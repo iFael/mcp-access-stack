@@ -1,0 +1,9 @@
+id: legacySite-no-let
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit let declarations without explicit compatibility proof.
+rule:
+  kind: lexical_declaration
+  regex: '^let\b'
+files:
+  - '**/*.js'

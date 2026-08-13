@@ -1,0 +1,24 @@
+{
+  "name": "@vs-code-gpt/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^4.4.0"
+  }
+}

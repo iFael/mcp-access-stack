@@ -1,0 +1,33 @@
+{
+  "name": "@vs-code-gpt/local-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "vs-code-gpt-agent": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:unit": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-unit",
+    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-integration",
+    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-e2e",
+    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
+  },
+  "dependencies": {
+    "@ast-grep/cli": "^0.44.1",
+    "@vs-code-gpt/shared": "0.1.0",
+    "iconv-lite": "^0.7.3",
+    "minimatch": "^10.2.0",
+    "ws": "^8.21.0"
+  }
+}

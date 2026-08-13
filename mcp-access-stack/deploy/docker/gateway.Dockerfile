@@ -1,0 +1,36 @@
+FROM node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 AS build
+
+WORKDIR /app
+ENV npm_config_audit=false \
+    npm_config_fund=false \
+    npm_config_update_notifier=false
+
+COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
+COPY services ./services
+COPY packages ./packages
+
+RUN npm ci --ignore-scripts
+RUN npm run build -w @vs-code-gpt/shared \
+    && npm run build -w @vs-code-gpt/remote-mcp-gateway \
+    && npm prune --omit=dev --workspaces --include-workspace-root
+
+FROM node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 AS runtime
+
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=3310
+
+COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/packages/mcp-core/package.json ./packages/mcp-core/package.json
+COPY --from=build --chown=node:node /app/packages/mcp-core/dist ./packages/mcp-core/dist
+COPY --from=build --chown=node:node /app/services/mcp-gateway/package.json ./services/mcp-gateway/package.json
+COPY --from=build --chown=node:node /app/services/mcp-gateway/dist ./services/mcp-gateway/dist
+
+USER node
+EXPOSE 3310
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3310)+'/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "services/mcp-gateway/dist/server.js"]

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "id": "vs-code-gpt",
+      "name": "VS Code - GPT",
+      "rootPath": "C:/Development/vs-code-gpt",
+      "enabled": true,
+      "permissionProfile": "full-repo-readonly",
+      "allowedRoots": [
+        "."
+      ],
+      "blockedGlobs": [
+        "**/*.sqlite",
+        "**/*.sqlite3"
+      ],
+      "limits": {
+        "maxFileBytes": 300000,
+        "maxSearchResults": 100,
+        "maxSearchSnippetBytes": 20000,
+        "maxDiffBytes": 500000,
+        "maxListedFiles": 1000
+      },
+      "allowWrites": [
+        ".codex/PLANNER_HANDOFF.md"
+      ]
+    }
+  ]
+}
