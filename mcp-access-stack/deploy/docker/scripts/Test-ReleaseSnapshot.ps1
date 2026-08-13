@@ -93,6 +93,48 @@ try {
         }
     }
 
+    $portableRoot = Join-Path $tempRoot 'portable-workspaces'
+    $portableWorkspace = Join-Path $portableRoot 'services\example-service'
+    $portableDist = Join-Path $portableWorkspace 'dist'
+    $portableScope = Join-Path $portableRoot 'node_modules\@example'
+    New-Item -ItemType Directory -Force -Path $portableDist, $portableScope | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $portableWorkspace 'package.json'),
+        '{"name":"@example/example-service","version":"1.0.0","type":"module","main":"./dist/index.js"}',
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $portableDist 'index.js'),
+        "export const portable = true;`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    $junctionPath = Join-Path $portableScope 'example-service'
+    New-Item -ItemType Junction -Path $junctionPath -Target $portableWorkspace | Out-Null
+    if ([string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $junctionPath -Force).LinkType)) {
+        throw 'Workspace portability fixture did not create a filesystem link.'
+    }
+
+    Convert-McpReleaseWorkspaceModulesToDirectories `
+        -ReleaseRoot $portableRoot `
+        -WorkspacePaths @('services\example-service')
+    $materializedModule = Get-Item -LiteralPath $junctionPath -Force
+    if (-not [string]::IsNullOrWhiteSpace([string]$materializedModule.LinkType)) {
+        throw 'Workspace module was not materialized as a physical directory.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $junctionPath 'dist\index.js') -PathType Leaf)) {
+        throw 'Materialized workspace module lost its runtime dist content.'
+    }
+
+    $movedPortableRoot = Join-Path $tempRoot 'portable-workspaces-moved'
+    Move-Item -LiteralPath $portableRoot -Destination $movedPortableRoot
+    $movedModule = Join-Path $movedPortableRoot 'node_modules\@example\example-service'
+    if (
+        -not (Test-Path -LiteralPath (Join-Path $movedModule 'dist\index.js') -PathType Leaf) -or
+        -not [string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $movedModule -Force).LinkType)
+    ) {
+        throw 'Materialized workspace module is not portable after the release tree is moved.'
+    }
+
     $runnerContent = Get-Content -Raw -LiteralPath $runnerPath
     if ($runnerContent -notmatch 'requiredArgument\(argumentsMap, "project-root"\)') {
         throw 'Immutable host runner does not require an explicit project-root binding.'
