@@ -24,7 +24,7 @@
     "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
   },
   "dependencies": {
-    "@ast-grep/cli": "^0.44.1",
+    "@ast-grep/cli": "^0.45.1",
     "@vs-code-gpt/shared": "0.1.0",
     "iconv-lite": "^0.7.3",
     "minimatch": "^10.2.0",
