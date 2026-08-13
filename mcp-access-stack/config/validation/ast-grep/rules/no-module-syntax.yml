@@ -1,0 +1,10 @@
+id: legacySite-no-module-syntax
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit ES module syntax without explicit compatibility proof.
+rule:
+  any:
+    - kind: import_statement
+    - kind: export_statement
+files:
+  - '**/*.js'

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Segmented Menu</title>
+  <style>.hidden{display:none} table{width:100%} td{padding:4px}</style>
+  <script>
+    function toggle(id) {
+      var element = document.getElementById(id);
+      element.className = element.className === 'hidden' ? '' : 'hidden';
+      return false;
+    }
+    window.addEventListener('DOMContentLoaded', function () {
+      var noise = document.getElementById('noise');
+      for (var index = 0; index < 2505; index += 1) {
+        var link = document.createElement('a');
+        link.href = '#noise-' + index;
+        link.textContent = 'Item legado ' + index;
+        noise.appendChild(link);
+      }
+    });
+  </script>
+</head>
+<body>
+<div id="noise"></div>
+<table id="main-menu" role="presentation">
+  <tr><td><a id="financeiro-segmented" href="#" onclick="return toggle('financeiro-segmented-submenu')">Financeiro</a></td></tr>
+  <tr id="financeiro-segmented-submenu" class="hidden"><td>
+    <a id="cpx-finance-segmented" href="segmented-cpx-finance.html" target="MenuContent">CPX-Finance</a>
+  </td></tr>
+  <tr class="hidden"><td><a href="danger.html" target="MenuContent">CPX-Finance</a></td></tr>
+</table>
+</body>
+</html>

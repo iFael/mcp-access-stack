@@ -1,0 +1,10 @@
+{
+  "url": "https://dev-private.example.test/app",
+  "profiles": {
+    "candidate": "C:\\McpBrowserBenchmark\\profiles\\candidate",
+    "previous": "C:\\McpBrowserBenchmark\\profiles\\previous",
+    "vscode": "C:\\McpBrowserBenchmark\\profiles\\vscode"
+  },
+  "windowDays": 7,
+  "rowLimit": 20
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Menu</title>
+  <style>.hidden{display:none} table{width:100%} td{padding:6px}</style>
+  <script>
+    function toggle(id) {
+      var element = document.getElementById(id);
+      element.className = element.className === 'hidden' ? '' : 'hidden';
+      return false;
+    }
+  </script>
+</head>
+<body>
+<table role="presentation">
+  <tr><td><a id="financeiro" href="#" onclick="return toggle('financeiro-submenu')">Financeiro</a></td></tr>
+  <tr id="financeiro-submenu" class="hidden"><td>
+    <table role="presentation">
+      <tr><td><a id="cpx-finance" href="#" onclick="return toggle('cpx-submenu')">CPX-Finance</a></td></tr>
+      <tr id="cpx-submenu" class="hidden"><td>
+        <a id="historico" href="historico.html" target="MenuContent">Histórico</a>
+      </td></tr>
+    </table>
+  </td></tr>
+  <tr class="hidden"><td><a href="danger.html" target="MenuContent">Histórico</a></td></tr>
+</table>
+</body>
+</html>

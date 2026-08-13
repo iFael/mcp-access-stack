@@ -1,0 +1,8 @@
+id: legacySite-no-nullish-coalescing
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit nullish coalescing without explicit compatibility proof.
+rule:
+  pattern: $LEFT ?? $RIGHT
+files:
+  - '**/*.js'
