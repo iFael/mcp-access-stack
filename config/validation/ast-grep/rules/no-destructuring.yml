@@ -1,0 +1,10 @@
+id: legacySite-no-destructuring
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit destructuring without explicit compatibility proof.
+rule:
+  any:
+    - kind: object_pattern
+    - kind: array_pattern
+files:
+  - '**/*.js'

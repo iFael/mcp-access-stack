@@ -1,0 +1,271 @@
+name: Public release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing SemVer tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  signing-preflight:
+    runs-on: ubuntu-latest
+    environment: public-release
+    steps:
+      - name: Require release signing secrets before publishing anything
+        shell: bash
+        env:
+          SIGNING_PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$SIGNING_PFX"
+          test -n "$SIGNING_PASSWORD"
+
+  metadata:
+    needs: signing-preflight
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
+      gateway-repository: ${{ steps.meta.outputs.gateway-repository }}
+      proxy-repository: ${{ steps.meta.outputs.proxy-repository }}
+    steps:
+      - name: Checkout requested tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable release identity
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_INPUT: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$TAG_INPUT"
+          else
+            tag="$REF_NAME"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          version="${tag#v}"
+          package_version="$(node -p "require('./mcp-access-stack/package.json').version")"
+          test "$version" = "$package_version"
+          commit="$(git rev-parse HEAD)"
+          test "$(git rev-parse "$tag^{commit}")" = "$commit"
+          owner="$(printf '%s' "$REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "gateway-repository=ghcr.io/$owner/mcp-access-stack-gateway" >> "$GITHUB_OUTPUT"
+          echo "proxy-repository=ghcr.io/$owner/mcp-access-stack-proxy" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: metadata
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --only-shell chromium
+
+      - name: Validate release source
+        run: npm run check
+
+  images:
+    needs:
+      - metadata
+      - validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      gateway-digest: ${{ steps.gateway.outputs.digest }}
+      proxy-digest: ${{ steps.proxy.outputs.digest }}
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish gateway
+        id: gateway
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/docker/gateway.Dockerfile
+          push: true
+          tags: |
+            ${{ needs.metadata.outputs.gateway-repository }}:${{ needs.metadata.outputs.version }}
+            ${{ needs.metadata.outputs.gateway-repository }}:sha-${{ needs.metadata.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Build and publish proxy
+        id: proxy
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/docker/proxy.Dockerfile
+          push: true
+          tags: |
+            ${{ needs.metadata.outputs.proxy-repository }}:${{ needs.metadata.outputs.version }}
+            ${{ needs.metadata.outputs.proxy-repository }}:sha-${{ needs.metadata.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
+          provenance: mode=max
+          sbom: true
+
+  package:
+    needs:
+      - metadata
+      - validate
+      - images
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: public-release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js bootstrap
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build immutable Windows runtime
+        env:
+          RELEASE_ID: ${{ needs.metadata.outputs.version }}
+        run: |
+          pwsh -NoLogo -NoProfile -File deploy/docker/scripts/New-McpRelease.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SkipDockerImages
+
+      - name: Assemble and sign minimal public distribution
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          RELEASE_ID: ${{ needs.metadata.outputs.version }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+          GATEWAY_REPOSITORY: ${{ needs.metadata.outputs.gateway-repository }}
+          GATEWAY_DIGEST: ${{ needs.images.outputs.gateway-digest }}
+          PROXY_REPOSITORY: ${{ needs.metadata.outputs.proxy-repository }}
+          PROXY_DIGEST: ${{ needs.images.outputs.proxy-digest }}
+        run: |
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpPublicDistribution.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -ReleaseTag $env:RELEASE_TAG `
+            -GatewayRepository $env:GATEWAY_REPOSITORY `
+            -GatewayDigest $env:GATEWAY_DIGEST `
+            -ProxyRepository $env:PROXY_REPOSITORY `
+            -ProxyDigest $env:PROXY_DIGEST `
+            -BuildRunId ([long]$env:GITHUB_RUN_ID) `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'public-distribution')
+
+      - name: Upload signed release assets for publisher job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-release-assets-${{ needs.metadata.outputs.version }}
+          path: |
+            ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.zip
+            ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs:
+      - metadata
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: public-release-assets-${{ needs.metadata.outputs.version }}
+          path: release-assets
+
+      - name: Publish immutable GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          args=(release create "$RELEASE_TAG" release-assets/* --verify-tag --generate-notes --title "$RELEASE_TAG")
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"

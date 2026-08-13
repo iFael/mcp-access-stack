@@ -1,0 +1,9 @@
+id: legacySite-no-const
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit const declarations without explicit compatibility proof.
+rule:
+  kind: lexical_declaration
+  regex: '^const\b'
+files:
+  - '**/*.js'

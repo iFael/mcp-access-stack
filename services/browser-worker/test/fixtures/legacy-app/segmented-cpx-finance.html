@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>CPX-Finance</title>
+  <style>.view{display:none}.view.is-active{display:block}.tab.is-active{font-weight:bold}</style>
+  <script>
+    function setView(name) {
+      setTimeout(function () {
+        document.querySelectorAll('.tab').forEach(function (button) {
+          button.classList.toggle('is-active', button.dataset.view === name);
+        });
+        document.querySelectorAll('.view').forEach(function (view) {
+          view.classList.toggle('is-active', view.id === name);
+        });
+      }, 25);
+      return false;
+    }
+  </script>
+</head>
+<body>
+<nav id="cpx-tabs">
+  <button type="button" class="tab is-active" data-view="conferencias" onclick="return setView('conferencias')">Conferências</button>
+  <button type="button" class="tab" data-view="historico" onclick="return setView('historico')">Histórico</button>
+</nav>
+<section id="conferencias" class="view is-active">Conferências ativas</section>
+<section id="historico" class="view">Histórico ativo</section>
+</body>
+</html>

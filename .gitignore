@@ -1,0 +1,17 @@
+.runtime-private/
+.runtime-tools/
+/runtime/
+**/node_modules/
+**/dist/
+**/coverage/
+**/.cache/
+**/*.log
+**/.cursor/chatgpt-debug/
+*.zip
+*.tmp
+releases/*
+.env
+.env.*
+!.env.example
+!.env*.example
+.codex/

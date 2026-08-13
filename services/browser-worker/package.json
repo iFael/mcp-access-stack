@@ -1,0 +1,21 @@
+{
+  "name": "@vs-code-gpt/browser-worker",
+  "version": "1.1.0-beta.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:unit": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-unit",
+    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-integration",
+    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-e2e",
+    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --coverage"
+  },
+  "dependencies": {
+    "@vs-code-gpt/shared": "0.1.0",
+    "playwright": "1.62.0-alpha-2026-06-29",
+    "zod": "^4.4.0"
+  }
+}

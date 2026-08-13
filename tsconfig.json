@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@vs-code-gpt/shared": ["./packages/mcp-core/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/mcp-core/src/**/*.ts",
+    "packages/mcp-core/test/**/*.ts",
+    "services/browser-worker/**/*.ts",
+    "services/workspace-agent/src/**/*.ts",
+    "services/workspace-agent/test/**/*.ts",
+    "services/mcp-gateway/src/**/*.ts",
+    "services/mcp-gateway/test/**/*.ts",
+    "tooling/smoke/**/*.ts",
+    "jest.config.ts",
+    "jest.preset.ts",
+    "packages/*/jest.config.ts",
+    "services/*/jest.config.ts"
+  ],
+  "exclude": ["services/browser-worker/dist/**"]
+}

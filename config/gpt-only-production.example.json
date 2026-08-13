@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "architecture": "gpt-only",
+  "nodeEnv": "production",
+  "ports": {
+    "proxy": 3300,
+    "gateway": 3310,
+    "browser": 3350
+  },
+  "mcpPath": "/mcp-replace-with-random-path",
+  "publicBaseUrl": "https://replace-with-your-tunnel.example",
+  "allowedOrigins": "https://chatgpt.com,https://chat.openai.com,http://127.0.0.1",
+  "authMode": "owner",
+  "ownerAuth": {
+    "token": "REPLACE_WITH_A_GENERATED_OWNER_TOKEN",
+    "scopes": [
+      "workspaces:read"
+    ],
+    "accessTokenTtlSeconds": 3600,
+    "refreshTokenTtlSeconds": 2592000
+  },
+  "gpt": {
+    "root": "C:\\absolute\\path\\to\\mcp-access-stack",
+    "policy": "C:\\absolute\\path\\to\\mcp-access-stack\\config\\workspace-policy.local.json",
+    "data": "C:\\absolute\\path\\to\\mcp-access-stack\\.runtime-private\\workspace-agent-data",
+    "agentId": "gpt-only-production-agent",
+    "token": "REPLACE_WITH_A_GENERATED_AGENT_TOKEN",
+    "tokenSha": "REPLACE_WITH_THE_AGENT_TOKEN_SHA256_HEX"
+  },
+  "browser": {
+    "token": "REPLACE_WITH_A_GENERATED_BROWSER_TOKEN",
+    "mode": "diagnostic",
+    "profileMode": "persistent",
+    "runtimeDirectory": "C:\\absolute\\path\\to\\mcp-access-stack\\runtime\\browser",
+    "privateDirectory": "C:\\absolute\\path\\to\\mcp-access-stack\\.runtime-private\\browser",
+    "userDataDirectory": "C:\\absolute\\path\\to\\mcp-access-stack\\.runtime-private\\browser\\chrome-profile",
+    "idempotencyTtlMs": 300000,
+    "idempotencyMaxEntries": 4096,
+    "cliSessionName": "gpt-only-production"
+  },
+  "actions": {
+    "enabled": false,
+    "workspaceIds": [
+      "workspace-a"
+    ],
+    "allowWrite": false,
+    "allowShell": false
+  },
+  "tunnel": {
+    "enabled": true,
+    "executable": "C:\\absolute\\path\\to\\ngrok.exe",
+    "url": "https://replace-with-your-tunnel.example",
+    "args": [
+      "http",
+      "3300",
+      "--url=https://replace-with-your-tunnel.example"
+    ]
+  }
+}

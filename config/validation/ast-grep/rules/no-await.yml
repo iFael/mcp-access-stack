@@ -1,0 +1,8 @@
+id: legacySite-no-await
+language: JavaScript
+severity: error
+message: LegacySite legacy runtime does not permit await expressions without explicit compatibility proof.
+rule:
+  kind: await_expression
+files:
+  - '**/*.js'

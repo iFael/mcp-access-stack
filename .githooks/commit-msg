@@ -1,0 +1,14 @@
+#!/bin/sh
+
+message_file="$1"
+subject=$(sed -n '1p' "$message_file")
+
+if printf '%s' "$subject" | grep -q '[A-Z]'; then
+  echo "commit subject must use lowercase letters only" >&2
+  exit 1
+fi
+
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|refactor|test|docs|chore|build|ci|perf|style|revert)(\([a-z0-9._/-]+\))?!?: .+'; then
+  echo "commit subject must follow conventional commits, for example: feat: adicionar recurso" >&2
+  exit 1
+fi

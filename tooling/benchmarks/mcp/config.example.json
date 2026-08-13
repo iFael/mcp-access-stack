@@ -1,0 +1,25 @@
+{
+  "warmups": 3,
+  "samples": 10,
+  "outputDirectory": "runtime/benchmarks/mcp",
+  "routes": [
+    {
+      "name": "local",
+      "url": "http://127.0.0.1:3300/mcp",
+      "tokenEnv": "MCP_BENCH_TOKEN"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "list-tools",
+      "tool": "tools/list",
+      "enabled": true
+    },
+    {
+      "name": "list-workspaces",
+      "tool": "list_workspaces",
+      "args": {},
+      "enabled": false
+    }
+  ]
+}

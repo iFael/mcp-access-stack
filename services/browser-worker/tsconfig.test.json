@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "isolatedModules": true,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "./**/*.ts",
+    "../../packages/mcp-core/src/**/*.ts",
+    "../mcp-gateway/src/browser-worker-client.ts"
+  ],
+  "exclude": ["dist/**", "coverage/**"]
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "composite": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["dist/**", "test/**", "jest.config.ts", "tsconfig.test.json", "**/*.test.ts"],
+  "references": [{ "path": "../../packages/mcp-core" }]
+}
