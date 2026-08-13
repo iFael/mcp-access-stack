@@ -4,6 +4,33 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$script:McpPublicCodeSigningThumbprint = 'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672'
+
+function Normalize-McpPublicThumbprint {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return ($Value -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
+}
+
+function Assert-McpPublicCertificateThumbprint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedThumbprint
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Certificate file was not found: $Path"
+    }
+    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        [System.IO.Path]::GetFullPath($Path)
+    )
+    $actual = Normalize-McpPublicThumbprint -Value $certificate.Thumbprint
+    $expected = Normalize-McpPublicThumbprint -Value $ExpectedThumbprint
+    if ($actual -ne $expected) {
+        throw "Certificate thumbprint mismatch: $Path"
+    }
+    return $certificate
+}
+
 function Get-McpPublicProjectRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 }
@@ -37,13 +64,20 @@ function Assert-McpPublicSignature {
     )
 
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($signature.Status -eq 'Valid') {
-        return
-    }
     if ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned') {
         return
     }
-    throw "Invalid Authenticode signature for $Path. Status=$($signature.Status)"
+    if ($signature.Status -ne 'Valid') {
+        throw "Invalid Authenticode signature for $Path. Status=$($signature.Status)"
+    }
+    if (-not $signature.SignerCertificate) {
+        throw "Authenticode signature does not expose a signer certificate: $Path"
+    }
+    $actualThumbprint = Normalize-McpPublicThumbprint -Value $signature.SignerCertificate.Thumbprint
+    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
+    if ($actualThumbprint -ne $expectedThumbprint) {
+        throw "Authenticode signer is not the MCP Access Stack project signer: $Path"
+    }
 }
 
 function Read-McpPublicJson {

@@ -40,6 +40,12 @@ $ErrorActionPreference = 'Stop'
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
+$publicCommonPath = Join-Path $root 'deploy\windows\PublicDistribution.Common.ps1'
+. $publicCommonPath
+$publicSignerCertificatePath = Join-Path $root 'deploy\windows\mcp-access-stack-code-signing.cer'
+Assert-McpPublicCertificateThumbprint `
+    -Path $publicSignerCertificatePath `
+    -ExpectedThumbprint $script:McpPublicCodeSigningThumbprint | Out-Null
 $stage = Join-Path $output 'stage'
 $releaseSource = Join-Path $root "releases\$ReleaseId"
 if (-not (Test-Path -LiteralPath $releaseSource -PathType Container)) {
@@ -96,13 +102,22 @@ function Sign-Script {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][object]$Certificate
     )
-    $signature = Set-AuthenticodeSignature `
+    Set-AuthenticodeSignature `
         -LiteralPath $Path `
         -Certificate $Certificate `
         -HashAlgorithm SHA256 `
-        -TimestampServer 'http://timestamp.digicert.com'
-    if ($signature.Status -ne 'Valid') {
-        throw "Authenticode signing failed: $Path (Status=$($signature.Status))"
+        -TimestampServer 'http://timestamp.digicert.com' | Out-Null
+    $observed = Get-AuthenticodeSignature -LiteralPath $Path
+    if (-not $observed.SignerCertificate) {
+        throw "Authenticode signing produced no signer certificate: $Path"
+    }
+    $actualThumbprint = Normalize-McpPublicThumbprint -Value $observed.SignerCertificate.Thumbprint
+    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
+    if ($actualThumbprint -ne $expectedThumbprint) {
+        throw "Authenticode signing used an unexpected certificate: $Path"
+    }
+    if ($observed.Status -notin @('Valid', 'NotTrusted', 'UnknownError')) {
+        throw "Authenticode signing failed: $Path (Status=$($observed.Status))"
     }
 }
 
@@ -131,6 +146,7 @@ $runtimeFiles = @(
     'deploy\windows\Install-McpAccessStack.ps1',
     'deploy\windows\Manage-McpCredential.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',
+    'deploy\windows\mcp-access-stack-code-signing.cer',
     'deploy\windows\Update-McpAccessStack.ps1',
     'operations\runtime\Initialize-GptOnlyProduction.ps1',
     'operations\validation\Initialize-ValidationTools.ps1'
@@ -197,6 +213,11 @@ $certificate = Import-PfxCertificate `
 try {
     if (-not $certificate.HasPrivateKey) {
         throw 'The configured code-signing certificate does not contain a private key.'
+    }
+    $certificateThumbprint = Normalize-McpPublicThumbprint -Value $certificate.Thumbprint
+    $expectedSignerThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
+    if ($certificateThumbprint -ne $expectedSignerThumbprint) {
+        throw 'The configured PFX is not the pinned MCP Access Stack code-signing certificate.'
     }
 
     foreach ($script in @(
