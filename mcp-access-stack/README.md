@@ -89,6 +89,13 @@ Tags SemVer publicam imagens GHCR por digest e um pacote Windows x64 assinado.
 O instalador e o atualizador candidate-first estão em `deploy/windows/`; o
 contrato completo está em `docs/operations/HOST_RELEASE_LIFECYCLE.md`.
 
+As releases Windows usam um certificado Authenticode self-signed exclusivo do
+projeto. A chave privada não é versionada. O certificado público fica em
+`deploy/windows/mcp-access-stack-code-signing.cer` e o verificador exige o
+thumbprint canônico `EC1DACA3C03E386BAB8E95B6E7929A4CA8342672`. Em um Windows
+que ainda não confia nesse certificado, a confiança é uma decisão local do
+usuário; o projeto não depende de uma CA comercial.
+
 Os testes de resistência do ambiente de desenvolvimento são separados em
 `docker:development:gate:quick`, `docker:development:gate:candidate` e
 `docker:development:gate:stability`. A política é adaptativa: `quick` cobre
