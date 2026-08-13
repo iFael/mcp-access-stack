@@ -1,4 +1,4 @@
-FROM node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 AS build
+FROM node:26.7.0-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS build
 
 WORKDIR /app
 ENV npm_config_audit=false \
@@ -14,7 +14,7 @@ RUN npm run build -w @vs-code-gpt/shared \
     && npm run build -w @vs-code-gpt/remote-mcp-gateway \
     && npm prune --omit=dev --workspaces --include-workspace-root
 
-FROM node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 AS runtime
+FROM node:26.7.0-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production \
