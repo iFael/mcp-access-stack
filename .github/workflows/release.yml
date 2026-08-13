@@ -289,4 +289,4 @@ jobs:
           if [[ "$RELEASE_VERSION" == *-* ]]; then
             args+=(--prerelease)
           fi
-          gh "${args[@]}"
+          gh "${args[@]}" --repo "$GITHUB_REPOSITORY"
