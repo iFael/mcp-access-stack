@@ -179,6 +179,7 @@ jobs:
     environment: public-release
     permissions:
       contents: read
+      actions: read
     defaults:
       run:
         working-directory: mcp-access-stack
@@ -204,9 +205,29 @@ jobs:
       - name: Build immutable Windows runtime
         env:
           RELEASE_ID: ${{ needs.metadata.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+          REPOSITORY: ${{ github.repository }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $runs = @(
+            gh run list `
+              --repo $env:REPOSITORY `
+              --workflow CI `
+              --branch main `
+              --commit $env:SOURCE_COMMIT `
+              --event push `
+              --status success `
+              --limit 1 `
+              --json databaseId | ConvertFrom-Json
+          )
+          if ($LASTEXITCODE -ne 0 -or $runs.Count -ne 1) {
+            throw 'Unable to resolve exactly one successful canonical CI run for the release commit.'
+          }
+          $ciRunId = [long]$runs[0].databaseId
           pwsh -NoLogo -NoProfile -File deploy/docker/scripts/New-McpRelease.ps1 `
             -ReleaseId $env:RELEASE_ID `
+            -GitHubCiRunId $ciRunId `
             -SkipDockerImages
 
       - name: Assemble and sign minimal public distribution
