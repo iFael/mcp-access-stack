@@ -617,6 +617,71 @@ function Copy-McpReleaseHostScripts {
     Copy-Item -LiteralPath $brokerSourcePath -Destination $brokerDestinationPath
 }
 
+function Convert-McpReleaseWorkspaceModulesToDirectories {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReleaseRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$WorkspacePaths
+    )
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($ReleaseRoot)
+    $rootPrefix = $resolvedRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $nodeModulesRoot = Join-Path $resolvedRoot 'node_modules'
+    New-Item -ItemType Directory -Force -Path $nodeModulesRoot | Out-Null
+
+    foreach ($workspacePath in $WorkspacePaths) {
+        if ([string]::IsNullOrWhiteSpace($workspacePath) -or [System.IO.Path]::IsPathRooted($workspacePath)) {
+            throw "Release workspace path must be relative: $workspacePath"
+        }
+        $resolvedWorkspace = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $workspacePath))
+        if (-not $resolvedWorkspace.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Release workspace path escapes the release root: $workspacePath"
+        }
+        $packagePath = Join-Path $resolvedWorkspace 'package.json'
+        $distPath = Join-Path $resolvedWorkspace 'dist'
+        if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+            throw "Release workspace package.json is missing: $workspacePath"
+        }
+        if (-not (Test-Path -LiteralPath $distPath -PathType Container)) {
+            throw "Release workspace dist directory is missing: $workspacePath"
+        }
+
+        $package = Read-McpJsonFile -Path $packagePath
+        $packageName = [string]$package.name
+        if ($packageName -notmatch '^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$') {
+            throw "Release workspace package name is unsafe: $packageName"
+        }
+        $segments = @($packageName -split '/')
+        $modulePath = if ($segments.Count -eq 2) {
+            Join-Path (Join-Path $nodeModulesRoot $segments[0]) $segments[1]
+        }
+        else {
+            Join-Path $nodeModulesRoot $segments[0]
+        }
+        $resolvedModule = [System.IO.Path]::GetFullPath($modulePath)
+        $nodeModulesPrefix = [System.IO.Path]::GetFullPath($nodeModulesRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $resolvedModule.StartsWith($nodeModulesPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Release workspace module path escapes node_modules: $packageName"
+        }
+
+        if (Test-Path -LiteralPath $resolvedModule) {
+            Remove-Item -LiteralPath $resolvedModule -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $resolvedModule | Out-Null
+        Copy-Item -LiteralPath $packagePath -Destination (Join-Path $resolvedModule 'package.json')
+        Copy-Item -LiteralPath $distPath -Destination $resolvedModule -Recurse
+
+        $materialized = Get-Item -LiteralPath $resolvedModule -Force
+        if (-not [string]::IsNullOrWhiteSpace([string]$materialized.LinkType)) {
+            throw "Release workspace module remained a filesystem link: $packageName"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedModule 'dist') -PathType Container)) {
+            throw "Release workspace module materialization is incomplete: $packageName"
+        }
+    }
+}
 function Get-McpReleaseHostRunnerPath {
     param(
         [Parameter(Mandatory = $true)]

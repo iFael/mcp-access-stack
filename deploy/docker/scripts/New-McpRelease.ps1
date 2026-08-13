@@ -140,6 +140,10 @@ try {
         Pop-Location
     }
 
+    Convert-McpReleaseWorkspaceModulesToDirectories `
+        -ReleaseRoot $stagingDirectory `
+        -WorkspacePaths $workspacePaths
+
     $hashedFiles = Get-ChildItem -LiteralPath $stagingDirectory -File -Recurse |
         Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } |
         Sort-Object FullName
