@@ -22,6 +22,9 @@ export const permissionProfileSchema = z.enum([
 
 export type PermissionProfile = z.infer<typeof permissionProfileSchema>;
 
+export const confirmationModeSchema = z.enum(["standard", "trusted-workspace"]);
+export type ConfirmationMode = z.infer<typeof confirmationModeSchema>;
+
 export const workspaceKindSchema = z.enum(["repository", "aggregate"]);
 export type WorkspaceKind = z.infer<typeof workspaceKindSchema>;
 
@@ -48,6 +51,7 @@ export const workspacePolicySchema = z
     workspaceKind: workspaceKindSchema.optional(),
     enabled: z.boolean().default(true),
     permissionProfile: permissionProfileSchema,
+    confirmationMode: confirmationModeSchema.default("standard"),
     allowedRoots: z.array(z.string().trim().min(1)).min(1),
     blockedGlobs: z.array(z.string().trim().min(1)).default([]),
     limits: workspaceLimitsSchema,
@@ -55,7 +59,19 @@ export const workspacePolicySchema = z
     allowShell: z.array(z.string().trim().min(1)).default([]),
     allowedShells: z.array(shellNameSchema).default(["powershell"]),
   })
-  .strict();
+  .strict()
+  .superRefine((workspace, context) => {
+    if (
+      workspace.confirmationMode === "trusted-workspace" &&
+      workspace.permissionProfile !== "full-repo-write"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "trusted-workspace confirmation mode requires full-repo-write.",
+        path: ["confirmationMode"],
+      });
+    }
+  });
 
 export type WorkspacePolicyInput = z.input<typeof workspacePolicySchema>;
 export type WorkspacePolicy = z.output<typeof workspacePolicySchema>;

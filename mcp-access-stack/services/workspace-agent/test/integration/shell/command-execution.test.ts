@@ -1,10 +1,12 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { afterEach, describe, expect, test, jest } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
 import { CommandConfirmationRegistry } from "../../../src/shell/confirmation.js";
 import { classifyCommandRisk } from "../../../src/shell/command-risk.js";
 import {
   createFixture,
+  git,
+  initializeGitRepository,
   makeWorkspacePolicy,
   type Fixture,
   writePolicy,
@@ -275,7 +277,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        objective: "Executar um comando que não deve iniciar",
+        objective: "Executar um comando que n├úo deve iniciar",
         timeoutMs: 30_000,
       }),
     ).rejects.toMatchObject({
@@ -287,32 +289,57 @@ describe("run command", () => {
   test("keeps the run_powershell alias on the same confirmation path", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);
+    await expect(agent.runPowerShell({ workspaceId: "test", command: "Remove-Item 'missing.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required", shell: "powershell" });
+  });
 
-    await expect(
-      agent.runPowerShell({
-        workspaceId: "test",
-        command: "Remove-Item 'missing.txt' -Force",
-        timeoutMs: 30_000,
-      }),
-    ).resolves.toMatchObject({ status: "confirmation_required", shell: "powershell" });
+  test("executes bounded local mutations without confirmation in trusted workspace", async () => {
+    fixture = await createWritableShellFixture("trusted-workspace");
+    const agent = await LocalAgent.create(fixture.policyPath);
+    for (const command of [
+      "New-Item -ItemType File -Path 'trusted-file.txt'",
+      "Set-Content -LiteralPath 'trusted-file.txt' -Value 'updated'",
+      "Move-Item -LiteralPath 'trusted-file.txt' -Destination 'trusted-moved.txt'",
+      "New-Item -ItemType Directory -Path 'trusted-dir'",
+      "Set-Content -LiteralPath 'trusted-dir/child.txt' -Value 'child'",
+      "Remove-Item -LiteralPath 'trusted-dir' -Recurse -Force",
+      "Remove-Item -LiteralPath 'trusted-moved.txt' -Force",
+    ]) {
+      await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command, timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    }
+    await expect(access(`${fixture.workspacePath}/trusted-moved.txt`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(`${fixture.workspacePath}/trusted-dir`)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 45_000);
+
+  test("executes bounded Git index and cleanup operations without confirmation in trusted workspace", async () => {
+    fixture = await createWritableShellFixture("trusted-workspace");
+    initializeGitRepository(fixture.workspacePath);
+    await writeWorkspaceFile(fixture.workspacePath, "tracked.txt", "before\n");
+    git(fixture.workspacePath, ["add", "--", "tracked.txt"]);
+    git(fixture.workspacePath, ["commit", "-m", "fixture"]);
+    await writeWorkspaceFile(fixture.workspacePath, "tracked.txt", "after\n");
+    const agent = await LocalAgent.create(fixture.policyPath);
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git restore --staged -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    expect(git(fixture.workspacePath, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+    expect((await readFile(`${fixture.workspacePath}/tracked.txt`, "utf8")).trim()).toBe("after");
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git reset HEAD -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await writeWorkspaceFile(fixture.workspacePath, "untracked.txt", "temporary\n");
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git clean -f -- untracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(access(`${fixture.workspacePath}/untracked.txt`)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 45_000);
+
+  test("blocks protected paths and keeps ambiguous traversal on confirmation in trusted workspace", async () => {
+    fixture = await createWritableShellFixture("trusted-workspace");
+    await writeWorkspaceFile(fixture.workspacePath, "secret/.env", "SECRET=value\n");
+    const agent = await LocalAgent.create(fixture.policyPath);
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "Remove-Item -LiteralPath 'secret' -Recurse -Force", timeoutMs: 30_000 })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "Remove-Item '..\\outside.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required" });
   });
 });
 
-async function createWritableShellFixture(): Promise<Fixture> {
-  const created = await createFixture({
-    profile: "full-repo-write",
-    allowedRoots: ["."],
-  });
-  await writePolicy(created.policyPath, [
-    {
-      ...makeWorkspacePolicy(created.workspacePath, {
-        profile: "full-repo-write",
-        allowedRoots: ["."],
-      }),
-      allowWrites: ["."],
-      allowShell: ["."],
-      allowedShells: ["powershell"],
-    },
-  ]);
+async function createWritableShellFixture(confirmationMode: "standard" | "trusted-workspace" = "standard"): Promise<Fixture> {
+  const created = await createFixture({ profile: "full-repo-write", allowedRoots: ["."], confirmationMode });
+  await writePolicy(created.policyPath, [{ ...makeWorkspacePolicy(created.workspacePath, { profile: "full-repo-write", allowedRoots: ["."], confirmationMode }), allowWrites: ["."], allowShell: ["."], allowedShells: ["powershell"] }]);
   return created;
 }

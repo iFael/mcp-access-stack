@@ -173,6 +173,7 @@ function createDiscoveredWorkspace(
     workspaceKind: "repository",
     enabled: true,
     permissionProfile: "planning-readonly",
+    confirmationMode: "standard",
     allowedRoots: ["."],
     blockedGlobs: [],
     limits,

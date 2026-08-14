@@ -431,18 +431,50 @@ describe("qualified run command", () => {
       (await readFile(path.join(fixture.workspacePath, "attempt-count.txt"), "utf8")).trim(),
     ).toBe("2");
   });
+
+  test("executes a simple qualified local mutation without confirmation in trusted workspace", async () => {
+    fixture = await createWritableShellFixture("trusted-workspace");
+    await writeWorkspaceFile(fixture.workspacePath, "trusted-qualified.txt", "before\n");
+    const stateDirectory = path.join(fixture.basePath, "command-invocations");
+    const agent = await LocalAgent.create(
+      fixture.policyPath,
+      enabledOptions(stateDirectory),
+    );
+
+    await expect(
+      agent.runCommand(
+        {
+          workspaceId: "test",
+          command: "Set-Content 'trusted-qualified.txt' 'after'",
+          shell: "powershell",
+          executionMode: "qualified",
+          timeoutMs: 120_000,
+        },
+        { invocationId: "trusted-qualified-mutation" },
+      ),
+    ).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      executionMode: "qualified",
+      corrected: false,
+    });
+    expect(
+      (await readFile(path.join(fixture.workspacePath, "trusted-qualified.txt"), "utf8")).trim(),
+    ).toBe("after");  });
 });
 
-async function createWritableShellFixture(): Promise<Fixture> {
+async function createWritableShellFixture(confirmationMode: "standard" | "trusted-workspace" = "standard"): Promise<Fixture> {
   const created = await createFixture({
     profile: "full-repo-write",
     allowedRoots: ["."],
+    confirmationMode,
   });
   await writePolicy(created.policyPath, [
     {
       ...makeWorkspacePolicy(created.workspacePath, {
         profile: "full-repo-write",
         allowedRoots: ["."],
+        confirmationMode,
       }),
       allowWrites: ["."],
       allowShell: ["."],

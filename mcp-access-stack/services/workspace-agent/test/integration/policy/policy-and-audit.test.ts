@@ -41,6 +41,7 @@ describe("policy and permissions", () => {
         workspaceKind: "repository",
         enabled: true,
         permissionProfile: "planning-readonly",
+        confirmationMode: "standard",
         writesEnabled: false,
         shellsEnabled: false,
         allowedShells: ["powershell"],

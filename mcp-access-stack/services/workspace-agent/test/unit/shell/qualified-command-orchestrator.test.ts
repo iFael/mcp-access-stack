@@ -49,6 +49,7 @@ const workspace: ResolvedWorkspace = {
   canonicalRootPath: process.cwd(),
   enabled: true,
   permissionProfile: "full-repo-write",
+    confirmationMode: "standard",
   allowedRoots: [
     {
       logicalPath: ".",
