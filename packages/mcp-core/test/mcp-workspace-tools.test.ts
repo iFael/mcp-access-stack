@@ -48,6 +48,7 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
         name: "Workspace",
         enabled: true,
         permissionProfile: "planning-readonly",
+        confirmationMode: "standard",
         writesEnabled: false,
         shellsEnabled: false,
         allowedShells: ["powershell"],

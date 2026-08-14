@@ -20,6 +20,7 @@ describe("WorkspaceRegistry.fromPolicy", () => {
     try {
       const registry = await WorkspaceRegistry.load(fixture.policyPath);
       const fromDisk = registry.listEnabled();
+      expect(fromDisk[0]?.confirmationMode).toBe("standard");
       const raw = await readFile(fixture.policyPath, "utf8");
       const policy = JSON.parse(raw);
       const fromPolicy = await WorkspaceRegistry.fromPolicy(policy);
@@ -82,6 +83,7 @@ describe("WorkspaceRegistry.fromPolicy", () => {
         rootPath: workspacePath,
         enabled: true,
         permissionProfile: "planning-readonly" as const,
+        confirmationMode: "standard" as const,
         allowedRoots: ["."],
         blockedGlobs: [],
         limits: defaultLimits,

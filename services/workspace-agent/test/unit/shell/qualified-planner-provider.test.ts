@@ -229,6 +229,7 @@ function workspace(): ResolvedWorkspace {
     canonicalRootPath: "C:\\fixture",
     enabled: true,
     permissionProfile: "full-repo-write",
+    confirmationMode: "standard",
     allowedRoots: [
       {
         logicalPath: ".",

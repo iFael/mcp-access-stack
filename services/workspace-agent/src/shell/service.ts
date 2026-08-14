@@ -20,6 +20,7 @@ import {
   classifyGitPushIntent,
   protectedGitPushReason,
 } from "./command-risk.js";
+import { decideCommandAuthorization } from "./confirmation-policy.js";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import {
   commandPlanExecutionToRiskCommand,
@@ -115,15 +116,31 @@ export class ShellService {
         "Qualified command risk classification diverged from the execution policy.",
       );
     }
-    const confirmationRequired =
-      plan.riskClass === "confirmation_required" || directRisk.destructive;
+    const fallbackReasons =
+      directRisk.reasons.length > 0
+        ? directRisk.reasons
+        : ["qualified command plan requires explicit confirmation"];
+    const authorization = await decideCommandAuthorization({
+      workspace,
+      shell: plan.shell,
+      command: riskCommand,
+      logicalCwd: cwd.logicalPath,
+      absoluteCwd: cwd.absolutePath,
+      directRisk,
+      currentRequiresConfirmation:
+        plan.riskClass === "confirmation_required" || directRisk.destructive,
+      fallbackReasons,
+    });
+    if (authorization.disposition === "blocked") {
+      throw new AppError(authorization.code, authorization.reason);
+    }
     const binding = {
       workspaceId: workspace.id,
       shell: plan.shell,
       cwd: cwd.logicalPath,
       command: `qualified:${plan.fingerprint}`,
     };
-    if (confirmationRequired) {
+    if (authorization.disposition === "confirmation_required") {
       if (!confirmationId) {
         const confirmation = this.confirmations.create(binding);
         return {
@@ -132,10 +149,7 @@ export class ShellService {
           cwd: cwd.logicalPath,
           confirmationId: confirmation.confirmationId,
           expiresAt: confirmation.expiresAt,
-          reasons:
-            directRisk.reasons.length > 0
-              ? directRisk.reasons
-              : ["qualified command plan requires explicit confirmation"],
+          reasons: authorization.reasons,
         };
       }
       this.confirmations.consume(confirmationId, binding);
@@ -237,6 +251,19 @@ export class ShellService {
     const cwd = await resolveShellCwd(workspace, input.cwd);
     await enforceGitPushPolicy(input.shell, input.command, cwd.absolutePath);
     const risk = classifyCommandRisk(input.shell, input.command);
+    const authorization = await decideCommandAuthorization({
+      workspace,
+      shell: input.shell,
+      command: input.command,
+      logicalCwd: cwd.logicalPath,
+      absoluteCwd: cwd.absolutePath,
+      directRisk: risk,
+      currentRequiresConfirmation: risk.destructive,
+      fallbackReasons: risk.reasons,
+    });
+    if (authorization.disposition === "blocked") {
+      throw new AppError(authorization.code, authorization.reason);
+    }
     const binding = {
       workspaceId: workspace.id,
       shell: input.shell,
@@ -244,7 +271,7 @@ export class ShellService {
       command: input.command,
     };
 
-    if (risk.destructive) {
+    if (authorization.disposition === "confirmation_required") {
       if (!input.confirmationId) {
         const confirmation = this.confirmations.create(binding);
         return {
@@ -253,7 +280,7 @@ export class ShellService {
           cwd: cwd.logicalPath,
           confirmationId: confirmation.confirmationId,
           expiresAt: confirmation.expiresAt,
-          reasons: risk.reasons,
+          reasons: authorization.reasons,
         };
       }
       this.confirmations.consume(input.confirmationId, binding);

@@ -58,6 +58,14 @@ npm run production:init -- `
 ```
 
 O inicializador gera tokens e configuração privada, mas não inicia processos. Segredos permanecem em `.runtime-private/`.
+### Confirmação de comandos por workspace
+
+Cada workspace pode definir `confirmationMode`:
+
+- `standard` é o default e preserva integralmente o comportamento de confirmação existente;
+- `trusted-workspace` só é válido com `permissionProfile: "full-repo-write"` e pode dispensar confirmação para mutações locais deterministicamente analisadas cujos alvos sejam comprovadamente contidos em `allowedRoots` e `allowWrites`.
+
+`trusted-workspace` não desabilita o classificador de risco. Comandos ambíguos continuam exigindo confirmação, e `blockedGlobs`/`mandatoryBlockedGlobs`, proteção de Git remoto, caminhos externos, Docker destrutivo, Registry, serviços, Scheduled Tasks, UAC, discos, credenciais e demais operações de sistema continuam protegidos independentemente do modo. Background tasks destrutivas permanecem bloqueadas.
 
 ## Isolamento do navegador
 

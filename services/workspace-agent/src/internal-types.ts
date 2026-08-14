@@ -1,4 +1,5 @@
 import type {
+  ConfirmationMode,
   PermissionProfile,
   ShellName,
   WorkspaceKind,
@@ -20,6 +21,7 @@ export interface ResolvedWorkspace {
   canonicalRootPath: string;
   enabled: boolean;
   permissionProfile: PermissionProfile;
+  confirmationMode: ConfirmationMode;
   allowedRoots: ResolvedAllowedRoot[];
   blockedGlobs: string[];
   limits: WorkspaceLimits;

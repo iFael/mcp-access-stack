@@ -37,6 +37,7 @@ async function fixture(): Promise<{
       canonicalRootPath: canonical,
       enabled: true,
       permissionProfile: "full-repo-write",
+    confirmationMode: "standard",
       allowedRoots: [
         {
           logicalPath: ".",

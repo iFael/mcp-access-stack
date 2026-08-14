@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
+  ConfirmationMode,
   PermissionProfile,
   WorkspaceKind,
   WorkspaceLimits,
@@ -18,6 +19,7 @@ export const defaultLimits: WorkspaceLimits = {
 
 export interface FixtureOptions {
   profile?: PermissionProfile;
+  confirmationMode?: ConfirmationMode;
   workspaceKind?: WorkspaceKind;
   allowedRoots?: string[];
   blockedGlobs?: string[];
@@ -75,6 +77,9 @@ export function makeWorkspacePolicy(
     ...(options.workspaceKind === undefined ? {} : { workspaceKind: options.workspaceKind }),
     enabled: options.enabled ?? true,
     permissionProfile: options.profile ?? "planning-readonly",
+    ...(options.confirmationMode === undefined
+      ? {}
+      : { confirmationMode: options.confirmationMode }),
     allowedRoots: options.allowedRoots ?? ["."],
     blockedGlobs: options.blockedGlobs ?? [],
     limits: { ...defaultLimits, ...options.limits },

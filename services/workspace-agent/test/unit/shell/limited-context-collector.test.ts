@@ -131,6 +131,7 @@ function createWorkspace(rootPath: string, canonicalRootPath: string): ResolvedW
     canonicalRootPath,
     enabled: true,
     permissionProfile: "full-repo-write",
+    confirmationMode: "standard",
     allowedRoots: [
       {
         logicalPath: ".",
