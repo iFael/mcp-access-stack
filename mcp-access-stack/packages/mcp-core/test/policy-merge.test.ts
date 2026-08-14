@@ -9,7 +9,7 @@ import {
   type ExplicitPolicyInput,
   type MergePolicyBase,
 } from "../src/policy-merge.js";
-import type { WorkspacePolicy } from "../src/policy.js";
+import { workspacePolicySchema, type WorkspacePolicyInput } from "../src/policy.js";
 
 const explicitLimits = {
   maxFileBytes: 10_000,
@@ -20,12 +20,13 @@ const explicitLimits = {
 };
 
 function entry(
-  workspace: WorkspacePolicy,
+  workspace: WorkspacePolicyInput,
   canonicalRootPath?: string,
 ): ExplicitPolicyInput {
+  const parsed = workspacePolicySchema.parse(workspace);
   return {
-    workspace,
-    canonicalRootPath: canonicalRootPath ?? workspace.rootPath,
+    workspace: parsed,
+    canonicalRootPath: canonicalRootPath ?? parsed.rootPath,
   };
 }
 

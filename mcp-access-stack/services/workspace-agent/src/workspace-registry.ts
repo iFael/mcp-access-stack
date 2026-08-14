@@ -65,6 +65,7 @@ export class WorkspaceRegistry {
         workspaceKind: workspace.workspaceKind ?? "repository",
         enabled: true as const,
         permissionProfile: workspace.permissionProfile,
+        confirmationMode: workspace.confirmationMode ?? "standard",
         writesEnabled:
           workspace.permissionProfile === "full-repo-write" && workspace.allowWrites.length > 0,
         shellsEnabled:
@@ -159,6 +160,7 @@ async function resolveWorkspaces(
       canonicalRootPath,
       enabled: workspace.enabled,
       permissionProfile: workspace.permissionProfile,
+      confirmationMode: workspace.confirmationMode,
       allowedRoots,
       blockedGlobs,
       limits: workspace.limits,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorCodes } from "./errors.js";
-import { permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
+import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
   commandAttemptSchema,
   commandAutoCorrectionModeSchema,
@@ -492,6 +492,7 @@ export const workspaceSummarySchema = z
     workspaceKind: workspaceKindSchema.optional(),
     enabled: z.literal(true),
     permissionProfile: permissionProfileSchema,
+    confirmationMode: confirmationModeSchema,
     writesEnabled: z.boolean(),
     shellsEnabled: z.boolean(),
     allowedShells: z.array(shellNameSchema),

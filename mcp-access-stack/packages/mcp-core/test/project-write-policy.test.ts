@@ -12,6 +12,7 @@ const baseWorkspace: WorkspacePolicy = {
   rootPath: "C:/Users/me/Desktop/development/LegacySite",
   enabled: true,
   permissionProfile: "planning-readonly",
+  confirmationMode: "standard",
   allowedRoots: ["."],
   blockedGlobs: [],
   limits: {
