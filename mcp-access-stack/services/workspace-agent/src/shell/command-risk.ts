@@ -1,4 +1,5 @@
 import type { ShellName } from "@vs-code-gpt/shared";
+import { analyzeSimplePowerShellCommand } from "./qualified/powershell-lexical.js";
 
 export interface CommandRisk {
   destructive: boolean;
@@ -16,6 +17,18 @@ interface RiskPattern {
   pattern: RegExp;
 }
 
+const DISK_BOOT_VOLUME_REASON = "disk, boot or volume operation";
+const FORMAT_COMMAND_TEXT_PATTERN = /\bformat-volume\b|\bformat(?:\.com|\.exe)?(?=\s|$)/iu;
+const POWERSHELL_FORMAT_SEGMENT_PATTERN =
+  /(?:^|[\r\n]|(?:&&|\|\||[;|])\s*)(?:&\s*)?(?:format-volume|format(?:\.com|\.exe)?)(?=\s|$)/iu;
+const POWERSHELL_AMBIGUOUS_SYNTAX_PATTERN = /[{}()]/u;
+const FORMAT_EXECUTABLES = new Set([
+  "format",
+  "format.com",
+  "format.exe",
+  "format-volume",
+]);
+
 const RISK_PATTERNS: RiskPattern[] = [
   {
     reason: "delete, remove or force-clean operation",
@@ -32,8 +45,8 @@ const RISK_PATTERNS: RiskPattern[] = [
       /\b(reg|regedit|set-itemproperty|sp|new-itemproperty|remove-itemproperty|rp)\b|\bhklm:|\bhkcu:/i,
   },
   {
-    reason: "disk, boot or volume operation",
-    pattern: /\bformat-volume\b|\bformat(?:\.com|\.exe)?(?=\s|$)|\b(diskpart|bcdedit|mountvol|manage-bde|chkdsk\s+.*\/f|dd\s+if=)\b/i,
+    reason: DISK_BOOT_VOLUME_REASON,
+    pattern: /\b(diskpart|bcdedit|mountvol|manage-bde|chkdsk\s+.*\/f|dd\s+if=)\b/i,
   },
   {
     reason: "service or process control",
@@ -86,6 +99,10 @@ export function classifyCommandRisk(shell: ShellName, command: string): CommandR
     .filter((entry) => entry.pattern.test(normalized))
     .map((entry) => entry.reason);
 
+  if (containsDiskFormatCommand(shell, command, normalized)) {
+    reasons.push(DISK_BOOT_VOLUME_REASON);
+  }
+
   if (FILE_REDIRECTION_PATTERN.test(normalized)) {
     reasons.push("move, overwrite or direct file write operation");
   }
@@ -129,6 +146,75 @@ export function protectedGitPushReason(
     return "Pushing to or from the main branch is permanently blocked.";
   }
   return undefined;
+}
+
+function containsDiskFormatCommand(
+  shell: ShellName,
+  command: string,
+  normalized: string,
+): boolean {
+  if (!FORMAT_COMMAND_TEXT_PATTERN.test(normalized)) return false;
+
+  if (shell !== "powershell" && shell !== "pwsh") {
+    return true;
+  }
+
+  const analysis = analyzeSimplePowerShellCommand(shell, command);
+  if (analysis?.valid && analysis.execution?.kind === "argv") {
+    return powerShellArgvExecutesDiskFormat(analysis.execution.executable, analysis.execution.argv);
+  }
+
+  if (POWERSHELL_FORMAT_SEGMENT_PATTERN.test(command)) {
+    return true;
+  }
+
+  // Complex PowerShell control syntax stays fail-closed when format-like text is present.
+  return POWERSHELL_AMBIGUOUS_SYNTAX_PATTERN.test(command);
+}
+
+function powerShellArgvExecutesDiskFormat(executable: string, argv: string[]): boolean {
+  const normalizedExecutable = normalizeRiskExecutable(executable);
+  if (FORMAT_EXECUTABLES.has(normalizedExecutable)) return true;
+
+  if (normalizedExecutable === "powershell" || normalizedExecutable === "powershell.exe") {
+    return nestedPowerShellFormatRisk("powershell", argv, ["-command", "-c"]);
+  }
+  if (normalizedExecutable === "pwsh" || normalizedExecutable === "pwsh.exe") {
+    return nestedPowerShellFormatRisk("pwsh", argv, ["-command", "-c"]);
+  }
+  if (normalizedExecutable === "cmd" || normalizedExecutable === "cmd.exe") {
+    return nestedOpaqueFormatRisk(argv, ["/c", "/k"]);
+  }
+  if (["bash", "sh", "wsl", "wsl.exe"].includes(normalizedExecutable)) {
+    return argv.some((value) => FORMAT_COMMAND_TEXT_PATTERN.test(value));
+  }
+
+  return false;
+}
+
+function nestedPowerShellFormatRisk(
+  shell: "powershell" | "pwsh",
+  argv: string[],
+  commandOptions: string[],
+): boolean {
+  const command = commandAfterOption(argv, commandOptions);
+  return command ? containsDiskFormatCommand(shell, command, normalizeForRisk(shell, command)) : false;
+}
+
+function nestedOpaqueFormatRisk(argv: string[], commandOptions: string[]): boolean {
+  const command = commandAfterOption(argv, commandOptions);
+  return command ? FORMAT_COMMAND_TEXT_PATTERN.test(command) : false;
+}
+
+function commandAfterOption(argv: string[], options: string[]): string | undefined {
+  const index = argv.findIndex((value) => options.includes(value.toLocaleLowerCase("en-US")));
+  if (index < 0 || index + 1 >= argv.length) return undefined;
+  return argv.slice(index + 1).join(" ");
+}
+
+function normalizeRiskExecutable(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1).toLocaleLowerCase("en-US");
 }
 
 function normalizeForRisk(shell: ShellName, command: string): string {
