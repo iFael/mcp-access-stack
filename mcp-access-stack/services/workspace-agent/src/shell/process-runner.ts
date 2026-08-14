@@ -69,10 +69,18 @@ export async function runShellCommand(
       signal?.removeEventListener("abort", onAbort);
     };
 
+    const failTermination = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
     const requestTermination = (reason: TerminationReason): void => {
       if (terminationReason !== undefined || settled) return;
       terminationReason = reason;
       termination ??= terminateChildProcessTree(child);
+      void termination.catch(failTermination);
     };
 
     const onAbort = (): void => requestTermination("abort");
@@ -107,7 +115,12 @@ export async function runShellCommand(
       if (settled) return;
       settled = true;
       cleanup();
-      await termination;
+      try {
+        await termination;
+      } catch (error) {
+        reject(error);
+        return;
+      }
       if (terminationReason === "abort") {
         reject(abortSignalError(signal));
         return;
@@ -162,7 +175,7 @@ export async function runShellCommandToFiles(
     };
     const onOutputFailure = (error: unknown): void => {
       outputFailure ??= error;
-      void terminate();
+      void terminate().catch(() => undefined);
     };
     const stdoutSink = createSafeFileSink(
       output.stdoutPath,
@@ -200,10 +213,19 @@ export async function runShellCommandToFiles(
       signal?.removeEventListener("abort", onAbort);
     };
 
+    const failTermination = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void Promise.allSettled([stdoutSink.end(), stderrSink.end()]).finally(() => {
+        reject(error);
+      });
+    };
+
     const requestTermination = (reason: TerminationReason): void => {
       if (terminationReason !== undefined || settled) return;
       terminationReason = reason;
-      void terminate();
+      void terminate().catch(failTermination);
     };
 
     const onAbort = (): void => requestTermination("abort");

@@ -98,6 +98,85 @@ describe("stateless MCP cancellation", () => {
       await fixture.close();
     }
   });
+
+  it("releases the MCP request id after confirmation_required before a confirmed retry", async () => {
+    const confirmationId = "confirmation-retry-test";
+    let calls = 0;
+    const agent = createFakeAgent({
+      runCommand: async (input: unknown) => {
+        calls += 1;
+        const confirmation = (input as { confirmationId?: string }).confirmationId;
+        if (confirmation === undefined) {
+          return {
+            status: "confirmation_required",
+            shell: "powershell",
+            cwd: ".",
+            confirmationId,
+            expiresAt: "2099-01-01T00:00:00.000Z",
+            reasons: ["test confirmation"],
+          };
+        }
+        expect(confirmation).toBe(confirmationId);
+        return {
+          status: "executed",
+          shell: "powershell",
+          cwd: ".",
+          exitCode: 0,
+          stdout: "confirmed-ok",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    });
+    const fixture = await createFixture(agent);
+    try {
+      const first = await postMcp(fixture.url, {
+        jsonrpc: "2.0",
+        id: 63,
+        method: "tools/call",
+        params: {
+          name: "run_command",
+          arguments: {
+            workspaceId: "workspace",
+            shell: "powershell",
+            command: "Write-Output confirmed",
+            timeoutMs: 30_000,
+          },
+        },
+      });
+      const firstBody = await first.json() as {
+        result: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+      expect(first.status).toBe(200);
+      expect(firstBody.result.isError).not.toBe(true);
+      expect(firstBody.result.content?.[0]?.text).toContain("confirmation_required");
+
+      const second = await postMcp(fixture.url, {
+        jsonrpc: "2.0",
+        id: 63,
+        method: "tools/call",
+        params: {
+          name: "run_command",
+          arguments: {
+            workspaceId: "workspace",
+            shell: "powershell",
+            command: "Write-Output confirmed",
+            timeoutMs: 30_000,
+            confirmationId,
+          },
+        },
+      });
+      const secondBody = await second.json() as {
+        result: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+      expect(second.status).toBe(200);
+      expect(secondBody.result.isError).not.toBe(true);
+      expect(secondBody.result.content?.[0]?.text).toContain("exit=0");
+      expect(calls).toBe(2);
+    } finally {
+      await fixture.close();
+    }
+  });
 });
 
 function createBlockingOperation(): {
