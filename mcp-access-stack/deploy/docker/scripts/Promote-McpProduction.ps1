@@ -246,7 +246,8 @@ function Invoke-ProductionComposeUp {
         '-d',
         '--no-build',
         'gateway',
-        'proxy'
+        'proxy',
+        'tunnel'
     )
 }
 

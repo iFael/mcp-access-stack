@@ -122,6 +122,10 @@ foreach ($requirement in $promotionRequirements) {
     }
 }
 
+if ($promotion -notmatch "(?s)'gateway',\s*'proxy',\s*'tunnel'") {
+    throw 'Production promotion compose convergence must include gateway, proxy and tunnel.'
+}
+
 if ($promotion.Contains('runtime\production-promotion\Invoke-InstallMcpHostTasks.ps1')) {
     throw 'Versioned production promotion must not depend on a runtime-only installer wrapper.'
 }
