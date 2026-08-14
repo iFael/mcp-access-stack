@@ -1,0 +1,5 @@
+version: 3
+agent:
+  dns_resolver_ips:
+    - 1.1.1.1
+    - 8.8.8.8

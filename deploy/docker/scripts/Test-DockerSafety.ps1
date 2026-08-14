@@ -14,6 +14,7 @@ $productionComposePath = Join-Path $PSScriptRoot '..\compose.production.yml'
 $developmentComposePath = Join-Path $PSScriptRoot '..\compose.development.yml'
 $productionComposeExamplePath = Join-Path $PSScriptRoot '..\config\production\compose.env.example'
 $developmentComposeExamplePath = Join-Path $PSScriptRoot '..\config\development\compose.env.example'
+$ngrokAgentConfigPath = Join-Path $PSScriptRoot '..\config\ngrok-agent.yml'
 
 $common = Get-Content -Raw -LiteralPath $commonPath
 $initializer = Get-Content -Raw -LiteralPath $initializerPath
@@ -24,6 +25,7 @@ $nativeLauncherSource = Get-Content -Raw -LiteralPath $nativeLauncherSourcePath
 $persistentEnable = Get-Content -Raw -LiteralPath $persistentEnablePath
 $productionCompose = Get-Content -Raw -LiteralPath $productionComposePath
 $developmentCompose = Get-Content -Raw -LiteralPath $developmentComposePath
+$ngrokAgentConfig = Get-Content -Raw -LiteralPath $ngrokAgentConfigPath
 
 if (-not $common.Contains('function Set-McpObjectProperty')) {
     throw 'Common Docker helpers must support optional JSON properties under strict mode.'
@@ -126,6 +128,24 @@ foreach ($composeSource in @(
     }
     if (-not $composeSource.Content.Contains('/var/lib/ngrok:rw,noexec,nosuid,size=1m')) {
         throw "Ngrok writable tmpfs is missing from $($composeSource.Name)."
+    }
+    if (-not $composeSource.Content.Contains('./config/ngrok-agent.yml:/etc/ngrok/mcp-agent.yml:ro')) {
+        throw "Ngrok resilient DNS configuration mount is missing from $($composeSource.Name)."
+    }
+    if (-not $composeSource.Content.Contains('--config=/var/lib/ngrok/auth-config.yml,/etc/ngrok/mcp-agent.yml')) {
+        throw "Ngrok merged configuration flag is missing from $($composeSource.Name)."
+    }
+}
+
+if (-not $ngrokAgentConfig.Contains('version: 3')) {
+    throw 'Ngrok resilient DNS configuration must use agent config version 3.'
+}
+if (-not $ngrokAgentConfig.Contains('dns_resolver_ips:')) {
+    throw 'Ngrok resilient DNS configuration must define dns_resolver_ips.'
+}
+foreach ($resolver in @('1.1.1.1', '8.8.8.8')) {
+    if (-not $ngrokAgentConfig.Contains("- $resolver")) {
+        throw "Ngrok resilient DNS configuration is missing resolver $resolver."
     }
 }
 

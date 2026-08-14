@@ -81,12 +81,15 @@ services:
       - /tmp:rw,noexec,nosuid,size=64m
       - /var/lib/ngrok:rw,noexec,nosuid,size=1m
     image: ${NGROK_IMAGE:-ngrok/ngrok:3.30.0-alpine}
+    volumes:
+      - ./config/ngrok-agent.yml:/etc/ngrok/mcp-agent.yml:ro
     env_file:
       - ../../.runtime-private/docker/production/ngrok.env
     command:
       - http
       - proxy:3300
       - --log=stdout
+      - --config=/var/lib/ngrok/auth-config.yml,/etc/ngrok/mcp-agent.yml
       - --url=${NGROK_PRODUCTION_URL:-}
     depends_on:
       proxy:
