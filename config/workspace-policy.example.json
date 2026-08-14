@@ -23,7 +23,7 @@
         "maxListedFiles": 1000
       },
       "allowWrites": [
-        ".codex/PLANNER_HANDOFF.md"
+        ".codex/HANDOFF.md"
       ]
     }
   ]

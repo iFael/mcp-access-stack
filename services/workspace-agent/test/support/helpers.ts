@@ -83,7 +83,7 @@ export function makeWorkspacePolicy(
     allowedRoots: options.allowedRoots ?? ["."],
     blockedGlobs: options.blockedGlobs ?? [],
     limits: { ...defaultLimits, ...options.limits },
-    allowWrites: [".codex/PLANNER_HANDOFF.md"],
+    allowWrites: [".codex/HANDOFF.md"],
   };
 }
 
