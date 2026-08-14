@@ -86,12 +86,15 @@ services:
     profiles:
       - tunnel
     image: ${NGROK_IMAGE:-ngrok/ngrok:3.30.0-alpine}
+    volumes:
+      - ./config/ngrok-agent.yml:/etc/ngrok/mcp-agent.yml:ro
     env_file:
       - ../../.runtime-private/docker/development/ngrok.env
     command:
       - http
       - proxy:4300
       - --log=stdout
+      - --config=/var/lib/ngrok/auth-config.yml,/etc/ngrok/mcp-agent.yml
       - --url=${NGROK_DEVELOPMENT_URL:-}
     depends_on:
       proxy:
