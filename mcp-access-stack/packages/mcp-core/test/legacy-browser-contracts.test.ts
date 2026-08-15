@@ -26,6 +26,16 @@ describe("legacy browser contracts", () => {
     expect(legacyLocatorSchema.parse({ text: "Financeiro" })).toEqual({ text: "Financeiro" });
   });
 
+  it("keeps modern snapshot refs out of browser_frame_sequence legacy locators", () => {
+    expect(browserFrameSequenceInputSchema.safeParse({
+      tabId: "tab-1",
+      steps: [{ action: "click", locator: { ref: "e69" } }],
+    }).success).toBe(false);
+    expect(browserFrameSequenceInputSchema.parse({
+      tabId: "tab-1",
+      steps: [{ action: "click", locator: { ref: "lref_1a2b3c4d" } }],
+    }).steps[0]).toMatchObject({ locator: { ref: "lref_1a2b3c4d" } });
+  });
   it("enforces typed sequence steps and bounded payloads", () => {
     expect(
       browserFrameSequenceInputSchema.parse({

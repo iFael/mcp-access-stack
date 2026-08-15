@@ -700,9 +700,14 @@ export class BrowserLegacyAutomationService {
             waitForFrameBatch &&
             isRetryableDirectFrameResolutionError(error);
           if (retryMissingWaitFrame && Date.now() >= frameWaitDeadline) {
+            const completedIndexes = steps.map((step) => step.index);
+            const observedIndexes = batch.entries.map((entry) => entry.index);
+            const progress = completedIndexes.length > 0
+              ? ` after completed step indexes [${completedIndexes.join(",")}] while observing step indexes [${observedIndexes.join(",")}]`
+              : "";
             throw new AppError(
               "STATE_NOT_REACHED",
-              "Legacy frame state was not reached before the deadline.",
+              `Legacy frame state was not reached before the deadline${progress}.`,
               { cause: error },
             );
           }
@@ -711,13 +716,37 @@ export class BrowserLegacyAutomationService {
             readOnlyBatch &&
             isTransientDirectFrameContextError(error);
           if (!retryMissingWaitFrame && !retryTransientRead) {
+            if (error instanceof AppError && steps.length > 0) {
+              const completedIndexes = steps.map((step) => step.index);
+              const observedIndexes = batch.entries.map((entry) => entry.index);
+              throw new AppError(
+                error.code,
+                `Legacy frame sequence failed while observing step indexes [${observedIndexes.join(",")}] after completed step indexes [${completedIndexes.join(",")}]. ${error.message}`,
+                { cause: error },
+              );
+            }
             throw error;
           }
           retries += 1;
           await directDelay(25, signal);
         }
       }
-      await navigation?.();
+      try {
+        await navigation?.();
+      } catch (error) {
+        if (error instanceof AppError) {
+          const completedIndexes = [
+            ...steps.map((step) => step.index),
+            ...batch.entries.map((entry) => entry.index),
+          ];
+          throw new AppError(
+            error.code,
+            `Legacy frame sequence reached post-action observation after step indexes [${completedIndexes.join(",")}]. ${error.message}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       response = execution.response;
       if (execution.result.steps.length !== batch.entries.length) {
         throw new AppError(
@@ -1020,27 +1049,43 @@ async function beginDirectFrameNavigationWait(
   driver: BrowserLegacyAutomationDriver,
   framePath: readonly string[],
   timeoutMs: number,
-): Promise<() => Promise<void>> {
+): Promise<() => Promise<"navigated" | "not-started">> {
   const frame = await driver.resolveFramePath(framePath);
-  const settled = frame.waitForNavigation({
-    waitUntil: "domcontentloaded",
-    timeout: Math.max(1, timeoutMs),
+  const navigationStartTimeoutMs = Math.max(1, Math.min(timeoutMs, 500));
+  const committed = frame.waitForNavigation({
+    waitUntil: "commit",
+    timeout: navigationStartTimeoutMs,
   }).then(
-    () => ({ ok: true as const }),
-    (error: unknown) => ({ ok: false as const, error }),
+    () => ({ status: "committed" as const }),
+    (error: unknown) =>
+      error instanceof Error && error.name === "TimeoutError"
+        ? ({ status: "not-started" as const })
+        : ({ status: "failed" as const, error }),
   );
   return async () => {
-    const result = await settled;
-    if (!result.ok) {
+    const result = await committed;
+    if (result.status === "not-started") return "not-started";
+    if (result.status === "failed") {
       throw new AppError(
         "STATE_NOT_REACHED",
-        "Legacy frame navigation did not reach the replacement document.",
+        "Legacy frame navigation observation failed before document commit; the action dispatch may already have occurred.",
         { cause: result.error },
       );
     }
+    try {
+      await frame.waitForLoadState("domcontentloaded", {
+        timeout: Math.max(1, timeoutMs - navigationStartTimeoutMs),
+      });
+    } catch (error) {
+      throw new AppError(
+        "STATE_NOT_REACHED",
+        "Legacy frame action was dispatched and navigation committed, but the replacement document did not reach DOMContentLoaded.",
+        { cause: error },
+      );
+    }
+    return "navigated";
   };
 }
-
 interface DirectDocumentSignals {
   layoutTables: number;
   inlineHandlers: number;

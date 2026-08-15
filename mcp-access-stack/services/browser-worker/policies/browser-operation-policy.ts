@@ -21,6 +21,11 @@ const browserAdvancedOperations = new Set<BrowserOperation>([
   "diagnostics",
 ]);
 
+const browserBasicObservabilityOperations = new Set<BrowserOperation>([
+  "console",
+  "networkList",
+  "diagnostics",
+]);
 export type BrowserAdvancedOperation =
   | "console"
   | "networkList"
@@ -53,7 +58,9 @@ export function assertBrowserOperationAllowed(
   }
 
   const profile = resolveBrowserOperationMode(mode);
-  if (!profile.allowAdvancedOperations) {
+  const allowsBasicInteractiveObservability =
+    mode === "interactive" && browserBasicObservabilityOperations.has(operation);
+  if (!profile.allowAdvancedOperations && !allowsBasicInteractiveObservability) {
     throw new AppError(
       "BROWSER_OPERATION_MODE_UNSUPPORTED",
       `Browser operation ${operation} requires diagnostic mode; the active session uses ${mode}.`,
