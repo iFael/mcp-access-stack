@@ -29,10 +29,12 @@ describe("browser operation policy", () => {
     expect(isBrowserAdvancedOperation("navigate")).toBe(false);
   });
 
-  it("allows advanced operations only in diagnostic mode", () => {
-    expect(() =>
-      assertBrowserOperationAllowed("console", "diagnostic", advancedDriver),
-    ).not.toThrow();
+  it("keeps basic sanitized observability available without opening diagnostic-only capabilities", () => {
+    for (const operation of ["console", "networkList", "diagnostics"] as const) {
+      expect(() =>
+        assertBrowserOperationAllowed(operation, "interactive", advancedDriver),
+      ).not.toThrow();
+    }
     expect(() =>
       assertBrowserOperationAllowed("navigate", "efficient", basicDriver),
     ).not.toThrow();
@@ -41,6 +43,19 @@ describe("browser operation policy", () => {
     ).toThrow(expect.objectContaining({
       code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
     }));
+    expect(() =>
+      assertBrowserOperationAllowed("networkInspect", "interactive", advancedDriver),
+    ).toThrow(expect.objectContaining({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    }));
+    expect(() =>
+      assertBrowserOperationAllowed("traceStart", "interactive", advancedDriver),
+    ).toThrow(expect.objectContaining({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    }));
+    expect(() =>
+      assertBrowserOperationAllowed("networkInspect", "diagnostic", advancedDriver),
+    ).not.toThrow();
   });
 
   it("reports a capability error when the direct engine lacks diagnostics", () => {

@@ -266,6 +266,58 @@ describe("BrowserLegacyAutomationService direct engine", () => {
     expect(evaluationScript(driver.evaluations[0])).toContain('"operation":"preflightFrameStep"');
   });
 
+  it("reports completed action steps when a later observation fails", async () => {
+    const driver = new FakeLegacyDriver([
+      envelope({ navigationLikely: false }),
+      envelope({
+        completed: true,
+        steps: [{ index: 0, action: "click", completed: true }],
+        telemetry: { totalMs: 1, interactionMs: 1, retries: 0 },
+      }),
+      { ok: false, error: { code: "STATE_NOT_REACHED", message: "Expected status was not observed." } },
+    ]);
+    const service = new BrowserLegacyAutomationService({ driver });
+
+    await expect(service.frameSequence({
+      tabId: "tab-1",
+      steps: [
+        { action: "click", framePath: ["MenuContent"], locator: { id: "open" } },
+        { action: "waitFor", framePath: ["MenuContent"], text: "ready", timeoutMs: 100 },
+      ],
+      timeoutMs: 1_000,
+    })).rejects.toMatchObject({
+      code: "STATE_NOT_REACHED",
+      message: expect.stringContaining(
+        "failed while observing step indexes [1] after completed step indexes [0]",
+      ),
+    });
+  });
+  it("reports that action dispatch reached post-action observation when committed navigation fails to settle", async () => {
+    const driver = new FakeLegacyDriver([
+      envelope({ navigationLikely: true }),
+      envelope({
+        completed: true,
+        steps: [{ index: 0, action: "click", completed: true }],
+        telemetry: { totalMs: 1, interactionMs: 1, retries: 0 },
+      }),
+    ], {
+      loadStateError: new Error("fixture load-state failure"),
+    });
+    const service = new BrowserLegacyAutomationService({ driver });
+
+    await expect(service.frameSequence({
+      tabId: "tab-1",
+      steps: [
+        { action: "click", framePath: ["MenuContent"], locator: { id: "open" } },
+      ],
+      timeoutMs: 1_000,
+    })).rejects.toMatchObject({
+      code: "STATE_NOT_REACHED",
+      message: expect.stringContaining(
+        "Legacy frame sequence reached post-action observation after step indexes [0].",
+      ),
+    });
+  });
   it("reuses only a signature-bound navigation cache entry", async () => {
     const cacheEntry = {
       pageSignature: "page-1",
@@ -440,7 +492,13 @@ class FakeLegacyDriver {
   private readonly frame: Frame;
   private readonly page: Page;
 
-  constructor(private readonly values: unknown[]) {
+  constructor(
+    private readonly values: unknown[],
+    private readonly navigation: {
+      commitError?: Error;
+      loadStateError?: Error;
+    } = {},
+  ) {
     const frame = {
       evaluate: async (expression: unknown, argument?: unknown) => {
         this.evaluations.push(argument ?? expression);
@@ -453,7 +511,13 @@ class FakeLegacyDriver {
       parentFrame: () => null,
       url: () => "https://example.test/legacy",
       isDetached: () => false,
-      waitForNavigation: async () => undefined,
+      waitForNavigation: async () => {
+        if (this.navigation.commitError) throw this.navigation.commitError;
+        return undefined;
+      },
+      waitForLoadState: async () => {
+        if (this.navigation.loadStateError) throw this.navigation.loadStateError;
+      },
     } as unknown as Frame;
     this.frame = frame;
     this.page = { mainFrame: () => frame } as unknown as Page;

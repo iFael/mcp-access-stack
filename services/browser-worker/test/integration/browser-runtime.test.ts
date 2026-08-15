@@ -1560,7 +1560,7 @@ describe("BrowserRuntime Playwright layer", () => {
     expect(fake.advancedCalls).toEqual([]);
   });
 
-  it("blocks advanced operations in interactive mode", async () => {
+  it("allows basic sanitized observability in interactive mode without opening detailed diagnostics", async () => {
     const directory = await makeTemporaryDirectory();
     const fake = new FakeBrowserDriver();
     const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
@@ -1568,10 +1568,23 @@ describe("BrowserRuntime Playwright layer", () => {
     const [tab] = (await runtime.tabs({})).tabs;
     if (!tab) throw new Error("Expected an owned MCP tab.");
 
-    await expect(runtime.console({ tabId: tab.tabId })).rejects.toMatchObject({
+    await expect(runtime.console({ tabId: tab.tabId })).resolves.toMatchObject({
+      tabId: tab.tabId,
+    });
+    await expect(runtime.networkList({ tabId: tab.tabId })).resolves.toMatchObject({
+      tabId: tab.tabId,
+    });
+    await expect(runtime.diagnostics({ tabId: tab.tabId })).resolves.toMatchObject({
+      tabId: tab.tabId,
+    });
+    await expect(runtime.networkInspect({
+      tabId: tab.tabId,
+      index: 1,
+      detail: "request",
+    })).rejects.toMatchObject({
       code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
     });
-    expect(fake.advancedCalls).toEqual([]);
+    expect(fake.advancedCalls).toEqual(["console", "networkList", "diagnostics"]);
   });
 
   it("rejects access to a task-owned tab from another owner scope", async () => {
