@@ -68,7 +68,13 @@ export type LegacyTelemetry = z.infer<typeof legacyTelemetrySchema>;
 
 export const legacyLocatorSchema = z
   .object({
-    ref: z.string().min(1).max(256).optional(),
+    ref: z
+      .string()
+      .regex(
+        /^lref_[0-9a-f]{8}$/u,
+        "Legacy locator refs must come from browser_dom_index (lref_<8-hex>); browser_snapshot aria refs are not interchangeable.",
+      )
+      .optional(),
     id: z.string().min(1).max(256).optional(),
     name: z.string().min(1).max(256).optional(),
     selector: z.string().min(1).max(2_000).optional(),

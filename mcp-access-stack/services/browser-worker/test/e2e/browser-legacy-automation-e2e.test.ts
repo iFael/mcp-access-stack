@@ -247,6 +247,123 @@ describe("Legacy Automation Engine E2E", () => {
     expect(await requireFrame("MenuContent").locator("#category").inputValue()).toBe("recent");
   });
 
+  it("keeps preventDefault fetch submits in the same document instead of requiring replacement navigation", async () => {
+    await loadFixture();
+    const contentFrame = requireFrame("MenuContent");
+    await contentFrame.evaluate(`(() => {
+      window.ajaxSubmitCount = 0;
+      const form = document.createElement("form");
+      form.id = "ajax-form";
+      const field = document.createElement("input");
+      field.id = "ajax-field";
+      field.name = "credential";
+      const button = document.createElement("button");
+      button.id = "ajax-submit";
+      button.type = "submit";
+      button.textContent = "Validar e autorizar";
+      const output = document.createElement("output");
+      output.id = "ajax-message";
+      form.append(field, button, output);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        window.ajaxSubmitCount += 1;
+        const response = await fetch("content.html", { cache: "no-store" });
+        output.textContent = response.ok ? "Credenciais inválidas." : "Falha inesperada.";
+      });
+      document.body.append(form);
+    })()`);
+    const driver = new PlaywrightEvaluationDriver(page);
+    const service = makeLegacyService(driver);
+
+    const result = await service.frameSequence({
+      tabId: "tab-1",
+      timeoutMs: 5_000,
+      steps: [
+        {
+          action: "fill",
+          framePath: ["MenuContent"],
+          locator: { id: "ajax-field" },
+          value: "credential-value",
+        },
+        {
+          action: "click",
+          framePath: ["MenuContent"],
+          locator: { id: "ajax-submit" },
+        },
+        {
+          action: "waitFor",
+          framePath: ["MenuContent"],
+          locator: { id: "ajax-message" },
+          state: "visible",
+          timeoutMs: 2_000,
+        },
+        {
+          action: "assert",
+          framePath: ["MenuContent"],
+          locator: { id: "ajax-message" },
+          condition: "textEquals",
+          expected: "Credenciais inválidas.",
+        },
+      ],
+    }, new Set([1]));
+
+    expect(result.result.steps.map((step) => step.index)).toEqual([0, 1, 2, 3]);
+    expect(await contentFrame.evaluate<number>("window.ajaxSubmitCount")).toBe(1);
+    expect(contentFrame.url()).toMatch(/content\.html$/u);
+  });
+
+  it("reindexes live interactive mutations while keeping arbitrary message text in extraction semantics", async () => {
+    await loadFixture();
+    const contentFrame = requireFrame("MenuContent");
+    const driver = new PlaywrightEvaluationDriver(page);
+    const service = makeLegacyService(driver);
+
+    const before = await service.domIndex({
+      tabId: "tab-1",
+      framePath: ["MenuContent"],
+      query: "Dynamic action",
+      visibleOnly: true,
+    });
+    expect(before.result.totalCount).toBe(0);
+
+    await contentFrame.evaluate(`(() => {
+      const button = document.createElement("button");
+      button.id = "dynamic-action";
+      button.textContent = "Dynamic action";
+      const message = document.createElement("div");
+      message.id = "dynamic-status";
+      message.textContent = "Credenciais inválidas.";
+      document.body.append(button, message);
+    })()`);
+
+    const after = await service.domIndex({
+      tabId: "tab-1",
+      framePath: ["MenuContent"],
+      query: "Dynamic action",
+      visibleOnly: true,
+    });
+    expect(after.result.items.some((item) => item.id === "dynamic-action")).toBe(true);
+
+    const messageIndex = await service.domIndex({
+      tabId: "tab-1",
+      framePath: ["MenuContent"],
+      rootSelector: "#dynamic-status",
+      query: "Credenciais inválidas.",
+      visibleOnly: true,
+    });
+    expect(messageIndex.result.totalCount).toBe(0);
+
+    const extracted = await service.frameSequence({
+      tabId: "tab-1",
+      steps: [{
+        action: "extract",
+        framePath: ["MenuContent"],
+        locator: { selector: "#dynamic-status" },
+        format: "text",
+      }],
+    });
+    expect(extracted.result.steps[0]?.value).toBe("Credenciais inválidas.");
+  });
   it("stops a cancelled sequence before a later DOM mutation", async () => {
     await loadFixture();
     const contentFrame = requireFrame("MenuContent");
@@ -326,7 +443,7 @@ describe("Legacy Automation Engine E2E", () => {
     expect(await contentFrame.locator("#native-output").textContent()).toBe("acionado");
   });
 
-  it("blocks submit actions without explicit authorization", async () => {
+  it("preflights submit confirmation before executing earlier sequence mutations", async () => {
     await loadFixture();
     const driver = new PlaywrightEvaluationDriver(page);
     const service = makeLegacyService(driver);
@@ -336,6 +453,12 @@ describe("Legacy Automation Engine E2E", () => {
         tabId: "tab-1",
         steps: [
           {
+            action: "fill",
+            framePath: ["MenuContent"],
+            locator: { id: "query" },
+            value: "must-not-run-before-confirmation",
+          },
+          {
             action: "click",
             framePath: ["MenuContent"],
             locator: { id: "analisar" },
@@ -344,6 +467,7 @@ describe("Legacy Automation Engine E2E", () => {
       }),
     ).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
 
+    expect(await requireFrame("MenuContent").locator("#query").inputValue()).toBe("");
     expect(requireFrame("MenuContent").url()).toMatch(/content\.html$/u);
   });
 
