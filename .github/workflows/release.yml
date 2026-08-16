@@ -230,6 +230,17 @@ jobs:
             -GitHubCiRunId $ciRunId `
             -SkipDockerImages
 
+      - name: Build Windows execution-node native artifacts
+        env:
+          RELEASE_ID: ${{ needs.metadata.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+        run: |
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpWindowsExecutionNodeArtifacts.ps1 `
+            -ReleaseRoot (Join-Path $PWD "releases\$env:RELEASE_ID") `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'execution-node-native')
+
       - name: Assemble and sign minimal public distribution
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
@@ -251,7 +262,15 @@ jobs:
             -ProxyRepository $env:PROXY_REPOSITORY `
             -ProxyDigest $env:PROXY_DIGEST `
             -BuildRunId ([long]$env:GITHUB_RUN_ID) `
+            -ExecutionNodeNativeDirectory (Join-Path $env:RUNNER_TEMP 'execution-node-native') `
             -OutputDirectory (Join-Path $env:RUNNER_TEMP 'public-distribution')
+
+      - name: Validate signed Windows execution-node package
+        env:
+          RELEASE_ID: ${{ needs.metadata.outputs.version }}
+        run: |
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsExecutionNodePackage.ps1 `
+            -ReleaseRoot (Join-Path $env:RUNNER_TEMP "public-distribution\stage\releases\$env:RELEASE_ID")
 
       - name: Upload signed release assets for publisher job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

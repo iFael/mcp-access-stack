@@ -27,6 +27,15 @@ $credentialManager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Manage-M
 $releaseWorkflowPath = Join-Path $PSScriptRoot '..\..\..\.github\workflows\release.yml'
 $releaseWorkflow = Get-Content -LiteralPath $releaseWorkflowPath -Raw
 $distributionBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpPublicDistribution.ps1') -Raw
+$executionNodeBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpWindowsExecutionNodeArtifacts.ps1') -Raw
+$mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHost.cs') -Raw
+$mcpHostSupervisorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostSupervisor.cs') -Raw
+$mcpHostPersistenceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostPersistence.cs') -Raw
+$executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
+$executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
+$executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
+$executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1') -Raw
+$executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
 if (
     -not $common.Contains('distribution-manifest.ps1') -or
     -not $common.Contains('Assert-McpPublicSignature')
@@ -35,11 +44,125 @@ if (
 }
 if (
     -not $releaseWorkflow.Contains('New-McpPublicDistribution.ps1') -or
+    -not $releaseWorkflow.Contains('New-McpWindowsExecutionNodeArtifacts.ps1') -or
+    -not $releaseWorkflow.Contains('Test-McpWindowsExecutionNodePackage.ps1') -or
     -not $distributionBuilder.Contains('distribution-manifest.ps1') -or
     -not $distributionBuilder.Contains('release-attestation.ps1') -or
+    -not $distributionBuilder.Contains('execution-node-manifest.json') -or
+    -not $distributionBuilder.Contains('ExecutionNodeNativeDirectory') -or
+    -not $distributionBuilder.Contains('McpHost.exe') -or
+    -not $distributionBuilder.Contains('WindowsExecutionNode.Common.ps1') -or
+    -not $distributionBuilder.Contains('Stage-McpWindowsExecutionNodeCandidate.ps1') -or
+    -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
+    -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeHostTask.ps1') -or
+    -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutover.ps1') -or
     -not $distributionBuilder.Contains('Set-AuthenticodeSignature')
 ) {
-    throw 'Public release workflow must build a signed distribution and release attestation.'
+    throw 'Public release workflow must build and sign the execution-node distribution and release attestation.'
+}
+foreach ($required in @(
+    'McpHost.exe',
+    'McpHostSupervisor.cs',
+    'McpHostPersistence.cs',
+    'McpNodeHostLauncher.exe',
+    'McpCredentialBroker.exe',
+    'Microsoft.NET\Framework64\v4.0.30319\csc.exe',
+    'System.Web.Extensions.dll',
+    'mcp-host-contract-v3'
+)) {
+    if (-not $executionNodeBuilder.Contains($required)) {
+        throw "Execution-node native builder requirement is missing: $required"
+    }
+}
+foreach ($required in @('--version', '--validate-release-root', '--supervise', '--run-active', 'installation-root', 'expected-manifest-sha256', 'qualification-owner-pid')) {
+    if (-not $mcpHostSource.Contains($required)) {
+        throw "McpHost supervisor CLI contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'JobObjectLimitKillOnJobClose',
+    '/health/ready',
+    'Execution-node artifact changed after validation',
+    'eventName, "connected"',
+    'host-state.json',
+    'mcp_host_qualification_owner_exited'
+)) {
+    if (-not $mcpHostSupervisorSource.Contains($required)) {
+        throw "McpHost supervisor runtime contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'host-ownership-',
+    'Stable McpHost does not match the active release McpHost artifact.',
+    'ExecutionNodeSupervisor.Run'
+)) {
+    if (-not $mcpHostPersistenceSource.Contains($required)) {
+        throw "McpHost persistent ownership contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'New-ScheduledTaskAction',
+    '-Execute $stableHostPath',
+    '--run-active',
+    'New-ScheduledTaskTrigger -AtLogOn',
+    '-MultipleInstances IgnoreNew'
+)) {
+    if (-not $executionNodeTaskInstaller.Contains($required)) {
+        throw "Persistent host task contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Disable-McpLegacyOwnership',
+    'Sync-McpStableHost',
+    'Wait-McpPersistentReady',
+    'Restore-McpLegacyOwnership',
+    'Enter-McpWindowsExecutionNodeOperationMutex'
+)) {
+    if (-not $executionNodeCutover.Contains($required)) {
+        throw "Execution-node cutover contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Assert-McpWindowsExecutionNodeRelease',
+    'Assert-McpWindowsExecutionNodeNoReparsePoints',
+    'Assert-McpWindowsExecutionNodeDistributionCompleteness',
+    'Assert-McpWindowsExecutionNodeMaterializedRelease',
+    'Read-McpWindowsExecutionNodeState',
+    'Write-McpWindowsExecutionNodeState',
+    'Enter-McpWindowsExecutionNodeOperationMutex',
+    'Exit-McpWindowsExecutionNodeOperationMutex'
+)) {
+    if (-not $executionNodeCommon.Contains($required)) {
+        throw "Execution-node common requirement is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Assert-McpPublicDistribution',
+    'ExpectedReleaseId',
+    'distributionCommit',
+    'state.lock',
+    'activeChanged = $false',
+    'candidatePrepared = $true',
+    'Enter-McpWindowsExecutionNodeOperationMutex'
+)) {
+    if (-not $executionNodeStager.Contains($required)) {
+        throw "Execution-node stager requirement is missing: $required"
+    }
+}
+foreach ($required in @(
+    "ValidateSet('Promote', 'Rollback')",
+    'state.lock',
+    'Assert-McpWindowsExecutionNodeRelease',
+    'healthValidated',
+    'candidate = $null',
+    'previous = $sourcePointer',
+    'candidate = $sourcePointer',
+    '--qualification-owner-pid',
+    'Enter-McpWindowsExecutionNodeOperationMutex'
+)) {
+    if (-not $executionNodeTransition.Contains($required)) {
+        throw "Execution-node transition requirement is missing: $required"
+    }
 }
 foreach ($required in @(
     'Assert-McpPublicSignature',
@@ -96,4 +219,51 @@ if (-not $distributionBuilder.Contains('WINDOWS_SIGNING_PFX_BASE64') -or
     throw 'Public distribution builder must fail closed without code-signing secrets.'
 }
 
+if ([string]$env:GITHUB_ACTIONS -eq 'true') {
+    $fixtureRoot = Join-Path $env:RUNNER_TEMP ('execution-node-builder-fixture-' + [guid]::NewGuid().ToString('N'))
+    $fixtureRelease = Join-Path $fixtureRoot 'release'
+    $fixtureOutput = Join-Path $fixtureRoot 'output'
+    try {
+        $launcherFixture = Join-Path $fixtureRelease 'tooling\windows-host-launcher'
+        $brokerFixture = Join-Path $fixtureRelease 'tooling\windows-credential-broker'
+        New-Item -ItemType Directory -Force -Path $launcherFixture, $brokerFixture | Out-Null
+        Copy-Item `
+            -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-host-launcher\McpNodeHostLauncher.cs') `
+            -Destination (Join-Path $launcherFixture 'McpNodeHostLauncher.cs')
+        Copy-Item `
+            -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-credential-broker\McpCredentialBroker.cs') `
+            -Destination (Join-Path $brokerFixture 'McpCredentialBroker.cs')
+        [IO.File]::WriteAllText(
+            (Join-Path $fixtureRelease 'manifest.json'),
+            (([ordered]@{
+                releaseId = 'ci-fixture'
+                commit = ('a' * 40)
+            } | ConvertTo-Json) + [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false)
+        )
+
+        $resultJson = & pwsh -NoLogo -NoProfile `
+            -File (Join-Path $PSScriptRoot 'New-McpWindowsExecutionNodeArtifacts.ps1') `
+            -ReleaseRoot $fixtureRelease `
+            -ReleaseId 'ci-fixture' `
+            -SourceCommit ('a' * 40) `
+            -OutputDirectory $fixtureOutput
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Execution-node native builder CI smoke failed.'
+        }
+        $result = $resultJson | ConvertFrom-Json
+        if ([string]$result.status -ne 'built' -or @($result.artifacts).Count -ne 3) {
+            throw 'Execution-node native builder CI smoke returned unexpected evidence.'
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $fixtureRoot) {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+}
+& (Join-Path $PSScriptRoot 'Test-McpHostSupervisor.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeTransition.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodePersistence.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'

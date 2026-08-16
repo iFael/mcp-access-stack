@@ -17,6 +17,7 @@ export * from "./project-write-policy.js";
 export * from "./qualified-command-contracts.js";
 export * from "./qualified-command-invocation-contracts.js";
 export * from "./timeout-policy.js";
+export * from "./windows-execution-node-contracts.js";
 export * from "./workspace-catalog.js";
 export * from "./workspace-executor.js";
 export * from "./windows-credential-broker.js";
