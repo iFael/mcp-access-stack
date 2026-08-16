@@ -31,6 +31,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputDirectory,
 
+    [Parameter(Mandatory = $true)]
+    [string]$ExecutionNodeNativeDirectory,
+
     [ValidateRange(0, 9223372036854775807)]
     [long]$BuildRunId = 0
 )
@@ -40,6 +43,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
+$executionNodeNative = [System.IO.Path]::GetFullPath($ExecutionNodeNativeDirectory)
 $publicCommonPath = Join-Path $root 'deploy\windows\PublicDistribution.Common.ps1'
 . $publicCommonPath
 $publicSignerCertificatePath = Join-Path $root 'deploy\windows\mcp-access-stack-code-signing.cer'
@@ -168,6 +172,39 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
     throw 'Immutable release identity or validation evidence does not match the requested public distribution.'
 }
 
+$expectedNativeArtifacts = @(
+    'McpHost.exe',
+    'McpNodeHostLauncher.exe',
+    'McpCredentialBroker.exe'
+)
+foreach ($name in $expectedNativeArtifacts) {
+    $source = Join-Path $executionNodeNative $name
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Prebuilt Windows execution-node artifact is missing: $name"
+    }
+}
+
+$nativeTarget = Join-Path $releaseTarget 'native'
+$compatTarget = Join-Path $releaseTarget 'compat'
+New-Item -ItemType Directory -Force -Path $nativeTarget, $compatTarget | Out-Null
+Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpHost.exe') -Destination (Join-Path $nativeTarget 'McpHost.exe')
+Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpNodeHostLauncher.exe') -Destination (Join-Path $compatTarget 'McpNodeHostLauncher.exe')
+Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpCredentialBroker.exe') -Destination (Join-Path $compatTarget 'McpCredentialBroker.exe')
+
+$nodeVersion = [string]$releaseManifest.nodeVersion
+if ($nodeVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+    throw 'Immutable release contains an invalid Node.js version.'
+}
+$nodeRuntimeSource = Join-Path $root ".runtime-tools\mcp-node-runtime\$nodeVersion"
+$nodeExecutableSource = Join-Path $nodeRuntimeSource 'node.exe'
+if (-not (Test-Path -LiteralPath $nodeExecutableSource -PathType Leaf)) {
+    throw "Managed Node.js runtime required by the release is missing: $nodeVersion"
+}
+$runtimeTargetParent = Join-Path $releaseTarget 'runtime'
+$nodeRuntimeTarget = Join-Path $runtimeTargetParent 'node'
+New-Item -ItemType Directory -Force -Path $runtimeTargetParent | Out-Null
+Copy-Item -LiteralPath $nodeRuntimeSource -Destination $nodeRuntimeTarget -Recurse
+
 $dockerImages = @(
     [ordered]@{
         component = 'gateway'
@@ -222,9 +259,84 @@ try {
 
     foreach ($script in @(
         Get-ChildItem -LiteralPath $stage -Recurse -File -Filter '*.ps1' |
+            Where-Object {
+                -not $_.FullName.StartsWith(
+                    $nodeRuntimeTarget,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            } |
             Sort-Object FullName
     )) {
         Sign-Script -Path $script.FullName -Certificate $certificate
+    }
+
+    $hostExecutablePath = Join-Path $releaseTarget 'native\McpHost.exe'
+    $compatLauncherPath = Join-Path $releaseTarget 'compat\McpNodeHostLauncher.exe'
+    $compatBrokerPath = Join-Path $releaseTarget 'compat\McpCredentialBroker.exe'
+    foreach ($nativeExecutable in @($hostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
+        Sign-Script -Path $nativeExecutable -Certificate $certificate
+    }
+
+    function New-ExecutionNodeArtifactRecord {
+        param(
+            [Parameter(Mandatory = $true)][string]$Role,
+            [Parameter(Mandatory = $true)][string]$RelativePath,
+            [Parameter(Mandatory = $true)][bool]$AuthenticodeRequired
+        )
+        $absolutePath = Join-Path $releaseTarget ($RelativePath.Replace('/', '\'))
+        if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
+            throw "Execution-node artifact is missing: $RelativePath"
+        }
+        if ($AuthenticodeRequired) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $absolutePath
+            if (-not $signature.SignerCertificate) {
+                throw "Execution-node artifact is unsigned: $RelativePath"
+            }
+            $actualThumbprint = Normalize-McpPublicThumbprint -Value $signature.SignerCertificate.Thumbprint
+            $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
+            if ($actualThumbprint -ne $expectedThumbprint) {
+                throw "Execution-node artifact signer mismatch: $RelativePath"
+            }
+        }
+        $item = Get-Item -LiteralPath $absolutePath
+        return [ordered]@{
+            role = $Role
+            path = $RelativePath
+            sha256 = (Get-FileHash -LiteralPath $absolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            sizeBytes = [long]$item.Length
+            authenticodeRequired = $AuthenticodeRequired
+        }
+    }
+
+    $executionNodeManifest = [ordered]@{
+        version = 1
+        releaseId = $ReleaseId
+        commit = $SourceCommit
+        platform = 'win32-x64'
+        createdAt = [DateTimeOffset]::UtcNow.ToString('O')
+        runtimeMode = 'bundled-node'
+        integrityRoot = 'signed-distribution-manifest'
+        artifacts = @(
+            (New-ExecutionNodeArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
+        )
+    }
+    $executionNodeManifestPath = Join-Path $releaseTarget 'execution-node-manifest.json'
+    Write-Utf8NoBom `
+        -Path $executionNodeManifestPath `
+        -Content (($executionNodeManifest | ConvertTo-Json -Depth 16) + [Environment]::NewLine)
+    $executionNodeIdentity = [ordered]@{
+        schemaVersion = 1
+        manifestPath = 'execution-node-manifest.json'
+        manifestSha256 = (Get-FileHash -LiteralPath $executionNodeManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    if ($releaseManifest.PSObject.Properties['executionNode']) {
+        $releaseManifest.executionNode = $executionNodeIdentity
+    }
+    else {
+        $releaseManifest | Add-Member -NotePropertyName executionNode -NotePropertyValue $executionNodeIdentity
     }
 
     $releaseFiles = @(
