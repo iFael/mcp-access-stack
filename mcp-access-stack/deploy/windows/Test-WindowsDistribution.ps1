@@ -32,6 +32,7 @@ $mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\toolin
 $mcpHostSupervisorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostSupervisor.cs') -Raw
 $executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
 $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
+$executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
 if (
     -not $common.Contains('distribution-manifest.ps1') -or
     -not $common.Contains('Assert-McpPublicSignature')
@@ -49,6 +50,7 @@ if (
     -not $distributionBuilder.Contains('McpHost.exe') -or
     -not $distributionBuilder.Contains('WindowsExecutionNode.Common.ps1') -or
     -not $distributionBuilder.Contains('Stage-McpWindowsExecutionNodeCandidate.ps1') -or
+    -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
     -not $distributionBuilder.Contains('Set-AuthenticodeSignature')
 ) {
     throw 'Public release workflow must build and sign the execution-node distribution and release attestation.'
@@ -66,7 +68,7 @@ foreach ($required in @(
         throw "Execution-node native builder requirement is missing: $required"
     }
 }
-foreach ($required in @('--version', '--validate-release-root', '--supervise', 'expected-manifest-sha256')) {
+foreach ($required in @('--version', '--validate-release-root', '--supervise', 'expected-manifest-sha256', 'qualification-owner-pid')) {
     if (-not $mcpHostSource.Contains($required)) {
         throw "McpHost supervisor CLI contract is missing: $required"
     }
@@ -76,7 +78,8 @@ foreach ($required in @(
     '/health/ready',
     'Execution-node artifact changed after validation',
     'eventName, "connected"',
-    'host-state.json'
+    'host-state.json',
+    'mcp_host_qualification_owner_exited'
 )) {
     if (-not $mcpHostSupervisorSource.Contains($required)) {
         throw "McpHost supervisor runtime contract is missing: $required"
@@ -104,6 +107,20 @@ foreach ($required in @(
 )) {
     if (-not $executionNodeStager.Contains($required)) {
         throw "Execution-node stager requirement is missing: $required"
+    }
+}
+foreach ($required in @(
+    "ValidateSet('Promote', 'Rollback')",
+    'state.lock',
+    'Assert-McpWindowsExecutionNodeRelease',
+    'healthValidated',
+    'candidate = $null',
+    'previous = $sourcePointer',
+    'candidate = $sourcePointer',
+    '--qualification-owner-pid'
+)) {
+    if (-not $executionNodeTransition.Contains($required)) {
+        throw "Execution-node transition requirement is missing: $required"
     }
 }
 foreach ($required in @(
@@ -206,4 +223,5 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
 }
 & (Join-Path $PSScriptRoot 'Test-McpHostSupervisor.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeTransition.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'

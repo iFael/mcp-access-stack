@@ -78,6 +78,7 @@ internal static class Program
         options.RestartCount = OptionalInteger(values, "restart-count", 5, 0, 100);
         options.RestartIntervalSeconds = OptionalInteger(values, "restart-interval-seconds", 5, 1, 3600);
         options.ReadinessTimeoutSeconds = OptionalInteger(values, "readiness-timeout-seconds", 45, 5, 600);
+        options.QualificationOwnerPid = OptionalInteger(values, "qualification-owner-pid", 0, 0, int.MaxValue);
 
         if (!string.Equals(options.EnvironmentName, "development", StringComparison.Ordinal) &&
             !string.Equals(options.EnvironmentName, "production", StringComparison.Ordinal))
@@ -101,7 +102,8 @@ internal static class Program
         "health-state-path",
         "restart-count",
         "restart-interval-seconds",
-        "readiness-timeout-seconds"
+        "readiness-timeout-seconds",
+        "qualification-owner-pid"
     };
 
     private static string Require(Dictionary<string, string> values, string name)
@@ -152,4 +154,5 @@ internal sealed class SupervisorOptions
     public int RestartCount;
     public int RestartIntervalSeconds;
     public int ReadinessTimeoutSeconds;
+    public int QualificationOwnerPid;
 }

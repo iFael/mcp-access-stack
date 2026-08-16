@@ -362,3 +362,47 @@ The state exposes host status, release identity, execution-manifest hash, child 
 The GitHub-only runtime smoke compiles the native host on the Windows runner, runs fake fixed Agent/Browser payloads from a fixture release, verifies Browser HTTP readiness, Agent structured readiness, one bounded Agent restart, final host readiness and Job Object cleanup after host termination. Normal local checks remain source/static only and do not invoke `csc.exe`.
 
 Stage 4 remains additive: beta.8 Scheduled Tasks, Agent, Browser Worker and production routing stay untouched until a later promotion/rollback gate explicitly authorizes cutover.
+
+## Transactional promotion and rollback (Stage 5)
+
+Stage 5 introduces a state transition controller without changing the beta.8 production runtime. The controller uses the same `state/state.lock` owned by candidate staging, so staging, promotion and rollback are mutually exclusive.
+
+The transition model is explicit:
+
+```text
+PROMOTE
+active=A, candidate=B, previous=null
+  -> validate A and B
+  -> start B with McpHost
+  -> require B health=ready
+  -> active=B, previous=A, candidate=null
+
+ROLLBACK
+active=B, candidate=null, previous=A
+  -> validate B and A
+  -> start A with McpHost
+  -> require A health=ready
+  -> active=A, candidate=B, previous=null
+```
+
+The displaced active release becomes `candidate` after rollback so it can only return to active through a new health-qualified promotion. Rollback does not create an implicit toggle loop through `previous`.
+
+The state write is deliberately late. `active` is never changed before the target release has passed:
+
+1. pointer validation;
+2. materialized release validation;
+3. execution-manifest hash binding;
+4. critical artifact validation performed by `McpHost` at startup;
+5. Agent readiness;
+6. Browser Worker readiness;
+7. host health identity checks (`releaseId`, manifest SHA-256, environment and host PID).
+
+If validation, process startup or health fails, the qualification host is terminated and `execution-node.json` is not rewritten. This makes a failed promotion or rollback a no-state-change outcome rather than a compensating pointer rewrite.
+
+Qualification startup also passes the transition controller PID through the closed `--qualification-owner-pid` option. `McpHost` holds a process handle for that owner; if the controller disappears before normal teardown, the host signals shutdown and closes its Job Object, preventing a pre-commit qualification tree from becoming orphaned.
+
+`Invoke-McpWindowsExecutionNodeTransition.ps1` is intentionally not the Stage 6 cutover orchestrator. Its McpHost instance is qualification-owned and is terminated after the state transaction. Persistent host ownership, stopping the beta.8 Scheduled Tasks and reboot persistence remain a separate cutover gate.
+
+Before qualification, the transition controller also refuses to run when `host-state.json` identifies a live McpHost. Stage 6 must therefore stop the currently owned host/runtime explicitly before invoking a real transition; Stage 5 never kills an existing production host implicitly.
+
+The transition script is included in the signed public Windows distribution. Normal local checks validate only its static contract. GitHub Windows CI owns the runtime smoke that compiles the native host and proves healthy promotion, healthy rollback, health-failure state preservation, pointer-tamper rejection and `state.lock` serialization.

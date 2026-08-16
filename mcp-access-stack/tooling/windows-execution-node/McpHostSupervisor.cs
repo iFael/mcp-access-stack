@@ -876,6 +876,13 @@ internal static class ExecutionNodeSupervisor
             runtimeRoot,
             credentialBrokerPath);
 
+        if (options.QualificationOwnerPid > 0)
+        {
+            StartQualificationOwnerMonitor(
+                options.QualificationOwnerPid,
+                Path.Combine(runtimeRoot, "host.log"));
+        }
+
         using (WindowsJob job = new WindowsJob())
         {
             ComponentSupervisor agent = new ComponentSupervisor(
@@ -944,6 +951,53 @@ internal static class ExecutionNodeSupervisor
         }
 
         return HasFatal() ? 1 : 0;
+    }
+
+    private static void StartQualificationOwnerMonitor(int ownerPid, string logPath)
+    {
+        if (ownerPid == Process.GetCurrentProcess().Id)
+        {
+            throw new ArgumentException("Qualification owner PID must identify the controlling process.");
+        }
+
+        Process owner;
+        try
+        {
+            owner = Process.GetProcessById(ownerPid);
+            if (owner.HasExited)
+            {
+                owner.Dispose();
+                throw new InvalidOperationException("Qualification owner process has already exited.");
+            }
+        }
+        catch (ArgumentException)
+        {
+            throw new InvalidOperationException("Qualification owner process was not found.");
+        }
+
+        Thread monitor = new Thread(delegate()
+        {
+            try
+            {
+                owner.WaitForExit();
+                HostLog.AppendEvent(
+                    logPath,
+                    "mcp_host_qualification_owner_exited",
+                    "ownerPid=" + ownerPid.ToString());
+                StopEvent.Set();
+            }
+            catch
+            {
+                StopEvent.Set();
+            }
+            finally
+            {
+                owner.Dispose();
+            }
+        });
+        monitor.IsBackground = true;
+        monitor.Name = "McpHost-QualificationOwner";
+        monitor.Start();
     }
 
     private static void RecordFatal(string reason)
