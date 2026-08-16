@@ -64,7 +64,7 @@ foreach ($forbidden in @(
 foreach ($required in @(
     'OfflinePinned',
     'McpAuthenticodeVerifier',
-    '0x800B0109',
+    '800B0109',
     'GITHUB_ACTIONS'
 )) {
     if (-not $common.Contains($required)) {
@@ -294,9 +294,10 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
 
         $authFixtureResult = [McpAuthenticodeVerifier]::Verify($authFixturePath)
         $authFixtureStatus = [uint32]$authFixtureResult.StatusCode
+        $trustUntrustedRoot = [Convert]::ToUInt32('800B0109', 16)
         $authFixtureThumbprint = (([string]$authFixtureResult.SignerThumbprint) -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
         $expectedFixtureThumbprint = (([string]$authFixtureCertificate.Thumbprint) -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
-        if ($authFixtureStatus -notin @([uint32]0, [uint32]0x800B0109) -or
+        if ($authFixtureStatus -notin @([uint32]0, $trustUntrustedRoot) -or
             $authFixtureThumbprint -ne $expectedFixtureThumbprint) {
             throw ("Offline Authenticode verifier rejected a valid CI fixture. WinVerifyTrust=0x{0:X8}" -f $authFixtureStatus)
         }
@@ -309,7 +310,7 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
         )
         $tamperedFixtureResult = [McpAuthenticodeVerifier]::Verify($authFixturePath)
         $tamperedStatus = [uint32]$tamperedFixtureResult.StatusCode
-        if ($tamperedStatus -in @([uint32]0, [uint32]0x800B0109)) {
+        if ($tamperedStatus -in @([uint32]0, $trustUntrustedRoot)) {
             throw 'Offline Authenticode verifier accepted a tampered CI fixture.'
         }
     }

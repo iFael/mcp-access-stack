@@ -88,9 +88,11 @@ function Assert-McpPublicOfflinePinnedSignature {
     $verification = [McpAuthenticodeVerifier]::Verify([System.IO.Path]::GetFullPath($Path))
     $statusCode = [uint32]$verification.StatusCode
     $signerThumbprint = [string]$verification.SignerThumbprint
+    $trustNoSignature = [Convert]::ToUInt32('800B0100', 16)
+    $trustUntrustedRoot = [Convert]::ToUInt32('800B0109', 16)
 
     if ($AllowUnsignedDevelopment -and
-        $statusCode -eq [uint32]0x800B0100 -and
+        $statusCode -eq $trustNoSignature -and
         [string]::IsNullOrWhiteSpace($signerThumbprint)) {
         return
     }
@@ -98,7 +100,7 @@ function Assert-McpPublicOfflinePinnedSignature {
     # The project signer is self-signed and its exact thumbprint is the trust anchor.
     # A cryptographically valid signature may therefore report CERT_E_UNTRUSTEDROOT
     # on an ephemeral runner that intentionally does not mutate the Windows Root store.
-    if ($statusCode -notin @([uint32]0, [uint32]0x800B0109)) {
+    if ($statusCode -notin @([uint32]0, $trustUntrustedRoot)) {
         throw ("Invalid offline Authenticode signature for {0}. WinVerifyTrust=0x{1:X8}" -f $Path, $statusCode)
     }
     if ([string]::IsNullOrWhiteSpace($signerThumbprint)) {
