@@ -29,6 +29,8 @@ $releaseWorkflow = Get-Content -LiteralPath $releaseWorkflowPath -Raw
 $distributionBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpPublicDistribution.ps1') -Raw
 $executionNodeBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpWindowsExecutionNodeArtifacts.ps1') -Raw
 $mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHost.cs') -Raw
+$executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
+$executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
 if (
     -not $common.Contains('distribution-manifest.ps1') -or
     -not $common.Contains('Assert-McpPublicSignature')
@@ -44,6 +46,8 @@ if (
     -not $distributionBuilder.Contains('execution-node-manifest.json') -or
     -not $distributionBuilder.Contains('ExecutionNodeNativeDirectory') -or
     -not $distributionBuilder.Contains('McpHost.exe') -or
+    -not $distributionBuilder.Contains('WindowsExecutionNode.Common.ps1') -or
+    -not $distributionBuilder.Contains('Stage-McpWindowsExecutionNodeCandidate.ps1') -or
     -not $distributionBuilder.Contains('Set-AuthenticodeSignature')
 ) {
     throw 'Public release workflow must build and sign the execution-node distribution and release attestation.'
@@ -62,6 +66,30 @@ foreach ($required in @(
 foreach ($required in @('--version', '--validate-release-root', 'runtime supervision is not enabled yet')) {
     if (-not $mcpHostSource.Contains($required)) {
         throw "McpHost stage-2 safety contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Assert-McpWindowsExecutionNodeRelease',
+    'Assert-McpWindowsExecutionNodeNoReparsePoints',
+    'Assert-McpWindowsExecutionNodeDistributionCompleteness',
+    'Assert-McpWindowsExecutionNodeMaterializedRelease',
+    'Read-McpWindowsExecutionNodeState',
+    'Write-McpWindowsExecutionNodeState'
+)) {
+    if (-not $executionNodeCommon.Contains($required)) {
+        throw "Execution-node common requirement is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Assert-McpPublicDistribution',
+    'ExpectedReleaseId',
+    'distributionCommit',
+    'state.lock',
+    'activeChanged = $false',
+    'candidatePrepared = $true'
+)) {
+    if (-not $executionNodeStager.Contains($required)) {
+        throw "Execution-node stager requirement is missing: $required"
     }
 }
 foreach ($required in @(
@@ -162,4 +190,5 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
         }
     }
 }
+& (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'

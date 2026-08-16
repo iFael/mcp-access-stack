@@ -262,3 +262,47 @@ signed immutable release -> verify -> McpHost.exe -> verified child components
 ```
 
 Endpoint protection remains enabled; the architecture must adapt to the endpoint security boundary rather than depend on exclusions.
+
+## Candidate-only staging (Stage 3)
+
+The first local materialization path is deliberately separate from the legacy updater and from production activation. `Stage-McpWindowsExecutionNodeCandidate.ps1` accepts an already extracted public distribution plus an explicit installation root; it does not fetch from GitHub, import Docker images, request promotion or start `McpHost`.
+
+The managed layout is:
+
+```text
+<installation-root>/
+  releases/
+    <release-id>/
+  state/
+    execution-node.json
+    state.lock
+```
+
+`execution-node.json` implements the versioned `active` / `candidate` / `previous` contract. Stage 3 may create or replace only `candidate`; `active` and `previous` are preserved semantically unchanged and staging the current active release is rejected. `manifestSha256` binds the pointer to `execution-node-manifest.json`.
+
+The candidate transaction is fail-closed:
+
+```text
+signed distribution manifest
+  -> validate every distribution hash and reject unsigned extra files
+  -> validate release attestation + manifest hashes
+  -> validate execution-node manifest + critical artifacts
+  -> validate required Authenticode
+  -> reject reparse points
+  -> reject overlapping source/destination roots
+  -> acquire exclusive state lock
+  -> copy to releases/.staging-*
+  -> revalidate copied release
+  -> atomic directory move to releases/<release-id>
+  -> revalidate final release
+  -> atomically write candidate state
+  -> report READY
+```
+
+The signed distribution file set is revalidated after materialization, including dependencies outside the smaller release `fileHashes` set, closing the copy-time TOCTOU window.
+
+A retry is idempotent when the same release and execution manifest are already materialized. An existing target with a different identity fails closed. A failed copy/validation can leave no candidate pointer; a successfully materialized release with a failed state write is harmless and can be revalidated on retry.
+
+The stager itself and `WindowsExecutionNode.Common.ps1` are included in the public distribution and Authenticode-signed by the GitHub packaging job. `AllowUnsignedDevelopment` exists only for repository tests/fixtures and does not relax normal production verification.
+
+Stage 3 does not modify the beta.8 production runtime, Scheduled Tasks, `.runtime-tools`, Docker, Gateway, Proxy, Tunnel or endpoint-security configuration.

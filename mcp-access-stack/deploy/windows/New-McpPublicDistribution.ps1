@@ -150,6 +150,8 @@ $runtimeFiles = @(
     'deploy\windows\Install-McpAccessStack.ps1',
     'deploy\windows\Manage-McpCredential.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',
+    'deploy\windows\WindowsExecutionNode.Common.ps1',
+    'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
     'deploy\windows\mcp-access-stack-code-signing.cer',
     'deploy\windows\Update-McpAccessStack.ps1',
     'operations\runtime\Initialize-GptOnlyProduction.ps1',
