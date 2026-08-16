@@ -8,6 +8,7 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $builderPath = Join-Path $PSScriptRoot 'New-McpWindowsExecutionNodeArtifacts.ps1'
 $taskInstallerPath = Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1'
 $cutoverPath = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
+$cutoverTaskInstallerPath = Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeCutoverTask.ps1'
 $hostSourcePath = Join-Path $root 'tooling\windows-execution-node\McpHost.cs'
 $persistenceSourcePath = Join-Path $root 'tooling\windows-execution-node\McpHostPersistence.cs'
 
@@ -345,6 +346,22 @@ function Wait-ReadyHealth {
     throw "Persistent host did not become ready for $ReleaseId."
 }
 
+function Wait-CutoverBrokerResult {
+    param([string]$Path, [int]$Seconds = 60)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($Seconds)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                $result = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+                if ([string]$result.status -in @('passed','failed')) { return $result }
+            }
+            catch {}
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    throw "Detached cutover broker did not persist a terminal result: $Path"
+}
+
 function Remove-TestTask {
     param([string]$TaskName)
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -369,6 +386,7 @@ try {
     $build = $buildJson | ConvertFrom-Json
     if ([string]$build.status -ne 'built') { throw 'Stage 6 McpHost native build evidence is invalid.' }
     $builtHost = Join-Path $buildOutput 'McpHost.exe'
+    $builtBroker = Join-Path $buildOutput 'McpCredentialBroker.exe'
     $version = @(& $builtHost --version)
     if ($LASTEXITCODE -ne 0 -or [string]$version[0] -ne 'mcp-host-contract-v3') {
         throw 'Stage 6 McpHost did not compile as contract v3.'
@@ -383,6 +401,9 @@ try {
     $releaseId = 'stage6-cutover-b'
     $release = New-TestRelease -InstallationRoot $installation -ReleaseId $releaseId -Commit ('d' * 40) -BuiltHostPath $builtHost
     Write-TestState -InstallationRoot $installation -Active $null -Candidate (New-TestPointer -ReleaseRoot $release -ReleaseId $releaseId) -Previous $null
+    $hostFixtureRoot = Join-Path $installation 'host'
+    New-Item -ItemType Directory -Force -Path $hostFixtureRoot | Out-Null
+    Copy-Item -LiteralPath $builtBroker -Destination (Join-Path $hostFixtureRoot 'McpCredentialBroker.exe')
 
     $legacyScript = Join-Path $successRoot 'legacy-owner.js'
     Write-TestUtf8 -Path $legacyScript -Content "setInterval(() => {}, 1000);`n"
@@ -390,23 +411,49 @@ try {
     $legacyAgentTask = "MCP Stage6 CI legacy agent $suffix"
     $legacyBrowserTask = "MCP Stage6 CI legacy browser $suffix"
     $persistentTask = "MCP Stage6 CI host $suffix"
+    $cutoverBrokerTask = "MCP Stage6 CI cutover $suffix"
     Register-TestLegacyTask -TaskName $legacyAgentTask -ScriptPath $legacyScript
     Register-TestLegacyTask -TaskName $legacyBrowserTask -ScriptPath $legacyScript
     Wait-TaskState -TaskName $legacyAgentTask -Expected 'Running'
     Wait-TaskState -TaskName $legacyBrowserTask -Expected 'Running'
 
-    $cutoverResult = (& $cutoverPath `
+    $cutoverTaskInstall = (& $cutoverTaskInstallerPath `
+        -InstallationRoot $installation `
+        -ProjectRoot $project `
+        -Environment production `
+        -TaskName $cutoverBrokerTask `
+        -PersistentTaskName $persistentTask `
+        -LegacyAgentTaskName $legacyAgentTask `
+        -LegacyBrowserTaskName $legacyBrowserTask `
+        -Execute `
+        -Force `
+        -AllowUnsignedDevelopment) | ConvertFrom-Json
+    if ([string]$cutoverTaskInstall.status -ne 'installed' -or $cutoverTaskInstall.independentOwner -ne $true) {
+        throw 'Detached cutover Task installer did not return independent-owner evidence.'
+    }
+    $taskNames.Add($cutoverBrokerTask)
+    $taskNames.Add($persistentTask)
+    $requestScript = Join-Path (Split-Path -Parent ([string]$cutoverTaskInstall.brokerPath)) 'Request-McpWindowsExecutionNodeCutover.ps1'
+    $requestOutput = & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $requestScript `
         -InstallationRoot $installation `
         -ProjectRoot $project `
         -Environment production `
         -Operation Promote `
-        -PersistentTaskName $persistentTask `
-        -LegacyAgentTaskName $legacyAgentTask `
-        -LegacyBrowserTaskName $legacyBrowserTask `
+        -ExpectedReleaseId $releaseId `
         -HealthTimeoutSeconds 40 `
+        -TaskName $cutoverBrokerTask `
         -Execute `
-        -AllowUnsignedDevelopment) | ConvertFrom-Json
-    $taskNames.Add($persistentTask)
+        -AllowUnsignedDevelopment
+    if ($LASTEXITCODE -ne 0) { throw 'Detached cutover request process failed.' }
+    $request = $requestOutput | ConvertFrom-Json
+    if ([string]$request.status -ne 'started' -or $request.detached -ne $true) {
+        throw 'Detached cutover request did not return STARTED evidence.'
+    }
+    $cutoverBrokerResult = Wait-CutoverBrokerResult -Path ([string]$request.resultPath) -Seconds 60
+    if ([string]$cutoverBrokerResult.status -ne 'passed') {
+        throw ('Detached cutover broker failed: ' + [string]$cutoverBrokerResult.error)
+    }
+    $cutoverResult = $cutoverBrokerResult.cutover
     if ([string]$cutoverResult.status -ne 'cutover-ready' -or
         [string]$cutoverResult.activeReleaseId -ne $releaseId) {
         throw 'Stage 6 cutover did not return READY evidence.'

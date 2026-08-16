@@ -38,6 +38,9 @@ $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-
 $executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
 $executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1') -Raw
 $executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
+$executionNodeCutoverTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
+$executionNodeCutoverTaskBroker = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
+$executionNodeCutoverRequest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Request-McpWindowsExecutionNodeCutover.ps1') -Raw
 if (
     -not $common.Contains('distribution-manifest.ps1') -or
     -not $common.Contains('Assert-McpPublicSignature')
@@ -102,6 +105,9 @@ if (
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeHostTask.ps1') -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutover.ps1') -or
+    -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeCutoverTask.ps1') -or
+    -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -or
+    -not $distributionBuilder.Contains('Request-McpWindowsExecutionNodeCutover.ps1') -or
     -not $distributionBuilder.Contains('Set-AuthenticodeSignature')
 ) {
     throw 'Public release workflow must build and sign the execution-node distribution and release attestation.'
@@ -166,6 +172,41 @@ foreach ($required in @(
 )) {
     if (-not $executionNodeCutover.Contains($required)) {
         throw "Execution-node cutover contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'New-ScheduledTaskAction',
+    'Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
+    '-ExecutionPolicy',
+    'AllSigned',
+    '-MultipleInstances IgnoreNew',
+    '-RunLevel Limited',
+    'independentOwner = $true'
+)) {
+    if (-not $executionNodeCutoverTaskInstaller.Contains($required)) {
+        throw "Detached execution-node cutover Task installer contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'cutover-request.json',
+    'cutover-runs',
+    'Invoke-McpWindowsExecutionNodeCutover.ps1',
+    'McpCredentialBroker.exe',
+    "status = 'passed'",
+    'Move-Item -LiteralPath $requestPath'
+)) {
+    if (-not $executionNodeCutoverTaskBroker.Contains($required)) {
+        throw "Detached execution-node cutover broker contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'Start-ScheduledTask',
+    'cutover-request.json',
+    'expectedManifestSha256',
+    'detached = $true'
+)) {
+    if (-not $executionNodeCutoverRequest.Contains($required)) {
+        throw "Detached execution-node cutover request contract is missing: $required"
     }
 }
 foreach ($required in @(
