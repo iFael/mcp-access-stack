@@ -53,11 +53,14 @@ function Invoke-CSharpBuild {
         [Parameter(Mandatory = $true)][string]$SourcePath,
         [Parameter(Mandatory = $true)][string]$TargetPath,
         [ValidateSet('exe', 'winexe')][string]$TargetType = 'winexe',
-        [string[]]$References = @()
+        [string[]]$References = @(),
+        [string[]]$AdditionalSourcePaths = @()
     )
 
-    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
-        throw "Native source file was not found: $SourcePath"
+    foreach ($source in @($SourcePath) + @($AdditionalSourcePaths)) {
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Native source file was not found: $source"
+        }
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetPath) | Out-Null
     $arguments = @(
@@ -71,6 +74,9 @@ function Invoke-CSharpBuild {
     }
     $arguments += "/out:$TargetPath"
     $arguments += $SourcePath
+    foreach ($source in $AdditionalSourcePaths) {
+        $arguments += $source
+    }
 
     $global:LASTEXITCODE = 0
     & $compiler @arguments
@@ -80,6 +86,7 @@ function Invoke-CSharpBuild {
 }
 
 $hostSource = Join-Path $root 'tooling\windows-execution-node\McpHost.cs'
+$hostSupervisorSource = Join-Path $root 'tooling\windows-execution-node\McpHostSupervisor.cs'
 $launcherSource = Join-Path $release 'tooling\windows-host-launcher\McpNodeHostLauncher.cs'
 $brokerSource = Join-Path $release 'tooling\windows-credential-broker\McpCredentialBroker.cs'
 
@@ -87,7 +94,12 @@ $hostPath = Join-Path $output 'McpHost.exe'
 $launcherPath = Join-Path $output 'McpNodeHostLauncher.exe'
 $brokerPath = Join-Path $output 'McpCredentialBroker.exe'
 
-Invoke-CSharpBuild -SourcePath $hostSource -TargetPath $hostPath -TargetType exe
+Invoke-CSharpBuild `
+    -SourcePath $hostSource `
+    -AdditionalSourcePaths @($hostSupervisorSource) `
+    -TargetPath $hostPath `
+    -TargetType exe `
+    -References @('System.Web.Extensions.dll')
 Invoke-CSharpBuild -SourcePath $launcherSource -TargetPath $launcherPath -TargetType winexe
 Invoke-CSharpBuild `
     -SourcePath $brokerSource `
@@ -96,7 +108,7 @@ Invoke-CSharpBuild `
     -References @('System.Windows.Forms.dll', 'System.Drawing.dll')
 
 $hostVersion = @(& $hostPath --version)
-if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v1') {
+if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v2') {
     throw 'Compiled McpHost failed its contract-version smoke check.'
 }
 

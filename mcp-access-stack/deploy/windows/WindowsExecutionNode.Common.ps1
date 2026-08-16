@@ -230,7 +230,7 @@ function Assert-McpWindowsExecutionNodeRelease {
     if ($RuntimeSmoke) {
         $hostPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$hostRecord.path)
         $hostVersion = @(& $hostPath --version)
-        if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v1') {
+        if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v2') {
             throw 'Signed McpHost failed its version smoke check.'
         }
         $hostValidation = @(& $hostPath --validate-release-root $release)

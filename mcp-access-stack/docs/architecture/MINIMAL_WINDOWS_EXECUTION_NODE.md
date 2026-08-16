@@ -306,3 +306,59 @@ A retry is idempotent when the same release and execution manifest are already m
 The stager itself and `WindowsExecutionNode.Common.ps1` are included in the public distribution and Authenticode-signed by the GitHub packaging job. `AllowUnsignedDevelopment` exists only for repository tests/fixtures and does not relax normal production verification.
 
 Stage 3 does not modify the beta.8 production runtime, Scheduled Tasks, `.runtime-tools`, Docker, Gateway, Proxy, Tunnel or endpoint-security configuration.
+
+## McpHost supervision and health (Stage 4)
+
+Stage 4 evolves `McpHost.exe` from a release-contract smoke artifact into the fixed local supervisor for Workspace Agent and Browser Worker. It does not activate the host in production and does not change `active`/`candidate`/`previous`.
+
+The supervisor command is deliberately closed rather than generic:
+
+```text
+McpHost.exe --supervise
+  --release-root <validated release>
+  --project-root <local MCP root>
+  --environment <development|production>
+  --expected-manifest-sha256 <candidate/active manifest hash>
+```
+
+Only bounded lifecycle/readiness tuning and an optional credential-broker path are accepted. The host does not accept arbitrary executable paths, command strings, shell names or script runners.
+
+Before starting children, the host:
+
+1. validates the fixed `bundled-node` execution manifest contract;
+2. binds startup to the expected SHA-256 of `execution-node-manifest.json`;
+3. revalidates size and SHA-256 for `McpHost.exe`, Agent, Browser Worker and bundled `node.exe`;
+4. requires the `mcp-host` artifact record to remain Authenticode-required;
+5. resolves only fixed child paths inside the release;
+6. reads the existing private Agent/Browser configuration without logging secrets.
+
+The child topology is direct:
+
+```text
+McpHost.exe
+  |-> runtime/node/node.exe services/workspace-agent/dist/cli.js connect ...
+  `-> runtime/node/node.exe services/browser-worker/dist/server.js
+```
+
+`Run-DockerHostComponent.mjs` is not part of the new supervision path.
+
+Readiness is component-specific:
+
+- Workspace Agent becomes ready only after its structured stderr diagnostic emits `event=connected`; reconnect/disconnect diagnostics can move it back to degraded without creating a second process;
+- Browser Worker is polled only on loopback `GET /health/ready` and is ready only on HTTP 200;
+- each newly started child has a bounded initial-readiness deadline; after a child has become ready, transient readiness loss does not immediately force a restart;
+- process exit uses a bounded restart budget and interval; exhaustion is terminal for the execution node.
+
+All supervised child processes are assigned to one Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Closing or terminating the host therefore closes the execution tree instead of leaving detached Agent/Browser descendants.
+
+Operational health is written as sanitized local state under:
+
+```text
+runtime/windows-execution-node/<environment>/host-state.json
+```
+
+The state exposes host status, release identity, execution-manifest hash, child PIDs, live/ready flags, restart attempts and timestamps. It never writes Agent/Browser tokens or credential values.
+
+The GitHub-only runtime smoke compiles the native host on the Windows runner, runs fake fixed Agent/Browser payloads from a fixture release, verifies Browser HTTP readiness, Agent structured readiness, one bounded Agent restart, final host readiness and Job Object cleanup after host termination. Normal local checks remain source/static only and do not invoke `csc.exe`.
+
+Stage 4 remains additive: beta.8 Scheduled Tasks, Agent, Browser Worker and production routing stay untouched until a later promotion/rollback gate explicitly authorizes cutover.

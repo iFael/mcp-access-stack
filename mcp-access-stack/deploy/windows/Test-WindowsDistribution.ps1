@@ -29,6 +29,7 @@ $releaseWorkflow = Get-Content -LiteralPath $releaseWorkflowPath -Raw
 $distributionBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpPublicDistribution.ps1') -Raw
 $executionNodeBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-McpWindowsExecutionNodeArtifacts.ps1') -Raw
 $mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHost.cs') -Raw
+$mcpHostSupervisorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostSupervisor.cs') -Raw
 $executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
 $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
 if (
@@ -54,18 +55,31 @@ if (
 }
 foreach ($required in @(
     'McpHost.exe',
+    'McpHostSupervisor.cs',
     'McpNodeHostLauncher.exe',
     'McpCredentialBroker.exe',
     'Microsoft.NET\Framework64\v4.0.30319\csc.exe',
-    'mcp-host-contract-v1'
+    'System.Web.Extensions.dll',
+    'mcp-host-contract-v2'
 )) {
     if (-not $executionNodeBuilder.Contains($required)) {
         throw "Execution-node native builder requirement is missing: $required"
     }
 }
-foreach ($required in @('--version', '--validate-release-root', 'runtime supervision is not enabled yet')) {
+foreach ($required in @('--version', '--validate-release-root', '--supervise', 'expected-manifest-sha256')) {
     if (-not $mcpHostSource.Contains($required)) {
-        throw "McpHost stage-2 safety contract is missing: $required"
+        throw "McpHost supervisor CLI contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'JobObjectLimitKillOnJobClose',
+    '/health/ready',
+    'Execution-node artifact changed after validation',
+    'eventName, "connected"',
+    'host-state.json'
+)) {
+    if (-not $mcpHostSupervisorSource.Contains($required)) {
+        throw "McpHost supervisor runtime contract is missing: $required"
     }
 }
 foreach ($required in @(
@@ -190,5 +204,6 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
         }
     }
 }
+& (Join-Path $PSScriptRoot 'Test-McpHostSupervisor.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'
