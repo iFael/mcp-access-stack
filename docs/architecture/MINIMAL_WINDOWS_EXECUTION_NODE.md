@@ -469,3 +469,30 @@ For a later cutover where a persistent McpHost was already the owner, failure si
 Stage 6 tests actual Scheduled Task mutation only on the GitHub Windows runner. The CI smoke proves direct stable-task ownership, duplicate-host rejection, stop/start (reboot-equivalent) recovery and fallback to legacy ownership after a deliberately failed first cutover. Normal local checks remain static/parser-only and never create Tasks or invoke `csc.exe`.
 
 Stage 6 still does not authorize production cutover or legacy removal. A later explicit production gate is required before changing the real beta.8 Tasks, installing the stable host on the workstation, or deleting Launcher/Broker/`.runtime-tools` artifacts.
+
+### Detached cutover execution boundary (Stage 6.1)
+
+A real first-cutover attempt exposed a lifecycle boundary that the Stage 6 CI fixture did not model: invoking `Invoke-McpWindowsExecutionNodeCutover.ps1` as a descendant of the legacy Workspace Agent is not a valid production execution topology. The cutover deliberately stops/disables that Agent ownership; therefore the caller can be terminated before it commits or rolls back the transaction.
+
+Production cutover is consequently request-driven and detached from the Agent being replaced:
+
+```text
+Workspace Agent / MCP request
+  -> write fresh, identity-bound cutover request
+  -> Start-ScheduledTask
+  -> requester may exit/disconnect
+
+Task Scheduler-owned cutover broker
+  -> consume request once
+  -> persist running result
+  -> invoke signed Stage 6 cutover
+  -> legacy Agent may stop without killing broker
+  -> persist passed/failed terminal result
+  -> new Agent reconnects through persistent McpHost or legacy fallback
+```
+
+`Install-McpWindowsExecutionNodeCutoverTask.ps1` materializes a content-addressed control bundle beneath `<installation-root>/control/<broker-hash>/` from the signed public distribution. The production Task is manual-only, `Interactive`, `Limited`, `MultipleInstances=IgnoreNew`, executes canonical `pwsh.exe` with `ExecutionPolicy AllSigned`, and has no generic command surface. `AllowUnsignedDevelopment` may use `Bypass` only in CI fixtures; production never does.
+
+The request surface can select only `Promote` or `Rollback`, the expected target release identity and a bounded health timeout. It cannot provide executable paths, shell commands, credential paths, persistent Task names or legacy Task names. Those ownership names are fixed in the broker Task action when installed. Requests are GUID-scoped, freshness-limited, atomically written and single-consumption; the broker rechecks the current target pointer before consuming them.
+
+The broker uses the stable signed `<installation-root>/host/McpCredentialBroker.exe`, writes terminal evidence under `state/cutover-runs/<request-id>/result.json`, and then invokes the existing transactional Stage 6 cutover. This makes caller disconnect expected rather than fatal and preserves the existing exact-state/legacy-ownership rollback behavior.
