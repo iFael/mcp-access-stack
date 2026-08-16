@@ -295,10 +295,10 @@ setInterval(() => {}, 1000);
     $startInfo.RedirectStandardError = $true
     foreach ($argument in @(
         '--supervise',
-        'release-root', $releaseRoot,
-        'project-root', $projectRoot,
-        'environment', $environmentName,
-        'expected-manifest-sha256', $manifestHash,
+        '--release-root', $releaseRoot,
+        '--project-root', $projectRoot,
+        '--environment', $environmentName,
+        '--expected-manifest-sha256', $manifestHash,
         '--restart-count', '2',
         '--restart-interval-seconds', '1',
         '--readiness-timeout-seconds', '10'
