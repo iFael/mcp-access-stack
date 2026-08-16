@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $script:McpPublicCodeSigningThumbprint = 'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672'
+$script:McpPublicSignatureValidationMode = 'System'
 
 function Normalize-McpPublicThumbprint {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -57,11 +58,72 @@ function Assert-McpPublicWindowsX64 {
     }
 }
 
+function Set-McpPublicSignatureValidationMode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('System', 'OfflinePinned')]
+        [string]$Mode
+    )
+
+    if ($Mode -eq 'OfflinePinned' -and [string]$env:GITHUB_ACTIONS -ne 'true') {
+        throw 'OfflinePinned Authenticode validation is GitHub Actions-only to avoid local C# compilation.'
+    }
+    $script:McpPublicSignatureValidationMode = $Mode
+}
+
+function Assert-McpPublicOfflinePinnedSignature {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$AllowUnsignedDevelopment
+    )
+
+    if (-not ('McpAuthenticodeVerifier' -as [type])) {
+        $verifierSource = Join-Path (Get-McpPublicProjectRoot) 'tooling\windows-execution-node\McpAuthenticodeVerifier.cs'
+        if (-not (Test-Path -LiteralPath $verifierSource -PathType Leaf)) {
+            throw "Offline Authenticode verifier source was not found: $verifierSource"
+        }
+        Add-Type -Path $verifierSource
+    }
+
+    $verification = [McpAuthenticodeVerifier]::Verify([System.IO.Path]::GetFullPath($Path))
+    $statusCode = [uint32]$verification.StatusCode
+    $signerThumbprint = [string]$verification.SignerThumbprint
+
+    if ($AllowUnsignedDevelopment -and
+        $statusCode -eq [uint32]0x800B0100 -and
+        [string]::IsNullOrWhiteSpace($signerThumbprint)) {
+        return
+    }
+
+    # The project signer is self-signed and its exact thumbprint is the trust anchor.
+    # A cryptographically valid signature may therefore report CERT_E_UNTRUSTEDROOT
+    # on an ephemeral runner that intentionally does not mutate the Windows Root store.
+    if ($statusCode -notin @([uint32]0, [uint32]0x800B0109)) {
+        throw ("Invalid offline Authenticode signature for {0}. WinVerifyTrust=0x{1:X8}" -f $Path, $statusCode)
+    }
+    if ([string]::IsNullOrWhiteSpace($signerThumbprint)) {
+        throw "Offline Authenticode verification did not expose a signer certificate: $Path"
+    }
+
+    $actualThumbprint = Normalize-McpPublicThumbprint -Value $signerThumbprint
+    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
+    if ($actualThumbprint -ne $expectedThumbprint) {
+        throw "Offline Authenticode signer is not the MCP Access Stack project signer: $Path"
+    }
+}
+
 function Assert-McpPublicSignature {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [switch]$AllowUnsignedDevelopment
     )
+
+    if ($script:McpPublicSignatureValidationMode -eq 'OfflinePinned') {
+        Assert-McpPublicOfflinePinnedSignature `
+            -Path $Path `
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+        return
+    }
 
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned') {

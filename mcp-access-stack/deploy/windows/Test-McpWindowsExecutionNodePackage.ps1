@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ReleaseRoot
+    [string]$ReleaseRoot,
+
+    [switch]$OfflinePinnedAuthenticode
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +13,9 @@ $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 . (Join-Path $root 'deploy\windows\PublicDistribution.Common.ps1')
 . (Join-Path $root 'deploy\windows\WindowsExecutionNode.Common.ps1')
 
+if ($OfflinePinnedAuthenticode) {
+    Set-McpPublicSignatureValidationMode -Mode 'OfflinePinned'
+}
 $verification = Assert-McpWindowsExecutionNodeRelease `
     -ReleaseRoot $ReleaseRoot `
     -RuntimeSmoke
