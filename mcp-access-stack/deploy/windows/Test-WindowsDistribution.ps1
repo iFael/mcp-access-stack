@@ -31,6 +31,8 @@ $executionNodeBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-M
 $mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHost.cs') -Raw
 $mcpHostSupervisorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostSupervisor.cs') -Raw
 $mcpHostPersistenceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostPersistence.cs') -Raw
+$authenticodeVerifierSourcePath = Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpAuthenticodeVerifier.cs'
+$authenticodeVerifierSource = Get-Content -LiteralPath $authenticodeVerifierSourcePath -Raw
 $executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
 $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
 $executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
@@ -43,16 +45,47 @@ if (
     throw 'Distribution hashes must be rooted in a signed manifest.'
 }
 foreach ($required in @(
-    'mcp-access-stack-code-signing.cer',
-    'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672',
-    'Cert:\CurrentUser\$storeName',
-    "@('Root', 'TrustedPublisher', 'TrustedPeople')",
-    'Import-Certificate',
-    'addedTrustPaths',
-    'Remove-Item -LiteralPath $storePath'
+    '-OfflinePinnedAuthenticode',
+    'timeout-minutes: 5'
 )) {
     if (-not $releaseWorkflow.Contains($required)) {
-        throw "Public release package-validation trust requirement is missing: $required"
+        throw "Public release package-validation offline Authenticode requirement is missing: $required"
+    }
+}
+foreach ($forbidden in @(
+    'Import-Certificate',
+    'addedTrustPaths',
+    'Cert:\CurrentUser\$storeName'
+)) {
+    if ($releaseWorkflow.Contains($forbidden)) {
+        throw "Public release package validation must not mutate certificate stores: $forbidden"
+    }
+}
+foreach ($required in @(
+    'OfflinePinned',
+    'McpAuthenticodeVerifier',
+    '800B0109',
+    'GITHUB_ACTIONS'
+)) {
+    if (-not $common.Contains($required)) {
+        throw "Offline pinned Authenticode common contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'WinVerifyTrust',
+    'WTD_UI_NONE',
+    'WTD_REVOKE_NONE',
+    'WTD_REVOCATION_CHECK_NONE',
+    'WTD_CACHE_ONLY_URL_RETRIEVAL',
+    'WTHelperProvDataFromStateData',
+    'WTHelperGetProvSignerFromChain',
+    'WTHelperGetProvCertFromChain',
+    'CertGetCertificateContextProperty',
+    'CERT_SHA1_HASH_PROP_ID',
+    'new IntPtr(-1)'
+)) {
+    if (-not $authenticodeVerifierSource.Contains($required)) {
+        throw "Offline Authenticode verifier contract is missing: $required"
     }
 }
 if (
@@ -233,6 +266,63 @@ if (-not $distributionBuilder.Contains('WINDOWS_SIGNING_PFX_BASE64') -or
 }
 
 if ([string]$env:GITHUB_ACTIONS -eq 'true') {
+    if (-not ('McpAuthenticodeVerifier' -as [type])) {
+        Add-Type -Path $authenticodeVerifierSourcePath
+    }
+    if (-not ('McpAuthenticodeVerifier' -as [type])) {
+        throw 'Offline Authenticode verifier did not compile on the GitHub Windows runner.'
+    }
+
+    $authFixtureRoot = Join-Path $env:RUNNER_TEMP ('authenticode-verifier-fixture-' + [guid]::NewGuid().ToString('N'))
+    $authFixtureCertificate = $null
+    try {
+        New-Item -ItemType Directory -Force -Path $authFixtureRoot | Out-Null
+        $authFixturePath = Join-Path $authFixtureRoot 'probe.ps1'
+        [IO.File]::WriteAllText(
+            $authFixturePath,
+            "Write-Output 'authenticode-probe'`r`n",
+            [Text.UTF8Encoding]::new($false)
+        )
+        $authFixtureCertificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject ('CN=MCP Offline Authenticode CI ' + [guid]::NewGuid().ToString('N')) `
+            -CertStoreLocation 'Cert:\CurrentUser\My'
+        Set-AuthenticodeSignature `
+            -LiteralPath $authFixturePath `
+            -Certificate $authFixtureCertificate `
+            -HashAlgorithm SHA256 | Out-Null
+
+        $authFixtureResult = [McpAuthenticodeVerifier]::Verify($authFixturePath)
+        $authFixtureStatus = [uint32]$authFixtureResult.StatusCode
+        $trustUntrustedRoot = [Convert]::ToUInt32('800B0109', 16)
+        $authFixtureThumbprint = (([string]$authFixtureResult.SignerThumbprint) -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
+        $expectedFixtureThumbprint = (([string]$authFixtureCertificate.Thumbprint) -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
+        if ($authFixtureStatus -notin @([uint32]0, $trustUntrustedRoot) -or
+            $authFixtureThumbprint -ne $expectedFixtureThumbprint) {
+            throw ("Offline Authenticode verifier rejected a valid CI fixture. WinVerifyTrust=0x{0:X8}" -f $authFixtureStatus)
+        }
+
+        $signedFixture = [IO.File]::ReadAllText($authFixturePath)
+        [IO.File]::WriteAllText(
+            $authFixturePath,
+            $signedFixture.Replace('authenticode-probe', 'authenticode-pr0be'),
+            [Text.UTF8Encoding]::new($false)
+        )
+        $tamperedFixtureResult = [McpAuthenticodeVerifier]::Verify($authFixturePath)
+        $tamperedStatus = [uint32]$tamperedFixtureResult.StatusCode
+        if ($tamperedStatus -in @([uint32]0, $trustUntrustedRoot)) {
+            throw 'Offline Authenticode verifier accepted a tampered CI fixture.'
+        }
+    }
+    finally {
+        if ($authFixtureCertificate) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($authFixtureCertificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $authFixtureRoot) {
+            Remove-Item -LiteralPath $authFixtureRoot -Recurse -Force
+        }
+    }
+
     $fixtureRoot = Join-Path $env:RUNNER_TEMP ('execution-node-builder-fixture-' + [guid]::NewGuid().ToString('N'))
     $fixtureRelease = Join-Path $fixtureRoot 'release'
     $fixtureOutput = Join-Path $fixtureRoot 'output'
