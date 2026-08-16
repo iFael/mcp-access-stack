@@ -80,6 +80,8 @@ foreach ($required in @(
     'WTHelperProvDataFromStateData',
     'WTHelperGetProvSignerFromChain',
     'WTHelperGetProvCertFromChain',
+    'CertGetCertificateContextProperty',
+    'CERT_SHA1_HASH_PROP_ID',
     'new IntPtr(-1)'
 )) {
     if (-not $authenticodeVerifierSource.Contains($required)) {

@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography.X509Certificates;
 
 public sealed class McpAuthenticodeVerificationResult
 {
@@ -59,18 +58,7 @@ public static class McpAuthenticodeVerifier
         public uint cbStruct;
         public IntPtr pCert;
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CERT_CONTEXT
-    {
-        public uint dwCertEncodingType;
-        public IntPtr pbCertEncoded;
-        public uint cbCertEncoded;
-        public IntPtr pCertInfo;
-        public IntPtr hCertStore;
-    }
-
-    [DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+[DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
     private static extern int WinVerifyTrust(
         IntPtr hwnd,
         [In] ref Guid pgActionID,
@@ -89,6 +77,15 @@ public static class McpAuthenticodeVerifier
     [DllImport("wintrust.dll", ExactSpelling = true)]
     private static extern IntPtr WTHelperGetProvCertFromChain(IntPtr pSgnr, uint idxCert);
 
+    private const uint CERT_SHA1_HASH_PROP_ID = 3;
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CertGetCertificateContextProperty(
+        IntPtr pCertContext,
+        uint dwPropId,
+        [Out] byte[] pvData,
+        ref uint pcbData);
     public static McpAuthenticodeVerificationResult Verify(string path)
     {
         if (String.IsNullOrWhiteSpace(path))
@@ -186,20 +183,25 @@ public static class McpAuthenticodeVerifier
         {
             return null;
         }
-
-        CERT_CONTEXT certificateContext =
-            (CERT_CONTEXT)Marshal.PtrToStructure(certificatePrefix.pCert, typeof(CERT_CONTEXT));
-        if (certificateContext.pbCertEncoded == IntPtr.Zero || certificateContext.cbCertEncoded == 0 ||
-            certificateContext.cbCertEncoded > Int32.MaxValue)
+        uint hashSize = 0;
+        if (!CertGetCertificateContextProperty(
+            certificatePrefix.pCert,
+            CERT_SHA1_HASH_PROP_ID,
+            null,
+            ref hashSize) || hashSize == 0 || hashSize > 64)
         {
             return null;
         }
 
-        byte[] encoded = new byte[(int)certificateContext.cbCertEncoded];
-        Marshal.Copy(certificateContext.pbCertEncoded, encoded, 0, encoded.Length);
-        using (X509Certificate2 certificate = new X509Certificate2(encoded))
+        byte[] hash = new byte[hashSize];
+        if (!CertGetCertificateContextProperty(
+            certificatePrefix.pCert,
+            CERT_SHA1_HASH_PROP_ID,
+            hash,
+            ref hashSize))
         {
-            return certificate.Thumbprint;
+            return null;
         }
+        return BitConverter.ToString(hash).Replace("-", String.Empty);
     }
 }
