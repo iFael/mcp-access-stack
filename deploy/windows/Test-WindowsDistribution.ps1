@@ -42,6 +42,19 @@ if (
 ) {
     throw 'Distribution hashes must be rooted in a signed manifest.'
 }
+foreach ($required in @(
+    'mcp-access-stack-code-signing.cer',
+    'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672',
+    'Cert:\CurrentUser\$storeName',
+    "@('Root', 'TrustedPublisher', 'TrustedPeople')",
+    'Import-Certificate',
+    'addedTrustPaths',
+    'Remove-Item -LiteralPath $storePath'
+)) {
+    if (-not $releaseWorkflow.Contains($required)) {
+        throw "Public release package-validation trust requirement is missing: $required"
+    }
+}
 if (
     -not $releaseWorkflow.Contains('New-McpPublicDistribution.ps1') -or
     -not $releaseWorkflow.Contains('New-McpWindowsExecutionNodeArtifacts.ps1') -or

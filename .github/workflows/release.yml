@@ -269,9 +269,34 @@ jobs:
         env:
           RELEASE_ID: ${{ needs.metadata.outputs.version }}
         run: |
-          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsExecutionNodePackage.ps1 `
-            -ReleaseRoot (Join-Path $env:RUNNER_TEMP "public-distribution\stage\releases\$env:RELEASE_ID")
-
+          $certificatePath = Join-Path $PWD 'deploy\windows\mcp-access-stack-code-signing.cer'
+          $expectedThumbprint = 'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672'
+          $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
+          $actualThumbprint = ($certificate.Thumbprint -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
+          if ($actualThumbprint -ne $expectedThumbprint) {
+            throw 'Pinned public code-signing certificate thumbprint mismatch.'
+          }
+          $addedTrustPaths = [Collections.Generic.List[string]]::new()
+          try {
+            foreach ($storeName in @('Root', 'TrustedPublisher', 'TrustedPeople')) {
+              $storeRoot = "Cert:\CurrentUser\$storeName"
+              $storePath = Join-Path $storeRoot $expectedThumbprint
+              if (-not (Test-Path -LiteralPath $storePath)) {
+                Import-Certificate -FilePath $certificatePath -CertStoreLocation $storeRoot | Out-Null
+                if (-not (Test-Path -LiteralPath $storePath)) {
+                  throw "Unable to establish temporary package-validation trust in $storeName."
+                }
+                $addedTrustPaths.Add($storePath)
+              }
+            }
+            & (Join-Path $PWD 'deploy\windows\Test-McpWindowsExecutionNodePackage.ps1') `
+              -ReleaseRoot (Join-Path $env:RUNNER_TEMP "public-distribution\stage\releases\$env:RELEASE_ID")
+          }
+          finally {
+            foreach ($storePath in $addedTrustPaths) {
+              Remove-Item -LiteralPath $storePath -Force -ErrorAction SilentlyContinue
+            }
+          }
       - name: Upload signed release assets for publisher job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
