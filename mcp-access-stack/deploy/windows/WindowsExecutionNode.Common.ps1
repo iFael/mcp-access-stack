@@ -230,7 +230,7 @@ function Assert-McpWindowsExecutionNodeRelease {
     if ($RuntimeSmoke) {
         $hostPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$hostRecord.path)
         $hostVersion = @(& $hostPath --version)
-        if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v2') {
+        if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
             throw 'Signed McpHost failed its version smoke check.'
         }
         $hostValidation = @(& $hostPath --validate-release-root $release)
@@ -275,6 +275,59 @@ function Assert-McpWindowsExecutionNodePointer {
     }
     catch {
         throw "Execution-node state contains an invalid $Name materializedAt timestamp."
+    }
+}
+
+function Enter-McpWindowsExecutionNodeOperationMutex {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallationRoot,
+        [ValidateRange(0, 60000)][int]$TimeoutMs = 0
+    )
+
+    $resolvedRoot = [IO.Path]::GetFullPath($InstallationRoot).TrimEnd('\', '/').ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($resolvedRoot)
+        $hashBytes = $sha.ComputeHash($bytes)
+        $hash = ([Convert]::ToHexString($hashBytes)).ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $name = 'Local\McpAccessStack.ExecutionNode.' + $hash.Substring(0, 32)
+    $mutex = [Threading.Mutex]::new($false, $name)
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne($TimeoutMs)
+        }
+        catch [Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw 'Another execution-node lifecycle operation is already active.'
+        }
+        return $mutex
+    }
+    catch {
+        if (-not $acquired) {
+            $mutex.Dispose()
+        }
+        throw
+    }
+}
+
+function Exit-McpWindowsExecutionNodeOperationMutex {
+    param([AllowNull()][Threading.Mutex]$Mutex)
+
+    if ($null -eq $Mutex) {
+        return
+    }
+    try {
+        $Mutex.ReleaseMutex()
+    }
+    finally {
+        $Mutex.Dispose()
     }
 }
 

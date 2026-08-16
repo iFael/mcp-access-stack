@@ -128,7 +128,7 @@ function Read-McpTransitionHealthState {
     }
     if ($null -eq $health -or
         [int]$health.version -ne 1 -or
-        [string]$health.contractVersion -ne 'mcp-host-contract-v2' -or
+        [string]$health.contractVersion -ne 'mcp-host-contract-v3' -or
         [string]$health.releaseId -ne $ReleaseId -or
         [string]$health.executionManifestSha256 -ne $ManifestSha256 -or
         [string]$health.environment -ne $Environment) {
@@ -170,10 +170,12 @@ New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 Assert-McpTransitionDirectoryBoundary -Path $runtimeRoot
 $healthStatePath = Join-Path $runtimeRoot 'host-state.json'
 
+$operationMutex = $null
 $lockStream = $null
 $hostProcess = $null
 $stateCommitted = $false
 try {
+    $operationMutex = Enter-McpWindowsExecutionNodeOperationMutex -InstallationRoot $installationRoot
     try {
         $lockStream = [IO.File]::Open(
             $lockPath,
@@ -348,6 +350,7 @@ finally {
     if ($lockStream) {
         $lockStream.Dispose()
     }
+    Exit-McpWindowsExecutionNodeOperationMutex -Mutex $operationMutex
     if (-not $stateCommitted -and $hostProcess) {
         # State remains unchanged on any pre-commit health or validation failure.
     }

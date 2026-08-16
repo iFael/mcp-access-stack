@@ -14,7 +14,7 @@ $supervisorSource = Get-Content -LiteralPath $supervisorSourcePath -Raw
 $builder = Get-Content -LiteralPath $builderPath -Raw
 
 foreach ($required in @(
-    'mcp-host-contract-v2',
+    'mcp-host-contract-v3',
     '--supervise',
     'expected-manifest-sha256',
     'release-root',
@@ -55,7 +55,7 @@ foreach ($forbidden in @(
 foreach ($required in @(
     'McpHostSupervisor.cs',
     'System.Web.Extensions.dll',
-    'mcp-host-contract-v2'
+    'mcp-host-contract-v3'
 )) {
     if (-not $builder.Contains($required)) {
         throw "McpHost native builder is missing supervisor support: $required"
@@ -279,7 +279,7 @@ setInterval(() => {}, 1000);
 
     $hostPath = Join-Path $releaseRoot 'native\McpHost.exe'
     $version = @(& $hostPath --version)
-    if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or [string]$version[0] -ne 'mcp-host-contract-v2') {
+    if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or [string]$version[0] -ne 'mcp-host-contract-v3') {
         throw 'McpHost supervisor CI artifact returned the wrong contract version.'
     }
     $validated = @(& $hostPath --validate-release-root $releaseRoot)

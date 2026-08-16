@@ -406,3 +406,66 @@ Qualification startup also passes the transition controller PID through the clos
 Before qualification, the transition controller also refuses to run when `host-state.json` identifies a live McpHost. Stage 6 must therefore stop the currently owned host/runtime explicitly before invoking a real transition; Stage 5 never kills an existing production host implicitly.
 
 The transition script is included in the signed public Windows distribution. Normal local checks validate only its static contract. GitHub Windows CI owns the runtime smoke that compiles the native host and proves healthy promotion, healthy rollback, health-failure state preservation, pointer-tamper rejection and `state.lock` serialization.
+
+## Persistent host ownership and cutover orchestration (Stage 6)
+
+Stage 6 introduces the persistent ownership model but does not execute a real production cutover. `McpHost.exe` advances to `mcp-host-contract-v3` and adds the closed `--run-active` command. The persistent command does not accept an executable, shell or script path. It resolves only the active execution-node release from the installation state.
+
+The stable local layout is:
+
+```text
+<installation-root>/
+  host/
+    McpHost.exe
+  releases/
+    <release-id>/...
+  state/
+    execution-node.json
+    state.lock
+    host-ownership-<environment>.lock
+```
+
+The stable host path is intentionally outside a versioned release. A per-user Scheduled Task points directly to `<installation-root>/host/McpHost.exe --run-active ...`; it does not point to `McpNodeHostLauncher.exe`, PowerShell, `Run-DockerHostComponent.mjs` or another generic runner. The task uses the interactive current-user session, Limited run level, `AtLogOn`, `MultipleInstances=IgnoreNew` and Task Scheduler restart policy. This preserves Browser Worker access to the interactive desktop/profile while reducing Agent + Browser persistence from two Tasks to one host owner.
+
+At `--run-active` startup, `McpHost`:
+
+1. requires its own process image to be exactly the stable host path;
+2. acquires an exclusive `host-ownership-<environment>.lock` for its lifetime;
+3. reads only the versioned `active` pointer from `state/execution-node.json`;
+4. resolves and revalidates `releases/<active.releaseId>` against the pointer manifest SHA-256;
+5. requires the stable `McpHost.exe` SHA-256 to match `native/McpHost.exe` from that active release;
+6. only then enters the existing Agent/Browser supervisor.
+
+A second persistent McpHost for the same environment therefore fails before it can spawn another Agent or Browser tree.
+
+### Lifecycle serialization
+
+`state.lock` remains the canonical lock for execution-node state mutation. Stage 6 adds a wider named lifecycle mutex derived from the normalized installation root. Candidate staging, Stage 5 transition and Stage 6 cutover acquire this mutex. The cutover owns it for the full stop/qualify/state/sync/start/health window, while the synchronous Stage 5 transition re-enters the same mutex on the same thread. This prevents a concurrent staging or transition operation from changing the lifecycle while ownership is being transferred.
+
+### Cutover order
+
+The Stage 6 orchestrator is deliberately separate from the Stage 5 state transition:
+
+```text
+capture current ownership + exact state snapshot
+  -> stop previous persistent host, if any
+  -> stop + disable legacy Agent/Browser Tasks
+  -> Stage 5 health-qualified state transition
+  -> copy + verify active release McpHost to the stable host path
+  -> ensure/enable the single persistent host Task
+  -> start Task
+  -> require persistent McpHost + Agent + Browser ready
+  -> report cutover-ready
+```
+
+The legacy Tasks are disabled, not removed. Launcher, Credential Broker and `.runtime-tools` also remain untouched in Stage 6.
+
+### Failure recovery
+
+The first migration from beta.8 is special: beta.8 is the external legacy runtime and is not represented as an execution-node `previous` release. Stage 6 therefore never invents a beta.8 pointer. If the first cutover fails after a new-format state transition, the orchestrator restores the exact pre-cutover state snapshot and restores the enabled/running state of the two legacy beta.8 Tasks.
+
+For a later cutover where a persistent McpHost was already the owner, failure similarly restores the exact pre-cutover execution-node state and restarts that prior persistent owner. Exact snapshot restoration is used instead of an inverse state transition so an older `previous` pointer is not lost.
+
+Stage 6 tests actual Scheduled Task mutation only on the GitHub Windows runner. The CI smoke proves direct stable-task ownership, duplicate-host rejection, stop/start (reboot-equivalent) recovery and fallback to legacy ownership after a deliberately failed first cutover. Normal local checks remain static/parser-only and never create Tasks or invoke `csc.exe`.
+
+Stage 6 still does not authorize production cutover or legacy removal. A later explicit production gate is required before changing the real beta.8 Tasks, installing the stable host on the workstation, or deleting Launcher/Broker/`.runtime-tools` artifacts.

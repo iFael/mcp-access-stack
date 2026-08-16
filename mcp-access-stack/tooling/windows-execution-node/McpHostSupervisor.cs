@@ -55,6 +55,7 @@ internal sealed class ReleaseContractInfo
     public string Root = string.Empty;
     public string ReleaseId = string.Empty;
     public string ManifestSha256 = string.Empty;
+    public string HostPath = string.Empty;
     public string NodePath = string.Empty;
     public string AgentPath = string.Empty;
     public string BrowserPath = string.Empty;
@@ -165,6 +166,7 @@ internal static class ReleaseContract
         result.Root = root;
         result.ReleaseId = releaseId;
         result.ManifestSha256 = actualManifestHash;
+        result.HostPath = RequireFile(root, Path.Combine("native", "McpHost.exe"));
         result.NodePath = nodePath;
         result.AgentPath = agentPath;
         result.BrowserPath = browserPath;

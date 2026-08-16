@@ -87,6 +87,7 @@ function Invoke-CSharpBuild {
 
 $hostSource = Join-Path $root 'tooling\windows-execution-node\McpHost.cs'
 $hostSupervisorSource = Join-Path $root 'tooling\windows-execution-node\McpHostSupervisor.cs'
+$hostPersistenceSource = Join-Path $root 'tooling\windows-execution-node\McpHostPersistence.cs'
 $launcherSource = Join-Path $release 'tooling\windows-host-launcher\McpNodeHostLauncher.cs'
 $brokerSource = Join-Path $release 'tooling\windows-credential-broker\McpCredentialBroker.cs'
 
@@ -96,7 +97,7 @@ $brokerPath = Join-Path $output 'McpCredentialBroker.exe'
 
 Invoke-CSharpBuild `
     -SourcePath $hostSource `
-    -AdditionalSourcePaths @($hostSupervisorSource) `
+    -AdditionalSourcePaths @($hostSupervisorSource, $hostPersistenceSource) `
     -TargetPath $hostPath `
     -TargetType exe `
     -References @('System.Web.Extensions.dll')
@@ -108,7 +109,7 @@ Invoke-CSharpBuild `
     -References @('System.Windows.Forms.dll', 'System.Drawing.dll')
 
 $hostVersion = @(& $hostPath --version)
-if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v2') {
+if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
     throw 'Compiled McpHost failed its contract-version smoke check.'
 }
 

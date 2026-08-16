@@ -123,9 +123,11 @@ $targetRelease = Resolve-McpPublicChildPath `
     -RelativePath $releaseId
 $statePath = Join-Path $stateRoot 'execution-node.json'
 $lockPath = Join-Path $stateRoot 'state.lock'
+$operationMutex = $null
 $lockStream = $null
 $stagingPath = $null
 try {
+    $operationMutex = Enter-McpWindowsExecutionNodeOperationMutex -InstallationRoot $installationRoot
     try {
         $lockStream = [IO.File]::Open(
             $lockPath,
@@ -246,4 +248,5 @@ finally {
     if ($stagingPath -and (Test-Path -LiteralPath $stagingPath)) {
         Remove-Item -LiteralPath $stagingPath -Recurse -Force -ErrorAction SilentlyContinue
     }
+    Exit-McpWindowsExecutionNodeOperationMutex -Mutex $operationMutex
 }
