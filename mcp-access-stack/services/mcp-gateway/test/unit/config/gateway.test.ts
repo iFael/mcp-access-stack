@@ -61,6 +61,7 @@ describe("gateway configuration loader", () => {
       PUBLIC_BASE_URL: "https://mcp.example.com",
       AUTH_MODE: "owner",
       OWNER_TOKEN: "c".repeat(24),
+      OWNER_OAUTH_STATE_PATH: "C:\\private\\owner-oauth-state.json",
       MCP_PATH: "/mcp-owner",
       AGENT_ID: "local-agent",
       AGENT_TOKEN_SHA256: "b".repeat(64),
@@ -68,6 +69,7 @@ describe("gateway configuration loader", () => {
 
     expect(config.authMode).toBe("owner");
     expect(config.ownerOAuth?.scopes).toEqual(["workspaces:read"]);
+    expect(config.ownerOAuth?.statePath).toBe("C:\\private\\owner-oauth-state.json");
     expect(config.oauth).toBeUndefined();
   });
 

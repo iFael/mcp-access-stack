@@ -22,6 +22,7 @@ const configSchema = z
     AUTH_MODE: z.enum(["oauth", "none", "owner"]).default("oauth"),
     OWNER_TOKEN: z.string().trim().min(16).optional(),
     OWNER_OAUTH_SCOPES: z.string().trim().min(1).default("workspaces:read"),
+    OWNER_OAUTH_STATE_PATH: z.string().trim().min(1).optional(),
     OWNER_ACCESS_TOKEN_TTL_SECONDS: positiveInteger(3600),
     OWNER_REFRESH_TOKEN_TTL_SECONDS: positiveInteger(2_592_000),
     MCP_PATH: z
@@ -93,6 +94,7 @@ export interface GatewayOwnerOAuthConfig {
   scopes: string[];
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
+  statePath?: string;
   resourceName: string;
 }
 
@@ -330,6 +332,7 @@ function loadOwnerOAuthConfig(
     scopes: scopes.length > 0 ? scopes : ["workspaces:read"],
     accessTokenTtlSeconds: value.OWNER_ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTtlSeconds: value.OWNER_REFRESH_TOKEN_TTL_SECONDS,
+    ...(value.OWNER_OAUTH_STATE_PATH === undefined ? {} : { statePath: value.OWNER_OAUTH_STATE_PATH }),
     resourceName: "MCP VS CODE - GPT",
   };
 }
