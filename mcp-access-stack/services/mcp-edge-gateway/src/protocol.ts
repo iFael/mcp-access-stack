@@ -1,56 +1,54 @@
-export const EDGE_PROTOCOL_VERSION = 1 as const;
-export const MCP_SESSION_NAME = "primary";
-export const MCP_RELAY_TIMEOUT_MS = 55_000;
-export const MAX_MCP_REQUEST_BODY_BYTES = 1_048_576;
-export const MAX_MCP_RESPONSE_BODY_BYTES = 4_194_304;
+import {
+  EDGE_PROTOCOL_VERSION,
+  EDGE_RELAY_TIMEOUT_MS,
+  EDGE_SESSION_NAME,
+  MAX_EDGE_REQUEST_BODY_BYTES,
+  MAX_EDGE_RESPONSE_BODY_BYTES,
+  isAllowedEdgeRequest,
+  parseConnectorToEdgeMessage,
+  utf8ByteLength,
+  type ConnectorReadyMessage,
+  type EdgeHelloMessage,
+  type EdgeHttpCancelMessage,
+  type EdgeHttpRequestMessage,
+  type EdgeHttpResponseMessage,
+} from "@mcp-access-stack/edge-protocol/source";
 
-export type ConnectorAttachment = {
-  role: "connector";
-  ready: boolean;
-  protocolVersion: number;
-};
-
-export type EdgeHelloMessage = {
-  type: "edge-hello";
-  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
-};
-
-export type ConnectorReadyMessage = {
-  type: "connector-ready";
-  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
-};
-
-export type McpRequestMessage = {
-  type: "mcp-request";
-  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
-  requestId: string;
-  method: "POST";
-  headers: Record<string, string>;
-  body: string;
-};
-
-export type McpResponseMessage = {
-  type: "mcp-response";
-  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
-  requestId: string;
-  status: number;
-  headers?: Record<string, string>;
-  body: string;
+export {
+  EDGE_PROTOCOL_VERSION,
+  EDGE_RELAY_TIMEOUT_MS,
+  EDGE_SESSION_NAME,
+  MAX_EDGE_REQUEST_BODY_BYTES,
+  MAX_EDGE_RESPONSE_BODY_BYTES,
+  isAllowedEdgeRequest,
+  parseConnectorToEdgeMessage,
+  utf8ByteLength,
+  type ConnectorReadyMessage,
+  type EdgeHelloMessage,
+  type EdgeHttpCancelMessage,
+  type EdgeHttpRequestMessage,
+  type EdgeHttpResponseMessage,
 };
 
 const REQUEST_HEADER_ALLOWLIST = new Set([
   "accept",
+  "authorization",
   "content-type",
   "mcp-protocol-version",
   "mcp-session-id",
+  "origin",
 ]);
 
 const RESPONSE_HEADER_ALLOWLIST = new Set([
+  "allow",
   "cache-control",
   "content-type",
+  "location",
   "mcp-protocol-version",
   "mcp-session-id",
+  "origin",
   "retry-after",
+  "www-authenticate",
 ]);
 
 export function collectAllowedRequestHeaders(headers: Headers): Record<string, string> {
@@ -70,43 +68,6 @@ export function collectAllowedResponseHeaders(
     }
   }
   return result;
-}
-
-export function parseConnectorMessage(value: string): ConnectorReadyMessage | McpResponseMessage | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return null;
-  }
-
-  if (!isRecord(parsed) || typeof parsed.type !== "string") return null;
-
-  if (parsed.type === "connector-ready") {
-    return parsed.protocolVersion === EDGE_PROTOCOL_VERSION
-      ? {
-          type: "connector-ready",
-          protocolVersion: EDGE_PROTOCOL_VERSION,
-        }
-      : null;
-  }
-
-  if (parsed.type !== "mcp-response") return null;
-  if (parsed.protocolVersion !== EDGE_PROTOCOL_VERSION) return null;
-  if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;
-  const status = parsed.status;
-  if (typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599) return null;
-  if (typeof parsed.body !== "string") return null;
-  if (parsed.headers !== undefined && !isStringRecord(parsed.headers)) return null;
-
-  return {
-    type: "mcp-response",
-    protocolVersion: EDGE_PROTOCOL_VERSION,
-    requestId: parsed.requestId,
-    status,
-    body: parsed.body,
-    ...(parsed.headers === undefined ? {} : { headers: parsed.headers }),
-  };
 }
 
 export async function connectorTokenMatches(
@@ -141,10 +102,6 @@ export function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-export function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
 function collectAllowedHeaders(headers: Headers, allowlist: Set<string>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [name, value] of headers.entries()) {
@@ -154,15 +111,6 @@ function collectAllowedHeaders(headers: Headers, allowlist: Set<string>): Record
     }
   }
   return result;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  if (!isRecord(value)) return false;
-  return Object.values(value).every((entry) => typeof entry === "string");
 }
 
 async function sha256(value: string): Promise<Uint8Array> {

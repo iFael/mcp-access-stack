@@ -2,60 +2,81 @@
 
 ## Status
 
-Current target architecture for this workstation. It supersedes the dedicated remote-VM/OpenSSH cutover as the preferred steady-state direction before that cutover was executed.
-
-The objective is to avoid a permanently managed external VM while still removing most resident MCP runtime components from the corporate Windows workstation.
+The Cloudflare edge is the preferred steady-state architecture for this workstation. The Worker is already deployable from `main`, but workspace traffic remains fail-closed until the connector and activation gates are completed.
 
 ## Target topology
 
 ```text
 ChatGPT
-  -> Cloudflare Worker (`mcp-edge-gateway`)
+  -> Cloudflare Worker
   -> Durable Object session
   <-> authenticated outbound WebSocket
-  -> Windows MCP Connector
-  -> local workspace execution boundary
+  -> Windows MCP Connector (single process)
+       |- embedded MCP Gateway on ephemeral 127.0.0.1 only
+       |- LocalAgent / workspace policy in-process
+       `- optional current Browser Worker during the browser transition
+  -> local workspaces
 ```
 
-GitHub remains authoritative for source, CI and immutable release artifacts. Cloudflare provides the public serverless edge and connection coordination.
+GitHub remains authoritative for source and CI. Cloudflare provides the public serverless edge and connection coordination.
 
 ## Windows boundary
 
-The Windows workstation initiates the connection outbound. No public inbound SSH port is required for the edge design.
+The connector is the only new steady-state MCP process planned for Windows. It opens no public listener and requires no inbound SSH. Its embedded Gateway binds an ephemeral port on `127.0.0.1` only; all Internet-facing traffic arrives over the connector-initiated `wss://.../connector` session.
 
-The target resident surface is a single bounded MCP Connector plus the normal developer tools already required by the workspaces. The connector must not become another general-purpose remote shell: authorization, workspace policy, bounded operations, cancellation and destructive confirmation remain mandatory.
+The connector reuses the existing `LocalAgent`, `InProcessWorkspaceExecutor` and MCP Gateway instead of duplicating their behavior. Therefore workspace permission profiles, destructive-command confirmation, audit logging, cancellation, background tasks, OAuth and MCP tool behavior remain implemented by the already-tested components.
 
-The existing local Agent remains a temporary fallback until the edge path is proven end to end. Legacy cleanup is a later gate.
+The current resident runtime remains a fallback until the Edge path is proven end to end. Cleanup is a later gate.
 
 ## Edge gateway
 
 `services/mcp-edge-gateway` provides:
 
-- `/mcp` public edge route;
-- `/connector` authenticated WebSocket route;
-- a singleton Durable Object coordinating the active connector;
-- WebSocket Hibernation-compatible connector state;
-- bounded request/response relay;
-- header allowlists;
-- request/response size limits;
-- relay timeout;
+- `GET /health` for edge/connector readiness;
+- `/connector` as the Bearer-authenticated WebSocket boundary;
+- a singleton Durable Object coordinating the connector;
+- WebSocket Hibernation-compatible state;
+- a strict HTTP relay allowlist for `/mcp` and the Owner OAuth endpoints only;
+- explicit relay cancellation propagated to the connector;
+- header allowlists, size limits, concurrency limits and relay deadline;
 - fail-closed deployment with `MCP_EDGE_ENABLED=false` by default.
 
-The initial deployment is intentionally non-operational for workspace access until a connector secret exists, the Windows connector is implemented and the `/mcp` activation gate is explicitly executed.
+The shared protocol is versioned in `packages/edge-protocol`. Protocol mismatch fails closed during the WebSocket handshake.
+
+## Owner OAuth preservation
+
+Production currently uses the Gateway's Owner OAuth flow. The Edge therefore does not implement a second authentication system. It relays only the exact Gateway paths required by the existing flow:
+
+- `/mcp`;
+- `/authorize`;
+- `/token`;
+- `/register`;
+- `/revoke`;
+- `/.well-known/oauth-authorization-server`;
+- `/.well-known/oauth-protected-resource`;
+- `/.well-known/oauth-protected-resource/mcp`.
+
+The `Origin` header is preserved so the Gateway's existing origin policy remains authoritative. Hop-by-hop, forwarding and arbitrary application headers are not relayed.
+
+## Connector configuration
+
+The connector is started only after its artifacts and secrets have been qualified. Required connector-specific settings are documented in `config/edge-connector.env.example`.
+
+`MCP_CONNECTOR_TOKEN` exists only as a Cloudflare secret. The Windows side reads the same value from a bounded local secret file via `MCP_CONNECTOR_TOKEN_FILE`; the token is never accepted as a command-line argument and is never logged.
+
+The embedded Gateway continues to consume its normal authentication and Browser settings from the process environment. `AUTH_MODE=none` is rejected by the connector.
 
 ## Migration boundaries
 
-1. deploy the disabled edge gateway from Git and validate Cloudflare health;
-2. implement and authenticate the outbound Windows connector;
-3. validate MCP relay, cancellation, filesystem/Git/shell/background operations and Browser strategy;
-4. enable the edge `/mcp` route only after the security and connector gates pass;
-5. keep the current local runtime as fallback until the new path is stable;
-6. retire obsolete resident MCP components only in a separate cleanup gate.
+1. deploy and validate the disabled Edge gateway;
+2. implement and qualify the outbound connector in Git/CI;
+3. materialize the connector secret in Cloudflare and Windows outside Git;
+4. run the connector and prove `/health` reports `connectorReady=true` while `MCP_EDGE_ENABLED=false`;
+5. explicitly enable the Edge relay and validate Owner OAuth plus MCP filesystem/Git/shell/background operations;
+6. qualify Browser reachability separately;
+7. keep the current local runtime as fallback until the Edge path is stable;
+8. retire obsolete resident components only in a separate cleanup gate.
 
-## Browser
+## SSH fallback
 
-Browser execution remains a separate decision. A local Browser Worker preserves access to corporate-only destinations; a remote/browser-managed option reduces Windows residency but may lose that reachability. Do not remove the current Browser Worker before empirical qualification.
-
-## SSH implementation
-
-The previously implemented `SshWorkspaceExecutor`, remote compose and OpenSSH bootstrap remain valid code and fallback options, but are not the preferred cutover path for this workstation while the edge-connector architecture is being adopted.
+The previously implemented `SshWorkspaceExecutor`, remote compose and OpenSSH bootstrap remain valid fallback code. They are not required by the Edge steady state.

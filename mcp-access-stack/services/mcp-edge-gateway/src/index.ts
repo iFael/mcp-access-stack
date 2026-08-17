@@ -1,7 +1,8 @@
 import { McpSession, type EdgeGatewayEnv } from "./mcp-session.js";
 import {
-  MCP_SESSION_NAME,
+  EDGE_SESSION_NAME,
   connectorTokenMatches,
+  isAllowedEdgeRequest,
   jsonResponse,
 } from "./protocol.js";
 
@@ -10,7 +11,7 @@ export { McpSession };
 export default {
   async fetch(request: Request, env: EdgeGatewayEnv): Promise<Response> {
     const url = new URL(request.url);
-    const sessionId = env.MCP_SESSION.idFromName(MCP_SESSION_NAME);
+    const sessionId = env.MCP_SESSION.idFromName(EDGE_SESSION_NAME);
     const session = env.MCP_SESSION.get(sessionId);
 
     if (url.pathname === "/health" && request.method === "GET") {
@@ -46,7 +47,8 @@ export default {
       return session.fetch(request);
     }
 
-    if (url.pathname === "/mcp") {
+    const path = `${url.pathname}${url.search}`;
+    if (isAllowedEdgeRequest(request.method, path)) {
       if (env.MCP_EDGE_ENABLED !== "true") {
         return jsonResponse({ error: "edge_not_enabled" }, 503);
       }
