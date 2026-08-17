@@ -37,6 +37,8 @@ $executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Window
 $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1') -Raw
 $executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
 $executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1') -Raw
+$edgeConnectorTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpEdgeConnectorTask.ps1') -Raw
+$edgeConnectorLauncher = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Start-McpEdgeConnector.ps1') -Raw
 $executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
 $executionNodeCutoverTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
 $executionNodeCutoverTaskBroker = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
@@ -104,6 +106,10 @@ if (
     -not $distributionBuilder.Contains('Stage-McpWindowsExecutionNodeCandidate.ps1') -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeHostTask.ps1') -or
+    -not $distributionBuilder.Contains('Install-McpEdgeConnectorTask.ps1') -or
+    -not $distributionBuilder.Contains('Start-McpEdgeConnector.ps1') -or
+    -not $distributionBuilder.Contains("-Role 'edge-connector'") -or
+    -not $distributionBuilder.Contains("-Role 'edge-connector-launcher'") -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutover.ps1') -or
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeCutoverTask.ps1') -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -or
@@ -126,6 +132,42 @@ foreach ($required in @(
         throw "Execution-node native builder requirement is missing: $required"
     }
 }
+foreach ($required in @(
+    'four legacy or six Edge-capable critical artifacts',
+    'edge-connector',
+    'edge-connector-launcher'
+)) {
+    if (-not $executionNodeCommon.Contains($required)) {
+        throw "Execution-node Edge compatibility contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'ExpectedManifestSha256',
+    "Role 'edge-connector'",
+    "Role 'edge-connector-launcher'",
+    "BROWSER_WORKER_ENABLED = 'false'",
+    'OWNER_OAUTH_STATE_PATH',
+    'ValidateOnly'
+)) {
+    if (-not $edgeConnectorLauncher.Contains($required)) {
+        throw "Persistent Edge Connector launcher contract is missing: $required"
+    }
+}
+foreach ($required in @(
+    'New-ScheduledTaskAction',
+    'New-ScheduledTaskTrigger -AtLogOn',
+    '-MultipleInstances IgnoreNew',
+    '-RestartCount 5',
+    '-RunLevel Limited',
+    "'AllSigned'",
+    'edge-connector-launcher',
+    'ValidateOnly'
+)) {
+    if (-not $edgeConnectorTaskInstaller.Contains($required)) {
+        throw "Persistent Edge Connector task contract is missing: $required"
+    }
+}
+
 foreach ($required in @('--version', '--validate-release-root', '--supervise', '--run-active', 'installation-root', 'expected-manifest-sha256', 'qualification-owner-pid')) {
     if (-not $mcpHostSource.Contains($required)) {
         throw "McpHost supervisor CLI contract is missing: $required"
@@ -410,4 +452,5 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeTransition.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodePersistence.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpEdgeConnectorPersistence.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'

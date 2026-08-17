@@ -34,6 +34,7 @@ export function mountOwnerOAuth(app: Express, config: GatewayConfig): OwnerOAuth
       refreshTokenTtlSeconds: owner.refreshTokenTtlSeconds,
       scopes: owner.scopes,
       allowedRedirectHosts: deriveAllowedRedirectHosts(config.publicBaseUrl),
+      ...(owner.statePath === undefined ? {} : { statePath: owner.statePath }),
       resourceName: owner.resourceName,
     },
     mcpUrl,
