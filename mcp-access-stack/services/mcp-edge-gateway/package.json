@@ -12,5 +12,8 @@
     "@cloudflare/workers-types": "5.20260817.1",
     "typescript": "6.0.3",
     "wrangler": "4.123.0"
+  },
+  "dependencies": {
+    "@mcp-access-stack/edge-protocol": "0.1.0"
   }
 }
