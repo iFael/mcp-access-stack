@@ -11,17 +11,16 @@ import {
   runPowerShellInputSchema,
   searchFilesInputSchema,
   writeFileInputSchema,
+  type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
 import express, { type Express } from "express";
 import type { Logger } from "pino";
-import type { AgentRelay } from "../relay/service.js";
 import type { GatewayConfig } from "../config.js";
 import { GptActionConsole } from "./console/service.js";
 import {
   createGptActionsOpenApi,
   createPrivacyPolicyHtml,
 } from "./openapi.js";
-import { RelayWorkspaceExecutor } from "../relay/workspace-executor.js";
 import {
   assertWorkspaceAllowed,
   createActionHandler,
@@ -67,7 +66,7 @@ import {
 export function mountGptActions(
   app: Express,
   config: GatewayConfig,
-  relay: AgentRelay,
+  executor: WorkspaceExecutor,
   logger: Logger,
   browser?: BrowserExecutor,
 ): void {
@@ -75,7 +74,6 @@ export function mountGptActions(
   if (!actions) return;
 
   const basePath = `${config.mcpPath}/actions`;
-  const executor = new RelayWorkspaceExecutor(relay);
   const consoleRegistry = new GptActionConsole();
 
   app.get(`${basePath}/openapi.json`, (_request, response) => {

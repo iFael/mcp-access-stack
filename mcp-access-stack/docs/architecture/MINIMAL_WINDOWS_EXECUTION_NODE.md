@@ -2,7 +2,7 @@
 
 ## Status
 
-Target architecture under implementation. The current production baseline remains `1.1.0-beta.8` and must stay available as rollback until the new host path passes its own cutover gates.
+Historical transition architecture. For this corporate workstation, the resident execution-node target is superseded by `REMOTE_MCP_RUNTIME.md` after the Bitdefender ATC incident. Keep this document as the record of the beta.9-beta.12 execution-node work and its reusable release/signing contracts; do not perform a new execution-node cutover on this workstation unless that architecture is explicitly re-authorized.
 
 Stage 1 defined the release/state contracts. Stage 2 adds the remote Windows artifact build, signing and package-validation pipeline without changing the active beta.8 runtime.
 

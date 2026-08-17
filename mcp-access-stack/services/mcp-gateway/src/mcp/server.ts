@@ -8,11 +8,10 @@ import {
   registerBrowserTools,
   registerWorkspaceTools,
   type BrowserExecutor,
+  type WorkspaceExecutor,
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
-import type { AgentRelay } from "../relay/service.js";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
-import { RelayWorkspaceExecutor } from "../relay/workspace-executor.js";
 
 export interface McpServerAuthOptions {
   requiredScope: string;
@@ -20,7 +19,7 @@ export interface McpServerAuthOptions {
 }
 
 export interface McpServerOptions {
-  relay: AgentRelay;
+  workspaceExecutor: WorkspaceExecutor;
   browser?: BrowserExecutor | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
@@ -46,8 +45,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     ? [{ type: "oauth2" as const, scopes: [options.auth.requiredScope] }]
     : [{ type: "noauth" as const }];
 
-  const workspaceExecutor = new RelayWorkspaceExecutor(options.relay);
-  registerWorkspaceTools(server, workspaceExecutor, {
+  registerWorkspaceTools(server, options.workspaceExecutor, {
     ...(options.auth === undefined ? {} : { auth: options.auth }),
     securitySchemes,
     ...(options.operationContextFactory === undefined
@@ -59,7 +57,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     registerBrowserTools(server, options.browser, {
       ...(options.auth === undefined ? {} : { auth: options.auth }),
       securitySchemes,
-      workspaceExecutor,
+      workspaceExecutor: options.workspaceExecutor,
       ...(options.operationContextFactory === undefined
         ? {}
         : { operationContextFactory: options.operationContextFactory }),

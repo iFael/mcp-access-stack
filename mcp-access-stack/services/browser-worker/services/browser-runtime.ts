@@ -157,6 +157,7 @@ import {
   BrowserSiteAuthenticationService,
   type BrowserSiteAuthenticationOutcome,
 } from "./browser-site-authentication-service.js";
+import { FileCredentialBroker } from "./file-credential-broker.js";
 import {
   WindowsCredentialBrokerClient,
   type BrowserCredentialBroker,
@@ -387,13 +388,15 @@ export class BrowserRuntime implements BrowserExecutor {
       )
       .map(toPublicBrowserTab);
     const credentialBroker = dependencies.credentialBroker ??
-      new WindowsCredentialBrokerClient({
-        ...(config.credentialBrokerPath === undefined
-          ? {}
-          : { executablePath: config.credentialBrokerPath }),
-        privateDirectory: config.privateDirectory,
-        timeoutMs: config.credentialBrokerTimeoutMs ?? 10_000,
-      });
+      (config.credentialsPath
+        ? new FileCredentialBroker(config.credentialsPath)
+        : new WindowsCredentialBrokerClient({
+            ...(config.credentialBrokerPath === undefined
+              ? {}
+              : { executablePath: config.credentialBrokerPath }),
+            privateDirectory: config.privateDirectory,
+            timeoutMs: config.credentialBrokerTimeoutMs ?? 10_000,
+          }));
     const runtime = new BrowserRuntime(
       config,
       dependencies.telemetry,

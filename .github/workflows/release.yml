@@ -41,6 +41,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       commit: ${{ steps.meta.outputs.commit }}
       gateway-repository: ${{ steps.meta.outputs.gateway-repository }}
+      browser-worker-repository: ${{ steps.meta.outputs.browser-worker-repository }}
       proxy-repository: ${{ steps.meta.outputs.proxy-repository }}
     steps:
       - name: Checkout requested tag
@@ -76,6 +77,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "gateway-repository=ghcr.io/$owner/mcp-access-stack-gateway" >> "$GITHUB_OUTPUT"
+          echo "browser-worker-repository=ghcr.io/$owner/mcp-access-stack-browser-worker" >> "$GITHUB_OUTPUT"
           echo "proxy-repository=ghcr.io/$owner/mcp-access-stack-proxy" >> "$GITHUB_OUTPUT"
 
   validate:
@@ -119,6 +121,7 @@ jobs:
       packages: write
     outputs:
       gateway-digest: ${{ steps.gateway.outputs.digest }}
+      browser-worker-digest: ${{ steps.browser-worker.outputs.digest }}
       proxy-digest: ${{ steps.proxy.outputs.digest }}
     steps:
       - name: Checkout exact release commit
@@ -153,6 +156,21 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Build and publish browser worker
+        id: browser-worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/remote/browser-worker.Dockerfile
+          push: true
+          tags: |
+            ${{ needs.metadata.outputs.browser-worker-repository }}:${{ needs.metadata.outputs.version }}
+            ${{ needs.metadata.outputs.browser-worker-repository }}:sha-${{ needs.metadata.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
+          provenance: mode=max
+          sbom: true
       - name: Build and publish proxy
         id: proxy
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
