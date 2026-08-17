@@ -14,7 +14,7 @@
     "build": "tsc -p packages/mcp-core/tsconfig.json && tsc -p services/browser-worker/tsconfig.json && tsc -p services/workspace-agent/tsconfig.json && tsc -p services/mcp-gateway/tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test operations/runtime/gpt-mcp-proxy.test.mjs operations/runtime/gpt-only-production-initializer.test.mjs operations/browser/report-browser-reliability.test.mjs tooling/benchmarks/browser/benchmark-browser-fast-path.test.mjs tooling/benchmarks/browser/benchmark-browser-auth-cold-path.test.mjs tooling/benchmarks/browser/browser-benchmark-runtime.test.mjs tooling/benchmarks/browser/flow-benchmark-core.test.mjs tooling/benchmarks/browser/flow-benchmark-fixture.test.mjs tooling/benchmarks/browser/flow-benchmark-local.test.mjs tooling/benchmarks/mcp/run.test.mjs tooling/qualification/browser/semantic-allowlist-retry.test.mjs tooling/structure/validate-repository-structure.test.mjs deploy/docker/scripts/Run-DockerHostComponent.test.mjs && tsc -p packages/mcp-core/tsconfig.json && tsc -p services/workspace-agent/tsconfig.json && npm run test:typescript",
-    "check": "npm run check:structure && npm run check:syntax && npm run test && npm run typecheck && npm run build",
+    "check": "npm run check:structure && npm run check:syntax && npm run test && npm run typecheck && npm run build && npm run check:edge",
     "docker:development:init": "pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Initialize-DockerDevelopment.ps1",
     "docker:development:up": "pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Start-DockerDevelopment.ps1",
     "docker:development:test": "pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-DockerDevelopment.ps1",
@@ -68,7 +68,8 @@
     "test:mcp-gateway:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --selectProjects mcp-gateway-e2e",
     "test:typescript:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage",
     "browser:performance:auth-cold": "npm run build && pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Invoke-BrowserAuthColdBenchmark.ps1",
-    "docker:production:update": "pwsh -NoLogo -NoProfile -File deploy/windows/Update-McpAccessStack.ps1"
+    "docker:production:update": "pwsh -NoLogo -NoProfile -File deploy/windows/Update-McpAccessStack.ps1",
+    "check:edge": "npm run check --workspace @mcp-access-stack/edge-gateway"
   },
   "engines": {
     "node": ">=24"
