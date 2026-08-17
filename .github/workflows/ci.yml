@@ -40,3 +40,39 @@ jobs:
 
       - name: Validate stack
         run: npm run check
+  release-images:
+    name: release-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build gateway release image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/docker/gateway.Dockerfile
+          push: false
+          tags: mcp-access-stack-gateway:ci
+
+      - name: Build browser worker release image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/remote/browser-worker.Dockerfile
+          push: false
+          tags: mcp-access-stack-browser-worker:ci
+
+      - name: Build proxy release image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./mcp-access-stack
+          file: ./mcp-access-stack/deploy/docker/proxy.Dockerfile
+          push: false
+          tags: mcp-access-stack-proxy:ci
