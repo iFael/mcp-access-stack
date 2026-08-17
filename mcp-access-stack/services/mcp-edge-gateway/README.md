@@ -23,6 +23,10 @@ O Worker é implantado **desativado por padrão** (`MCP_EDGE_ENABLED=false`). O 
 - O relay usa allowlist de headers e limites de tamanho/timeout.
 - A ativação pública do `/mcp` fica separada da implantação inicial.
 
+## Cloudflare Worker identity
+
+O Worker conectado no dashboard chama-se `mcp-access-stack` e o campo `name` do `wrangler.jsonc` deve permanecer alinhado a esse nome.
+
 ## Cloudflare Workers Builds
 
 Configuração do projeto conectado ao GitHub:
