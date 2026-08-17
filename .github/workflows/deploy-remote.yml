@@ -1,0 +1,113 @@
+name: Deploy Remote MCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable MCP release version/tag to deploy, without a leading v
+        required: true
+        type: string
+
+env:
+  DEPLOY_BUNDLE: mcp-remote-deploy.tar.gz
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: remote-production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout deployment source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+
+      - name: Prepare SSH trust material
+        shell: bash
+        env:
+          REMOTE_KEY: ${{ secrets.MCP_REMOTE_DEPLOY_SSH_KEY }}
+          REMOTE_KNOWN_HOSTS: ${{ secrets.MCP_REMOTE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$REMOTE_KEY"
+          test -n "$REMOTE_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$REMOTE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$REMOTE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Package versioned deployment definition
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C mcp-access-stack -czf "$DEPLOY_BUNDLE" \
+            deploy/remote/compose.yml \
+            deploy/remote/Deploy-McpRemoteRuntime.sh \
+            deploy/docker/config/ngrok-agent.yml
+
+      - name: Upload deployment definition
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.MCP_REMOTE_DEPLOY_HOST }}
+          REMOTE_PORT: ${{ secrets.MCP_REMOTE_DEPLOY_PORT }}
+          REMOTE_USER: ${{ secrets.MCP_REMOTE_DEPLOY_USER }}
+          REMOTE_PATH: ${{ secrets.MCP_REMOTE_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${REMOTE_HOST:?}"
+          : "${REMOTE_USER:?}"
+          : "${REMOTE_PATH:?}"
+          port="${REMOTE_PORT:-22}"
+          scp -P "$port" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_BUNDLE" \
+            "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}/$DEPLOY_BUNDLE"
+
+      - name: Deploy immutable GHCR images
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.MCP_REMOTE_DEPLOY_HOST }}
+          REMOTE_PORT: ${{ secrets.MCP_REMOTE_DEPLOY_PORT }}
+          REMOTE_USER: ${{ secrets.MCP_REMOTE_DEPLOY_USER }}
+          REMOTE_PATH: ${{ secrets.MCP_REMOTE_DEPLOY_PATH }}
+          VERSION: ${{ inputs.version }}
+          GHCR_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          port="${REMOTE_PORT:-22}"
+          owner="$(printf '%s' "$GHCR_OWNER" | tr '[:upper:]' '[:lower:]')"
+          gateway="ghcr.io/$owner/mcp-access-stack-gateway:$VERSION"
+          browser="ghcr.io/$owner/mcp-access-stack-browser-worker:$VERSION"
+          proxy="ghcr.io/$owner/mcp-access-stack-proxy:$VERSION"
+          command=$(cat <<EOF
+          set -euo pipefail
+          cd '$REMOTE_PATH'
+          rm -rf .deploy-next
+          mkdir -p .deploy-next
+          tar -xzf '$DEPLOY_BUNDLE' -C .deploy-next
+          chmod +x .deploy-next/deploy/remote/Deploy-McpRemoteRuntime.sh
+          MCP_GATEWAY_IMAGE='$gateway' \
+          MCP_BROWSER_WORKER_IMAGE='$browser' \
+          MCP_PROXY_IMAGE='$proxy' \
+          MCP_REMOTE_COMPOSE_FILE='$REMOTE_PATH/.deploy-next/deploy/remote/compose.yml' \
+          MCP_REMOTE_CONFIG_FILE='$REMOTE_PATH/remote-runtime.env' \
+          '$REMOTE_PATH/.deploy-next/deploy/remote/Deploy-McpRemoteRuntime.sh'
+          EOF
+          )
+          ssh -p "$port" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "${REMOTE_USER}@${REMOTE_HOST}" \
+            "$command"

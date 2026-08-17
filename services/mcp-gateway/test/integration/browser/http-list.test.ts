@@ -75,7 +75,7 @@ describe("advanced browser tools HTTP list", () => {
         });
       }
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });

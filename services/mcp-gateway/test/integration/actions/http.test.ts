@@ -469,7 +469,7 @@ async function createActionsFixture(
     ...http,
     finishTask,
     close: async () => {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     },
   };

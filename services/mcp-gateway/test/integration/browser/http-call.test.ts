@@ -143,7 +143,7 @@ describe("advanced browser tools HTTP calls", () => {
         },
       ]);
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
       await worker.close();
     }

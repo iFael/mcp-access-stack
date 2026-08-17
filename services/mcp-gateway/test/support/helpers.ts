@@ -22,6 +22,7 @@ export function makeGatewayConfig(
       requiredScope: "workspaces:read",
     },
     allowedOrigins: new Set(["https://chatgpt.com"]),
+    workspaceBackend: { kind: "relay" },
     agent: {
       id: "test-agent",
       tokenSha256:

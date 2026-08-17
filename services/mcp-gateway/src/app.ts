@@ -1,4 +1,4 @@
-import type { BrowserExecutor } from "@vs-code-gpt/shared";
+import type { BrowserExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import compression from "compression";
@@ -11,6 +11,7 @@ import express, {
 import helmet from "helmet";
 import type { Logger } from "pino";
 import { AgentRelay } from "./relay/service.js";
+import { RelayWorkspaceExecutor } from "./relay/workspace-executor.js";
 import {
   JwtAccessTokenVerifier,
   type AccessTokenVerifier,
@@ -44,7 +45,7 @@ import {
 
 export interface GatewayApplication {
   app: Express;
-  relay: AgentRelay;
+  relay?: AgentRelay;
   logger: Logger;
   resourceMetadataUrl?: URL | undefined;
 }
@@ -53,6 +54,8 @@ export interface GatewayApplicationDependencies {
   logger?: Logger;
   tokenVerifier?: AccessTokenVerifier;
   browser?: BrowserExecutor;
+  workspaceExecutor?: WorkspaceExecutor;
+  workspaceReady?: () => boolean;
 }
 
 export function createGatewayApplication(
@@ -60,18 +63,26 @@ export function createGatewayApplication(
   dependencies: GatewayApplicationDependencies = {},
 ): GatewayApplication {
   const logger = dependencies.logger ?? createLogger(config.logLevel);
-  const relay = new AgentRelay(
-    {
-      agentId: config.agent.id,
-      tokenSha256: config.agent.tokenSha256,
-      requestTimeoutMs: config.agent.requestTimeoutMs,
-      heartbeatMs: config.agent.heartbeatMs,
-      maxConcurrency: config.agent.maxConcurrency,
-      maxPayloadBytes: config.agent.maxPayloadBytes,
-      allowedOrigins: config.allowedOrigins,
-    },
-    logger,
-  );
+  const relay = config.workspaceBackend.kind === "relay"
+    ? new AgentRelay(
+        {
+          agentId: config.agent.id!,
+          tokenSha256: config.agent.tokenSha256!,
+          requestTimeoutMs: config.agent.requestTimeoutMs,
+          heartbeatMs: config.agent.heartbeatMs,
+          maxConcurrency: config.agent.maxConcurrency,
+          maxPayloadBytes: config.agent.maxPayloadBytes,
+          allowedOrigins: config.allowedOrigins,
+        },
+        logger,
+      )
+    : undefined;
+  const workspaceExecutor = dependencies.workspaceExecutor ??
+    (relay ? new RelayWorkspaceExecutor(relay) : undefined);
+  if (!workspaceExecutor) {
+    throw new Error("A workspace executor is required when the relay backend is disabled.");
+  }
+  const workspaceReady = dependencies.workspaceReady ?? (() => relay?.isConnected ?? false);
   const browser = dependencies.browser ?? (config.browserWorker
     ? new BrowserWorkerClient({
         url: config.browserWorker.url,
@@ -99,8 +110,8 @@ export function createGatewayApplication(
 
   app.get("/health/live", (_request, response) => response.json({ status: "live" }));
   app.get("/health/ready", (_request, response) =>
-    response.status(relay.isConnected ? 200 : 503).json({
-      status: relay.isConnected ? "ready" : "agent_disconnected",
+    response.status(workspaceReady() ? 200 : 503).json({
+      status: workspaceReady() ? "ready" : "workspace_backend_unavailable",
     }),
   );
 
@@ -174,7 +185,7 @@ export function createGatewayApplication(
     mcpMiddlewares.push(createSubjectRateLimiter(config));
   }
 
-  mountGptActions(app, config, relay, logger, browser);
+  mountGptActions(app, config, workspaceExecutor, logger, browser);
 
   app.use(config.mcpPath, createMcpRequestLifecycleMiddleware(logger));
   app.use(config.mcpPath, ...mcpMiddlewares);
@@ -224,7 +235,7 @@ export function createGatewayApplication(
       return;
     }
     const server = createMcpServer({
-      relay,
+      workspaceExecutor,
       ...(browser === undefined ? {} : { browser }),
       auth: mcpAuth,
       operationContextFactory,
@@ -258,7 +269,12 @@ export function createGatewayApplication(
     response.status(500).json({ error: "internal_error" });
   });
 
-  return { app, relay, logger, resourceMetadataUrl };
+  return {
+    app,
+    ...(relay === undefined ? {} : { relay }),
+    logger,
+    resourceMetadataUrl,
+  };
 }
 
 function bindMcpHttpRequestAbort(

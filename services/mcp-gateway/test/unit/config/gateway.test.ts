@@ -142,6 +142,45 @@ describe("gateway configuration loader", () => {
     expect(config.actions?.workspaceIds).toEqual(["workspace-a", "development"]);
   });
 
+  it("loads the SSH workspace backend without a legacy Agent identity", () => {
+    const environment: Record<string, string> = {
+      ...requiredEnv,
+      NODE_ENV: "test",
+      WORKSPACE_BACKEND: "ssh",
+      SSH_WORKSPACE_HOST: "workspace.example.internal",
+      SSH_WORKSPACE_PORT: "2222",
+      SSH_WORKSPACE_USERNAME: "developer",
+      SSH_WORKSPACE_PRIVATE_KEY_PATH: "/run/secrets/workspace-key",
+      SSH_WORKSPACE_KNOWN_HOSTS_PATH: "/run/secrets/known-hosts",
+      SSH_WORKSPACE_POLICY_PATH: "/run/secrets/workspace-policy",
+      BROWSER_WORKER_ENABLED: "true",
+      BROWSER_WORKER_URL: "http://browser-worker:3350",
+      BROWSER_WORKER_ALLOWED_HOSTS: "browser-worker",
+      BROWSER_WORKER_TOKEN: "x".repeat(32),
+    };
+    delete environment.AGENT_ID;
+    delete environment.AGENT_TOKEN_SHA256;
+    const config = loadGatewayConfig(environment);
+
+    expect(config.workspaceBackend).toMatchObject({
+      kind: "ssh",
+      host: "workspace.example.internal",
+      port: 2222,
+      username: "developer",
+    });
+    expect(config.browserWorker?.url.href).toBe("http://browser-worker:3350/");
+  });
+
+  it("fails closed when the SSH backend is missing trust material", () => {
+    expect(() =>
+      loadGatewayConfig({
+        ...requiredEnv,
+        NODE_ENV: "test",
+        WORKSPACE_BACKEND: "ssh",
+        SSH_WORKSPACE_HOST: "workspace.example.internal",
+      }),
+    ).toThrow(/SSH_WORKSPACE_USERNAME/u);
+  });
   it("requires a token hash when GPT Actions are enabled", () => {
     expect(() =>
       loadGatewayConfig({

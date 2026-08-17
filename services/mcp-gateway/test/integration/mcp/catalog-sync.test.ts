@@ -9,6 +9,7 @@ import {
   type BrowserExecutor,
 } from "@vs-code-gpt/shared";
 import type { AgentRelay } from "../../../src/relay/service.js";
+import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import { createMcpServer } from "../../../src/mcp/server.js";
 
 const expectedLateTools = [
@@ -83,7 +84,7 @@ describe("MCP connector catalog synchronization", () => {
   });
 
   it("publishes a different server identity when the available tool set is reduced", async () => {
-    const server = createMcpServer({ relay: {} as AgentRelay });
+    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay) });
     const client = createClient("workspace-only-catalog-test");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -159,7 +160,7 @@ describe("MCP connector catalog synchronization", () => {
 
 function createFullServer() {
   return createMcpServer({
-    relay: {} as AgentRelay,
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
     browser: {} as BrowserExecutor,
   });
 }

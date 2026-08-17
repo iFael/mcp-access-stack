@@ -11,12 +11,18 @@ COPY packages ./packages
 
 RUN npm ci --ignore-scripts
 RUN npm run build -w @vs-code-gpt/shared \
+    && npm run build -w @vs-code-gpt/local-agent \
     && npm run build -w @vs-code-gpt/remote-mcp-gateway \
     && npm prune --omit=dev --workspaces --include-workspace-root
 
 FROM node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 AS runtime
 
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     PORT=3310
 
@@ -24,6 +30,8 @@ COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages/mcp-core/package.json ./packages/mcp-core/package.json
 COPY --from=build --chown=node:node /app/packages/mcp-core/dist ./packages/mcp-core/dist
+COPY --from=build --chown=node:node /app/services/workspace-agent/package.json ./services/workspace-agent/package.json
+COPY --from=build --chown=node:node /app/services/workspace-agent/dist ./services/workspace-agent/dist
 COPY --from=build --chown=node:node /app/services/mcp-gateway/package.json ./services/mcp-gateway/package.json
 COPY --from=build --chown=node:node /app/services/mcp-gateway/dist ./services/mcp-gateway/dist
 

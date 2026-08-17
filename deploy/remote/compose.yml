@@ -1,0 +1,142 @@
+name: mcp-access-stack-remote
+
+x-runtime-security: &runtime-security
+  restart: unless-stopped
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  gateway:
+    <<: *runtime-security
+    image: ${MCP_GATEWAY_IMAGE:?MCP_GATEWAY_IMAGE is required}
+    env_file:
+      - ${MCP_GATEWAY_ENV_FILE:-./gateway.env}
+    environment:
+      PORT: "3310"
+      WORKSPACE_BACKEND: ssh
+      SSH_WORKSPACE_PRIVATE_KEY_PATH: /tmp/workspace-ssh-key
+      SSH_WORKSPACE_KNOWN_HOSTS_PATH: /run/secrets/workspace_known_hosts
+      SSH_WORKSPACE_POLICY_PATH: /run/secrets/workspace_policy
+      SSH_WORKSPACE_BACKGROUND_STATE_DIR: /var/lib/mcp-access-stack/background-tasks
+      BROWSER_WORKER_ENABLED: "true"
+      BROWSER_WORKER_URL: http://browser-worker:3350
+      BROWSER_WORKER_ALLOWED_HOSTS: browser-worker
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        cp /run/secrets/workspace_ssh_key /tmp/workspace-ssh-key
+        chmod 600 /tmp/workspace-ssh-key
+        exec node services/mcp-gateway/dist/server.js
+    secrets:
+      - workspace_ssh_key
+      - workspace_known_hosts
+      - workspace_policy
+    volumes:
+      - gateway-state:/var/lib/mcp-access-stack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      browser-worker:
+        condition: service_healthy
+    networks:
+      - mcp
+
+  browser-worker:
+    <<: *runtime-security
+    image: ${MCP_BROWSER_WORKER_IMAGE:?MCP_BROWSER_WORKER_IMAGE is required}
+    env_file:
+      - ${MCP_BROWSER_ENV_FILE:-./browser.env}
+    environment:
+      BROWSER_WORKER_HOST: 0.0.0.0
+      BROWSER_WORKER_PORT: "3350"
+      BROWSER_WORKER_HEADLESS: "true"
+      BROWSER_WORKER_CREDENTIALS_PATH: /tmp/browser-credentials.json
+      BROWSER_WORKER_SITE_POLICIES_PATH: /run/secrets/browser_site_policies
+      BROWSER_WORKER_RUNTIME_DIR: /var/lib/mcp-access-stack/browser
+      BROWSER_WORKER_PRIVATE_DIR: /var/lib/mcp-access-stack/browser-private
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        cp /run/secrets/browser_credentials /tmp/browser-credentials.json
+        chmod 600 /tmp/browser-credentials.json
+        exec node services/browser-worker/dist/server.js
+    secrets:
+      - browser_credentials
+      - browser_site_policies
+    volumes:
+      - browser-state:/var/lib/mcp-access-stack
+    networks:
+      - mcp
+
+  proxy:
+    <<: *runtime-security
+    image: ${MCP_PROXY_IMAGE:?MCP_PROXY_IMAGE is required}
+    environment:
+      PROXY_HOST: 0.0.0.0
+      PROXY_PORT: "3300"
+      TARGET_HOST: gateway
+      TARGET_PORT: "3310"
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      MCP_PATH_ALIASES: ${MCP_PATH_ALIASES:-}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - mcp
+
+  tunnel:
+    <<: *runtime-security
+    image: ${NGROK_IMAGE:-ngrok/ngrok:3.30.0-alpine}
+    env_file:
+      - ${MCP_TUNNEL_ENV_FILE:-./tunnel.env}
+    environment:
+      NGROK_CONFIG: /var/lib/ngrok/auth-config.yml
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/lib/ngrok:rw,noexec,nosuid,size=1m
+    volumes:
+      - ../docker/config/ngrok-agent.yml:/etc/ngrok/mcp-agent.yml:ro
+    command:
+      - http
+      - proxy:3300
+      - --log=stdout
+      - --config=/var/lib/ngrok/auth-config.yml,/etc/ngrok/mcp-agent.yml
+      - --url=${NGROK_PRODUCTION_URL:-}
+    depends_on:
+      proxy:
+        condition: service_healthy
+    networks:
+      - mcp
+
+secrets:
+  workspace_ssh_key:
+    file: ${MCP_WORKSPACE_SSH_KEY_FILE:?MCP_WORKSPACE_SSH_KEY_FILE is required}
+  workspace_known_hosts:
+    file: ${MCP_WORKSPACE_KNOWN_HOSTS_FILE:?MCP_WORKSPACE_KNOWN_HOSTS_FILE is required}
+  workspace_policy:
+    file: ${MCP_WORKSPACE_POLICY_FILE:?MCP_WORKSPACE_POLICY_FILE is required}
+  browser_credentials:
+    file: ${MCP_BROWSER_CREDENTIALS_FILE:?MCP_BROWSER_CREDENTIALS_FILE is required}
+  browser_site_policies:
+    file: ${MCP_BROWSER_SITE_POLICIES_FILE:?MCP_BROWSER_SITE_POLICIES_FILE is required}
+
+volumes:
+  gateway-state:
+  browser-state:
+
+networks:
+  mcp:
+    driver: bridge

@@ -60,7 +60,7 @@ describe("legacy browser MCP fast path", () => {
         "com.openai.gateway/route": "legacy-browser-fast-path-v1",
       });
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });
@@ -123,7 +123,7 @@ describe("legacy browser MCP fast path", () => {
         worker: null,
       }));
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });
@@ -176,7 +176,7 @@ describe("legacy browser MCP fast path", () => {
       ).toBe(true);
       expect(calls).toBe(0);
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });
@@ -221,7 +221,7 @@ describe("legacy browser MCP fast path", () => {
         "com.openai.gateway/route": "legacy-browser-fast-path-v1",
       });
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });

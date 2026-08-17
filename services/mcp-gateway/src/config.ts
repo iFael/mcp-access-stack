@@ -38,14 +38,24 @@ const configSchema = z
     OAUTH_ALLOWED_SUBJECTS: z.string().trim().min(1).optional(),
     OAUTH_REQUIRED_SCOPE: z.string().trim().min(1).default("workspaces:read"),
     ALLOWED_ORIGINS: z.string().default(""),
-    AGENT_ID: z.string().trim().min(1).max(128),
-    AGENT_TOKEN_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/),
+    AGENT_ID: z.string().trim().min(1).max(128).optional(),
+    AGENT_TOKEN_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
     AGENT_REQUEST_TIMEOUT_MS: cappedInteger(60_000, MAX_REQUEST_TIMEOUT_MS),
     AGENT_HEARTBEAT_MS: positiveInteger(30_000),
     AGENT_MAX_CONCURRENCY: cappedInteger(4, MAX_CONCURRENCY),
     AGENT_MAX_PAYLOAD_BYTES: cappedInteger(MAX_PAYLOAD_BYTES, MAX_PAYLOAD_BYTES),
+    WORKSPACE_BACKEND: z.enum(["relay", "ssh"]).default("relay"),
+    SSH_WORKSPACE_HOST: z.string().trim().min(1).optional(),
+    SSH_WORKSPACE_PORT: z.coerce.number().int().min(1).max(65_535).default(22),
+    SSH_WORKSPACE_USERNAME: z.string().trim().min(1).optional(),
+    SSH_WORKSPACE_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
+    SSH_WORKSPACE_KNOWN_HOSTS_PATH: z.string().trim().min(1).optional(),
+    SSH_WORKSPACE_POLICY_PATH: z.string().trim().min(1).optional(),
+    SSH_WORKSPACE_CONNECT_TIMEOUT_MS: cappedInteger(15_000, 120_000),
+    SSH_WORKSPACE_BACKGROUND_STATE_DIR: z.string().trim().min(1).default("/var/lib/mcp-access-stack/background-tasks"),
     BROWSER_WORKER_ENABLED: z.stringbool().default(false),
     BROWSER_WORKER_ALLOW_DOCKER_HOST: z.stringbool().default(false),
+    BROWSER_WORKER_ALLOWED_HOSTS: z.string().default(""),
     BROWSER_WORKER_URL: z.url().default("http://127.0.0.1:3350"),
     BROWSER_WORKER_TOKEN: z.string().min(32).optional(),
     BROWSER_WORKER_TIMEOUT_MS: cappedInteger(120_000, MAX_REQUEST_TIMEOUT_MS),
@@ -100,6 +110,19 @@ export interface GatewayActionsConfig {
   allowShell: boolean;
 }
 
+export type GatewayWorkspaceBackendConfig =
+  | { kind: "relay" }
+  | {
+      kind: "ssh";
+      host: string;
+      port: number;
+      username: string;
+      privateKeyPath: string;
+      knownHostsPath: string;
+      policyPath: string;
+      connectTimeoutMs: number;
+      backgroundStateDirectory: string;
+    };
 export interface GatewayConfig {
   nodeEnv: "development" | "test" | "production";
   port: number;
@@ -112,9 +135,10 @@ export interface GatewayConfig {
   browserWorker?: GatewayBrowserWorkerConfig | undefined;
   actions?: GatewayActionsConfig | undefined;
   allowedOrigins: ReadonlySet<string>;
+  workspaceBackend: GatewayWorkspaceBackendConfig;
   agent: {
-    id: string;
-    tokenSha256: string;
+    id?: string;
+    tokenSha256?: string;
     requestTimeoutMs: number;
     heartbeatMs: number;
     maxConcurrency: number;
@@ -136,6 +160,12 @@ export function loadGatewayConfig(
     if (raw !== undefined) input[variable] = raw;
   }
   const value = configSchema.parse(input);
+  if (
+    value.WORKSPACE_BACKEND === "relay" &&
+    (!value.AGENT_ID || !value.AGENT_TOKEN_SHA256)
+  ) {
+    throw new Error("WORKSPACE_BACKEND=relay requires AGENT_ID and AGENT_TOKEN_SHA256.");
+  }
   const publicBaseUrl = new URL(value.PUBLIC_BASE_URL);
   if (publicBaseUrl.username || publicBaseUrl.password || publicBaseUrl.search || publicBaseUrl.hash) {
     throw new Error("PUBLIC_BASE_URL must not contain credentials, query parameters, or fragments.");
@@ -158,9 +188,12 @@ export function loadGatewayConfig(
     browserWorker: loadBrowserWorkerConfig(value),
     actions: loadActionsConfig(value),
     allowedOrigins: parseSet(value.ALLOWED_ORIGINS),
+    workspaceBackend: loadWorkspaceBackendConfig(value),
     agent: {
-      id: value.AGENT_ID,
-      tokenSha256: value.AGENT_TOKEN_SHA256.toLowerCase(),
+      ...(value.AGENT_ID === undefined ? {} : { id: value.AGENT_ID }),
+      ...(value.AGENT_TOKEN_SHA256 === undefined
+        ? {}
+        : { tokenSha256: value.AGENT_TOKEN_SHA256.toLowerCase() }),
       requestTimeoutMs: value.AGENT_REQUEST_TIMEOUT_MS,
       heartbeatMs: value.AGENT_HEARTBEAT_MS,
       maxConcurrency: value.AGENT_MAX_CONCURRENCY,
@@ -174,6 +207,32 @@ export function loadGatewayConfig(
   };
 }
 
+function loadWorkspaceBackendConfig(
+  value: z.infer<typeof configSchema>,
+): GatewayWorkspaceBackendConfig {
+  if (value.WORKSPACE_BACKEND === "relay") return { kind: "relay" };
+  const required = {
+    SSH_WORKSPACE_HOST: value.SSH_WORKSPACE_HOST,
+    SSH_WORKSPACE_USERNAME: value.SSH_WORKSPACE_USERNAME,
+    SSH_WORKSPACE_PRIVATE_KEY_PATH: value.SSH_WORKSPACE_PRIVATE_KEY_PATH,
+    SSH_WORKSPACE_KNOWN_HOSTS_PATH: value.SSH_WORKSPACE_KNOWN_HOSTS_PATH,
+    SSH_WORKSPACE_POLICY_PATH: value.SSH_WORKSPACE_POLICY_PATH,
+  };
+  for (const [name, configured] of Object.entries(required)) {
+    if (!configured) throw new Error(`WORKSPACE_BACKEND=ssh requires ${name}.`);
+  }
+  return {
+    kind: "ssh",
+    host: required.SSH_WORKSPACE_HOST!,
+    port: value.SSH_WORKSPACE_PORT,
+    username: required.SSH_WORKSPACE_USERNAME!,
+    privateKeyPath: required.SSH_WORKSPACE_PRIVATE_KEY_PATH!,
+    knownHostsPath: required.SSH_WORKSPACE_KNOWN_HOSTS_PATH!,
+    policyPath: required.SSH_WORKSPACE_POLICY_PATH!,
+    connectTimeoutMs: value.SSH_WORKSPACE_CONNECT_TIMEOUT_MS,
+    backgroundStateDirectory: value.SSH_WORKSPACE_BACKGROUND_STATE_DIR,
+  };
+}
 function loadActionsConfig(
   value: z.infer<typeof configSchema>,
 ): GatewayActionsConfig | undefined {
@@ -208,9 +267,12 @@ function loadBrowserWorkerConfig(
   if (value.BROWSER_WORKER_ALLOW_DOCKER_HOST) {
     allowedHosts.add("host.docker.internal");
   }
+  for (const host of parseSet(value.BROWSER_WORKER_ALLOWED_HOSTS)) {
+    allowedHosts.add(host.toLocaleLowerCase("en-US"));
+  }
   if (
     url.protocol !== "http:" ||
-    !allowedHosts.has(url.hostname) ||
+    !allowedHosts.has(url.hostname.toLocaleLowerCase("en-US")) ||
     url.username ||
     url.password ||
     url.search ||

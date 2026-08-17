@@ -229,7 +229,7 @@ async function createFixture(agent: LocalAgent): Promise<{
   const gateway = createGatewayApplication(config, { logger: silentLogger() });
   const http = await listen(gateway.app);
   http.server.on("upgrade", (request, socket, head) => {
-    gateway.relay.handleUpgrade(request, socket, head);
+    gateway.relay!.handleUpgrade(request, socket, head);
   });
   const controller = new AbortController();
   const connection = new AgentConnection(agent, {
@@ -241,14 +241,14 @@ async function createFixture(agent: LocalAgent): Promise<{
     reconnectMaxMs: 50,
   });
   const running = connection.run(controller.signal);
-  await waitFor(() => gateway.relay.isConnected, 5_000);
+  await waitFor(() => gateway.relay!.isConnected, 5_000);
 
   return {
     url: http.url,
     close: async () => {
       controller.abort();
       await running;
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     },
   };

@@ -18,6 +18,7 @@ export type BrowserChannel = z.infer<typeof browserChannelSchema>;
 
 const configSchema = z
   .object({
+    BROWSER_WORKER_HOST: z.enum(["127.0.0.1", "0.0.0.0"]).default("127.0.0.1"),
     BROWSER_WORKER_PORT: z.coerce.number().int().min(1).max(65_535).default(3350),
     BROWSER_WORKER_TOKEN: z.string().min(32),
     BROWSER_WORKER_MODE: browserOperationModeSchema.default(
@@ -25,6 +26,8 @@ const configSchema = z
     ),
     BROWSER_WORKER_PROFILE_MODE: browserProfileModeSchema.default("persistent"),
     BROWSER_WORKER_BROWSER_CHANNEL: browserChannelSchema.default("chromium"),
+    BROWSER_WORKER_HEADLESS: z.stringbool().default(false),
+    BROWSER_WORKER_CREDENTIALS_PATH: z.string().min(1).optional(),
     BROWSER_WORKER_USER_DATA_DIR: z.string().min(1).optional(),
     BROWSER_WORKER_MAX_PAYLOAD_BYTES: z.coerce
       .number()
@@ -197,7 +200,7 @@ const configSchema = z
   .strict();
 
 export interface BrowserWorkerConfig {
-  host: "127.0.0.1";
+  host: "127.0.0.1" | "0.0.0.0";
   port: number;
   token: string;
   mode: BrowserOperationMode;
@@ -221,6 +224,7 @@ export interface BrowserWorkerConfig {
   primaryPrivateSiteUrl?: URL;
   privateSitePolicies?: AuthorizedSitePolicy[];
   credentialBrokerPath?: string;
+  credentialsPath?: string;
   credentialBrokerTimeoutMs?: number;
   loginTimeoutMs?: number;
   loginInvalidBackoffMs?: number;
@@ -280,12 +284,13 @@ export function loadBrowserWorkerConfig(
     );
   }
   return {
-    host: "127.0.0.1",
+    host: value.BROWSER_WORKER_HOST,
     port: value.BROWSER_WORKER_PORT,
     token: value.BROWSER_WORKER_TOKEN,
     mode: value.BROWSER_WORKER_MODE,
     profileMode: value.BROWSER_WORKER_PROFILE_MODE,
     browserChannel: value.BROWSER_WORKER_BROWSER_CHANNEL,
+    headless: value.BROWSER_WORKER_HEADLESS,
     userDataDirectory,
     maxPayloadBytes: value.BROWSER_WORKER_MAX_PAYLOAD_BYTES,
     maxOwnedTabs: value.BROWSER_WORKER_MAX_OWNED_TABS,
@@ -302,6 +307,9 @@ export function loadBrowserWorkerConfig(
     ...(primaryPrivateSite ? { primaryPrivateSiteId: primaryPrivateSite.siteId } : {}),
     ...(primaryPrivateSiteUrl ? { primaryPrivateSiteUrl } : {}),
     privateSitePolicies,
+    ...(value.BROWSER_WORKER_CREDENTIALS_PATH === undefined
+      ? {}
+      : { credentialsPath: path.resolve(value.BROWSER_WORKER_CREDENTIALS_PATH) }),
     ...(value.BROWSER_WORKER_CREDENTIAL_BROKER_PATH === undefined
       ? {}
       : {

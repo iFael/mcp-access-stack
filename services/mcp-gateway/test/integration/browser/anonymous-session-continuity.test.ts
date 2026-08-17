@@ -60,7 +60,7 @@ describe("anonymous MCP browser session continuity", () => {
       });
       expect(new Set(worker.calls.map((call) => call.ownerScope)).size).toBe(1);
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
       await worker.close();
     }
@@ -98,7 +98,7 @@ describe("anonymous MCP browser session continuity", () => {
       expect(readTabId(second)).toBe(readTabId(first));
       expect(worker.createdTabCount()).toBe(1);
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
       await worker.close();
     }
