@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-access-stack",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-17",
+  "workers_dev": true,
+  "vars": {
+    "MCP_EDGE_ENABLED": "false"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_SESSION",
+        "class_name": "McpSession"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["McpSession"]
+    }
+  ]
+}

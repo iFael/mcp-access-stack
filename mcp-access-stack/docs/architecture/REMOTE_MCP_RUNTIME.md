@@ -1,5 +1,6 @@
 # Remote MCP Runtime
 
+> **Status:** esta arquitetura de VM remota + OpenSSH permanece implementada como fallback, mas deixou de ser o alvo preferencial deste workstation antes do cutover. O alvo atual e `EDGE_MCP_RUNTIME.md`, baseado em Cloudflare Worker + Durable Object + connector outbound.
 ## Status
 
 Target architecture for production after the Bitdefender ATC incident on the corporate Windows workstation.
