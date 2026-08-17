@@ -154,6 +154,8 @@ $runtimeFiles = @(
     'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeTransition.ps1',
     'deploy\windows\Install-McpWindowsExecutionNodeHostTask.ps1',
+    'deploy\windows\Install-McpEdgeConnectorTask.ps1',
+    'deploy\windows\Start-McpEdgeConnector.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',
     'deploy\windows\Install-McpWindowsExecutionNodeCutoverTask.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
@@ -171,6 +173,10 @@ $releaseTargetParent = Join-Path $stage 'releases'
 New-Item -ItemType Directory -Force -Path $releaseTargetParent | Out-Null
 Copy-Item -LiteralPath $releaseSource -Destination $releaseTargetParent -Recurse
 $releaseTarget = Join-Path $releaseTargetParent $ReleaseId
+$edgeLauncherSource = Join-Path $stage 'deploy\windows\Start-McpEdgeConnector.ps1'
+$edgeLauncherTarget = Join-Path $releaseTarget 'deploy\windows\Start-McpEdgeConnector.ps1'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeLauncherTarget) | Out-Null
+Copy-Item -LiteralPath $edgeLauncherSource -Destination $edgeLauncherTarget
 $releaseManifestPath = Join-Path $releaseTarget 'manifest.json'
 $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
 if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
@@ -328,6 +334,8 @@ try {
             (New-ExecutionNodeArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Role 'edge-connector' -RelativePath 'services/mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }

@@ -23,6 +23,10 @@ import {
   checkResourceAllowed,
   resourceUrlFromServerUrl,
 } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import {
+  OwnerOAuthStateStore,
+  type PersistedOwnerOAuthTokenRecord,
+} from "./owner-state-store.js";
 
 export interface OwnerOAuthConfig {
   ownerToken: string;
@@ -30,6 +34,7 @@ export interface OwnerOAuthConfig {
   refreshTokenTtlSeconds: number;
   scopes: string[];
   allowedRedirectHosts: string[];
+  statePath?: string;
   resourceName: string;
 }
 
@@ -40,7 +45,6 @@ interface AuthorizationCodeRecord {
 }
 
 interface AccessTokenRecord {
-  token: string;
   clientId: string;
   scopes: string[];
   expiresAt: number;
@@ -48,7 +52,6 @@ interface AccessTokenRecord {
 }
 
 interface RefreshTokenRecord {
-  token: string;
   clientId: string;
   scopes: string[];
   expiresAt: number;
@@ -178,15 +181,41 @@ function approvalFormHtml(params: {
 export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
-  constructor(private readonly allowedRedirectHosts: string[]) {}
+  constructor(
+    private readonly allowedRedirectHosts: string[],
+    initialClients: readonly OAuthClientInformationFull[] = [],
+    private readonly onChanged?: () => void,
+  ) {
+    for (const client of initialClients) {
+      if (client.client_secret !== undefined ||
+          (client.token_endpoint_auth_method !== undefined && client.token_endpoint_auth_method !== "none")) {
+        throw new Error("Persisted OAuth client must be a public PKCE client.");
+      }
+      if (!client.redirect_uris.every((uri) => redirectHostAllowed(uri, this.allowedRedirectHosts))) {
+        throw new Error("Persisted OAuth client redirect_uri is not allowed for this MCP server.");
+      }
+      if (this.clients.has(client.client_id)) {
+        throw new Error("Persisted OAuth client_id is duplicated.");
+      }
+      this.clients.set(client.client_id, client);
+    }
+  }
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
     return this.clients.get(clientId);
   }
 
+  snapshot(): OAuthClientInformationFull[] {
+    return [...this.clients.values()];
+  }
+
   registerClient(
     client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
   ): OAuthClientInformationFull {
+    if (client.client_secret !== undefined ||
+        (client.token_endpoint_auth_method !== undefined && client.token_endpoint_auth_method !== "none")) {
+      throw new InvalidRequestError("Owner OAuth accepts public PKCE clients only");
+    }
     if (!client.redirect_uris.every((uri) => redirectHostAllowed(uri, this.allowedRedirectHosts))) {
       throw new InvalidRequestError("Client redirect_uri is not allowed for this MCP server");
     }
@@ -200,23 +229,96 @@ export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
       response_types: client.response_types ?? ["code"],
     };
     this.clients.set(registered.client_id, registered);
+    try {
+      this.onChanged?.();
+    } catch (error) {
+      this.clients.delete(registered.client_id);
+      throw error;
+    }
     return registered;
   }
 }
 
+function hydratePersistedTokenRecord(
+  record: PersistedOwnerOAuthTokenRecord,
+  clientIds: ReadonlySet<string>,
+  supportedScopes: readonly string[],
+  resourceServerUrl: URL,
+): AccessTokenRecord {
+  if (!clientIds.has(record.clientId)) {
+    throw new Error("Persisted Owner OAuth token references an unknown client.");
+  }
+  if (!requestedScopesAllowed(record.scopes, [...supportedScopes])) {
+    throw new Error("Persisted Owner OAuth token contains unsupported scopes.");
+  }
+  const resource = record.resource === undefined ? undefined : new URL(record.resource);
+  if (
+    resource &&
+    !checkResourceAllowed({
+      requestedResource: resource,
+      configuredResource: resourceServerUrl,
+    })
+  ) {
+    throw new Error("Persisted Owner OAuth token belongs to a different resource.");
+  }
+  return {
+    clientId: record.clientId,
+    scopes: [...record.scopes],
+    expiresAt: record.expiresAt,
+    ...(resource === undefined ? {} : { resource }),
+  };
+}
 export class OwnerOAuthProvider implements OAuthServerProvider {
   readonly clientsStore: OAuthRegisteredClientsStore;
+  private readonly clientStore: InMemoryOAuthClientsStore;
   private readonly codes = new Map<string, AuthorizationCodeRecord>();
   private readonly accessTokens = new Map<string, AccessTokenRecord>();
   private readonly refreshTokens = new Map<string, RefreshTokenRecord>();
   private readonly resourceServerUrl: URL;
+  private readonly stateStore: OwnerOAuthStateStore | undefined;
 
   constructor(
     private readonly config: OwnerOAuthConfig,
     resourceServerUrl: URL,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
-    this.clientsStore = new InMemoryOAuthClientsStore(config.allowedRedirectHosts);
+    this.stateStore = config.statePath
+      ? new OwnerOAuthStateStore(config.statePath, this.resourceServerUrl)
+      : undefined;
+    const persisted = this.stateStore?.load() ?? {
+      clients: [],
+      accessTokens: [],
+      refreshTokens: [],
+    };
+    const clientIds = new Set(persisted.clients.map((client) => client.client_id));
+    const now = Math.floor(Date.now() / 1000);
+    for (const record of persisted.accessTokens) {
+      if (record.expiresAt <= now) continue;
+      this.accessTokens.set(
+        record.hash,
+        hydratePersistedTokenRecord(record, clientIds, config.scopes, this.resourceServerUrl),
+      );
+    }
+    for (const record of persisted.refreshTokens) {
+      if (record.expiresAt <= now) continue;
+      this.refreshTokens.set(
+        record.hash,
+        hydratePersistedTokenRecord(record, clientIds, config.scopes, this.resourceServerUrl),
+      );
+    }
+    this.clientStore = new InMemoryOAuthClientsStore(
+      config.allowedRedirectHosts,
+      persisted.clients,
+      () => this.persistState(),
+    );
+    this.clientsStore = this.clientStore;
+    if (
+      this.stateStore &&
+      (this.accessTokens.size !== persisted.accessTokens.length ||
+        this.refreshTokens.size !== persisted.refreshTokens.length)
+    ) {
+      this.persistState();
+    }
   }
 
   async authorize(
@@ -319,7 +421,8 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     scopes?: string[],
     resource?: URL,
   ): Promise<OAuthTokens> {
-    const record = this.refreshTokens.get(hashToken(refreshToken));
+    const refreshHash = hashToken(refreshToken);
+    const record = this.refreshTokens.get(refreshHash);
     if (!record || record.clientId !== client.client_id || record.expiresAt < Math.floor(Date.now() / 1000)) {
       throw new InvalidGrantError("Invalid refresh token");
     }
@@ -336,8 +439,12 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     if (!requestedScopes.every((scope) => record.scopes.includes(scope))) {
       throw new AccessDeniedError("Refresh token cannot grant requested scopes");
     }
-    this.refreshTokens.delete(hashToken(refreshToken));
-    return this.issueTokens(client.client_id, requestedScopes, resource ?? record.resource);
+    return this.issueTokens(
+      client.client_id,
+      requestedScopes,
+      resource ?? record.resource,
+      refreshHash,
+    );
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
@@ -356,8 +463,10 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
 
   async revokeToken(_client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     const hashed = hashToken(request.token);
-    this.accessTokens.delete(hashed);
-    this.refreshTokens.delete(hashed);
+    this.mutateTokens(() => {
+      this.accessTokens.delete(hashed);
+      this.refreshTokens.delete(hashed);
+    });
   }
 
   private validCodeRecord(
@@ -371,26 +480,36 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     return record;
   }
 
-  private issueTokens(clientId: string, scopes: string[], resource?: URL): OAuthTokens {
+  private issueTokens(
+    clientId: string,
+    scopes: string[],
+    resource?: URL,
+    refreshTokenToReplaceHash?: string,
+  ): OAuthTokens {
     const now = Math.floor(Date.now() / 1000);
     const accessToken = randomToken();
     const refreshToken = randomToken();
+    const accessHash = hashToken(accessToken);
+    const refreshHash = hashToken(refreshToken);
     const accessExpiresAt = now + this.config.accessTokenTtlSeconds;
     const refreshExpiresAt = now + this.config.refreshTokenTtlSeconds;
 
-    this.accessTokens.set(hashToken(accessToken), {
-      token: accessToken,
-      clientId,
-      scopes,
-      expiresAt: accessExpiresAt,
-      ...(resource === undefined ? {} : { resource }),
-    });
-    this.refreshTokens.set(hashToken(refreshToken), {
-      token: refreshToken,
-      clientId,
-      scopes,
-      expiresAt: refreshExpiresAt,
-      ...(resource === undefined ? {} : { resource }),
+    this.mutateTokens(() => {
+      if (refreshTokenToReplaceHash) {
+        this.refreshTokens.delete(refreshTokenToReplaceHash);
+      }
+      this.accessTokens.set(accessHash, {
+        clientId,
+        scopes: [...scopes],
+        expiresAt: accessExpiresAt,
+        ...(resource === undefined ? {} : { resource }),
+      });
+      this.refreshTokens.set(refreshHash, {
+        clientId,
+        scopes: [...scopes],
+        expiresAt: refreshExpiresAt,
+        ...(resource === undefined ? {} : { resource }),
+      });
     });
 
     return {
@@ -400,6 +519,50 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
       refresh_token: refreshToken,
       scope: scopes.join(" "),
     };
+  }
+
+  private mutateTokens(mutation: () => void): void {
+    if (!this.stateStore) {
+      mutation();
+      return;
+    }
+    const accessBefore = new Map(this.accessTokens);
+    const refreshBefore = new Map(this.refreshTokens);
+    mutation();
+    try {
+      this.persistState();
+    } catch (error) {
+      this.accessTokens.clear();
+      this.refreshTokens.clear();
+      for (const [key, value] of accessBefore) this.accessTokens.set(key, value);
+      for (const [key, value] of refreshBefore) this.refreshTokens.set(key, value);
+      throw error;
+    }
+  }
+
+  private persistState(): void {
+    if (!this.stateStore) return;
+    const now = Math.floor(Date.now() / 1000);
+    this.stateStore.save({
+      clients: this.clientStore.snapshot(),
+      accessTokens: this.serializeTokenRecords(this.accessTokens, now),
+      refreshTokens: this.serializeTokenRecords(this.refreshTokens, now),
+    });
+  }
+
+  private serializeTokenRecords<T extends AccessTokenRecord | RefreshTokenRecord>(
+    records: ReadonlyMap<string, T>,
+    now: number,
+  ): PersistedOwnerOAuthTokenRecord[] {
+    return [...records.entries()]
+      .filter(([, record]) => record.expiresAt > now)
+      .map(([hash, record]) => ({
+        hash,
+        clientId: record.clientId,
+        scopes: [...record.scopes],
+        expiresAt: record.expiresAt,
+        ...(record.resource === undefined ? {} : { resource: record.resource.href }),
+      }));
   }
 }
 
