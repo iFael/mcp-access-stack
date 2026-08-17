@@ -77,7 +77,7 @@ describe("stateless MCP catalog identity", () => {
       expect(listCatalog).toMatchObject({ ...MCP_FULL_TOOL_CATALOG_METADATA });
       expect(listCatalog.serverVersion).toBe(serverInfo.version);
     } finally {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });

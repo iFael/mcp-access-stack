@@ -50,7 +50,7 @@ describe("gateway to local agent integration", () => {
     const gateway = createGatewayApplication(config, { logger: silentLogger() });
     const http = await listen(gateway.app);
     http.server.on("upgrade", (request, socket, head) => {
-      gateway.relay.handleUpgrade(request, socket, head);
+      gateway.relay!.handleUpgrade(request, socket, head);
     });
     const workspace = await createFixture();
     const abortController = new AbortController();
@@ -67,7 +67,7 @@ describe("gateway to local agent integration", () => {
         reconnectMaxMs: 50,
       });
       const connectionRun = connection.run(abortController.signal);
-      await waitFor(() => gateway.relay.isConnected);
+      await waitFor(() => gateway.relay!.isConnected);
       const accessToken = await new SignJWT({
         scope: "workspaces:read",
         azp: "e2e-client",
@@ -111,7 +111,7 @@ describe("gateway to local agent integration", () => {
       await connectionRun;
     } finally {
       abortController.abort();
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
       await jwks.close();
       await workspace.cleanup();
@@ -134,7 +134,7 @@ describe("gateway to local agent integration", () => {
     const gateway = createGatewayApplication(config, { logger: silentLogger() });
     const http = await listen(gateway.app);
     http.server.on("upgrade", (request, socket, head) => {
-      gateway.relay.handleUpgrade(request, socket, head);
+      gateway.relay!.handleUpgrade(request, socket, head);
     });
     const workspace = await createFixture({ workspaceKind: "aggregate" });
     const abortController = new AbortController();
@@ -155,7 +155,7 @@ describe("gateway to local agent integration", () => {
         reconnectMaxMs: 50,
       });
       const connectionRun = connection.run(abortController.signal);
-      await waitFor(() => gateway.relay.isConnected);
+      await waitFor(() => gateway.relay!.isConnected);
 
       const post = async (payload: Record<string, unknown>) => {
         const response = await fetch(new URL("/mcp", http.url), {
@@ -238,7 +238,7 @@ describe("gateway to local agent integration", () => {
       await connectionRun;
     } finally {
       abortController.abort();
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
       await workspace.cleanup();
     }
@@ -265,7 +265,7 @@ describe("gateway to local agent integration", () => {
         socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
         return;
       }
-      gateway.relay.handleUpgrade(request, socket, head);
+      gateway.relay!.handleUpgrade(request, socket, head);
     });
     const abortController = new AbortController();
     const localAgent = {
@@ -287,12 +287,12 @@ describe("gateway to local agent integration", () => {
     const running = connection.run(abortController.signal);
 
     try {
-      await waitFor(() => gateway.relay.isConnected);
+      await waitFor(() => gateway.relay!.isConnected);
       expect(upgrades).toBeGreaterThanOrEqual(2);
     } finally {
       abortController.abort();
       await running;
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     }
   });
