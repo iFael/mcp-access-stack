@@ -11,6 +11,7 @@ COPY packages ./packages
 
 RUN npm ci --ignore-scripts
 RUN npm run build -w @vs-code-gpt/shared \
+    && npm run build -w @mcp-access-stack/edge-protocol \
     && npm run build -w @vs-code-gpt/local-agent \
     && npm run build -w @vs-code-gpt/remote-mcp-gateway \
     && npm prune --omit=dev --workspaces --include-workspace-root
@@ -28,6 +29,8 @@ ENV NODE_ENV=production \
 
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/packages/edge-protocol/package.json ./packages/edge-protocol/package.json
+COPY --from=build --chown=node:node /app/packages/edge-protocol/dist ./packages/edge-protocol/dist
 COPY --from=build --chown=node:node /app/packages/mcp-core/package.json ./packages/mcp-core/package.json
 COPY --from=build --chown=node:node /app/packages/mcp-core/dist ./packages/mcp-core/dist
 COPY --from=build --chown=node:node /app/services/workspace-agent/package.json ./services/workspace-agent/package.json
