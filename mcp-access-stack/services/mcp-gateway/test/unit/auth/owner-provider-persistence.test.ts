@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { OwnerOAuthProvider, type OwnerOAuthConfig } from "../../../src/auth/owner-provider.js";
 
 const resourceUrl = new URL("https://mcp.example.com/mcp");
