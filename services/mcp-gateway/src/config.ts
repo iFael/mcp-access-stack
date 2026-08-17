@@ -44,7 +44,7 @@ const configSchema = z
     AGENT_HEARTBEAT_MS: positiveInteger(30_000),
     AGENT_MAX_CONCURRENCY: cappedInteger(4, MAX_CONCURRENCY),
     AGENT_MAX_PAYLOAD_BYTES: cappedInteger(MAX_PAYLOAD_BYTES, MAX_PAYLOAD_BYTES),
-    WORKSPACE_BACKEND: z.enum(["relay", "ssh"]).default("relay"),
+    WORKSPACE_BACKEND: z.enum(["relay", "ssh", "in-process"]).default("relay"),
     SSH_WORKSPACE_HOST: z.string().trim().min(1).optional(),
     SSH_WORKSPACE_PORT: z.coerce.number().int().min(1).max(65_535).default(22),
     SSH_WORKSPACE_USERNAME: z.string().trim().min(1).optional(),
@@ -112,6 +112,7 @@ export interface GatewayActionsConfig {
 
 export type GatewayWorkspaceBackendConfig =
   | { kind: "relay" }
+  | { kind: "in-process" }
   | {
       kind: "ssh";
       host: string;
@@ -211,6 +212,7 @@ function loadWorkspaceBackendConfig(
   value: z.infer<typeof configSchema>,
 ): GatewayWorkspaceBackendConfig {
   if (value.WORKSPACE_BACKEND === "relay") return { kind: "relay" };
+  if (value.WORKSPACE_BACKEND === "in-process") return { kind: "in-process" };
   const required = {
     SSH_WORKSPACE_HOST: value.SSH_WORKSPACE_HOST,
     SSH_WORKSPACE_USERNAME: value.SSH_WORKSPACE_USERNAME,

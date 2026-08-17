@@ -1,40 +1,36 @@
 # MCP Edge Gateway
 
-Cloudflare Worker usado como borda pública serverless do MCP.
-
-Topologia deste estágio:
+Cloudflare Worker used as the public serverless edge for the MCP.
 
 ```text
 ChatGPT -> Cloudflare Worker -> Durable Object <-> MCP Connector (Windows, outbound)
 ```
 
-O Worker é implantado **desativado por padrão** (`MCP_EDGE_ENABLED=false`). O endpoint `/mcp` só começa a encaminhar tráfego quando essa flag for explicitamente habilitada em um gate posterior.
+The Worker is deployed **disabled by default** (`MCP_EDGE_ENABLED=false`). Public MCP/OAuth relay is enabled only in a later activation gate.
 
-## Rotas
+## Routes
 
-- `GET /health`: saúde do Worker e presença de connector pronto.
-- `POST /mcp`: relay MCP; retorna `503` enquanto o edge estiver desabilitado ou o connector não estiver pronto.
-- `/connector`: upgrade WebSocket autenticado para o connector outbound do Windows.
+- `GET /health`: Worker health plus connector readiness.
+- `/connector`: authenticated WebSocket upgrade for the outbound Windows connector.
+- `/mcp`: MCP relay when the Edge is explicitly enabled.
+- Owner OAuth routes: only the exact paths listed in `docs/architecture/EDGE_MCP_RUNTIME.md`.
 
-## Segurança inicial
+## Security
 
-- `MCP_CONNECTOR_TOKEN` é obrigatório para `/connector` e deve ser criado como Cloudflare secret, nunca versionado.
-- O token não é encaminhado ao Windows e não é registrado.
-- O relay usa allowlist de headers e limites de tamanho/timeout.
-- A ativação pública do `/mcp` fica separada da implantação inicial.
-
-## Cloudflare Worker identity
-
-O Worker conectado no dashboard chama-se `mcp-access-stack` e o campo `name` do `wrangler.jsonc` deve permanecer alinhado a esse nome.
+- `MCP_CONNECTOR_TOKEN` is a Cloudflare secret and is never versioned.
+- Connector protocol/version, request paths and methods fail closed.
+- Only allowlisted request/response headers cross the Edge boundary.
+- Request/response sizes, relay time and connector concurrency are bounded.
+- Edge cancellation is propagated to the connector and the embedded Gateway.
+- `Origin` is forwarded so Gateway origin policy is preserved.
 
 ## Cloudflare Workers Builds
 
-Configuração do projeto conectado ao GitHub:
-
 ```text
-Root directory: mcp-access-stack/services/mcp-edge-gateway
-Build command:   (vazio)
+Root directory: /mcp-access-stack/services/mcp-edge-gateway
+Build command:   (empty)
 Deploy command:  npx wrangler deploy
+Version command: npx wrangler deploy --dry-run
 ```
 
-O `wrangler.jsonc` deste diretório é a fonte de verdade do Worker. O Durable Object usa armazenamento SQLite e WebSocket Hibernation para manter o connector conectado sem exigir uma VM dedicada.
+The `wrangler.jsonc` in this directory is the Worker source of truth. The Durable Object uses SQLite storage and WebSocket Hibernation.

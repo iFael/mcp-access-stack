@@ -171,6 +171,21 @@ describe("gateway configuration loader", () => {
     expect(config.browserWorker?.url.href).toBe("http://browser-worker:3350/");
   });
 
+  it("loads the in-process workspace backend without a legacy Agent identity", () => {
+    const environment: Record<string, string> = {
+      ...requiredEnv,
+      NODE_ENV: "test",
+      WORKSPACE_BACKEND: "in-process",
+    };
+    delete environment.AGENT_ID;
+    delete environment.AGENT_TOKEN_SHA256;
+
+    const config = loadGatewayConfig(environment);
+
+    expect(config.workspaceBackend).toEqual({ kind: "in-process" });
+    expect(config.agent.id).toBeUndefined();
+    expect(config.agent.tokenSha256).toBeUndefined();
+  });
   it("fails closed when the SSH backend is missing trust material", () => {
     expect(() =>
       loadGatewayConfig({

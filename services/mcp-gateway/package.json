@@ -20,6 +20,10 @@
     "jose": "^6.2.3",
     "pino": "^10.3.1",
     "ws": "^8.21.0",
-    "zod": "^4.4.0"
+    "zod": "^4.4.0",
+    "@mcp-access-stack/edge-protocol": "0.1.0"
+  },
+  "bin": {
+    "mcp-edge-connector": "./dist/edge-connector-cli.js"
   }
 }

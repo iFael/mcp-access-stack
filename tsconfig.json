@@ -4,11 +4,20 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@vs-code-gpt/shared": ["./packages/mcp-core/src/index.ts"]
+      "@vs-code-gpt/shared": [
+        "./packages/mcp-core/src/index.ts"
+      ],
+      "@mcp-access-stack/edge-protocol": [
+        "./packages/edge-protocol/src/index.ts"
+      ],
+      "@mcp-access-stack/edge-protocol/source": [
+        "./packages/edge-protocol/src/index.ts"
+      ]
     }
   },
   "include": [
     "packages/mcp-core/src/**/*.ts",
+    "packages/edge-protocol/src/**/*.ts",
     "packages/mcp-core/test/**/*.ts",
     "services/browser-worker/**/*.ts",
     "services/workspace-agent/src/**/*.ts",
@@ -21,5 +30,7 @@
     "packages/*/jest.config.ts",
     "services/*/jest.config.ts"
   ],
-  "exclude": ["services/browser-worker/dist/**"]
+  "exclude": [
+    "services/browser-worker/dist/**"
+  ]
 }
