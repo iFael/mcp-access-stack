@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@vs-code-gpt/local-agent": "0.1.0",
     "@vs-code-gpt/shared": "0.1.0",
     "compression": "1.8.1",
     "express": "^5.2.1",

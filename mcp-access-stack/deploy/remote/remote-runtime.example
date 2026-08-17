@@ -1,0 +1,20 @@
+# Immutable GHCR images produced by the release workflow.
+MCP_GATEWAY_IMAGE=ghcr.io/<owner>/mcp-access-stack-gateway:<version-or-digest>
+MCP_BROWSER_WORKER_IMAGE=ghcr.io/<owner>/mcp-access-stack-browser-worker:<version-or-digest>
+MCP_PROXY_IMAGE=ghcr.io/<owner>/mcp-access-stack-proxy:<version-or-digest>
+
+# Runtime environment files. Keep these outside Git.
+MCP_GATEWAY_ENV_FILE=./private/gateway.env
+MCP_BROWSER_ENV_FILE=./private/browser.env
+MCP_TUNNEL_ENV_FILE=./private/tunnel.env
+
+# Runtime secrets. Keep these outside Git.
+MCP_WORKSPACE_SSH_KEY_FILE=./private/workspace-ssh-key
+MCP_WORKSPACE_KNOWN_HOSTS_FILE=./private/workspace-known-hosts
+MCP_WORKSPACE_POLICY_FILE=./private/workspace-policy.json
+MCP_BROWSER_CREDENTIALS_FILE=./private/browser-credentials.json
+MCP_BROWSER_SITE_POLICIES_FILE=./private/browser-site-policies.json
+
+MCP_PATH=/mcp
+MCP_PATH_ALIASES=
+NGROK_PRODUCTION_URL=

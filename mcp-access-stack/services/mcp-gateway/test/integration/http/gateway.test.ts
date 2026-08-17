@@ -276,7 +276,7 @@ async function createHttpFixture(
   return {
     ...http,
     close: async () => {
-      gateway.relay.close();
+      gateway.relay!.close();
       await http.close();
     },
   };

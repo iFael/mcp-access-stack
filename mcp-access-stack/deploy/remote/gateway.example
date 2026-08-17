@@ -1,0 +1,21 @@
+NODE_ENV=production
+PUBLIC_BASE_URL=https://<public-mcp-host>
+AUTH_MODE=oauth
+MCP_PATH=/mcp
+TRUST_PROXY=0
+OAUTH_ISSUER=https://<issuer>/
+OAUTH_AUDIENCE=https://<public-mcp-host>
+OAUTH_JWKS_URL=https://<issuer>/.well-known/jwks.json
+OAUTH_ALLOWED_SUBJECTS=<allowed-subject>
+OAUTH_REQUIRED_SCOPE=workspaces:read
+ALLOWED_ORIGINS=https://chatgpt.com
+
+
+SSH_WORKSPACE_HOST=<corporate-windows-host-or-forward>
+SSH_WORKSPACE_PORT=22
+SSH_WORKSPACE_USERNAME=<windows-user>
+SSH_WORKSPACE_CONNECT_TIMEOUT_MS=15000
+
+# Must match browser.example and remain outside Git.
+BROWSER_WORKER_TOKEN=<at-least-32-random-characters>
+LOG_LEVEL=info

@@ -32,3 +32,6 @@
 # OS/editor noise
 .DS_Store
 Thumbs.db
+# Remote MCP runtime private deployment state
+**/deploy/remote/private/
+**/deploy/remote/remote-runtime.env
