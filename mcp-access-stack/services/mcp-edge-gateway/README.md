@@ -30,7 +30,7 @@ The Worker is deployed **disabled by default** (`MCP_EDGE_ENABLED=false`). Publi
 Root directory: /mcp-access-stack/services/mcp-edge-gateway
 Build command:   (empty)
 Deploy command:  npx wrangler deploy
-Version command: npx wrangler versions upload
+Version command: npx wrangler deploy --dry-run
 ```
 
 The `wrangler.jsonc` in this directory is the Worker source of truth. The Durable Object uses SQLite storage and WebSocket Hibernation.
