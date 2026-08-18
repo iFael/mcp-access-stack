@@ -262,6 +262,12 @@ function Assert-McpWindowsExecutionNodeRelease {
     }
 }
 
+function Get-McpWindowsExecutionNodeStatePath {
+    param([Parameter(Mandatory = $true)][string]$InstallationRoot)
+
+    $resolvedRoot = [IO.Path]::GetFullPath($InstallationRoot)
+    return Join-Path $resolvedRoot 'state\lifecycle-state.v1.json'
+}
 function Assert-McpWindowsExecutionNodePointer {
     param(
         [AllowNull()][object]$Pointer,

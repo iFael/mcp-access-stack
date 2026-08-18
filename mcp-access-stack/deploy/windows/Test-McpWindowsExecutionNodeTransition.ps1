@@ -97,7 +97,7 @@ function New-ReleasePointer {
 
 function Write-State {
     param([AllowNull()][object]$Active, [AllowNull()][object]$Candidate, [AllowNull()][object]$Previous)
-    Write-TestUtf8 -Path (Join-Path $stateRoot 'execution-node.json') -Content (([ordered]@{
+    Write-TestUtf8 -Path (Join-Path $stateRoot 'lifecycle-state.v1.json') -Content (([ordered]@{
         version = 1
         active = $Active
         candidate = $Candidate
@@ -340,7 +340,7 @@ try {
         $null -ne $promote.candidateReleaseId) {
         throw 'Healthy execution-node promotion returned unexpected evidence.'
     }
-    $stateAfterPromote = Get-Content -LiteralPath (Join-Path $stateRoot 'execution-node.json') -Raw | ConvertFrom-Json
+    $stateAfterPromote = Get-Content -LiteralPath (Join-Path $stateRoot 'lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     if ([string]$stateAfterPromote.active.releaseId -ne '1.2.0-b' -or
         [string]$stateAfterPromote.previous.releaseId -ne '1.2.0-a' -or
         $null -ne $stateAfterPromote.candidate) {
@@ -428,7 +428,7 @@ try {
         if ($null -ne (Get-Process -Id $ownedHostPid -ErrorAction SilentlyContinue)) {
             throw 'McpHost survived loss of its qualification owner process.'
         }
-        $ownerState = Get-Content -LiteralPath (Join-Path $stateRoot 'execution-node.json') -Raw | ConvertFrom-Json
+        $ownerState = Get-Content -LiteralPath (Join-Path $stateRoot 'lifecycle-state.v1.json') -Raw | ConvertFrom-Json
         if ([string]$ownerState.active.releaseId -ne '1.2.0-a' -or
             [string]$ownerState.candidate.releaseId -ne '1.2.0-c' -or
             $null -ne $ownerState.previous) {
@@ -446,7 +446,7 @@ try {
 
     # A target that never reaches ready must leave the state unchanged.
     Write-State -Active $pointerA -Candidate $pointerC -Previous $null
-    $beforeFailedPromotion = Get-Content -LiteralPath (Join-Path $stateRoot 'execution-node.json') -Raw | ConvertFrom-Json
+    $beforeFailedPromotion = Get-Content -LiteralPath (Join-Path $stateRoot 'lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     $healthRejected = $false
     try {
         & $transition `
@@ -464,7 +464,7 @@ try {
     catch {
         $healthRejected = $_.Exception.Message -like '*qualification*'
     }
-    $afterFailedPromotion = Get-Content -LiteralPath (Join-Path $stateRoot 'execution-node.json') -Raw | ConvertFrom-Json
+    $afterFailedPromotion = Get-Content -LiteralPath (Join-Path $stateRoot 'lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     if (-not $healthRejected -or
         [string]$afterFailedPromotion.active.releaseId -ne [string]$beforeFailedPromotion.active.releaseId -or
         [string]$afterFailedPromotion.candidate.releaseId -ne [string]$beforeFailedPromotion.candidate.releaseId -or
