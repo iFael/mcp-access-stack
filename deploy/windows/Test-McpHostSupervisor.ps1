@@ -35,7 +35,11 @@ foreach ($required in @(
     '/health/ready',
     'host-state.json',
     'restart budget exhausted',
-    'BROWSER_WORKER_PROFILE_MODE"] = "persistent"'
+    'BROWSER_WORKER_PROFILE_MODE"] = "persistent"',
+    'services/mcp-gateway/dist/edge-connector-cli.js',
+    'deploy/windows/Start-McpEdgeConnector.ps1',
+    'either four legacy or six Edge-capable critical artifacts',
+    'Edge connector launcher artifact must require Authenticode.'
 )) {
     if (-not $supervisorSource.Contains($required)) {
         throw "McpHost supervisor source requirement is missing: $required"
@@ -110,6 +114,27 @@ function New-ArtifactRecord {
     }
 }
 
+function Write-ExecutionManifest {
+    param(
+        [object[]]$Artifacts,
+        [string]$ReleaseId,
+        [string]$Commit,
+        [string]$ReleaseRoot
+    )
+    $manifest = [ordered]@{
+        version = 1
+        releaseId = $ReleaseId
+        commit = $Commit
+        platform = 'win32-x64'
+        runtimeMode = 'bundled-node'
+        integrityRoot = 'signed-distribution-manifest'
+        artifacts = $Artifacts
+    }
+    $manifestPath = Join-Path $ReleaseRoot 'execution-node-manifest.json'
+    Write-Utf8NoBom -Path $manifestPath -Content (($manifest | ConvertTo-Json -Depth 12) + "`n")
+    return (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 function Test-ProcessAlive {
     param([int]$Id)
     if ($Id -le 0) { return $false }
@@ -130,6 +155,8 @@ try {
         $configurationRoot, `
         (Join-Path $releaseRoot 'services\workspace-agent\dist'), `
         (Join-Path $releaseRoot 'services\browser-worker\dist'), `
+        (Join-Path $releaseRoot 'services\mcp-gateway\dist'), `
+        (Join-Path $releaseRoot 'deploy\windows'), `
         (Join-Path $releaseRoot 'runtime\node'), `
         (Join-Path $releaseRoot 'native'), `
         (Join-Path $releaseRoot 'tooling\windows-host-launcher'), `
@@ -185,6 +212,13 @@ setInterval(() => {}, 1000);
     Write-Utf8NoBom `
         -Path (Join-Path $releaseRoot 'services\browser-worker\dist\server.js') `
         -Content ($browserScript + "`n")
+
+    Write-Utf8NoBom `
+        -Path (Join-Path $releaseRoot 'services\mcp-gateway\dist\edge-connector-cli.js') `
+        -Content "setInterval(() => {}, 1000);`n"
+    Write-Utf8NoBom `
+        -Path (Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1') `
+        -Content "Write-Output 'edge-launcher'`n"
 
     $agentConfig = [ordered]@{
         gatewayUrl = 'ws://127.0.0.1:65534/agent'
@@ -257,35 +291,44 @@ setInterval(() => {}, 1000);
         -LiteralPath (Join-Path $buildOutput 'McpHost.exe') `
         -Destination (Join-Path $releaseRoot 'native\McpHost.exe')
 
-    $executionManifest = [ordered]@{
-        version = 1
-        releaseId = $releaseId
-        commit = $commit
-        platform = 'win32-x64'
-        runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
-        artifacts = @(
-            (New-ArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
-            (New-ArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
-            (New-ArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-ArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
-        )
-    }
-    $executionManifestPath = Join-Path $releaseRoot 'execution-node-manifest.json'
-    Write-Utf8NoBom `
-        -Path $executionManifestPath `
-        -Content (($executionManifest | ConvertTo-Json -Depth 12) + "`n")
-    $manifestHash = (Get-FileHash -LiteralPath $executionManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $legacyArtifacts = @(
+        (New-ArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
+        (New-ArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
+        (New-ArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
+        (New-ArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
+    )
 
     $hostPath = Join-Path $releaseRoot 'native\McpHost.exe'
     $version = @(& $hostPath --version)
     if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or [string]$version[0] -ne 'mcp-host-contract-v3') {
         throw 'McpHost supervisor CI artifact returned the wrong contract version.'
     }
-    $validated = @(& $hostPath --validate-release-root $releaseRoot)
-    if ($LASTEXITCODE -ne 0 -or $validated.Count -ne 1 -or [string]$validated[0] -ne 'release-root-valid') {
-        throw 'McpHost supervisor CI release validation failed.'
+
+    $null = Write-ExecutionManifest -Artifacts $legacyArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
+    $legacyValidation = @(& $hostPath --validate-release-root $releaseRoot)
+    if ($LASTEXITCODE -ne 0 -or $legacyValidation.Count -ne 1 -or [string]$legacyValidation[0] -ne 'release-root-valid') {
+        throw 'McpHost supervisor CI legacy 4-artifact release validation failed.'
     }
+
+    $edgeArtifacts = @($legacyArtifacts) + @(
+        (New-ArtifactRecord -Role 'edge-connector' -RelativePath 'services/mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+        (New-ArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true)
+    )
+    $manifestHash = Write-ExecutionManifest -Artifacts $edgeArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
+    $edgeValidation = @(& $hostPath --validate-release-root $releaseRoot)
+    if ($LASTEXITCODE -ne 0 -or $edgeValidation.Count -ne 1 -or [string]$edgeValidation[0] -ne 'release-root-valid') {
+        throw 'McpHost supervisor CI Edge-capable 6-artifact release validation failed.'
+    }
+
+    $partialArtifacts = @($edgeArtifacts | Select-Object -First 5)
+    $null = Write-ExecutionManifest -Artifacts $partialArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
+    $partialValidation = @(& $hostPath --validate-release-root $releaseRoot 2>&1)
+    $partialExitCode = $LASTEXITCODE
+    if ($partialExitCode -eq 0) {
+        throw 'McpHost supervisor CI partial 5-artifact manifest must fail closed.'
+    }
+
+    $manifestHash = Write-ExecutionManifest -Artifacts $edgeArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $hostPath

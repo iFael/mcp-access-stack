@@ -179,7 +179,11 @@ foreach ($required in @(
     'Execution-node artifact changed after validation',
     'eventName, "connected"',
     'host-state.json',
-    'mcp_host_qualification_owner_exited'
+    'mcp_host_qualification_owner_exited',
+    'either four legacy or six Edge-capable critical artifacts',
+    'services/mcp-gateway/dist/edge-connector-cli.js',
+    'deploy/windows/Start-McpEdgeConnector.ps1',
+    'Edge connector launcher artifact must require Authenticode.'
 )) {
     if (-not $mcpHostSupervisorSource.Contains($required)) {
         throw "McpHost supervisor runtime contract is missing: $required"
