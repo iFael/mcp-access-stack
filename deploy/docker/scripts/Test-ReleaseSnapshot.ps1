@@ -63,6 +63,33 @@ try {
     }
 
     $actualProjectRoot = Get-McpProjectRoot
+    $runtimeWorkspacePaths = @(Get-McpReleaseRuntimeWorkspacePaths)
+    $runtimeWorkspaceClosure = Assert-McpReleaseRuntimeWorkspaceClosure `
+        -SourceRoot $actualProjectRoot `
+        -WorkspacePaths $runtimeWorkspacePaths
+    if ([int]$runtimeWorkspaceClosure.workspaceCount -ne $runtimeWorkspacePaths.Count) {
+        throw 'Runtime workspace closure validation returned an unexpected workspace count.'
+    }
+    if ($runtimeWorkspacePaths -notcontains 'packages/edge-protocol') {
+        throw 'Edge protocol workspace is missing from the canonical Windows runtime workspace set.'
+    }
+    $incompleteRuntimeWorkspaces = @($runtimeWorkspacePaths | Where-Object { $_ -ne 'packages/edge-protocol' })
+    $closureRejected = $false
+    try {
+        Assert-McpReleaseRuntimeWorkspaceClosure `
+            -SourceRoot $actualProjectRoot `
+            -WorkspacePaths $incompleteRuntimeWorkspaces | Out-Null
+    }
+    catch {
+        if ($_.Exception.Message -notmatch '@mcp-access-stack/edge-protocol') {
+            throw
+        }
+        $closureRejected = $true
+    }
+    if (-not $closureRejected) {
+        throw 'Runtime workspace closure accepted a missing local production dependency.'
+    }
+
     Copy-McpReleaseHostScripts -SourceRoot $actualProjectRoot -DestinationRoot $hostReleaseRoot
     $runnerPath = Get-McpReleaseHostRunnerPath -ReleaseRoot $hostReleaseRoot
     $launcherSourcePath = Get-McpReleaseNodeHostLauncherSourcePath -ReleaseRoot $hostReleaseRoot
@@ -97,7 +124,9 @@ try {
     $portableWorkspace = Join-Path $portableRoot 'services\example-service'
     $portableDist = Join-Path $portableWorkspace 'dist'
     $portableScope = Join-Path $portableRoot 'node_modules\@example'
-    New-Item -ItemType Directory -Force -Path $portableDist, $portableScope | Out-Null
+    $portableUnusedWorkspace = Join-Path $tempRoot 'unused-workspace'
+    $portableUnusedDist = Join-Path $portableUnusedWorkspace 'dist'
+    New-Item -ItemType Directory -Force -Path $portableDist, $portableScope, $portableUnusedDist | Out-Null
     [IO.File]::WriteAllText(
         (Join-Path $portableWorkspace 'package.json'),
         '{"name":"@example/example-service","version":"1.0.0","type":"module","main":"./dist/index.js"}',
@@ -108,8 +137,39 @@ try {
         "export const portable = true;`n",
         [Text.UTF8Encoding]::new($false)
     )
+    [IO.File]::WriteAllText(
+        (Join-Path $portableUnusedWorkspace 'package.json'),
+        '{"name":"@example/unused-service","version":"1.0.0","type":"module","main":"./dist/index.js"}',
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $portableUnusedDist 'index.js'),
+        "export const unused = true;`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    $portableLock = [ordered]@{
+        lockfileVersion = 3
+        packages = [ordered]@{
+            '' = [ordered]@{}
+            'node_modules/@example/example-service' = [ordered]@{
+                resolved = 'services/example-service'
+                link = $true
+            }
+            'node_modules/@example/unused-service' = [ordered]@{
+                resolved = 'services/unused-service'
+                link = $true
+            }
+        }
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $portableRoot 'package-lock.json'),
+        ($portableLock | ConvertTo-Json -Depth 8),
+        [Text.UTF8Encoding]::new($false)
+    )
     $junctionPath = Join-Path $portableScope 'example-service'
     New-Item -ItemType Junction -Path $junctionPath -Target $portableWorkspace | Out-Null
+    $unusedJunctionPath = Join-Path $portableScope 'unused-service'
+    New-Item -ItemType Junction -Path $unusedJunctionPath -Target $portableUnusedWorkspace | Out-Null
     if ([string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $junctionPath -Force).LinkType)) {
         throw 'Workspace portability fixture did not create a filesystem link.'
     }
@@ -117,6 +177,15 @@ try {
     Convert-McpReleaseWorkspaceModulesToDirectories `
         -ReleaseRoot $portableRoot `
         -WorkspacePaths @('services\example-service')
+    $cleanupEvidence = Remove-McpReleaseUnselectedWorkspaceLinks `
+        -ReleaseRoot $portableRoot `
+        -WorkspacePaths @('services\example-service')
+    if (@($cleanupEvidence.removedWorkspaceLinks) -notcontains 'node_modules/@example/unused-service') {
+        throw 'Unselected workspace link was not removed from the portable release fixture.'
+    }
+    if ($null -ne (Get-Item -LiteralPath $unusedJunctionPath -Force -ErrorAction SilentlyContinue)) {
+        throw 'Unselected workspace link remained in the portable release fixture.'
+    }
     $materializedModule = Get-Item -LiteralPath $junctionPath -Force
     if (-not [string]::IsNullOrWhiteSpace([string]$materializedModule.LinkType)) {
         throw 'Workspace module was not materialized as a physical directory.'
