@@ -274,11 +274,11 @@ The managed layout is:
   releases/
     <release-id>/
   state/
-    execution-node.json
+    lifecycle-state.v1.json
     state.lock
 ```
 
-`execution-node.json` implements the versioned `active` / `candidate` / `previous` contract. Stage 3 may create or replace only `candidate`; `active` and `previous` are preserved semantically unchanged and staging the current active release is rejected. `manifestSha256` binds the pointer to `execution-node-manifest.json`.
+`lifecycle-state.v1.json` implements the versioned `active` / `candidate` / `previous` contract. Stage 3 may create or replace only `candidate`; `active` and `previous` are preserved semantically unchanged and staging the current active release is rejected. `manifestSha256` binds the pointer to `execution-node-manifest.json`.
 
 The candidate transaction is fail-closed:
 
@@ -397,7 +397,7 @@ The state write is deliberately late. `active` is never changed before the targe
 6. Browser Worker readiness;
 7. host health identity checks (`releaseId`, manifest SHA-256, environment and host PID).
 
-If validation, process startup or health fails, the qualification host is terminated and `execution-node.json` is not rewritten. This makes a failed promotion or rollback a no-state-change outcome rather than a compensating pointer rewrite.
+If validation, process startup or health fails, the qualification host is terminated and `lifecycle-state.v1.json` is not rewritten. This makes a failed promotion or rollback a no-state-change outcome rather than a compensating pointer rewrite.
 
 Qualification startup also passes the transition controller PID through the closed `--qualification-owner-pid` option. `McpHost` holds a process handle for that owner; if the controller disappears before normal teardown, the host signals shutdown and closes its Job Object, preventing a pre-commit qualification tree from becoming orphaned.
 
@@ -420,7 +420,7 @@ The stable local layout is:
   releases/
     <release-id>/...
   state/
-    execution-node.json
+    lifecycle-state.v1.json
     state.lock
     host-ownership-<environment>.lock
 ```
@@ -431,7 +431,7 @@ At `--run-active` startup, `McpHost`:
 
 1. requires its own process image to be exactly the stable host path;
 2. acquires an exclusive `host-ownership-<environment>.lock` for its lifetime;
-3. reads only the versioned `active` pointer from `state/execution-node.json`;
+3. reads only the versioned `active` pointer from `state/lifecycle-state.v1.json`;
 4. resolves and revalidates `releases/<active.releaseId>` against the pointer manifest SHA-256;
 5. requires the stable `McpHost.exe` SHA-256 to match `native/McpHost.exe` from that active release;
 6. only then enters the existing Agent/Browser supervisor.

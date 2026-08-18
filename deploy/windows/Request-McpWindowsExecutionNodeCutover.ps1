@@ -59,7 +59,7 @@ $projectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 if ([string]::IsNullOrWhiteSpace($TaskName)) {
     $TaskName = "MCP Access Stack $Environment cutover"
 }
-$statePath = Join-Path $installationRoot 'state\execution-node.json'
+$statePath = Get-McpWindowsExecutionNodeStatePath -InstallationRoot $installationRoot
 $requestPath = Join-Path $installationRoot 'state\cutover-request.json'
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
     throw 'Execution-node state is missing.'

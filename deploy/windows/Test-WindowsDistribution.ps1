@@ -192,7 +192,9 @@ foreach ($required in @(
 foreach ($required in @(
     'host-ownership-',
     'Stable McpHost does not match the active release McpHost artifact.',
-    'ExecutionNodeSupervisor.Run'
+    'ExecutionNodeSupervisor.Run',
+    'LifecycleStateFileName',
+    'lifecycle-state.v1.json'
 )) {
     if (-not $mcpHostPersistenceSource.Contains($required)) {
         throw "McpHost persistent ownership contract is missing: $required"
@@ -260,6 +262,8 @@ foreach ($required in @(
     'Assert-McpWindowsExecutionNodeNoReparsePoints',
     'Assert-McpWindowsExecutionNodeDistributionCompleteness',
     'Assert-McpWindowsExecutionNodeMaterializedRelease',
+    'Get-McpWindowsExecutionNodeStatePath',
+    'lifecycle-state.v1.json',
     'Read-McpWindowsExecutionNodeState',
     'Write-McpWindowsExecutionNodeState',
     'Enter-McpWindowsExecutionNodeOperationMutex',

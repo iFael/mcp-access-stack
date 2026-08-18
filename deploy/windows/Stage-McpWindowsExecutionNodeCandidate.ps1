@@ -121,7 +121,7 @@ Assert-McpManagedDirectoryBoundary -Path $stateRoot
 $targetRelease = Resolve-McpPublicChildPath `
     -Root $releasesRoot `
     -RelativePath $releaseId
-$statePath = Join-Path $stateRoot 'execution-node.json'
+$statePath = Get-McpWindowsExecutionNodeStatePath -InstallationRoot $installationRoot
 $lockPath = Join-Path $stateRoot 'state.lock'
 $operationMutex = $null
 $lockStream = $null

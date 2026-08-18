@@ -104,7 +104,7 @@ foreach ($rootPath in @($installationRoot, $projectRoot)) {
 $stateRoot = Join-Path $installationRoot 'state'
 $releasesRoot = Join-Path $installationRoot 'releases'
 $hostRoot = Join-Path $installationRoot 'host'
-$statePath = Join-Path $stateRoot 'execution-node.json'
+$statePath = Get-McpWindowsExecutionNodeStatePath -InstallationRoot $installationRoot
 $stableHostPath = Join-Path $hostRoot 'McpHost.exe'
 $runtimeRoot = Join-Path $projectRoot ("runtime\windows-execution-node\{0}" -f $Environment)
 $healthStatePath = Join-Path $runtimeRoot 'host-state.json'

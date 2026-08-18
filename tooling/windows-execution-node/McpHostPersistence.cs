@@ -18,6 +18,7 @@ internal sealed class PersistentHostOptions
 
 internal static class ExecutionNodePersistence
 {
+    private const string LifecycleStateFileName = "lifecycle-state.v1.json";
     public static int Run(PersistentHostOptions options, string contractVersion)
     {
         if (Environment.OSVersion.Platform != PlatformID.Win32NT)
@@ -65,7 +66,7 @@ internal static class ExecutionNodePersistence
             "host-ownership-" + options.EnvironmentName + ".lock");
         using (FileStream ownership = AcquireOwnershipLock(ownershipLockPath))
         {
-            PersistentActiveState active = ReadActiveState(Path.Combine(stateRoot, "execution-node.json"));
+            PersistentActiveState active = ReadActiveState(Path.Combine(stateRoot, LifecycleStateFileName));
             string releaseRoot = ResolveChildDirectory(releasesRoot, active.ReleaseId);
             ReleaseContractInfo release = ReleaseContract.Validate(
                 releaseRoot,

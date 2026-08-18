@@ -181,7 +181,7 @@ function Write-TestExecutionNodeState {
         [AllowNull()][object]$Candidate,
         [AllowNull()][object]$Previous
     )
-    $statePath = Join-Path $InstallationRoot 'state\execution-node.json'
+    $statePath = Join-Path $InstallationRoot 'state\lifecycle-state.v1.json'
     Write-TestUtf8 -Path $statePath -Content (([ordered]@{
         version = 1
         active = $Active
@@ -232,7 +232,7 @@ try {
         $first.alreadyPrepared -ne $false) {
         throw 'Candidate-only staging did not return the expected READY evidence.'
     }
-    $stateA = Get-Content -LiteralPath (Join-Path $installationA 'state\execution-node.json') -Raw | ConvertFrom-Json
+    $stateA = Get-Content -LiteralPath (Join-Path $installationA 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     if ([string]$stateA.active.releaseId -ne '1.1.0' -or
         [string]$stateA.previous.releaseId -ne '1.0.0' -or
         [string]$stateA.candidate.releaseId -ne '1.2.0-stage') {
@@ -332,7 +332,7 @@ try {
     catch {
         $activeRejected = $true
     }
-    $stateC = Get-Content -LiteralPath (Join-Path $installationC 'state\execution-node.json') -Raw | ConvertFrom-Json
+    $stateC = Get-Content -LiteralPath (Join-Path $installationC 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     if (-not $activeRejected -or
         [string]$stateC.active.releaseId -ne '1.2.2-stage' -or
         $null -ne $stateC.candidate) {
