@@ -148,7 +148,7 @@ if ($existing) {
         [string]$actions[0].Execute -eq $stableHostPath -and
         [string]$actions[0].Arguments -eq $argumentText -and
         [string]$actions[0].WorkingDirectory -eq $stableHostRoot -and
-        [string]$existing.Principal.UserId -eq $userId -and
+        (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
         [string]$existing.Principal.LogonType -in @('Interactive', 'InteractiveToken') -and
         [string]$existing.Principal.RunLevel -eq 'Limited'
     if ($matches) {

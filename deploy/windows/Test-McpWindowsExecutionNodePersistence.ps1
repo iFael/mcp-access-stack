@@ -85,6 +85,19 @@ if ([string]$plan.status -ne 'planned' -or
     throw 'Persistent host Scheduled Task plan is not stable/direct/interactive.'
 }
 
+$executionNodeCommonPath = Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1'
+. $executionNodeCommonPath
+$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (Test-McpWindowsAccountIdentityEquivalent `
+    -Left $currentIdentity.Name `
+    -Right $currentIdentity.User.Value)) {
+    throw 'Scheduled Task account identity comparison must accept equivalent account name and SID forms.'
+}
+if (Test-McpWindowsAccountIdentityEquivalent `
+    -Left $currentIdentity.Name `
+    -Right 'S-1-5-21-0-0-0-999999999') {
+    throw 'Scheduled Task account identity comparison accepted a different SID.'
+}
 if ([string]$env:GITHUB_ACTIONS -ne 'true') {
     Write-Output 'Execution-node persistent ownership static contract passed; Scheduled Task/cutover smoke is GitHub-only.'
     return
@@ -463,6 +476,18 @@ try {
         throw 'Legacy ownership Tasks were not disabled after successful cutover.'
     }
     Wait-TaskState -TaskName $persistentTask -Expected 'Running'
+    $reinstall = (& $taskInstallerPath `
+        -InstallationRoot $installation `
+        -ProjectRoot $project `
+        -Environment production `
+        -TaskName $persistentTask `
+        -CredentialBrokerPath (Join-Path $hostFixtureRoot 'McpCredentialBroker.exe') `
+        -Execute `
+        -Activate `
+        -AllowUnsignedDevelopment) | ConvertFrom-Json
+    if ([string]$reinstall.status -ne 'already-installed' -or $reinstall.changed -ne $false) {
+        throw 'Persistent host task reinstall did not recognize the existing equivalent Windows principal.'
+    }
     $healthPath = Join-Path $project 'runtime\windows-execution-node\production\host-state.json'
     $ready = Wait-ReadyHealth -Path $healthPath -ReleaseId $releaseId
 
