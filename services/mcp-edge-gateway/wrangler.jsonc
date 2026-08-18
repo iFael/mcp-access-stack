@@ -5,7 +5,7 @@
   "compatibility_date": "2026-08-17",
   "workers_dev": true,
   "vars": {
-    "MCP_EDGE_ENABLED": "false"
+    "MCP_EDGE_ENABLED": "true"
   },
   "durable_objects": {
     "bindings": [
