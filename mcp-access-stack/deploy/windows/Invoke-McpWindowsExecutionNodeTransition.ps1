@@ -163,7 +163,7 @@ $stateRoot = Join-Path $installationRoot 'state'
 Assert-McpTransitionDirectoryBoundary -Path $releasesRoot
 Assert-McpTransitionDirectoryBoundary -Path $stateRoot
 
-$statePath = Join-Path $stateRoot 'execution-node.json'
+$statePath = Get-McpWindowsExecutionNodeStatePath -InstallationRoot $installationRoot
 $lockPath = Join-Path $stateRoot 'state.lock'
 $runtimeRoot = Join-Path $projectRoot ("runtime\windows-execution-node\{0}" -f $Environment)
 New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null

@@ -136,7 +136,7 @@ function New-TestPointer {
 
 function Write-TestState {
     param([string]$InstallationRoot, [AllowNull()][object]$Active, [AllowNull()][object]$Candidate, [AllowNull()][object]$Previous)
-    $path = Join-Path $InstallationRoot 'state\execution-node.json'
+    $path = Join-Path $InstallationRoot 'state\lifecycle-state.v1.json'
     Write-TestUtf8 -Path $path -Content (([ordered]@{
         version = 1
         active = $Active
@@ -556,7 +556,7 @@ try {
     if (-not $fallbackObserved) {
         throw 'Stage 6 fallback fixture unexpectedly completed cutover.'
     }
-    $restoredState = Get-Content -LiteralPath (Join-Path $failureInstallation 'state\execution-node.json') -Raw | ConvertFrom-Json
+    $restoredState = Get-Content -LiteralPath (Join-Path $failureInstallation 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
     if ($null -ne $restoredState.active -or
         $null -eq $restoredState.candidate -or
         [string]$restoredState.candidate.releaseId -ne $failureReleaseId) {
