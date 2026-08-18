@@ -133,6 +133,23 @@ foreach ($required in @(
     }
 }
 foreach ($required in @(
+    'Resolve-McpWindowsAccountSidValue',
+    'Test-McpWindowsAccountIdentityEquivalent'
+)) {
+    if (-not $executionNodeCommon.Contains($required)) {
+        throw "Execution-node Windows account identity contract is missing: $required"
+    }
+}
+foreach ($installerContract in @(
+    [pscustomobject]@{ name='host'; content=$executionNodeTaskInstaller },
+    [pscustomobject]@{ name='edge'; content=$edgeConnectorTaskInstaller },
+    [pscustomobject]@{ name='cutover'; content=$executionNodeCutoverTaskInstaller }
+)) {
+    if (-not $installerContract.content.Contains('Test-McpWindowsAccountIdentityEquivalent')) {
+        throw "Scheduled Task installer does not use SID-aware Windows identity comparison: $($installerContract.name)"
+    }
+}
+foreach ($required in @(
     'four legacy or six Edge-capable critical artifacts',
     'edge-connector',
     'edge-connector-launcher'

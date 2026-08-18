@@ -18,6 +18,44 @@ function Assert-McpWindowsExecutionNodeSignature {
     }
     Assert-McpPublicSignature -Path $Path -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 }
+function Resolve-McpWindowsAccountSidValue {
+    param([Parameter(Mandatory = $true)][string]$UserId)
+
+    if ([string]::IsNullOrWhiteSpace($UserId)) {
+        return $null
+    }
+    try {
+        if ($UserId -match '^S-\d-\d+(?:-\d+)+$') {
+            return ([Security.Principal.SecurityIdentifier]::new($UserId)).Value
+        }
+        $account = [Security.Principal.NTAccount]::new($UserId)
+        return ([Security.Principal.SecurityIdentifier]$account.Translate(
+            [Security.Principal.SecurityIdentifier]
+        )).Value
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-McpWindowsAccountIdentityEquivalent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
+        return $false
+    }
+    if ($Left.Equals($Right, [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $leftSid = Resolve-McpWindowsAccountSidValue -UserId $Left
+    $rightSid = Resolve-McpWindowsAccountSidValue -UserId $Right
+    return -not [string]::IsNullOrWhiteSpace($leftSid) -and
+        -not [string]::IsNullOrWhiteSpace($rightSid) -and
+        $leftSid.Equals($rightSid, [StringComparison]::OrdinalIgnoreCase)
+}
 function Assert-McpWindowsExecutionNodeNoReparsePoints {
     param([Parameter(Mandatory = $true)][string]$Root)
 
