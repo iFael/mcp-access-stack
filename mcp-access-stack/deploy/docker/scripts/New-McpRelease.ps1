@@ -110,12 +110,13 @@ try {
     New-Item -ItemType Directory -Force -Path $stagingDirectory | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'package.json'), (Join-Path $sourceRoot 'package-lock.json') -Destination $stagingDirectory
 
-    $workspacePaths = @(
-        'services/browser-worker',
-        'services/workspace-agent',
-        'services/mcp-gateway',
-        'packages/mcp-core'
-    )
+    $workspacePaths = @(Get-McpReleaseRuntimeWorkspacePaths)
+    $workspaceClosure = Assert-McpReleaseRuntimeWorkspaceClosure `
+        -SourceRoot $sourceRoot `
+        -WorkspacePaths $workspacePaths
+    if ([int]$workspaceClosure.workspaceCount -ne $workspacePaths.Count) {
+        throw 'Release runtime workspace closure returned an unexpected workspace count.'
+    }
     foreach ($workspacePath in $workspacePaths) {
         $sourceWorkspace = Join-Path $sourceRoot $workspacePath
         $target = Join-Path $stagingDirectory $workspacePath
@@ -143,6 +144,13 @@ try {
     Convert-McpReleaseWorkspaceModulesToDirectories `
         -ReleaseRoot $stagingDirectory `
         -WorkspacePaths $workspacePaths
+
+    $workspaceCleanup = Remove-McpReleaseUnselectedWorkspaceLinks `
+        -ReleaseRoot $stagingDirectory `
+        -WorkspacePaths $workspacePaths
+    if ($null -eq $workspaceCleanup.removedWorkspaceLinks) {
+        throw 'Release workspace portability cleanup returned invalid evidence.'
+    }
 
     $hashedFiles = Get-ChildItem -LiteralPath $stagingDirectory -File -Recurse |
         Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } |

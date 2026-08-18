@@ -617,6 +617,206 @@ function Copy-McpReleaseHostScripts {
     Copy-Item -LiteralPath $brokerSourcePath -Destination $brokerDestinationPath
 }
 
+function Get-McpReleaseRuntimeWorkspacePaths {
+    return @(
+        'services/browser-worker',
+        'services/workspace-agent',
+        'services/mcp-gateway',
+        'packages/mcp-core',
+        'packages/edge-protocol'
+    )
+}
+
+function Assert-McpReleaseRuntimeWorkspaceClosure {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+
+        [string[]]$WorkspacePaths = @(Get-McpReleaseRuntimeWorkspacePaths)
+    )
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($SourceRoot)
+    $rootPackagePath = Join-Path $resolvedRoot 'package.json'
+    if (-not (Test-Path -LiteralPath $rootPackagePath -PathType Leaf)) {
+        throw "Release source package.json is missing: $rootPackagePath"
+    }
+    $rootPackage = Read-McpJsonFile -Path $rootPackagePath
+    $patterns = @($rootPackage.workspaces | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    if ($patterns.Count -eq 0) {
+        throw 'Release source does not declare npm workspaces.'
+    }
+
+    $workspaceByName = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $workspaceByPath = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($pattern in $patterns) {
+        $nativePattern = $pattern.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        foreach ($directory in @(Get-ChildItem -Path (Join-Path $resolvedRoot $nativePattern) -Directory -ErrorAction SilentlyContinue)) {
+            $packagePath = Join-Path $directory.FullName 'package.json'
+            if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+                continue
+            }
+            $package = Read-McpJsonFile -Path $packagePath
+            $packageName = [string]$package.name
+            if ($packageName -notmatch '^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$') {
+                throw "Release workspace package name is unsafe: $packageName"
+            }
+            $relativePath = $directory.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/').Replace('\', '/')
+            if ($workspaceByName.ContainsKey($packageName)) {
+                throw "Duplicate release workspace package name: $packageName"
+            }
+            $record = [pscustomobject]@{
+                name = $packageName
+                path = $relativePath
+                package = $package
+            }
+            $workspaceByName.Add($packageName, $record)
+            $workspaceByPath.Add($relativePath, $record)
+        }
+    }
+
+    $selectedPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($workspacePath in $WorkspacePaths) {
+        $normalized = ([string]$workspacePath).Trim().Replace('\', '/').Trim('/')
+        if ([string]::IsNullOrWhiteSpace($normalized) -or -not $workspaceByPath.ContainsKey($normalized)) {
+            throw "Configured release runtime workspace is not a declared workspace: $workspacePath"
+        }
+        [void]$selectedPaths.Add($normalized)
+    }
+
+    foreach ($workspacePath in $selectedPaths) {
+        $record = $workspaceByPath[$workspacePath]
+        foreach ($dependencyGroup in @('dependencies', 'optionalDependencies', 'peerDependencies')) {
+            $property = $record.package.PSObject.Properties[$dependencyGroup]
+            if ($null -eq $property -or $null -eq $property.Value) {
+                continue
+            }
+            foreach ($dependency in $property.Value.PSObject.Properties) {
+                $dependencyName = [string]$dependency.Name
+                if (-not $workspaceByName.ContainsKey($dependencyName)) {
+                    continue
+                }
+                $dependencyRecord = $workspaceByName[$dependencyName]
+                if (-not $selectedPaths.Contains([string]$dependencyRecord.path)) {
+                    throw "Release runtime workspace closure is incomplete: $($record.name) depends on local workspace $dependencyName at $($dependencyRecord.path)."
+                }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        workspaceCount = $selectedPaths.Count
+        workspacePaths = @($selectedPaths | Sort-Object)
+    }
+}
+
+function Remove-McpReleaseUnselectedWorkspaceLinks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReleaseRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$WorkspacePaths
+    )
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($ReleaseRoot)
+    $lockPath = Join-Path $resolvedRoot 'package-lock.json'
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw "Release package-lock.json is missing: $lockPath"
+    }
+    $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json -AsHashtable
+    if (-not $lock.ContainsKey('packages')) {
+        throw 'Release package-lock.json does not contain a packages map.'
+    }
+
+    $selectedPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($workspacePath in $WorkspacePaths) {
+        $normalized = ([string]$workspacePath).Trim().Replace('\', '/').Trim('/')
+        if ([string]::IsNullOrWhiteSpace($normalized)) {
+            throw 'Release workspace path cannot be empty.'
+        }
+        [void]$selectedPaths.Add($normalized)
+    }
+
+    $removed = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $lock.packages.GetEnumerator()) {
+        $entry = $record.Value
+        if ($null -eq $entry -or -not $entry.ContainsKey('link') -or $entry['link'] -ne $true) {
+            continue
+        }
+        $moduleRelative = ([string]$record.Key).Replace('/', '\')
+        if (-not $moduleRelative.StartsWith('node_modules\', [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $workspaceRelative = ([string]$entry.resolved).Replace('\', '/').Trim('/')
+        $modulePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $moduleRelative))
+        $parent = Split-Path -Parent $modulePath
+        $leaf = Split-Path -Leaf $modulePath
+        $item = @(
+            Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq $leaf }
+        ) | Select-Object -First 1
+
+        if ($selectedPaths.Contains($workspaceRelative)) {
+            if ($null -eq $item -or -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
+                throw "Selected release workspace module is not materialized as a physical directory: $($record.Key)"
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $modulePath 'dist') -PathType Container)) {
+                throw "Selected release workspace module is missing runtime dist content: $($record.Key)"
+            }
+            continue
+        }
+
+        if ($null -eq $item) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
+            throw "Unselected release workspace module unexpectedly exists as physical content: $($record.Key)"
+        }
+        Remove-Item -LiteralPath $modulePath -Force
+        $removed.Add([string]$record.Key)
+    }
+
+    foreach ($record in $lock.packages.GetEnumerator()) {
+        $entry = $record.Value
+        if ($null -eq $entry -or -not $entry.ContainsKey('link') -or $entry['link'] -ne $true) {
+            continue
+        }
+        $moduleRelative = ([string]$record.Key).Replace('/', '\')
+        if (-not $moduleRelative.StartsWith('node_modules\', [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $workspaceRelative = ([string]$entry.resolved).Replace('\', '/').Trim('/')
+        if ($selectedPaths.Contains($workspaceRelative)) {
+            continue
+        }
+        $modulePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $moduleRelative))
+        $parent = Split-Path -Parent $modulePath
+        $leaf = Split-Path -Leaf $modulePath
+        $residual = @(
+            Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq $leaf }
+        ) | Select-Object -First 1
+        if ($null -ne $residual) {
+            throw "Unselected release workspace link remained after portability cleanup: $($record.Key)"
+        }
+    }
+
+    $nodeModulesRoot = Join-Path $resolvedRoot 'node_modules'
+    $residualLinks = @(
+        Get-ChildItem -LiteralPath $nodeModulesRoot -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.LinkType) }
+    )
+    if ($residualLinks.Count -gt 0) {
+        $relativeLink = $residualLinks[0].FullName.Substring($resolvedRoot.Length).TrimStart('\', '/')
+        throw "Release node_modules contains a residual filesystem link: $relativeLink"
+    }
+
+    return [pscustomobject]@{
+        removedWorkspaceLinks = @($removed)
+        residualLinkCount = $residualLinks.Count
+    }
+}
+
 function Convert-McpReleaseWorkspaceModulesToDirectories {
     param(
         [Parameter(Mandatory = $true)]
