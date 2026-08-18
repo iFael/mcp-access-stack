@@ -14,7 +14,7 @@ function config(statePath: string): OwnerOAuthConfig {
     accessTokenTtlSeconds: 3600,
     refreshTokenTtlSeconds: 86_400,
     scopes: ["workspaces:read"],
-    allowedRedirectHosts: ["chatgpt.com"],
+    allowedRedirectHosts: ["mcp.example.com"],
     statePath,
     resourceName: "MCP Test",
   };
@@ -22,7 +22,7 @@ function config(statePath: string): OwnerOAuthConfig {
 
 async function registerChatGptClient(provider: OwnerOAuthProvider) {
   return await provider.clientsStore.registerClient?.({
-    redirect_uris: ["https://chatgpt.com/aip/oauth/callback"],
+    redirect_uris: ["https://chatgpt.com/connector/oauth/persistence-test"],
     client_name: "ChatGPT",
     token_endpoint_auth_method: "none",
     grant_types: ["authorization_code", "refresh_token"],
