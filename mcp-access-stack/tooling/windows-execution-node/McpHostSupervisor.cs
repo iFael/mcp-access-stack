@@ -119,9 +119,14 @@ internal static class ReleaseContract
             throw new InvalidDataException("Execution-node manifest does not contain artifacts.");
         }
         IList artifacts = JsonData.RequireList(artifactsValue, "artifacts");
-        if (artifacts.Count != expectedArtifacts.Count)
+        if (artifacts.Count == 6)
         {
-            throw new InvalidDataException("Execution-node manifest must contain exactly four critical artifacts.");
+            expectedArtifacts.Add("edge-connector", "services/mcp-gateway/dist/edge-connector-cli.js");
+            expectedArtifacts.Add("edge-connector-launcher", "deploy/windows/Start-McpEdgeConnector.ps1");
+        }
+        else if (artifacts.Count != 4)
+        {
+            throw new InvalidDataException("Execution-node manifest must contain either four legacy or six Edge-capable critical artifacts.");
         }
 
         HashSet<string> seenRoles = new HashSet<string>(StringComparer.Ordinal);
@@ -151,10 +156,16 @@ internal static class ReleaseContract
             {
                 throw new InvalidDataException("Execution-node artifact changed after validation: " + role);
             }
-            if (string.Equals(role, "mcp-host", StringComparison.Ordinal) &&
+            bool requiresAuthenticode =
+                string.Equals(role, "mcp-host", StringComparison.Ordinal) ||
+                string.Equals(role, "edge-connector-launcher", StringComparison.Ordinal);
+            if (requiresAuthenticode &&
                 !JsonData.OptionalBoolean(artifact, "authenticodeRequired", false))
             {
-                throw new InvalidDataException("McpHost artifact must require Authenticode.");
+                throw new InvalidDataException(
+                    string.Equals(role, "mcp-host", StringComparison.Ordinal)
+                        ? "McpHost artifact must require Authenticode."
+                        : "Edge connector launcher artifact must require Authenticode.");
             }
         }
         if (seenRoles.Count != expectedArtifacts.Count)
