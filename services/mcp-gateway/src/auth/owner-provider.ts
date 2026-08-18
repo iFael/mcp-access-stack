@@ -96,6 +96,18 @@ function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boole
   if (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) {
     return true;
   }
+  if (parsed.protocol === "https:" && parsed.hostname === "chatgpt.com") {
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const callbackId = segments[2];
+    return parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.search === "" &&
+      parsed.hash === "" &&
+      segments.length === 3 &&
+      segments[0] === "connector" &&
+      segments[1] === "oauth" &&
+      callbackId !== undefined && callbackId.length > 0;
+  }
   return allowedHosts.includes(parsed.hostname);
 }
 
