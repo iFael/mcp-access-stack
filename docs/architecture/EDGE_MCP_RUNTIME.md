@@ -72,7 +72,7 @@ The production connector is owned by a dedicated Scheduled Task instead of a ter
 
 The persistence contract is deliberately bounded:
 
-- the task runs as the current interactive user with `Limited` run level;
+- the task runs as the current interactive user with `Limited` run level, but PowerShell is launched with `-NonInteractive -WindowStyle Hidden` so no user-facing console owns the runtime;
 - it starts at logon, uses `MultipleInstances=IgnoreNew`, has no execution time limit and uses the Task Scheduler restart policy;
 - the task pins the SHA-256 of `execution-node-manifest.json` and refuses a release whose critical artifacts changed after installation;
 - the connector CLI and launcher are explicit critical artifacts in new execution-node manifests, while legacy four-artifact manifests remain valid for fallback/rollback compatibility;
@@ -80,7 +80,8 @@ The persistence contract is deliberately bounded:
 - `MCP_CONNECTOR_TOKEN` and the embedded Gateway Owner token remain only in bounded private files. Their values are never placed in Scheduled Task arguments, source, manifests or logs;
 - Owner OAuth registration and session state is durable under the same private runtime root. Registered public clients and SHA-256 hashes of access/refresh tokens are persisted atomically; Owner, access and refresh token plaintext values are never written to the state file;
 - the launcher forces `BROWSER_WORKER_ENABLED=false` during the initial Edge persistence qualification. Browser ownership remains a later migration gate;
-- installation validates the launcher with `-ValidateOnly` before task registration, and production execution uses `ExecutionPolicy AllSigned`.
+- installation validates the launcher with `-ValidateOnly` before task registration, and production execution uses `ExecutionPolicy AllSigned`;
+- Edge production cutovers use the existing lifecycle broker in `EdgeOnly` mode: lifecycle pointers still promote/rollback atomically, but the redundant `McpHost` Scheduled Task is retired instead of recreated.
 
 The persistent task may be installed and qualified while `MCP_EDGE_ENABLED=false`. Enabling the public Edge relay remains a separate explicit gate after startup, restart and reconnect behavior are proven.
 

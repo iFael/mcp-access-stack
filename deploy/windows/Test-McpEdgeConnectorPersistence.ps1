@@ -34,6 +34,8 @@ foreach ($required in @(
     '-MultipleInstances IgnoreNew',
     '-RestartCount 5',
     '-RunLevel Limited',
+    "'-NonInteractive'",
+    "'-WindowStyle', 'Hidden'",
     "'AllSigned'",
     'edge-connector-launcher',
     'ValidateOnly'
@@ -151,6 +153,8 @@ try {
     if ([string]$plan.status -ne 'planned' -or
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
+        $plan.plan.nonInteractive -ne $true -or
+        [string]$plan.plan.windowStyle -ne 'Hidden' -or
         $plan.plan.activated -ne $false) {
         throw 'Edge Connector task installer returned an unexpected plan.'
     }

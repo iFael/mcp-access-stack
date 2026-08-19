@@ -84,6 +84,8 @@ $plan = [ordered]@{
     launcherPath = $launcherPath
     runtimeRoot = $runtime
     execute = $pwsh
+    nonInteractive = $true
+    windowStyle = 'Hidden'
     executionPolicy = $executionPolicy
     trigger = 'AtLogOn'
     triggerUser = $userId
@@ -146,6 +148,8 @@ $arguments = [System.Collections.Generic.List[string]]::new()
 foreach ($value in @(
     '-NoLogo',
     '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle', 'Hidden',
     '-ExecutionPolicy', $executionPolicy,
     '-File', (Quote-McpEdgeTaskArgument $launcherPath),
     '-ReleaseRoot', (Quote-McpEdgeTaskArgument $releaseRoot),
@@ -238,7 +242,7 @@ if (-not $alreadyInstalled) {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector for the interactive user session.'
+        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector without a visible console window.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 }
 

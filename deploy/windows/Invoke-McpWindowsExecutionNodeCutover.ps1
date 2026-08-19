@@ -18,6 +18,7 @@ param(
     [string]$LegacyAgentTaskName,
     [string]$LegacyBrowserTaskName,
     [string]$CredentialBrokerPath,
+    [switch]$EdgeOnly,
 
     [ValidateRange(5, 300)]
     [int]$HealthTimeoutSeconds = 60,
@@ -292,6 +293,7 @@ function Invoke-McpStateTransition {
         Environment = $Environment
         Operation = $TransitionOperation
         HealthTimeoutSeconds = $HealthTimeoutSeconds
+        EdgeOnly = [bool]$EdgeOnly
         Execute = $true
         AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
     }
@@ -436,21 +438,41 @@ try {
         throw 'Execution-node transition committed without an active release.'
     }
 
-    Sync-McpStableHost -Pointer $stateAfterTransition.active
-    $taskResult = Ensure-McpPersistentTask
-    Start-ScheduledTask -TaskName $PersistentTaskName
-    $readyHealth = Wait-McpPersistentReady -Pointer $stateAfterTransition.active
+    if ($EdgeOnly) {
+        $null = Assert-McpCutoverPointerRelease -Pointer $stateAfterTransition.active
+        $persistentTask = Get-ScheduledTask -TaskName $PersistentTaskName -ErrorAction SilentlyContinue
+        $persistentTaskRemoved = $false
+        if ($persistentTask) {
+            if ([string]$persistentTask.State -eq 'Running') {
+                Stop-ScheduledTask -TaskName $PersistentTaskName
+                Wait-McpCutoverTaskNotRunning -TaskName $PersistentTaskName
+            }
+            Unregister-ScheduledTask -TaskName $PersistentTaskName -Confirm:$false
+            $persistentTaskRemoved = $true
+        }
+        $taskStatus = if ($persistentTaskRemoved) { 'retired-edge-only' } else { 'absent-edge-only' }
+        $persistentHostPid = 0
+    }
+    else {
+        Sync-McpStableHost -Pointer $stateAfterTransition.active
+        $taskResult = Ensure-McpPersistentTask
+        Start-ScheduledTask -TaskName $PersistentTaskName
+        $readyHealth = Wait-McpPersistentReady -Pointer $stateAfterTransition.active
+        $taskStatus = [string]$taskResult.status
+        $persistentHostPid = [int]$readyHealth.pid
+    }
 
     [pscustomobject]@{
         status = 'cutover-ready'
         operation = $Operation.ToLowerInvariant()
+        ownershipMode = if ($EdgeOnly) { 'edge-only' } else { 'persistent-host' }
         activeReleaseId = [string]$stateAfterTransition.active.releaseId
         persistentTaskName = $PersistentTaskName
-        persistentHostPid = [int]$readyHealth.pid
+        persistentHostPid = $persistentHostPid
         legacyAgentTaskDisabled = [bool]$legacyAgent.exists
         legacyBrowserTaskDisabled = [bool]$legacyBrowser.exists
         transitionStatus = [string]$transitionResult.status
-        taskStatus = [string]$taskResult.status
+        taskStatus = $taskStatus
         productionLegacyRemoved = $false
     } | ConvertTo-Json -Compress
 }
