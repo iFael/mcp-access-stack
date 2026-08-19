@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from "../../../src/http/mcp-middleware.js";
 import {
   McpOperationRegistry,
   createGatewayOperationContextFactory,
+  createMcpCancellationScopeKey,
   createMcpOperationScopeKey,
   createMcpPrincipalKey,
   extractMcpCancellationNotifications,
@@ -53,6 +54,7 @@ describe("gateway MCP operation context", () => {
       registry,
       principalKey: "principal",
       operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: new AbortController().signal,
     });
     const first = factory(
@@ -84,6 +86,7 @@ describe("gateway MCP operation context", () => {
       registry,
       principalKey: "principal",
       operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: requestController.signal,
     });
     const lease = factory(
@@ -91,7 +94,7 @@ describe("gateway MCP operation context", () => {
       60_000,
     );
 
-    registry.cancel("request-scope", 11, "user cancelled");
+    registry.cancel("principal", 11, "user cancelled");
 
     expect(lease.context.signal?.aborted).toBe(true);
     expect(lease.context.signal?.reason).toMatchObject({
@@ -112,6 +115,7 @@ describe("gateway MCP operation context", () => {
       registry,
       principalKey: "principal",
       operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: requestController.signal,
     });
     const lease = factory(
@@ -238,7 +242,7 @@ describe("MCP cancellation parsing and principal identity", () => {
     expect(key).not.toContain(auth.token);
   });
 
-  it("isolates stateless request ids without changing the stable owner principal", () => {
+  it("isolates stateless duplicate detection while preserving principal-scoped cancellation", () => {
     const first = authenticatedRequest("http-request-a");
     const second = authenticatedRequest("http-request-b");
     const firstPrincipal = createMcpPrincipalKey(first);
@@ -248,12 +252,20 @@ describe("MCP cancellation parsing and principal identity", () => {
 
     const firstScope = createMcpOperationScopeKey(first, firstPrincipal);
     const secondScope = createMcpOperationScopeKey(second, secondPrincipal);
+    const firstCancellationScope = createMcpCancellationScopeKey(first, firstPrincipal);
+    const secondCancellationScope = createMcpCancellationScopeKey(second, secondPrincipal);
     expect(firstScope).not.toBe(secondScope);
     expect(firstScope).toMatch(/^request:[a-f0-9]{64}$/u);
+    expect(firstCancellationScope).toBe(secondCancellationScope);
+    expect(firstCancellationScope).toBe(firstPrincipal);
 
     const registry = new McpOperationRegistry();
-    const firstRegistration = registry.begin(firstScope, 7);
-    const secondRegistration = registry.begin(secondScope, 7);
+    const firstRegistration = registry.begin(firstScope, 7, firstCancellationScope);
+    const secondRegistration = registry.begin(secondScope, 7, secondCancellationScope);
+
+    expect(registry.cancel(firstCancellationScope, 7, "stop stateless request")).toBe(true);
+    expect(firstRegistration.signal.aborted).toBe(true);
+    expect(secondRegistration.signal.aborted).toBe(true);
 
     firstRegistration.release();
     secondRegistration.release();
@@ -270,13 +282,15 @@ describe("MCP cancellation parsing and principal identity", () => {
     const principal = createMcpPrincipalKey(first);
     const firstScope = createMcpOperationScopeKey(first, principal);
     const secondScope = createMcpOperationScopeKey(second, principal);
+    const cancellationScope = createMcpCancellationScopeKey(first, principal);
 
     expect(firstScope).toBe(secondScope);
     expect(firstScope).toMatch(/^mcp-session:[a-f0-9]{64}$/u);
+    expect(cancellationScope).toBe(firstScope);
 
     const registry = new McpOperationRegistry();
-    const registration = registry.begin(firstScope, 9);
-    expect(() => registry.begin(secondScope, 9)).toThrow(AppError);
+    const registration = registry.begin(firstScope, 9, cancellationScope);
+    expect(() => registry.begin(secondScope, 9, cancellationScope)).toThrow(AppError);
     registration.release();
   });
 });

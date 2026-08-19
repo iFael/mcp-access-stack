@@ -11,6 +11,7 @@ describe("gateway idempotency correlation", () => {
       registry,
       principalKey: "principal-a",
       operationScopeKey: "request-scope-a",
+      cancellationScopeKey: "principal-a",
       requestSignal: new AbortController().signal,
     });
 

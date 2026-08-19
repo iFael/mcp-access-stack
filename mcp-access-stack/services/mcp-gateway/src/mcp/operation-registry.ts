@@ -29,19 +29,24 @@ export interface McpOperationRegistration {
 
 export class McpOperationRegistry {
   private readonly active = new Map<string, ActiveOperation>();
+  private readonly cancellationTargets = new Map<string, Map<string, AbortController>>();
   private readonly cancellations = new Map<string, CancellationTombstone>();
 
   get size(): number {
     return this.active.size;
   }
 
-  begin(principalKey: string, requestId: McpRequestId): McpOperationRegistration {
+  begin(
+    operationScopeKey: string,
+    requestId: McpRequestId,
+    cancellationScopeKey = operationScopeKey,
+  ): McpOperationRegistration {
     this.sweepExpiredCancellations();
-    const key = operationKey(principalKey, requestId);
+    const key = operationKey(operationScopeKey, requestId);
     if (this.active.has(key)) {
       throw new AppError(
         "RELAY_PROTOCOL_ERROR",
-        "A request with the same MCP request id is already active for this principal.",
+        "A request with the same MCP request id is already active for this operation scope.",
       );
     }
 
@@ -49,9 +54,17 @@ export class McpOperationRegistry {
     const controller = new AbortController();
     this.active.set(key, { token, controller });
 
-    const pendingCancellation = this.cancellations.get(key);
+    const cancellationKey = operationKey(cancellationScopeKey, requestId);
+    let targets = this.cancellationTargets.get(cancellationKey);
+    if (!targets) {
+      targets = new Map<string, AbortController>();
+      this.cancellationTargets.set(cancellationKey, targets);
+    }
+    targets.set(token, controller);
+
+    const pendingCancellation = this.cancellations.get(cancellationKey);
     if (pendingCancellation) {
-      this.cancellations.delete(key);
+      this.cancellations.delete(cancellationKey);
       controller.abort(pendingCancellation.reason);
     }
 
@@ -61,21 +74,30 @@ export class McpOperationRegistry {
         const current = this.active.get(key);
         if (current?.token === token) {
           this.active.delete(key);
+          const currentTargets = this.cancellationTargets.get(cancellationKey);
+          currentTargets?.delete(token);
+          if (currentTargets?.size === 0) {
+            this.cancellationTargets.delete(cancellationKey);
+          }
         }
       },
     };
   }
 
   cancel(
-    principalKey: string,
+    cancellationScopeKey: string,
     requestId: McpRequestId,
     reason?: string,
   ): boolean {
     this.sweepExpiredCancellations();
-    const key = operationKey(principalKey, requestId);
-    const active = this.active.get(key);
-    if (active) {
-      active.controller.abort(reason);
+    const key = operationKey(cancellationScopeKey, requestId);
+    const targets = this.cancellationTargets.get(key);
+    if (targets && targets.size > 0) {
+      for (const controller of targets.values()) {
+        if (!controller.signal.aborted) {
+          controller.abort(reason);
+        }
+      }
       return true;
     }
     this.cancellations.set(key, {
@@ -90,6 +112,7 @@ export class McpOperationRegistry {
       operation.controller.abort("gateway shutdown");
     }
     this.active.clear();
+    this.cancellationTargets.clear();
     this.cancellations.clear();
   }
 
@@ -106,6 +129,7 @@ export interface GatewayOperationContextFactoryOptions {
   registry: McpOperationRegistry;
   principalKey: string;
   operationScopeKey: string;
+  cancellationScopeKey: string;
   requestSignal: AbortSignal;
 }
 
@@ -122,6 +146,7 @@ export function createGatewayOperationContextFactory(
     const registration = options.registry.begin(
       options.operationScopeKey,
       extra.requestId,
+      options.cancellationScopeKey,
     );
     const controller = new AbortController();
     const subscriptions: Array<{
@@ -235,6 +260,30 @@ export function createMcpOperationScopeKey(
   request: AuthenticatedRequest,
   principalKey = createMcpPrincipalKey(request),
 ): string {
+  const sessionScopeKey = createMcpSessionScopeKey(request, principalKey);
+  if (sessionScopeKey) return sessionScopeKey;
+
+  const requestId = request.mcpRequestId;
+  if (!requestId) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "The MCP request lifecycle id is unavailable.",
+    );
+  }
+  return `request:${sha256(JSON.stringify([principalKey, requestId]))}`;
+}
+
+export function createMcpCancellationScopeKey(
+  request: AuthenticatedRequest,
+  principalKey = createMcpPrincipalKey(request),
+): string {
+  return createMcpSessionScopeKey(request, principalKey) ?? principalKey;
+}
+
+function createMcpSessionScopeKey(
+  request: AuthenticatedRequest,
+  principalKey: string,
+): string | undefined {
   const mcpSessionId = readOpaquePrincipalHeader(request, "mcp-session-id");
   if (mcpSessionId) {
     return `mcp-session:${sha256(JSON.stringify([principalKey, mcpSessionId]))}`;
@@ -247,15 +296,7 @@ export function createMcpOperationScopeKey(
       JSON.stringify([principalKey, openAiSubject, openAiSession]),
     )}`;
   }
-
-  const requestId = request.mcpRequestId;
-  if (!requestId) {
-    throw new AppError(
-      "INTERNAL_ERROR",
-      "The MCP request lifecycle id is unavailable.",
-    );
-  }
-  return `request:${sha256(JSON.stringify([principalKey, requestId]))}`;
+  return undefined;
 }
 
 function readOpaquePrincipalHeader(

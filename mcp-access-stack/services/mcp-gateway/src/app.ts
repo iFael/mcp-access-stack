@@ -24,6 +24,7 @@ import { tryHandleLegacyBrowserFastPath } from "./mcp/browser-legacy-fast-path.j
 import {
   McpOperationRegistry,
   createGatewayOperationContextFactory,
+  createMcpCancellationScopeKey,
   createMcpOperationScopeKey,
   createMcpPrincipalKey,
   extractMcpCancellationNotifications,
@@ -198,9 +199,10 @@ export function createGatewayApplication(
 
     const principalKey = createMcpPrincipalKey(request);
     const operationScopeKey = createMcpOperationScopeKey(request, principalKey);
+    const cancellationScopeKey = createMcpCancellationScopeKey(request, principalKey);
     for (const cancellation of extractMcpCancellationNotifications(request.body)) {
       const matched = operationRegistry.cancel(
-        operationScopeKey,
+        cancellationScopeKey,
         cancellation.requestId,
         cancellation.reason,
       );
@@ -217,6 +219,7 @@ export function createGatewayApplication(
       registry: operationRegistry,
       principalKey,
       operationScopeKey,
+      cancellationScopeKey,
       requestSignal: requestAbort.signal,
     });
     try {
