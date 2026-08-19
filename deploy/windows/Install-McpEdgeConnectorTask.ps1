@@ -69,7 +69,8 @@ $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
 $connectorToken = Assert-McpEdgeTaskFile -Path $ConnectorTokenFile -Name 'Connector token'
 $ownerToken = Assert-McpEdgeTaskFile -Path $OwnerTokenFile -Name 'Owner token'
 $policy = Assert-McpEdgeTaskFile -Path $PolicyPath -Name 'Workspace policy'
-$launcherPath = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
+$validationLauncherPath = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
+$nativeLauncherPath = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 $executionCommonPath = Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1'
 $pwshCommand = Get-Command pwsh.exe -ErrorAction Stop
@@ -81,12 +82,13 @@ $plan = [ordered]@{
     taskName = $TaskName
     releaseId = $ReleaseId
     releaseRoot = $releaseRoot
-    launcherPath = $launcherPath
+    validationLauncherPath = $validationLauncherPath
+    launcherPath = $nativeLauncherPath
     runtimeRoot = $runtime
-    execute = $pwsh
-    nonInteractive = $true
-    windowStyle = 'Hidden'
-    executionPolicy = $executionPolicy
+    execute = $nativeLauncherPath
+    processSubsystem = 'windows-gui'
+    consoleAttached = $false
+    validationExecutionPolicy = $executionPolicy
     trigger = 'AtLogOn'
     triggerUser = $userId
     triggerDelaySeconds = $DelaySeconds
@@ -99,7 +101,6 @@ $plan = [ordered]@{
     hidden = $true
     activated = [bool]$Activate
 }
-
 if (-not $Execute) {
     [pscustomobject]@{
         status = 'planned'
@@ -136,40 +137,24 @@ $release = Assert-McpWindowsExecutionNodeRelease `
     -RuntimeSmoke
 $manifestSha256 = [string]$release.executionManifestSha256
 
-if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
-    throw "Edge Connector launcher is missing from release: $launcherPath"
+if (-not (Test-Path -LiteralPath $validationLauncherPath -PathType Leaf)) {
+    throw "Edge Connector validation launcher is missing from release: $validationLauncherPath"
 }
-$launcherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-connector-launcher' })
-if ($launcherRecord.Count -ne 1 -or $launcherRecord[0].authenticodeRequired -ne $true) {
-    throw 'Edge Connector launcher must be a signed critical release artifact.'
+if (-not (Test-Path -LiteralPath $nativeLauncherPath -PathType Leaf)) {
+    throw "Edge Connector native launcher is missing from release: $nativeLauncherPath"
 }
-
-$arguments = [System.Collections.Generic.List[string]]::new()
-foreach ($value in @(
-    '-NoLogo',
-    '-NoProfile',
-    '-NonInteractive',
-    '-WindowStyle', 'Hidden',
-    '-ExecutionPolicy', $executionPolicy,
-    '-File', (Quote-McpEdgeTaskArgument $launcherPath),
-    '-ReleaseRoot', (Quote-McpEdgeTaskArgument $releaseRoot),
-    '-ExpectedManifestSha256', $manifestSha256,
-    '-RuntimeRoot', (Quote-McpEdgeTaskArgument $runtime),
-    '-EdgeBaseUrl', (Quote-McpEdgeTaskArgument $EdgeBaseUrl),
-    '-ConnectorTokenFile', (Quote-McpEdgeTaskArgument $connectorToken),
-    '-OwnerTokenFile', (Quote-McpEdgeTaskArgument $ownerToken),
-    '-PolicyPath', (Quote-McpEdgeTaskArgument $policy),
-    '-AllowedOrigins', (Quote-McpEdgeTaskArgument $AllowedOrigins),
-    '-OwnerOAuthScopes', (Quote-McpEdgeTaskArgument $OwnerOAuthScopes),
-    '-MaxConcurrentRequests', ([string]$MaxConcurrentRequests)
-)) {
-    $arguments.Add([string]$value)
+$validationLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-connector-launcher' })
+if ($validationLauncherRecord.Count -ne 1 -or $validationLauncherRecord[0].authenticodeRequired -ne $true) {
+    throw 'Edge Connector validation launcher must be a signed critical release artifact.'
 }
-$argumentText = $arguments -join ' '
+$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })
+if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $true) {
+    throw 'Edge Connector native launcher must be a signed critical release artifact.'
+}
 
 $validationArguments = @(
     '-NoLogo', '-NoProfile', '-ExecutionPolicy', $executionPolicy,
-    '-File', $launcherPath,
+    '-File', $validationLauncherPath,
     '-ReleaseRoot', $releaseRoot,
     '-ExpectedManifestSha256', $manifestSha256,
     '-RuntimeRoot', $runtime,
@@ -191,13 +176,40 @@ if ([string]$validation.status -ne 'validated' -or
     [string]$validation.executionManifestSha256 -ne $manifestSha256) {
     throw 'Edge Connector launcher validation returned unexpected evidence.'
 }
+$nodePath = [IO.Path]::GetFullPath([string]$validation.nodePath)
+$edgeCliPath = [IO.Path]::GetFullPath([string]$validation.edgeConnectorPath)
+$edgeOrigin = [string]$validation.edgeOrigin
+$stdoutLog = Join-Path $runtime 'logs\edge-connector.stdout.log'
+$stderrLog = Join-Path $runtime 'logs\edge-connector.stderr.log'
+$ownerOAuthStatePath = Join-Path $runtime 'owner-oauth-state.json'
+
+$arguments = [System.Collections.Generic.List[string]]::new()
+foreach ($value in @(
+    '--node', (Quote-McpEdgeTaskArgument $nodePath),
+    '--stdout-log', (Quote-McpEdgeTaskArgument $stdoutLog),
+    '--stderr-log', (Quote-McpEdgeTaskArgument $stderrLog),
+    '--env', (Quote-McpEdgeTaskArgument ("MCP_EDGE_BASE_URL=$edgeOrigin")),
+    '--env', (Quote-McpEdgeTaskArgument ("MCP_CONNECTOR_TOKEN_FILE=$connectorToken")),
+    '--env', (Quote-McpEdgeTaskArgument ("VS_CODE_GPT_POLICY_PATH=$policy")),
+    '--env', (Quote-McpEdgeTaskArgument ("MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=$MaxConcurrentRequests")),
+    '--env', (Quote-McpEdgeTaskArgument 'AUTH_MODE=owner'),
+    '--env-file', (Quote-McpEdgeTaskArgument ("OWNER_TOKEN=$ownerToken")),
+    '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_SCOPES=$OwnerOAuthScopes")),
+    '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_STATE_PATH=$ownerOAuthStatePath")),
+    '--env', (Quote-McpEdgeTaskArgument ("ALLOWED_ORIGINS=$AllowedOrigins")),
+    '--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=false'),
+    '--', (Quote-McpEdgeTaskArgument $edgeCliPath)
+)) {
+    $arguments.Add([string]$value)
+}
+$argumentText = $arguments -join ' '
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $alreadyInstalled = $false
 if ($existing) {
     $actions = @($existing.Actions)
     $matches = $actions.Count -eq 1 -and
-        [string]$actions[0].Execute -eq $pwsh -and
+        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq [IO.Path]::GetFullPath($nativeLauncherPath) -and
         [string]$actions[0].Arguments -eq $argumentText -and
         [string]$actions[0].WorkingDirectory -eq $releaseRoot -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
@@ -230,7 +242,7 @@ if (-not $alreadyInstalled) {
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -Hidden
     $action = New-ScheduledTaskAction `
-        -Execute $pwsh `
+        -Execute $nativeLauncherPath `
         -Argument $argumentText `
         -WorkingDirectory $releaseRoot
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
@@ -242,7 +254,7 @@ if (-not $alreadyInstalled) {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector without a visible console window.'
+        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the signed native GUI-subsystem launcher.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 }
 
@@ -261,4 +273,5 @@ else {
     releaseId = $ReleaseId
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
+    nativeLauncherValidated = $true
 } | ConvertTo-Json -Compress

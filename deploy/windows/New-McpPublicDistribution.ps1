@@ -156,6 +156,7 @@ $runtimeFiles = @(
     'deploy\windows\Install-McpWindowsExecutionNodeHostTask.ps1',
     'deploy\windows\Install-McpEdgeConnectorTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
+    'deploy\windows\Test-McpEdgeConnectorTerminalIndependence.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',
     'deploy\windows\Install-McpWindowsExecutionNodeCutoverTask.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
@@ -336,6 +337,7 @@ try {
             (New-ExecutionNodeArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Role 'edge-connector' -RelativePath 'services/mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Role 'edge-native-launcher' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }

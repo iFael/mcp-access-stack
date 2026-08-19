@@ -119,14 +119,18 @@ internal static class ReleaseContract
             throw new InvalidDataException("Execution-node manifest does not contain artifacts.");
         }
         IList artifacts = JsonData.RequireList(artifactsValue, "artifacts");
-        if (artifacts.Count == 6)
+        if (artifacts.Count == 6 || artifacts.Count == 7)
         {
             expectedArtifacts.Add("edge-connector", "services/mcp-gateway/dist/edge-connector-cli.js");
             expectedArtifacts.Add("edge-connector-launcher", "deploy/windows/Start-McpEdgeConnector.ps1");
+            if (artifacts.Count == 7)
+            {
+                expectedArtifacts.Add("edge-native-launcher", "compat/McpNodeHostLauncher.exe");
+            }
         }
         else if (artifacts.Count != 4)
         {
-            throw new InvalidDataException("Execution-node manifest must contain either four legacy or six Edge-capable critical artifacts.");
+            throw new InvalidDataException("Execution-node manifest must contain four legacy, six Edge PowerShell, or seven native-Edge critical artifacts.");
         }
 
         HashSet<string> seenRoles = new HashSet<string>(StringComparer.Ordinal);
@@ -158,7 +162,8 @@ internal static class ReleaseContract
             }
             bool requiresAuthenticode =
                 string.Equals(role, "mcp-host", StringComparison.Ordinal) ||
-                string.Equals(role, "edge-connector-launcher", StringComparison.Ordinal);
+                string.Equals(role, "edge-connector-launcher", StringComparison.Ordinal) ||
+                string.Equals(role, "edge-native-launcher", StringComparison.Ordinal);
             if (requiresAuthenticode &&
                 !JsonData.OptionalBoolean(artifact, "authenticodeRequired", false))
             {

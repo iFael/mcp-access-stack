@@ -39,6 +39,7 @@ $executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'In
 $executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1') -Raw
 $edgeConnectorTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpEdgeConnectorTask.ps1') -Raw
 $edgeConnectorLauncher = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Start-McpEdgeConnector.ps1') -Raw
+$edgeTerminalIndependenceTest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Test-McpEdgeConnectorTerminalIndependence.ps1') -Raw
 $executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
 $executionNodeCutoverTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
 $executionNodeCutoverTaskBroker = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
@@ -108,8 +109,10 @@ if (
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeHostTask.ps1') -or
     -not $distributionBuilder.Contains('Install-McpEdgeConnectorTask.ps1') -or
     -not $distributionBuilder.Contains('Start-McpEdgeConnector.ps1') -or
+    -not $distributionBuilder.Contains('Test-McpEdgeConnectorTerminalIndependence.ps1') -or
     -not $distributionBuilder.Contains("-Role 'edge-connector'") -or
     -not $distributionBuilder.Contains("-Role 'edge-connector-launcher'") -or
+    -not $distributionBuilder.Contains("-Role 'edge-native-launcher'") -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutover.ps1') -or
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeCutoverTask.ps1') -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeCutoverTask.ps1') -or
@@ -150,9 +153,10 @@ foreach ($installerContract in @(
     }
 }
 foreach ($required in @(
-    'four legacy or six Edge-capable critical artifacts',
+    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
     'edge-connector',
-    'edge-connector-launcher'
+    'edge-connector-launcher',
+    'edge-native-launcher'
 )) {
     if (-not $executionNodeCommon.Contains($required)) {
         throw "Execution-node Edge compatibility contract is missing: $required"
@@ -176,8 +180,9 @@ foreach ($required in @(
     '-MultipleInstances IgnoreNew',
     '-RestartCount 5',
     '-RunLevel Limited',
-    "'AllSigned'",
-    'edge-connector-launcher',
+    'McpNodeHostLauncher.exe',
+    '--env-file',
+    'edge-native-launcher',
     'ValidateOnly'
 )) {
     if (-not $edgeConnectorTaskInstaller.Contains($required)) {
@@ -197,15 +202,33 @@ foreach ($required in @(
     'eventName, "connected"',
     'host-state.json',
     'mcp_host_qualification_owner_exited',
-    'either four legacy or six Edge-capable critical artifacts',
+    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
     'services/mcp-gateway/dist/edge-connector-cli.js',
     'deploy/windows/Start-McpEdgeConnector.ps1',
+    'compat/McpNodeHostLauncher.exe',
     'Edge connector launcher artifact must require Authenticode.'
 )) {
     if (-not $mcpHostSupervisorSource.Contains($required)) {
         throw "McpHost supervisor runtime contract is missing: $required"
     }
 }
+foreach ($required in @(
+    'Get-McpEdgeConsoleSnapshot',
+    'hasVisibleWindow',
+    'visibleConsoleHosts',
+    'CloseMainWindow',
+    'launcher_has_terminal_window',
+    'originalLauncherAlive',
+    'originalNodeAlive',
+    'sameProcessTree',
+    'Wait-McpTerminalProbeRecovery',
+    'terminalIndependent'
+)) {
+    if (-not $edgeTerminalIndependenceTest.Contains($required)) {
+        throw "Edge terminal-independence qualification contract is missing: $required"
+    }
+}
+
 foreach ($required in @(
     'host-ownership-',
     'Stable McpHost does not match the active release McpHost artifact.',
