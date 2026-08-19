@@ -75,6 +75,8 @@ internal static class Program
         public int RunnerRestartCount = 0;
         public int RunnerRestartIntervalSeconds = 60;
         public readonly List<string> NodeArguments = new List<string>();
+        public readonly Dictionary<string, string> EnvironmentValues = new Dictionary<string, string>(StringComparer.Ordinal);
+        public readonly Dictionary<string, string> EnvironmentFileValues = new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
     private static int Main(string[] args)
@@ -172,6 +174,8 @@ internal static class Program
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+
+        ApplyChildEnvironment(startInfo, options);
 
         using (Process child = new Process { StartInfo = startInfo, EnableRaisingEvents = true })
         {
@@ -376,6 +380,14 @@ internal static class Program
                     1,
                     3600);
             }
+            else if (current == "--env")
+            {
+                AddEnvironmentAssignment(options, current, value, false);
+            }
+            else if (current == "--env-file")
+            {
+                AddEnvironmentAssignment(options, current, value, true);
+            }
             else
             {
                 throw new ArgumentException("Unsupported launcher argument: " + current);
@@ -390,6 +402,96 @@ internal static class Program
         }
 
         return options;
+    }
+
+    private static void AddEnvironmentAssignment(
+        LauncherOptions options,
+        string optionName,
+        string assignment,
+        bool fromFile)
+    {
+        int separator = assignment.IndexOf('=');
+        if (separator <= 0 || separator == assignment.Length - 1)
+        {
+            throw new ArgumentException("Invalid environment assignment for launcher argument: " + optionName);
+        }
+
+        string name = assignment.Substring(0, separator);
+        string value = assignment.Substring(separator + 1);
+        if (!IsSafeEnvironmentName(name))
+        {
+            throw new ArgumentException("Invalid environment variable name for launcher argument: " + optionName);
+        }
+        if (options.EnvironmentValues.ContainsKey(name) || options.EnvironmentFileValues.ContainsKey(name))
+        {
+            throw new ArgumentException("Duplicate environment variable for launcher argument: " + name);
+        }
+
+        if (fromFile)
+        {
+            if (!Path.IsPathRooted(value) || !File.Exists(value))
+            {
+                throw new FileNotFoundException("Environment value file was not found.", value);
+            }
+            FileInfo info = new FileInfo(value);
+            if (info.Length <= 0 || info.Length > 4096)
+            {
+                throw new InvalidDataException("Environment value file size is invalid.");
+            }
+            options.EnvironmentFileValues.Add(name, value);
+        }
+        else
+        {
+            if (value.IndexOf('\0') >= 0 || value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0)
+            {
+                throw new ArgumentException("Environment value contains an invalid control character: " + name);
+            }
+            options.EnvironmentValues.Add(name, value);
+        }
+    }
+
+    private static bool IsSafeEnvironmentName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128)
+        {
+            return false;
+        }
+        for (int index = 0; index < value.Length; index++)
+        {
+            char character = value[index];
+            bool safe =
+                (character >= 'A' && character <= 'Z') ||
+                (character >= '0' && character <= '9') ||
+                character == '_';
+            if (!safe)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string ReadEnvironmentFileValue(string path)
+    {
+        string value = File.ReadAllText(path, Encoding.UTF8).Trim();
+        if (value.Length == 0 || value.Length > 4096 ||
+            value.IndexOf('\0') >= 0 || value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0)
+        {
+            throw new InvalidDataException("Environment value file contains an invalid value.");
+        }
+        return value;
+    }
+
+    private static void ApplyChildEnvironment(ProcessStartInfo startInfo, LauncherOptions options)
+    {
+        foreach (KeyValuePair<string, string> pair in options.EnvironmentValues)
+        {
+            startInfo.EnvironmentVariables[pair.Key] = pair.Value;
+        }
+        foreach (KeyValuePair<string, string> pair in options.EnvironmentFileValues)
+        {
+            startInfo.EnvironmentVariables[pair.Key] = ReadEnvironmentFileValue(pair.Value);
+        }
     }
 
     private static int ParseIntegerArgument(
