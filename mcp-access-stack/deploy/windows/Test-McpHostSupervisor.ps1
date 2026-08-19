@@ -38,7 +38,7 @@ foreach ($required in @(
     'BROWSER_WORKER_PROFILE_MODE"] = "persistent"',
     'services/mcp-gateway/dist/edge-connector-cli.js',
     'deploy/windows/Start-McpEdgeConnector.ps1',
-    'either four legacy or six Edge-capable critical artifacts',
+    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
     'Edge connector launcher artifact must require Authenticode.'
 )) {
     if (-not $supervisorSource.Contains($required)) {

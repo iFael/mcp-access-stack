@@ -34,10 +34,10 @@ foreach ($required in @(
     '-MultipleInstances IgnoreNew',
     '-RestartCount 5',
     '-RunLevel Limited',
-    "'-NonInteractive'",
-    "'-WindowStyle', 'Hidden'",
-    "'AllSigned'",
-    'edge-connector-launcher',
+    'McpNodeHostLauncher.exe',
+    '--env-file',
+    'edge-native-launcher',
+    'processSubsystem',
     'ValidateOnly'
 )) {
     if (-not $installerContent.Contains($required)) {
@@ -153,8 +153,9 @@ try {
     if ([string]$plan.status -ne 'planned' -or
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
-        $plan.plan.nonInteractive -ne $true -or
-        [string]$plan.plan.windowStyle -ne 'Hidden' -or
+        [string]$plan.plan.processSubsystem -ne 'windows-gui' -or
+        $plan.plan.consoleAttached -ne $false -or
+        [string]$plan.plan.execute -notmatch 'McpNodeHostLauncher\.exe$' -or
         $plan.plan.activated -ne $false) {
         throw 'Edge Connector task installer returned an unexpected plan.'
     }

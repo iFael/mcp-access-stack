@@ -219,14 +219,18 @@ function Assert-McpWindowsExecutionNodeRelease {
     $artifacts = @($executionManifest.artifacts)
     $baseRoles = @('mcp-host', 'workspace-agent', 'browser-worker', 'node-runtime')
     $edgeRoles = @('edge-connector', 'edge-connector-launcher')
+    $edgeNativeRoles = @('edge-native-launcher')
     if ($artifacts.Count -eq 4) {
         $expectedRoles = $baseRoles
     }
     elseif ($artifacts.Count -eq 6) {
         $expectedRoles = @($baseRoles + $edgeRoles)
     }
+    elseif ($artifacts.Count -eq 7) {
+        $expectedRoles = @($baseRoles + $edgeRoles + $edgeNativeRoles)
+    }
     else {
-        throw 'Bundled-node execution manifest must contain either four legacy or six Edge-capable critical artifacts.'
+        throw 'Bundled-node execution manifest must contain four legacy, six Edge PowerShell, or seven native-Edge critical artifacts.'
     }
     foreach ($role in $expectedRoles) {
         $records = @($artifacts | Where-Object { [string]$_.role -eq $role })
