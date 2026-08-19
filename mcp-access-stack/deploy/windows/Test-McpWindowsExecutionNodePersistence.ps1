@@ -65,7 +65,8 @@ foreach ($required in @(
     'Wait-McpPersistentReady',
     'Restore-McpLegacyOwnership',
     'Restore-McpStateSnapshot',
-    'Enter-McpWindowsExecutionNodeOperationMutex'
+    'Enter-McpWindowsExecutionNodeOperationMutex',
+    'EdgeOnly'
 )) {
     if (-not $cutover.Contains($required)) {
         throw "Execution-node cutover contract is missing: $required"
@@ -215,7 +216,7 @@ function New-TestRelease {
     $release = Join-Path $InstallationRoot "releases\$ReleaseId"
     foreach ($directory in @(
         'native', 'compat', 'services\workspace-agent\dist',
-        'services\browser-worker\dist', 'runtime\node'
+        'services\browser-worker\dist', 'services\mcp-gateway\dist', 'deploy\windows', 'runtime\node'
     )) {
         New-Item -ItemType Directory -Force -Path (Join-Path $release $directory) | Out-Null
     }
@@ -227,6 +228,8 @@ function New-TestRelease {
 process.stderr.write(JSON.stringify({ event: 'connected', pid: process.pid }) + '\n');
 setInterval(() => {}, 1000);
 '@
+    Write-TestUtf8 -Path (Join-Path $release 'services\mcp-gateway\dist\edge-connector-cli.js') -Content "setInterval(() => {}, 1000);`n"
+    Write-TestUtf8 -Path (Join-Path $release 'deploy\windows\Start-McpEdgeConnector.ps1') -Content "Write-Output 'edge-launcher-fixture'`n"
     Write-TestUtf8 -Path (Join-Path $release 'services\browser-worker\dist\server.js') -Content @'
 const http = require('node:http');
 const port = Number(process.env.BROWSER_WORKER_PORT);
@@ -265,6 +268,8 @@ setInterval(() => {}, 1000);
             (New-ArtifactRecord 'mcp-host' 'native/McpHost.exe' $true),
             (New-ArtifactRecord 'workspace-agent' 'services/workspace-agent/dist/cli.js' $false),
             (New-ArtifactRecord 'browser-worker' 'services/browser-worker/dist/server.js' $false),
+            (New-ArtifactRecord 'edge-connector' 'services/mcp-gateway/dist/edge-connector-cli.js' $false),
+            (New-ArtifactRecord 'edge-connector-launcher' 'deploy/windows/Start-McpEdgeConnector.ps1' $false),
             (New-ArtifactRecord 'node-runtime' 'runtime/node/node.exe' $false)
         )
     }

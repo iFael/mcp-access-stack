@@ -26,6 +26,7 @@ param(
     [ValidateRange(5, 600)]
     [int]$ReadinessTimeoutSeconds = 45,
 
+    [switch]$EdgeOnly,
     [switch]$Execute,
     [switch]$AllowUnsignedDevelopment
 )
@@ -224,6 +225,15 @@ try {
             -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     }
 
+    if ($EdgeOnly) {
+        $targetRoles = @($target.verification.executionManifest.artifacts | ForEach-Object { [string]$_.role })
+        foreach ($requiredRole in @('edge-connector','edge-connector-launcher','node-runtime')) {
+            if ($requiredRole -notin $targetRoles) {
+                throw "Edge-only transition target is missing required artifact role: $requiredRole"
+            }
+        }
+    }
+
     if (Test-Path -LiteralPath $healthStatePath -PathType Leaf) {
         try {
             $existingHealth = Get-Content -LiteralPath $healthStatePath -Raw | ConvertFrom-Json
@@ -240,7 +250,9 @@ try {
         Remove-Item -LiteralPath $healthStatePath -Force -ErrorAction SilentlyContinue
     }
 
-    $hostRecord = @($target.verification.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
+    $readyHealth = $null
+    if (-not $EdgeOnly) {
+        $hostRecord = @($target.verification.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
     $hostPath = Resolve-McpPublicChildPath `
         -Root $target.releaseRoot `
         -RelativePath ([string]$hostRecord.path)
@@ -296,6 +308,7 @@ try {
     if ($null -eq $readyHealth) {
         throw 'Execution-node qualification did not reach ready before the health deadline.'
     }
+    }
 
     $now = [DateTimeOffset]::UtcNow.ToString('O')
     if ($Operation -eq 'Promote') {
@@ -340,8 +353,9 @@ try {
         activeReleaseId = [string]$committedState.active.releaseId
         candidateReleaseId = if ($null -eq $committedState.candidate) { $null } else { [string]$committedState.candidate.releaseId }
         previousReleaseId = if ($null -eq $committedState.previous) { $null } else { [string]$committedState.previous.releaseId }
-        healthValidated = $true
-        qualificationHostPid = $hostProcess.Id
+        healthValidated = -not $EdgeOnly
+        qualificationMode = if ($EdgeOnly) { 'edge-integrity' } else { 'mcp-host-health' }
+        qualificationHostPid = if ($hostProcess) { $hostProcess.Id } else { 0 }
         qualificationHostRetained = $false
     } | ConvertTo-Json -Compress
 }

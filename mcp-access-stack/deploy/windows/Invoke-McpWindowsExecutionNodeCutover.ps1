@@ -293,6 +293,7 @@ function Invoke-McpStateTransition {
         Environment = $Environment
         Operation = $TransitionOperation
         HealthTimeoutSeconds = $HealthTimeoutSeconds
+        EdgeOnly = [bool]$EdgeOnly
         Execute = $true
         AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
     }
