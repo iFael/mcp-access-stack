@@ -269,7 +269,7 @@ setInterval(() => {}, 1000);
             (New-ArtifactRecord 'workspace-agent' 'services/workspace-agent/dist/cli.js' $false),
             (New-ArtifactRecord 'browser-worker' 'services/browser-worker/dist/server.js' $false),
             (New-ArtifactRecord 'edge-connector' 'services/mcp-gateway/dist/edge-connector-cli.js' $false),
-            (New-ArtifactRecord 'edge-connector-launcher' 'deploy/windows/Start-McpEdgeConnector.ps1' $false),
+            (New-ArtifactRecord 'edge-connector-launcher' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
             (New-ArtifactRecord 'node-runtime' 'runtime/node/node.exe' $false)
         )
     }
