@@ -538,6 +538,86 @@ try {
         throw 'Persistent host reboot-equivalent recovery did not create a new host process.'
     }
 
+    # Edge-only cutover: promote lifecycle and retire an existing Host task without recreating it.
+    $edgeRoot = Join-Path $testRoot 'edge-only'
+    $edgeInstallation = Join-Path $edgeRoot 'installation'
+    $edgeProject = Join-Path $edgeRoot 'project'
+    New-Item -ItemType Directory -Force -Path (Join-Path $edgeInstallation 'state'), (Join-Path $edgeInstallation 'releases'), $edgeProject | Out-Null
+    $edgeReleaseId = 'stage6-edge-only'
+    $edgeRelease = New-TestRelease -InstallationRoot $edgeInstallation -ReleaseId $edgeReleaseId -Commit ('f' * 40) -BuiltHostPath $builtHost
+    Write-TestState -InstallationRoot $edgeInstallation -Active $null -Candidate (New-TestPointer -ReleaseRoot $edgeRelease -ReleaseId $edgeReleaseId) -Previous $null
+    $edgeHostRoot = Join-Path $edgeInstallation 'host'
+    New-Item -ItemType Directory -Force -Path $edgeHostRoot | Out-Null
+    Copy-Item -LiteralPath $builtBroker -Destination (Join-Path $edgeHostRoot 'McpCredentialBroker.exe')
+
+    $edgeSuffix = [guid]::NewGuid().ToString('N')
+    $edgePersistentTask = "MCP Stage6 CI edge host $edgeSuffix"
+    $edgeCutoverTask = "MCP Stage6 CI edge cutover $edgeSuffix"
+    $edgeLegacyScript = Join-Path $edgeRoot 'old-host.js'
+    Write-TestUtf8 -Path $edgeLegacyScript -Content "setInterval(() => {}, 1000);`n"
+    Register-TestLegacyTask -TaskName $edgePersistentTask -ScriptPath $edgeLegacyScript
+    Wait-TaskState -TaskName $edgePersistentTask -Expected 'Running'
+    $taskNames.Add($edgePersistentTask)
+
+    $edgeCutoverInstall = (& $cutoverTaskInstallerPath `
+        -InstallationRoot $edgeInstallation `
+        -ProjectRoot $edgeProject `
+        -Environment production `
+        -TaskName $edgeCutoverTask `
+        -PersistentTaskName $edgePersistentTask `
+        -LegacyAgentTaskName "MCP Stage6 CI edge legacy agent $edgeSuffix" `
+        -LegacyBrowserTaskName "MCP Stage6 CI edge legacy browser $edgeSuffix" `
+        -EdgeOnly `
+        -Execute `
+        -Force `
+        -AllowUnsignedDevelopment) | ConvertFrom-Json
+    if ([string]$edgeCutoverInstall.status -ne 'installed' -or $edgeCutoverInstall.edgeOnly -ne $true) {
+        throw 'Edge-only cutover Task installer did not return edge-only evidence.'
+    }
+    $taskNames.Add($edgeCutoverTask)
+    $edgeCutoverAction = @((Get-ScheduledTask -TaskName $edgeCutoverTask).Actions)
+    if ($edgeCutoverAction.Count -ne 1 -or
+        [string]$edgeCutoverAction[0].Arguments -notlike '*-NonInteractive*' -or
+        [string]$edgeCutoverAction[0].Arguments -notlike '*-WindowStyle Hidden*' -or
+        [string]$edgeCutoverAction[0].Arguments -notlike '*-EdgeOnly*') {
+        throw 'Edge-only cutover Task does not use the hidden/non-interactive EdgeOnly broker contract.'
+    }
+
+    $edgeRequestScript = Join-Path (Split-Path -Parent ([string]$edgeCutoverInstall.brokerPath)) 'Request-McpWindowsExecutionNodeCutover.ps1'
+    $edgeRequestOutput = & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $edgeRequestScript `
+        -InstallationRoot $edgeInstallation `
+        -ProjectRoot $edgeProject `
+        -Environment production `
+        -Operation Promote `
+        -ExpectedReleaseId $edgeReleaseId `
+        -HealthTimeoutSeconds 40 `
+        -TaskName $edgeCutoverTask `
+        -Execute `
+        -AllowUnsignedDevelopment
+    if ($LASTEXITCODE -ne 0) { throw 'Edge-only detached cutover request process failed.' }
+    $edgeRequest = $edgeRequestOutput | ConvertFrom-Json
+    $edgeBrokerResult = Wait-CutoverBrokerResult -Path ([string]$edgeRequest.resultPath) -Seconds 60
+    if ([string]$edgeBrokerResult.status -ne 'passed') {
+        throw ('Edge-only detached cutover broker failed: ' + [string]$edgeBrokerResult.error)
+    }
+    $edgeCutover = $edgeBrokerResult.cutover
+    if ([string]$edgeCutover.status -ne 'cutover-ready' -or
+        [string]$edgeCutover.ownershipMode -ne 'edge-only' -or
+        [string]$edgeCutover.activeReleaseId -ne $edgeReleaseId -or
+        [int]$edgeCutover.persistentHostPid -ne 0 -or
+        [string]$edgeCutover.taskStatus -ne 'retired-edge-only') {
+        throw 'Edge-only cutover did not return the expected lifecycle/ownership evidence.'
+    }
+    if (Get-ScheduledTask -TaskName $edgePersistentTask -ErrorAction SilentlyContinue) {
+        throw 'Edge-only cutover recreated or retained the persistent Host task.'
+    }
+    $edgeState = Get-Content -LiteralPath (Join-Path $edgeInstallation 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
+    if ($null -eq $edgeState.active -or
+        [string]$edgeState.active.releaseId -ne $edgeReleaseId -or
+        $null -ne $edgeState.candidate) {
+        throw 'Edge-only cutover did not commit the expected lifecycle state.'
+    }
+
     # Failed first cutover after state commit must restore pre-cutover state + legacy ownership.
     $failureRoot = Join-Path $testRoot 'failure'
     $failureInstallation = Join-Path $failureRoot 'installation'
@@ -593,7 +673,7 @@ try {
         throw 'Failed first cutover left a newly-created persistent host Task registered.'
     }
 
-    Write-Output 'Execution-node persistent ownership/cutover smoke passed single Task ownership, restart recovery and legacy fallback.'
+    Write-Output 'Execution-node persistent ownership/cutover smoke passed host ownership, EdgeOnly retirement, restart recovery and legacy fallback.'
 }
 finally {
     foreach ($taskName in @($taskNames)) {
