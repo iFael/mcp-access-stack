@@ -6,7 +6,7 @@ Cloudflare Worker used as the public serverless edge for the MCP.
 ChatGPT -> Cloudflare Worker -> Durable Object <-> MCP Connector (Windows, outbound)
 ```
 
-The Worker is deployed **disabled by default** (`MCP_EDGE_ENABLED=false`). Public MCP/OAuth relay is enabled only in a later activation gate.
+The public Edge relay is enabled in production (`MCP_EDGE_ENABLED=true`) and published from `main` through Cloudflare Workers Builds. Non-production branches run a Wrangler dry-run and do not change the live Worker deployment.
 
 ## Routes
 
@@ -27,10 +27,12 @@ The Worker is deployed **disabled by default** (`MCP_EDGE_ENABLED=false`). Publi
 ## Cloudflare Workers Builds
 
 ```text
-Root directory: /mcp-access-stack/services/mcp-edge-gateway
-Build command:   (empty)
-Deploy command:  npx wrangler deploy
-Version command: npx wrangler deploy --dry-run
+Root directory:        /mcp-access-stack
+Build command:         (empty)
+Production (`main`):   npx wrangler deploy --config services/mcp-edge-gateway/wrangler.jsonc
+Non-production:        npx wrangler deploy --dry-run --config services/mcp-edge-gateway/wrangler.jsonc
 ```
+
+The production trigger includes only `main`. The non-production trigger includes all other branches and excludes `main`.
 
 The `wrangler.jsonc` in this directory is the Worker source of truth. The Durable Object uses SQLite storage and WebSocket Hibernation.
