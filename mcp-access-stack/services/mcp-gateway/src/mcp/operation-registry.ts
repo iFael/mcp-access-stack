@@ -105,6 +105,7 @@ export class McpOperationRegistry {
 export interface GatewayOperationContextFactoryOptions {
   registry: McpOperationRegistry;
   principalKey: string;
+  operationScopeKey: string;
   requestSignal: AbortSignal;
 }
 
@@ -119,7 +120,7 @@ export function createGatewayOperationContextFactory(
       startedAt,
     );
     const registration = options.registry.begin(
-      options.principalKey,
+      options.operationScopeKey,
       extra.requestId,
     );
     const controller = new AbortController();
@@ -174,7 +175,7 @@ export function createGatewayOperationContextFactory(
     subscribe(
       registration.signal,
       "cancelled",
-      "A stateless MCP cancellation notification matched the active principal and request id.",
+      "An MCP cancellation notification matched the active operation scope and request id.",
     );
     subscribe(
       options.requestSignal,
@@ -228,6 +229,33 @@ export function createMcpPrincipalKey(request: AuthenticatedRequest): string {
   const address = request.ip ?? request.socket.remoteAddress ?? "unknown";
   const userAgent = request.header("user-agent") ?? "unknown";
   return `anonymous:${sha256(`${address}:${userAgent}`)}`;
+}
+
+export function createMcpOperationScopeKey(
+  request: AuthenticatedRequest,
+  principalKey = createMcpPrincipalKey(request),
+): string {
+  const mcpSessionId = readOpaquePrincipalHeader(request, "mcp-session-id");
+  if (mcpSessionId) {
+    return `mcp-session:${sha256(JSON.stringify([principalKey, mcpSessionId]))}`;
+  }
+
+  const openAiSubject = readOpaquePrincipalHeader(request, "x-openai-subject");
+  const openAiSession = readOpaquePrincipalHeader(request, "x-openai-session");
+  if (openAiSubject && openAiSession) {
+    return `openai-session:${sha256(
+      JSON.stringify([principalKey, openAiSubject, openAiSession]),
+    )}`;
+  }
+
+  const requestId = request.mcpRequestId;
+  if (!requestId) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "The MCP request lifecycle id is unavailable.",
+    );
+  }
+  return `request:${sha256(JSON.stringify([principalKey, requestId]))}`;
 }
 
 function readOpaquePrincipalHeader(

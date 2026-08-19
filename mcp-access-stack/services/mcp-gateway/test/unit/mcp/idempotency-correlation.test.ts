@@ -10,6 +10,7 @@ describe("gateway idempotency correlation", () => {
     const factory = createGatewayOperationContextFactory({
       registry,
       principalKey: "principal-a",
+      operationScopeKey: "request-scope-a",
       requestSignal: new AbortController().signal,
     });
 
