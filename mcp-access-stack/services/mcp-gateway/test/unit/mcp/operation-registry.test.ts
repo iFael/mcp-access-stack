@@ -5,6 +5,8 @@ import type { AuthenticatedRequest } from "../../../src/http/mcp-middleware.js";
 import {
   McpOperationRegistry,
   createGatewayOperationContextFactory,
+  createMcpCancellationScopeKey,
+  createMcpOperationScopeKey,
   createMcpPrincipalKey,
   extractMcpCancellationNotifications,
 } from "../../../src/mcp/operation-registry.js";
@@ -51,6 +53,8 @@ describe("gateway MCP operation context", () => {
     const factory = createGatewayOperationContextFactory({
       registry,
       principalKey: "principal",
+      operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: new AbortController().signal,
     });
     const first = factory(
@@ -74,13 +78,15 @@ describe("gateway MCP operation context", () => {
     second.release();
   });
 
-  it("maps a stateless cancellation to a structured cancelled lifecycle", () => {
+  it("maps a matched cancellation to a structured cancelled lifecycle", () => {
     const registry = new McpOperationRegistry();
     const requestController = new AbortController();
     const sdkController = new AbortController();
     const factory = createGatewayOperationContextFactory({
       registry,
       principalKey: "principal",
+      operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: requestController.signal,
     });
     const lease = factory(
@@ -108,6 +114,8 @@ describe("gateway MCP operation context", () => {
     const factory = createGatewayOperationContextFactory({
       registry,
       principalKey: "principal",
+      operationScopeKey: "request-scope",
+      cancellationScopeKey: "principal",
       requestSignal: requestController.signal,
     });
     const lease = factory(
@@ -233,6 +241,58 @@ describe("MCP cancellation parsing and principal identity", () => {
     expect(key).toMatch(/^identity:[a-f0-9]{64}$/);
     expect(key).not.toContain(auth.token);
   });
+
+  it("isolates stateless duplicate detection while preserving principal-scoped cancellation", () => {
+    const first = authenticatedRequest("http-request-a");
+    const second = authenticatedRequest("http-request-b");
+    const firstPrincipal = createMcpPrincipalKey(first);
+    const secondPrincipal = createMcpPrincipalKey(second);
+
+    expect(firstPrincipal).toBe(secondPrincipal);
+
+    const firstScope = createMcpOperationScopeKey(first, firstPrincipal);
+    const secondScope = createMcpOperationScopeKey(second, secondPrincipal);
+    const firstCancellationScope = createMcpCancellationScopeKey(first, firstPrincipal);
+    const secondCancellationScope = createMcpCancellationScopeKey(second, secondPrincipal);
+    expect(firstScope).not.toBe(secondScope);
+    expect(firstScope).toMatch(/^request:[a-f0-9]{64}$/u);
+    expect(firstCancellationScope).toBe(secondCancellationScope);
+    expect(firstCancellationScope).toBe(firstPrincipal);
+
+    const registry = new McpOperationRegistry();
+    const firstRegistration = registry.begin(firstScope, 7, firstCancellationScope);
+    const secondRegistration = registry.begin(secondScope, 7, secondCancellationScope);
+
+    expect(registry.cancel(firstCancellationScope, 7, "stop stateless request")).toBe(true);
+    expect(firstRegistration.signal.aborted).toBe(true);
+    expect(secondRegistration.signal.aborted).toBe(true);
+
+    firstRegistration.release();
+    secondRegistration.release();
+    expect(registry.size).toBe(0);
+  });
+
+  it("keeps duplicate detection stable across requests that share an MCP session", () => {
+    const first = authenticatedRequest("http-request-a", {
+      "mcp-session-id": "session-a",
+    });
+    const second = authenticatedRequest("http-request-b", {
+      "mcp-session-id": "session-a",
+    });
+    const principal = createMcpPrincipalKey(first);
+    const firstScope = createMcpOperationScopeKey(first, principal);
+    const secondScope = createMcpOperationScopeKey(second, principal);
+    const cancellationScope = createMcpCancellationScopeKey(first, principal);
+
+    expect(firstScope).toBe(secondScope);
+    expect(firstScope).toMatch(/^mcp-session:[a-f0-9]{64}$/u);
+    expect(cancellationScope).toBe(firstScope);
+
+    const registry = new McpOperationRegistry();
+    const registration = registry.begin(firstScope, 9, cancellationScope);
+    expect(() => registry.begin(secondScope, 9, cancellationScope)).toThrow(AppError);
+    registration.release();
+  });
 });
 
 function anonymousRequest(
@@ -254,6 +314,24 @@ function requestWithHeaders(
   return {
     ip,
     socket: { remoteAddress: ip },
+    header: (name: string) => headers[name.toLowerCase()],
+  } as unknown as AuthenticatedRequest;
+}
+
+function authenticatedRequest(
+  mcpRequestId: string,
+  headers: Record<string, string> = {},
+): AuthenticatedRequest {
+  const auth: AuthInfo = {
+    token: "shared-access-token",
+    clientId: "client-a",
+    scopes: ["workspaces:read"],
+  };
+  return {
+    auth,
+    mcpRequestId,
+    ip: "127.0.0.1",
+    socket: { remoteAddress: "127.0.0.1" },
     header: (name: string) => headers[name.toLowerCase()],
   } as unknown as AuthenticatedRequest;
 }
