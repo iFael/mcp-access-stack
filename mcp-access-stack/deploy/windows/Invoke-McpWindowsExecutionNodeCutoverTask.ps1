@@ -13,6 +13,7 @@ param(
     [string]$PersistentTaskName,
     [string]$LegacyAgentTaskName,
     [string]$LegacyBrowserTaskName,
+    [switch]$EdgeOnly,
     [switch]$AllowUnsignedDevelopment
 )
 
@@ -151,6 +152,7 @@ try {
         LegacyBrowserTaskName = $legacyBrowserTaskName
         CredentialBrokerPath = $brokerPath
         HealthTimeoutSeconds = [int]$request.healthTimeoutSeconds
+        EdgeOnly = [bool]$EdgeOnly
         Execute = $true
         AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
     }

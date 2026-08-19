@@ -14,6 +14,7 @@ param(
     [string]$PersistentTaskName,
     [string]$LegacyAgentTaskName,
     [string]$LegacyBrowserTaskName,
+    [switch]$EdgeOnly,
     [switch]$Execute,
     [switch]$Force,
     [switch]$AllowUnsignedDevelopment
@@ -136,7 +137,7 @@ function Quote-McpCutoverTaskArgument {
 }
 $executionPolicy = if ($AllowUnsignedDevelopment) { 'Bypass' } else { 'AllSigned' }
 $arguments = @(
-    '-NoLogo', '-NoProfile', '-ExecutionPolicy', $executionPolicy,
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', $executionPolicy,
     '-File', (Quote-McpCutoverTaskArgument $brokerPath),
     '-InstallationRoot', (Quote-McpCutoverTaskArgument $installationRoot),
     '-ProjectRoot', (Quote-McpCutoverTaskArgument $projectRoot),
@@ -145,6 +146,7 @@ $arguments = @(
     '-LegacyAgentTaskName', (Quote-McpCutoverTaskArgument $LegacyAgentTaskName),
     '-LegacyBrowserTaskName', (Quote-McpCutoverTaskArgument $LegacyBrowserTaskName)
 )
+if ($EdgeOnly) { $arguments += '-EdgeOnly' }
 if ($AllowUnsignedDevelopment) { $arguments += '-AllowUnsignedDevelopment' }
 $argumentText = $arguments -join ' '
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -185,7 +187,7 @@ if (-not $alreadyInstalled) {
         -Hidden
     $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argumentText -WorkingDirectory $bundleRoot
     $task = New-ScheduledTask -Action $action -Principal $principal -Settings $settings `
-        -Description 'Runs execution-node ownership cutover independently from the Workspace Agent being replaced.'
+        -Description $(if ($EdgeOnly) { 'Runs Edge-only execution-node lifecycle cutover without recreating McpHost.' } else { 'Runs execution-node ownership cutover independently from the Workspace Agent being replaced.' })
     Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 }
 
@@ -196,4 +198,5 @@ if (-not $alreadyInstalled) {
     bundleId = $bundleId
     brokerPath = $brokerPath
     independentOwner = $true
+    edgeOnly = [bool]$EdgeOnly
 } | ConvertTo-Json -Compress
