@@ -24,6 +24,9 @@ param(
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
     [string]$OwnerOAuthScopes = 'workspaces:read',
+    [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
+    [string]$BrowserWorkerTokenFile,
+    [switch]$EnableBrowserWorker,
 
     [ValidateRange(1, 64)]
     [int]$MaxConcurrentRequests = 8,
@@ -106,6 +109,16 @@ function Read-McpEdgeOwnerToken {
     return $token
 }
 
+function Read-McpEdgeBrowserToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    $token = $raw.Trim()
+    if ($token.Length -lt 32 -or $token.Length -gt 2048 -or $token -match '[\r\n\0]') {
+        throw 'Browser Worker token file contains an invalid token.'
+    }
+    return $token
+}
 $release = [IO.Path]::GetFullPath($ReleaseRoot)
 $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
 $manifestPath = Join-Path $release 'execution-node-manifest.json'
@@ -153,6 +166,31 @@ if (-not (Test-Path -LiteralPath $policy -PathType Leaf)) {
     throw 'Workspace policy file was not found.'
 }
 $ownerToken = Read-McpEdgeOwnerToken -Path $ownerTokenPath
+$browserTokenPath = $null
+$browserToken = $null
+$browserUri = $null
+if ($EnableBrowserWorker) {
+    if ([string]::IsNullOrWhiteSpace($BrowserWorkerTokenFile)) {
+        throw 'EnableBrowserWorker requires BrowserWorkerTokenFile.'
+    }
+    $browserTokenPath = Assert-McpEdgeSecretFile -Path $BrowserWorkerTokenFile -Name 'Browser Worker token'
+    $browserToken = Read-McpEdgeBrowserToken -Path $browserTokenPath
+    try {
+        $browserUri = [Uri]$BrowserWorkerUrl
+    }
+    catch {
+        throw 'BrowserWorkerUrl must be a valid loopback HTTP origin.'
+    }
+    if (-not $browserUri.IsAbsoluteUri -or
+        $browserUri.Scheme -ne 'http' -or
+        $browserUri.Host -notin @('127.0.0.1', 'localhost', '::1') -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.UserInfo) -or
+        $browserUri.AbsolutePath -ne '/' -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.Query) -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.Fragment)) {
+        throw 'BrowserWorkerUrl must be a credential-free loopback HTTP origin with no path, query or fragment.'
+    }
+}
 
 if ($ValidateOnly) {
     [pscustomobject]@{
@@ -162,7 +200,8 @@ if ($ValidateOnly) {
         edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority)
         nodePath = $nodePath
         edgeConnectorPath = $edgeCliPath
-        browserEnabled = $false
+        browserEnabled = [bool]$EnableBrowserWorker
+        browserWorkerUrl = if ($EnableBrowserWorker) { $browserUri.GetLeftPart([UriPartial]::Authority) } else { $null }
     } | ConvertTo-Json -Compress
     return
 }
@@ -181,7 +220,16 @@ $env:OWNER_TOKEN = $ownerToken
 $env:OWNER_OAUTH_SCOPES = $OwnerOAuthScopes
 $env:OWNER_OAUTH_STATE_PATH = Join-Path $runtime 'owner-oauth-state.json'
 $env:ALLOWED_ORIGINS = $AllowedOrigins
-$env:BROWSER_WORKER_ENABLED = 'false'
+if ($EnableBrowserWorker) {
+    $env:BROWSER_WORKER_ENABLED = 'true'
+    $env:BROWSER_WORKER_URL = $browserUri.GetLeftPart([UriPartial]::Authority)
+    $env:BROWSER_WORKER_TOKEN = $browserToken
+}
+else {
+    $env:BROWSER_WORKER_ENABLED = 'false'
+    $env:BROWSER_WORKER_URL = $null
+    $env:BROWSER_WORKER_TOKEN = $null
+}
 
 try {
     & $nodePath $edgeCliPath 1>> $stdoutLog 2>> $stderrLog
@@ -189,7 +237,9 @@ try {
 }
 finally {
     $env:OWNER_TOKEN = $null
+    $env:BROWSER_WORKER_TOKEN = $null
     $ownerToken = $null
+    $browserToken = $null
 }
 if ($exitCode -ne 0) {
     throw "Edge Connector exited with code $exitCode."
