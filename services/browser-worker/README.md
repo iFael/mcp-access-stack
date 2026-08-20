@@ -45,3 +45,21 @@ npm run test:browser-worker:coverage
 ```
 
 A configuração produtiva é privada. Não a copie para o repositório nem reutilize o perfil pessoal do Chrome. O runtime final não depende de `@playwright/mcp`, `@playwright/cli` ou da Playwright Extension.
+
+## Produção Windows no Edge V3
+
+O Browser Worker é um componente first-party do `mcp-access-stack` e permanece no Windows porque possui o Chromium e o perfil persistente local. Ele não é outro MCP e não depende do Docker.
+
+A propriedade canônica em produção é uma Scheduled Task separada:
+
+```text
+MCP Access Stack production browser-worker
+  -> compat/McpNodeHostLauncher.exe
+  -> runtime/node/node.exe
+  -> services/browser-worker/dist/server.js
+  -> http://127.0.0.1:3350
+```
+
+`deploy/windows/Install-McpBrowserWorkerTask.ps1` instala a task com `RunLevel=Limited`, launcher GUI nativo, Node empacotado, token file-backed e perfil `dedicated-persistent`. O Gateway embutido no Edge Connector acessa o serviço somente por loopback quando `BROWSER_WORKER_ENABLED=true`.
+
+A task deve operar apenas o diretório de usuário dedicado do MCP. Perfil pessoal e abas não pertencentes ao MCP não fazem parte desse runtime.

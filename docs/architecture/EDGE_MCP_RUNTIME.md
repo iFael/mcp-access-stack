@@ -2,7 +2,7 @@
 
 ## Status
 
-The Cloudflare edge is the preferred steady-state architecture for this workstation. The Worker is already deployable from `main`, but workspace traffic remains fail-closed until the connector and activation gates are completed.
+The Cloudflare edge is the active V3 steady-state architecture. Workspace/Git/shell traffic is already qualified through the outbound Edge Connector. Browser automation remains Windows-local and is attached to the embedded Gateway through a dedicated loopback Browser Worker task.
 
 ## Target topology
 
@@ -11,22 +11,23 @@ ChatGPT
   -> Cloudflare Worker
   -> Durable Object session
   <-> authenticated outbound WebSocket
-  -> Windows MCP Connector (single process)
+  -> Windows Edge Connector
        |- embedded MCP Gateway on ephemeral 127.0.0.1 only
-       |- LocalAgent / workspace policy in-process
-       `- optional current Browser Worker during the browser transition
-  -> local workspaces
+       `- LocalAgent / workspace policy in-process
+            |- local workspaces
+            `-> loopback Browser Worker task on 127.0.0.1:3350
+                 `-> dedicated persistent Chromium profile
 ```
 
 GitHub remains authoritative for source and CI. Cloudflare provides the public serverless edge and connection coordination.
 
 ## Windows boundary
 
-The connector is the only new steady-state MCP process planned for Windows. It opens no public listener and requires no inbound SSH. Its embedded Gateway binds an ephemeral port on `127.0.0.1` only; all Internet-facing traffic arrives over the connector-initiated `wss://.../connector` session.
+The Edge Connector is the only Internet-facing MCP ownership process on Windows. It opens no public listener and requires no inbound SSH. Its embedded Gateway binds an ephemeral port on `127.0.0.1` only; all Internet-facing traffic arrives over the connector-initiated `wss://.../connector` session. The first-party Browser Worker remains a separate local Windows process because it owns Chromium and its persistent MCP-only profile; it listens only on loopback.
 
 The connector reuses the existing `LocalAgent`, `InProcessWorkspaceExecutor` and MCP Gateway instead of duplicating their behavior. Therefore workspace permission profiles, destructive-command confirmation, audit logging, cancellation, background tasks, OAuth and MCP tool behavior remain implemented by the already-tested components.
 
-The current resident runtime remains a fallback until the Edge path is proven end to end. Cleanup is a later gate.
+The legacy Docker/V2 resident runtime is retired. Browser automation remains local through the first-party Windows Browser Worker task, not through a legacy fallback runtime.
 
 ## Edge gateway
 
@@ -39,7 +40,7 @@ The current resident runtime remains a fallback until the Edge path is proven en
 - a strict HTTP relay allowlist for `/mcp` and the Owner OAuth endpoints only;
 - explicit relay cancellation propagated to the connector;
 - header allowlists, size limits, concurrency limits and relay deadline;
-- fail-closed deployment with `MCP_EDGE_ENABLED=false` by default.
+- an explicit `MCP_EDGE_ENABLED` activation gate; production is enabled only after connector qualification.
 
 The shared protocol is versioned in `packages/edge-protocol`. Protocol mismatch fails closed during the WebSocket handshake.
 
@@ -79,7 +80,8 @@ The persistence contract is deliberately bounded:
 - Node.js is the bundled runtime from the immutable release; the task never depends on FNM, `PATH` resolution or a developer shell;
 - `MCP_CONNECTOR_TOKEN` remains a file path in the child environment and the embedded Gateway Owner token is injected by the native launcher from a bounded private file. The Owner token plaintext is never placed in Scheduled Task arguments, source, manifests or logs;
 - Owner OAuth registration and session state is durable under the same private runtime root. Registered public clients and SHA-256 hashes of access/refresh tokens are persisted atomically; Owner, access and refresh token plaintext values are never written to the state file;
-- the launcher forces `BROWSER_WORKER_ENABLED=false` during the initial Edge persistence qualification. Browser ownership remains a later migration gate;
+- Browser Worker ownership is separate from the Edge process: `deploy/windows/Install-McpBrowserWorkerTask.ps1` owns `services/browser-worker/dist/server.js` through the same signed native launcher and bundled Node runtime;
+- the Edge task enables Browser integration only when explicitly configured with a loopback `BROWSER_WORKER_URL` and a file-backed `BROWSER_WORKER_TOKEN`; Browser token plaintext is not stored in task arguments;
 - installation runs the signed `Start-McpEdgeConnector.ps1 -ValidateOnly` preflight before task registration; PowerShell is not the persistent runtime owner;
 - `deploy/windows/Test-McpEdgeConnectorTerminalIndependence.ps1` is the mandatory persistence gate. It identifies any console/terminal window associated with the Edge launcher, closes the real terminal window when one exists, records the original launcher and Node PIDs, and rejects a result where Task Scheduler merely restarts the connector after the original process tree dies;
 - terminal independence passes only when no Edge terminal is present, the original native launcher PID and original Node PID remain alive, the task remains `Running`, Worker health remains `connectorReady=true`, and a real V3 operation succeeds afterward;
@@ -94,9 +96,8 @@ The persistent task may be installed and qualified while `MCP_EDGE_ENABLED=false
 3. materialize the connector secret in Cloudflare and Windows outside Git;
 4. run the connector and prove `/health` reports `connectorReady=true` while `MCP_EDGE_ENABLED=false`;
 5. explicitly enable the Edge relay and validate Owner OAuth plus MCP filesystem/Git/shell/background operations;
-6. qualify Browser reachability separately;
-7. keep the current local runtime as fallback until the Edge path is stable;
-8. retire obsolete resident components only in a separate cleanup gate.
+6. install the native Windows Browser Worker task, enable the Edge loopback Browser client and qualify live/ready plus a real V3 browser operation;
+7. keep Docker/V2/ngrok retired after Browser qualification; the native Browser Worker is the only remaining local Browser runtime.
 
 ## SSH fallback
 

@@ -20,6 +20,9 @@ foreach ($required in @(
     "Role 'edge-connector-launcher'",
     "Role 'node-runtime'",
     "BROWSER_WORKER_ENABLED = 'false'",
+    'EnableBrowserWorker',
+    'BrowserWorkerTokenFile',
+    'BROWSER_WORKER_URL',
     'OWNER_OAUTH_STATE_PATH',
     'OWNER_TOKEN = $ownerToken',
     'ValidateOnly'
@@ -36,6 +39,8 @@ foreach ($required in @(
     '-RunLevel Limited',
     'McpNodeHostLauncher.exe',
     '--env-file',
+    'BROWSER_WORKER_TOKEN=',
+    'EnableBrowserWorker',
     'edge-native-launcher',
     'processSubsystem',
     'ValidateOnly'
@@ -56,9 +61,11 @@ $edgeCli = Join-Path $releaseRoot 'services\mcp-gateway\dist\edge-connector-cli.
 $nodePath = Join-Path $releaseRoot 'runtime\node\node.exe'
 $connectorTokenFile = Join-Path $runtimeRoot 'connector-token.txt'
 $ownerTokenFile = Join-Path $runtimeRoot 'owner-token.txt'
+$browserTokenFile = Join-Path $runtimeRoot 'browser-token.txt'
 $policyPath = Join-Path $runtimeRoot 'policy.json'
 $connectorToken = 'c' * 64
 $ownerToken = 'o' * 64
+$browserToken = 'b' * 64
 
 try {
     New-Item -ItemType Directory -Force -Path `
@@ -71,6 +78,7 @@ try {
     [IO.File]::WriteAllText($nodePath, 'node-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($connectorTokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($ownerTokenFile, $ownerToken, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($browserTokenFile, $browserToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($policyPath, "{}`n", [Text.UTF8Encoding]::new($false))
 
     function New-FixtureArtifact {
@@ -134,6 +142,30 @@ try {
         throw 'Edge Connector launcher returned unexpected validation evidence.'
     }
 
+    $enabledValidateArgs = @($validateArgs[0..($validateArgs.Count - 2)]) + @(
+        '-EnableBrowserWorker',
+        '-BrowserWorkerUrl', 'http://127.0.0.1:3350',
+        '-BrowserWorkerTokenFile', $browserTokenFile,
+        '-ValidateOnly'
+    )
+    $enabledValidationOutput = @(& pwsh @enabledValidateArgs 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $enabledValidationOutput.Count -ne 1) {
+        throw 'Edge Connector browser-enabled launcher fixture validation failed.'
+    }
+    $enabledValidationText = [string]$enabledValidationOutput[0]
+    if ($enabledValidationText.Contains($connectorToken) -or
+        $enabledValidationText.Contains($ownerToken) -or
+        $enabledValidationText.Contains($browserToken)) {
+        throw 'Edge Connector browser-enabled validation leaked a fixture secret.'
+    }
+    $enabledValidation = $enabledValidationText | ConvertFrom-Json
+    if ([string]$enabledValidation.status -ne 'validated' -or
+        [string]$enabledValidation.executionManifestSha256 -ne $manifestHash -or
+        $enabledValidation.browserEnabled -ne $true -or
+        [string]$enabledValidation.browserWorkerUrl -ne 'http://127.0.0.1:3350') {
+        throw 'Edge Connector browser-enabled launcher returned unexpected validation evidence.'
+    }
+
     $planOutput = @(& pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer `
         -InstallationRoot (Join-Path $fixtureRoot 'installation') `
         -ReleaseId 'edge-fixture' `
@@ -141,12 +173,15 @@ try {
         -EdgeBaseUrl 'https://mcp-access-stack.example.workers.dev' `
         -ConnectorTokenFile $connectorTokenFile `
         -OwnerTokenFile $ownerTokenFile `
-        -PolicyPath $policyPath 2>&1)
+        -PolicyPath $policyPath `
+        -EnableBrowserWorker `
+        -BrowserWorkerUrl 'http://127.0.0.1:3350' `
+        -BrowserWorkerTokenFile $browserTokenFile 2>&1)
     if ($LASTEXITCODE -ne 0 -or $planOutput.Count -ne 1) {
         throw 'Edge Connector task installer plan smoke failed.'
     }
     $planText = [string]$planOutput[0]
-    if ($planText.Contains($connectorToken) -or $planText.Contains($ownerToken)) {
+    if ($planText.Contains($connectorToken) -or $planText.Contains($ownerToken) -or $planText.Contains($browserToken)) {
         throw 'Edge Connector task installer leaked a fixture secret.'
     }
     $plan = $planText | ConvertFrom-Json
@@ -154,6 +189,8 @@ try {
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
         [string]$plan.plan.processSubsystem -ne 'windows-gui' -or
+        $plan.plan.browserEnabled -ne $true -or
+        [string]$plan.plan.browserWorkerUrl -ne 'http://127.0.0.1:3350' -or
         $plan.plan.consoleAttached -ne $false -or
         [string]$plan.plan.execute -notmatch 'McpNodeHostLauncher\.exe$' -or
         $plan.plan.activated -ne $false) {
