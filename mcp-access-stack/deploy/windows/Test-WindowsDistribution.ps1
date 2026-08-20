@@ -38,6 +38,7 @@ $executionNodeStager = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Stage-
 $executionNodeTransition = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeTransition.ps1') -Raw
 $executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeHostTask.ps1') -Raw
 $edgeConnectorTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpEdgeConnectorTask.ps1') -Raw
+$browserWorkerTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpBrowserWorkerTask.ps1') -Raw
 $edgeConnectorLauncher = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Start-McpEdgeConnector.ps1') -Raw
 $edgeTerminalIndependenceTest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Test-McpEdgeConnectorTerminalIndependence.ps1') -Raw
 $executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
@@ -108,6 +109,7 @@ if (
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
     -not $distributionBuilder.Contains('Install-McpWindowsExecutionNodeHostTask.ps1') -or
     -not $distributionBuilder.Contains('Install-McpEdgeConnectorTask.ps1') -or
+    -not $distributionBuilder.Contains('Install-McpBrowserWorkerTask.ps1') -or
     -not $distributionBuilder.Contains('Start-McpEdgeConnector.ps1') -or
     -not $distributionBuilder.Contains('Test-McpEdgeConnectorTerminalIndependence.ps1') -or
     -not $distributionBuilder.Contains("-Role 'edge-connector'") -or
@@ -146,6 +148,7 @@ foreach ($required in @(
 foreach ($installerContract in @(
     [pscustomobject]@{ name='host'; content=$executionNodeTaskInstaller },
     [pscustomobject]@{ name='edge'; content=$edgeConnectorTaskInstaller },
+    [pscustomobject]@{ name='browser'; content=$browserWorkerTaskInstaller },
     [pscustomobject]@{ name='cutover'; content=$executionNodeCutoverTaskInstaller }
 )) {
     if (-not $installerContract.content.Contains('Test-McpWindowsAccountIdentityEquivalent')) {
@@ -167,6 +170,9 @@ foreach ($required in @(
     "Role 'edge-connector'",
     "Role 'edge-connector-launcher'",
     "BROWSER_WORKER_ENABLED = 'false'",
+    'EnableBrowserWorker',
+    'BrowserWorkerTokenFile',
+    'BROWSER_WORKER_URL',
     'OWNER_OAUTH_STATE_PATH',
     'ValidateOnly'
 )) {
@@ -182,6 +188,8 @@ foreach ($required in @(
     '-RunLevel Limited',
     'McpNodeHostLauncher.exe',
     '--env-file',
+    'BROWSER_WORKER_TOKEN=',
+    'EnableBrowserWorker',
     'edge-native-launcher',
     'ValidateOnly'
 )) {
@@ -190,6 +198,26 @@ foreach ($required in @(
     }
 }
 
+foreach ($required in @(
+    'MCP Access Stack production browser-worker',
+    "Role 'browser-worker'",
+    "Role 'node-runtime'",
+    "Role 'edge-native-launcher'",
+    '--env-file',
+    'BROWSER_WORKER_TOKEN=',
+    'BROWSER_WORKER_PROFILE_MODE=persistent',
+    "profile = 'dedicated-persistent'",
+    'BROWSER_WORKER_USER_DATA_DIR=',
+    'BROWSER_WORKER_SITE_POLICIES_PATH=',
+    'BROWSER_WORKER_CREDENTIAL_BROKER_PATH=',
+    'New-ScheduledTaskTrigger -AtLogOn',
+    '-MultipleInstances IgnoreNew',
+    '-RunLevel Limited'
+)) {
+    if (-not $browserWorkerTaskInstaller.Contains($required)) {
+        throw "Native Browser Worker task contract is missing: $required"
+    }
+}
 foreach ($required in @('--version', '--validate-release-root', '--supervise', '--run-active', 'installation-root', 'expected-manifest-sha256', 'qualification-owner-pid')) {
     if (-not $mcpHostSource.Contains($required)) {
         throw "McpHost supervisor CLI contract is missing: $required"

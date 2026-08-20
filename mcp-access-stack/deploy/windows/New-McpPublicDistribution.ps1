@@ -155,6 +155,7 @@ $runtimeFiles = @(
     'deploy\windows\Invoke-McpWindowsExecutionNodeTransition.ps1',
     'deploy\windows\Install-McpWindowsExecutionNodeHostTask.ps1',
     'deploy\windows\Install-McpEdgeConnectorTask.ps1',
+    'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
     'deploy\windows\Test-McpEdgeConnectorTerminalIndependence.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',

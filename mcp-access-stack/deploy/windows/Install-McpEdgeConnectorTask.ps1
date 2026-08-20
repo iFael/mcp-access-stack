@@ -24,6 +24,9 @@ param(
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
     [string]$OwnerOAuthScopes = 'workspaces:read',
+    [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
+    [string]$BrowserWorkerTokenFile,
+    [switch]$EnableBrowserWorker,
     [string]$TaskName = 'MCP Access Stack production edge-connector',
 
     [ValidateRange(1, 64)]
@@ -69,6 +72,30 @@ $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
 $connectorToken = Assert-McpEdgeTaskFile -Path $ConnectorTokenFile -Name 'Connector token'
 $ownerToken = Assert-McpEdgeTaskFile -Path $OwnerTokenFile -Name 'Owner token'
 $policy = Assert-McpEdgeTaskFile -Path $PolicyPath -Name 'Workspace policy'
+$browserTokenFile = $null
+$browserOrigin = $null
+if ($EnableBrowserWorker) {
+    if ([string]::IsNullOrWhiteSpace($BrowserWorkerTokenFile)) {
+        throw 'EnableBrowserWorker requires BrowserWorkerTokenFile.'
+    }
+    $browserTokenFile = Assert-McpEdgeTaskFile -Path $BrowserWorkerTokenFile -Name 'Browser Worker token'
+    try {
+        $browserUri = [Uri]$BrowserWorkerUrl
+    }
+    catch {
+        throw 'BrowserWorkerUrl must be a valid loopback HTTP origin.'
+    }
+    if (-not $browserUri.IsAbsoluteUri -or
+        $browserUri.Scheme -ne 'http' -or
+        $browserUri.Host -notin @('127.0.0.1', 'localhost', '::1') -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.UserInfo) -or
+        $browserUri.AbsolutePath -ne '/' -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.Query) -or
+        -not [string]::IsNullOrWhiteSpace($browserUri.Fragment)) {
+        throw 'BrowserWorkerUrl must be a credential-free loopback HTTP origin with no path, query or fragment.'
+    }
+    $browserOrigin = $browserUri.GetLeftPart([UriPartial]::Authority)
+}
 $validationLauncherPath = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
 $nativeLauncherPath = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
@@ -85,6 +112,8 @@ $plan = [ordered]@{
     validationLauncherPath = $validationLauncherPath
     launcherPath = $nativeLauncherPath
     runtimeRoot = $runtime
+    browserEnabled = [bool]$EnableBrowserWorker
+    browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
     execute = $nativeLauncherPath
     processSubsystem = 'windows-gui'
     consoleAttached = $false
@@ -167,13 +196,21 @@ $validationArguments = @(
     '-MaxConcurrentRequests', [string]$MaxConcurrentRequests,
     '-ValidateOnly'
 )
+if ($EnableBrowserWorker) {
+    $validationArguments += @(
+        '-EnableBrowserWorker',
+        '-BrowserWorkerUrl', $browserOrigin,
+        '-BrowserWorkerTokenFile', $browserTokenFile
+    )
+}
 $validationJson = @(& $pwsh @validationArguments)
 if ($LASTEXITCODE -ne 0 -or $validationJson.Count -ne 1) {
     throw 'Edge Connector launcher validation failed before task installation.'
 }
 $validation = $validationJson[0] | ConvertFrom-Json
 if ([string]$validation.status -ne 'validated' -or
-    [string]$validation.executionManifestSha256 -ne $manifestSha256) {
+    [string]$validation.executionManifestSha256 -ne $manifestSha256 -or
+    [bool]$validation.browserEnabled -ne [bool]$EnableBrowserWorker) {
     throw 'Edge Connector launcher validation returned unexpected evidence.'
 }
 $nodePath = [IO.Path]::GetFullPath([string]$validation.nodePath)
@@ -184,7 +221,7 @@ $stderrLog = Join-Path $runtime 'logs\edge-connector.stderr.log'
 $ownerOAuthStatePath = Join-Path $runtime 'owner-oauth-state.json'
 
 $arguments = [System.Collections.Generic.List[string]]::new()
-foreach ($value in @(
+$launcherValues = @(
     '--node', (Quote-McpEdgeTaskArgument $nodePath),
     '--stdout-log', (Quote-McpEdgeTaskArgument $stdoutLog),
     '--stderr-log', (Quote-McpEdgeTaskArgument $stderrLog),
@@ -196,10 +233,20 @@ foreach ($value in @(
     '--env-file', (Quote-McpEdgeTaskArgument ("OWNER_TOKEN=$ownerToken")),
     '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_SCOPES=$OwnerOAuthScopes")),
     '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_STATE_PATH=$ownerOAuthStatePath")),
-    '--env', (Quote-McpEdgeTaskArgument ("ALLOWED_ORIGINS=$AllowedOrigins")),
-    '--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=false'),
-    '--', (Quote-McpEdgeTaskArgument $edgeCliPath)
-)) {
+    '--env', (Quote-McpEdgeTaskArgument ("ALLOWED_ORIGINS=$AllowedOrigins"))
+)
+if ($EnableBrowserWorker) {
+    $launcherValues += @(
+        '--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=true'),
+        '--env', (Quote-McpEdgeTaskArgument ("BROWSER_WORKER_URL=$browserOrigin")),
+        '--env-file', (Quote-McpEdgeTaskArgument ("BROWSER_WORKER_TOKEN=$browserTokenFile"))
+    )
+}
+else {
+    $launcherValues += @('--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=false'))
+}
+$launcherValues += @('--', (Quote-McpEdgeTaskArgument $edgeCliPath))
+foreach ($value in $launcherValues) {
     $arguments.Add([string]$value)
 }
 $argumentText = $arguments -join ' '
@@ -274,4 +321,6 @@ else {
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
     nativeLauncherValidated = $true
+    browserEnabled = [bool]$EnableBrowserWorker
+    browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
 } | ConvertTo-Json -Compress
