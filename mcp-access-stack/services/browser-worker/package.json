@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@vs-code-gpt/shared": "0.1.0",
-    "playwright": "1.62.0-alpha-2026-06-29",
+    "playwright": "1.62.1",
     "zod": "^4.4.0"
   }
 }
