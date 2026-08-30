@@ -65,7 +65,7 @@ export function createEdgeControlPlaneRuntime(
   if (mode === "owner") {
     const scopes = parseCsv(requireValue(env.MCP_OWNER_OAUTH_SCOPES, "MCP_OWNER_OAUTH_SCOPES"), "MCP_OWNER_OAUTH_SCOPES");
     const owner = new EdgeOwnerOAuth(storage, {
-      ownerSecret: requireValue(env.MCP_OWNER_TOKEN, "MCP_OWNER_TOKEN"),
+      ...(env.MCP_OWNER_TOKEN?.trim() ? { ownerSecret: env.MCP_OWNER_TOKEN.trim() } : {}),
       publicBaseUrl,
       mcpPath: "/mcp",
       scopes,

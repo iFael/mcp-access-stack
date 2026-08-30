@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
+import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
 import {
   EdgeControlPlaneConfigurationError,
   createEdgeControlPlaneRuntime,
@@ -9,16 +10,19 @@ import {
 } from "./control-plane/runtime.js";
 import {
   EDGE_PROTOCOL_VERSION,
+  LEGACY_EDGE_PROTOCOL_VERSION,
   EDGE_RELAY_TIMEOUT_MS,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
   collectAllowedRequestHeaders,
+  collectLegacyAllowedRequestHeaders,
   collectAllowedResponseHeaders,
   isAllowedEdgeRequest,
   jsonResponse,
   parseConnectorToEdgeMessage,
+  parseLegacyConnectorToEdgeMessage,
+  resolveConnectorProtocol,
   utf8ByteLength,
-  type EdgeHelloMessage,
   type EdgeHttpCancelMessage,
   type EdgeHttpRequestMessage,
 } from "./protocol.js";
@@ -45,29 +49,70 @@ type PendingRelay = {
 export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly pending = new Map<string, PendingRelay>();
   private controlRuntime: EdgeControlPlaneRuntime | undefined;
+  private v3CutoverComplete = false;
 
   constructor(ctx: DurableObjectState, private readonly edgeEnv: EdgeGatewayEnv) {
     super(ctx, edgeEnv);
   }
 
-  getStatus(): {
+  async getStatus(): Promise<{
     controlPlaneReady: boolean;
     executionPlaneReady: boolean;
     connectorReady: boolean;
-  } {
-    const connectorReady = this.getReadyConnector() !== null;
-    let controlPlaneReady = false;
-    try {
-      this.getControlRuntime();
-      controlPlaneReady = true;
-    } catch (error) {
-      if (!(error instanceof EdgeControlPlaneConfigurationError)) throw error;
+  }> {
+    const connector = this.getReadyConnector();
+    const connectorReady = connector !== null;
+    const attachment = connector ? this.readConnectorAttachment(connector) : null;
+    let controlPlaneReady = attachment?.protocolVersion === LEGACY_EDGE_PROTOCOL_VERSION;
+    if (!controlPlaneReady) {
+      try {
+        const runtime = this.getControlRuntime();
+        controlPlaneReady = runtime.oauth instanceof EdgeOwnerOAuth
+          ? await runtime.oauth.isConfigured()
+          : true;
+      } catch (error) {
+        if (!(error instanceof EdgeControlPlaneConfigurationError)) throw error;
+      }
     }
     return {
       controlPlaneReady,
       executionPlaneReady: controlPlaneReady && connectorReady,
       connectorReady,
     };
+  }
+
+  async bootstrapLegacyOwnerState(input: unknown): Promise<string> {
+    const result = await this.bootstrapLegacyOwnerStateResult(input);
+    return JSON.stringify(result);
+  }
+
+  private async bootstrapLegacyOwnerStateResult(input: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !== "ownerToken,state" ||
+        typeof input.ownerToken !== "string") {
+      return { status: 400, body: { error: "invalid_owner_bootstrap" } };
+    }
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return { status: 503, body: { error: "edge_control_plane_not_configured" } };
+      }
+      throw error;
+    }
+    if (!(runtime.oauth instanceof EdgeOwnerOAuth)) {
+      return { status: 409, body: { error: "owner_bootstrap_not_applicable" } };
+    }
+    try {
+      await runtime.oauth.bootstrapLegacyState(input.state, input.ownerToken);
+      return { status: 200, body: { status: "bootstrapped" } };
+    } catch (error) {
+      const alreadyBootstrapped = error instanceof Error && /already bootstrapped/u.test(error.message);
+      return {
+        status: alreadyBootstrapped ? 409 : 400,
+        body: { error: alreadyBootstrapped ? "owner_bootstrap_already_complete" : "owner_bootstrap_rejected" },
+      };
+    }
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -77,7 +122,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return this.handleConnectorUpgrade(request);
     }
     if (url.pathname === "/status") {
-      return jsonResponse(this.getStatus());
+      return jsonResponse(await this.getStatus());
     }
     if (isAllowedEdgeRequest(request.method, `${url.pathname}${url.search}`)) {
       return this.handleAllowedRequest(request);
@@ -92,24 +137,29 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
-    const parsed = parseConnectorToEdgeMessage(message);
-    if (!parsed) {
+    const attachment = this.readConnectorAttachment(webSocket);
+    if (!attachment) {
+      webSocket.close(1008, "Invalid connector session");
+      return;
+    }
+    const parsed = attachment.protocolVersion === LEGACY_EDGE_PROTOCOL_VERSION
+      ? parseLegacyConnectorToEdgeMessage(message)
+      : parseConnectorToEdgeMessage(message);
+    if (!parsed || parsed.protocolVersion !== attachment.protocolVersion) {
       webSocket.close(1008, "Invalid connector message");
       return;
     }
 
     if (parsed.type === "connector-ready") {
-      const attachment = this.readConnectorAttachment(webSocket);
-      if (!attachment) {
-        webSocket.close(1008, "Invalid connector session");
-        return;
-      }
-
       webSocket.serializeAttachment({
         role: "connector",
         ready: true,
-        protocolVersion: EDGE_PROTOCOL_VERSION,
+        protocolVersion: attachment.protocolVersion,
       } satisfies ConnectorAttachment);
+      if (attachment.protocolVersion === EDGE_PROTOCOL_VERSION) {
+        this.v3CutoverComplete = true;
+        this.ctx.waitUntil(this.ctx.storage.put("edge:v3-cutover-complete", true));
+      }
       return;
     }
 
@@ -147,6 +197,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   }
 
   private async handleAllowedRequest(request: Request): Promise<Response> {
+    const legacyConnector = this.getReadyConnector(LEGACY_EDGE_PROTOCOL_VERSION);
+    if (legacyConnector) return this.relayLegacyRequest(request, legacyConnector);
+
     let runtime: EdgeControlPlaneRuntime;
     try {
       runtime = this.getControlRuntime();
@@ -180,7 +233,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.edgeEnv,
       this.ctx.storage,
       {
-        isReady: () => this.getReadyConnector() !== null,
+        isReady: () => this.getReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
         getGeneration: () => null,
         execute: async (body, principal, request) => {
           if (!request) return agentUnavailableResponse(body);
@@ -196,9 +249,16 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     return this.controlRuntime;
   }
 
-  private handleConnectorUpgrade(request: Request): Response {
+  private async handleConnectorUpgrade(request: Request): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse({ error: "websocket_required" }, 426);
+    }
+    const persistedCutover = this.v3CutoverComplete ||
+      (await this.ctx.storage.get<boolean>("edge:v3-cutover-complete")) === true;
+    if (persistedCutover) this.v3CutoverComplete = true;
+    const protocolVersion = resolveConnectorProtocol(new URL(request.url), persistedCutover);
+    if (protocolVersion === null) {
+      return jsonResponse({ error: "connector_protocol_not_allowed" }, 409);
     }
 
     for (const existing of this.ctx.getWebSockets("connector")) {
@@ -213,17 +273,54 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     server.serializeAttachment({
       role: "connector",
       ready: false,
-      protocolVersion: EDGE_PROTOCOL_VERSION,
+      protocolVersion,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
-
-    const hello: EdgeHelloMessage = {
-      type: "edge-hello",
-      protocolVersion: EDGE_PROTOCOL_VERSION,
-    };
-    server.send(JSON.stringify(hello));
+    server.send(JSON.stringify({ type: "edge-hello", protocolVersion }));
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private async relayLegacyRequest(request: Request, connector: WebSocket): Promise<Response> {
+    const url = new URL(request.url);
+    const path = `${url.pathname}${url.search}`;
+    if (!isAllowedEdgeRequest(request.method, path)) return jsonResponse({ error: "edge_route_not_allowed" }, 404);
+    const body = request.method === "GET" ? "" : await request.text();
+    if (utf8ByteLength(body) > MAX_EDGE_REQUEST_BODY_BYTES) return jsonResponse({ error: "request_too_large" }, 413);
+    const requestId = crypto.randomUUID();
+    const envelope = {
+      type: "http-request",
+      protocolVersion: LEGACY_EDGE_PROTOCOL_VERSION,
+      requestId,
+      method: request.method,
+      path,
+      headers: collectLegacyAllowedRequestHeaders(request.headers),
+      body,
+    };
+    return new Promise<Response>((resolve) => {
+      const finish = (reason: EdgeHttpCancelMessage["reason"], response: Response) => {
+        const pending = this.pending.get(requestId);
+        if (!pending) return;
+        this.pending.delete(requestId);
+        clearTimeout(pending.timeout);
+        pending.releaseAbort();
+        this.sendCancellation(connector, requestId, reason, LEGACY_EDGE_PROTOCOL_VERSION);
+        resolve(response);
+      };
+      const timeout = setTimeout(() => finish("timeout", jsonResponse({ error: "connector_timeout" }, 504)), EDGE_RELAY_TIMEOUT_MS);
+      const onAbort = () => finish("client_disconnected", new Response(null, { status: 499 }));
+      request.signal.addEventListener("abort", onAbort, { once: true });
+      const releaseAbort = () => request.signal.removeEventListener("abort", onAbort);
+      this.pending.set(requestId, { resolve, timeout, releaseAbort });
+      try {
+        connector.send(JSON.stringify(envelope));
+      } catch {
+        clearTimeout(timeout);
+        releaseAbort();
+        this.pending.delete(requestId);
+        resolve(jsonResponse({ error: "connector_send_failed" }, 503));
+      }
+    });
   }
 
   private async relayAuthenticatedRequest(
@@ -232,7 +329,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     principal: AuthenticatedEdgePrincipal,
     unavailableResponse?: () => Response,
   ): Promise<Response> {
-    const connector = this.getReadyConnector();
+    const connector = this.getReadyConnector(EDGE_PROTOCOL_VERSION);
     if (!connector) {
       return unavailableResponse?.() ?? jsonResponse({ error: "connector_unavailable" }, 503);
     }
@@ -269,7 +366,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         this.pending.delete(requestId);
         clearTimeout(pending.timeout);
         pending.releaseAbort();
-        this.sendCancellation(connector, requestId, reason);
+        this.sendCancellation(connector, requestId, reason, EDGE_PROTOCOL_VERSION);
         resolve(response);
       };
 
@@ -305,11 +402,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     connector: WebSocket,
     requestId: string,
     reason: EdgeHttpCancelMessage["reason"],
+    protocolVersion: 2 | 3,
   ): void {
     if (connector.readyState !== WebSocket.OPEN) return;
-    const cancellation: EdgeHttpCancelMessage = {
+    const cancellation = {
       type: "http-cancel",
-      protocolVersion: EDGE_PROTOCOL_VERSION,
+      protocolVersion,
       requestId,
       reason,
     };
@@ -320,16 +418,14 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
 
-  private getReadyConnector(): WebSocket | null {
+  private getReadyConnector(protocolVersion?: number): WebSocket | null {
     for (const webSocket of this.ctx.getWebSockets("connector")) {
       const attachment = this.readConnectorAttachment(webSocket);
       if (
         attachment?.ready === true &&
-        attachment.protocolVersion === EDGE_PROTOCOL_VERSION &&
+        (protocolVersion === undefined || attachment.protocolVersion === protocolVersion) &&
         webSocket.readyState === WebSocket.OPEN
-      ) {
-        return webSocket;
-      }
+      ) return webSocket;
     }
     return null;
   }
@@ -383,4 +479,7 @@ function readJsonRpcId(body: unknown): string | number | null {
   if (typeof body !== "object" || body === null || Array.isArray(body) || !("id" in body)) return null;
   const id = (body as { id?: unknown }).id;
   return typeof id === "string" || typeof id === "number" ? id : null;
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

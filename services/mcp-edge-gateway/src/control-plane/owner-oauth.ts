@@ -17,7 +17,7 @@ export interface OwnerOAuthStorage {
 }
 
 export interface EdgeOwnerOAuthConfig {
-  ownerSecret: string;
+  ownerSecret?: string;
   publicBaseUrl: URL;
   mcpPath: string;
   scopes: string[];
@@ -53,6 +53,14 @@ type RefreshTokenRecord = {
 };
 
 type RevokedAccessRecord = { expiresAt: number };
+type LegacyAccessTokenRecord = RefreshTokenRecord;
+type OwnerCredentialMaterial = {
+  ownerVerifierHash: string;
+  signingKey: string;
+};
+
+const OWNER_BOOTSTRAP_MARKER_KEY = "owner:bootstrap:v1";
+const OWNER_CREDENTIAL_MATERIAL_KEY = "owner:credential-material:v1";
 
 type OwnerAccessClaims = {
   iss: string;
@@ -77,7 +85,7 @@ export class EdgeOwnerOAuth {
     private readonly storage: OwnerOAuthStorage,
     private readonly config: EdgeOwnerOAuthConfig,
   ) {
-    if (config.ownerSecret.length < 16) throw new Error("Owner secret must contain at least 16 characters.");
+    if (config.ownerSecret !== undefined && config.ownerSecret.length < 16) throw new Error("Owner secret must contain at least 16 characters.");
     if (config.scopes.length === 0 || config.scopes.length > MAX_SCOPES) throw new Error("Owner OAuth scopes are invalid.");
     this.mcpUrl = new URL(config.mcpPath, config.publicBaseUrl);
     this.resourceMetadataUrl = new URL(`/.well-known/oauth-protected-resource${config.mcpPath}`, config.publicBaseUrl);
@@ -90,21 +98,53 @@ export class EdgeOwnerOAuth {
     if (!token) throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
 
     const claims = await this.verifyAccessToken(token).catch(() => null);
-    if (!claims || claims.exp <= nowSeconds()) {
+    if (claims && claims.exp > nowSeconds()) {
+      const revoked = await this.storage.get<RevokedAccessRecord>(revokedAccessKey(claims.jti));
+      if (revoked) {
+        if (revoked.expiresAt > nowSeconds()) {
+          throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
+        }
+        await this.storage.delete(revokedAccessKey(claims.jti));
+      }
+      const scopes = parseScopes(claims.scope);
+      if (!scopes.includes(this.requiredScope)) {
+        throw new EdgeAuthenticationError(403, "insufficient_scope", this.challenge);
+      }
+      return { subject: claims.sub, scopes, ownerScope: "owner" };
+    }
+
+    const legacy = await this.storage.get<LegacyAccessTokenRecord>(legacyAccessKey(await sha256Base64Url(token)));
+    if (!legacy || legacy.expiresAt <= nowSeconds() || legacy.resource !== this.mcpUrl.href) {
       throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
     }
-    const revoked = await this.storage.get<RevokedAccessRecord>(revokedAccessKey(claims.jti));
-    if (revoked) {
-      if (revoked.expiresAt > nowSeconds()) {
-        throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
-      }
-      await this.storage.delete(revokedAccessKey(claims.jti));
-    }
-    const scopes = parseScopes(claims.scope);
-    if (!scopes.includes(this.requiredScope)) {
+    if (!legacy.scopes.includes(this.requiredScope)) {
       throw new EdgeAuthenticationError(403, "insufficient_scope", this.challenge);
     }
-    return { subject: claims.sub, scopes, ownerScope: "owner" };
+    return { subject: `owner:${legacy.clientId}`, scopes: [...legacy.scopes], ownerScope: "owner" };
+  }
+
+
+  async isConfigured(): Promise<boolean> {
+    if (this.config.ownerSecret !== undefined && this.config.ownerSecret.length >= 16) return true;
+    return isOwnerCredentialMaterial(await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY));
+  }
+
+  async bootstrapLegacyState(snapshot: unknown, suppliedOwnerSecret: string): Promise<void> {
+    if (await this.storage.get<boolean>(OWNER_BOOTSTRAP_MARKER_KEY)) {
+      throw new Error("Owner OAuth state is already bootstrapped.");
+    }
+    if (suppliedOwnerSecret.length < 16 || suppliedOwnerSecret.length > 2048 || /[\r\n\0]/u.test(suppliedOwnerSecret)) {
+      throw new Error("Owner secret is invalid.");
+    }
+    const parsed = this.parseLegacySnapshot(snapshot);
+    const material = await deriveOwnerCredentialMaterial(suppliedOwnerSecret);
+
+    await this.storage.put(OWNER_CREDENTIAL_MATERIAL_KEY, material);
+    for (const client of parsed.clients) await this.storage.put(clientKey(client.client_id), client);
+    await this.storage.put("owner:client-count", parsed.clients.length);
+    for (const record of parsed.accessTokens) await this.storage.put(legacyAccessKey(record.hash), record.value);
+    for (const record of parsed.refreshTokens) await this.storage.put(refreshKey(record.hash), record.value);
+    await this.storage.put(OWNER_BOOTSTRAP_MARKER_KEY, true);
   }
 
   async handle(request: Request): Promise<Response | null> {
@@ -196,7 +236,7 @@ export class EdgeOwnerOAuth {
       return htmlResponse(this.authorizationPage(client, fields));
     }
     const supplied = fields.get("owner_token") ?? "";
-    if (!(await constantTimeEquals(supplied, this.config.ownerSecret))) {
+    if (!(await this.ownerSecretMatches(supplied))) {
       return htmlResponse(this.authorizationPage(client, fields, "Owner credential was not accepted."), 401);
     }
 
@@ -261,7 +301,9 @@ export class EdgeOwnerOAuth {
     if (claims) {
       await this.storage.put(revokedAccessKey(claims.jti), { expiresAt: claims.exp } satisfies RevokedAccessRecord);
     } else {
-      await this.storage.delete(refreshKey(await sha256Base64Url(token)));
+      const hash = await sha256Base64Url(token);
+      await this.storage.delete(refreshKey(hash));
+      await this.storage.delete(legacyAccessKey(hash));
     }
     return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
   }
@@ -324,14 +366,98 @@ export class EdgeOwnerOAuth {
   }
 
   private hmacKey(): Promise<CryptoKey> {
-    this.hmacKeyPromise ??= crypto.subtle.importKey(
+    this.hmacKeyPromise ??= this.loadSigningKey();
+    return this.hmacKeyPromise;
+  }
+
+  private async loadSigningKey(): Promise<CryptoKey> {
+    const stored = await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY);
+    const material = stored ?? (this.config.ownerSecret ? await deriveOwnerCredentialMaterial(this.config.ownerSecret) : undefined);
+    if (!material || !isOwnerCredentialMaterial(material)) throw new Error("Owner credential material is not configured.");
+    return crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode(this.config.ownerSecret),
+      toArrayBuffer(decodeBase64UrlBytes(material.signingKey)),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["sign", "verify"],
     );
-    return this.hmacKeyPromise;
+  }
+
+  private async ownerSecretMatches(supplied: string): Promise<boolean> {
+    const stored = await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY);
+    if (stored) {
+      if (!isOwnerCredentialMaterial(stored)) return false;
+      return constantTimeBase64UrlEquals(await sha256Base64Url(supplied), stored.ownerVerifierHash);
+    }
+    return this.config.ownerSecret !== undefined && constantTimeEquals(supplied, this.config.ownerSecret);
+  }
+
+  private parseLegacySnapshot(snapshot: unknown): {
+    clients: OwnerClient[];
+    accessTokens: Array<{ hash: string; value: LegacyAccessTokenRecord }>;
+    refreshTokens: Array<{ hash: string; value: RefreshTokenRecord }>;
+  } {
+    if (!isRecord(snapshot) || snapshot.version !== 1 || snapshot.resourceServerUrl !== this.mcpUrl.href) {
+      throw new Error("Legacy Owner OAuth state does not match this MCP resource.");
+    }
+    if (!Array.isArray(snapshot.clients) || snapshot.clients.length > MAX_CLIENTS) throw new Error("Legacy Owner OAuth clients are invalid.");
+    const clients = snapshot.clients.map((entry) => this.parseLegacyClient(entry));
+    const clientIds = new Set(clients.map((client) => client.client_id));
+    return {
+      clients,
+      accessTokens: this.parseLegacyTokenRecords(snapshot.accessTokens, clientIds, "access"),
+      refreshTokens: this.parseLegacyTokenRecords(snapshot.refreshTokens, clientIds, "refresh"),
+    };
+  }
+
+  private parseLegacyClient(value: unknown): OwnerClient {
+    if (!isRecord(value) || typeof value.client_id !== "string" || value.client_id.length === 0 ||
+        typeof value.client_id_issued_at !== "number" || !Number.isSafeInteger(value.client_id_issued_at) ||
+        !Array.isArray(value.redirect_uris) || value.redirect_uris.length === 0 ||
+        !value.redirect_uris.every((entry) => typeof entry === "string" && this.redirectAllowed(entry)) ||
+        (value.token_endpoint_auth_method !== undefined && value.token_endpoint_auth_method !== "none")) {
+      throw new Error("Legacy Owner OAuth client is invalid.");
+    }
+    const grantTypes = readStringArray(value.grant_types, ["authorization_code", "refresh_token"]);
+    const responseTypes = readStringArray(value.response_types, ["code"]);
+    if (!grantTypes.every((entry) => entry === "authorization_code" || entry === "refresh_token") ||
+        !responseTypes.every((entry) => entry === "code")) throw new Error("Legacy Owner OAuth client grants are invalid.");
+    return {
+      client_id: value.client_id,
+      client_id_issued_at: value.client_id_issued_at,
+      redirect_uris: [...value.redirect_uris] as string[],
+      ...(typeof value.client_name === "string" && value.client_name.length > 0 ? { client_name: value.client_name.slice(0, 200) } : {}),
+      token_endpoint_auth_method: "none",
+      grant_types: grantTypes,
+      response_types: responseTypes,
+    };
+  }
+
+  private parseLegacyTokenRecords(
+    value: unknown,
+    clientIds: Set<string>,
+    kind: "access" | "refresh",
+  ): Array<{ hash: string; value: RefreshTokenRecord }> {
+    if (!Array.isArray(value) || value.length > 4096) throw new Error(`Legacy Owner OAuth ${kind} tokens are invalid.`);
+    return value.map((entry) => {
+      if (!isRecord(entry) || typeof entry.hash !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(entry.hash) ||
+          typeof entry.clientId !== "string" || !clientIds.has(entry.clientId) ||
+          !Array.isArray(entry.scopes) || entry.scopes.length === 0 || entry.scopes.length > MAX_SCOPES ||
+          !entry.scopes.every((scope) => typeof scope === "string" && scope.length > 0 && this.config.scopes.includes(scope)) ||
+          typeof entry.expiresAt !== "number" || !Number.isSafeInteger(entry.expiresAt) || entry.expiresAt <= 0 ||
+          (entry.resource !== undefined && entry.resource !== this.mcpUrl.href)) {
+        throw new Error(`Legacy Owner OAuth ${kind} token record is invalid.`);
+      }
+      return {
+        hash: entry.hash,
+        value: {
+          clientId: entry.clientId,
+          scopes: [...entry.scopes] as string[],
+          resource: typeof entry.resource === "string" ? entry.resource : this.mcpUrl.href,
+          expiresAt: entry.expiresAt,
+        },
+      };
+    });
   }
 
   private redirectAllowed(value: string): boolean {
@@ -357,6 +483,7 @@ export class EdgeOwnerOAuth {
 function clientKey(clientId: string): string { return `owner:client:${clientId}`; }
 function codeKey(hash: string): string { return `owner:code:${hash}`; }
 function refreshKey(hash: string): string { return `owner:refresh:${hash}`; }
+function legacyAccessKey(hash: string): string { return `owner:legacy-access:${hash}`; }
 function revokedAccessKey(jti: string): string { return `owner:revoked:${jti}`; }
 function nowSeconds(): number { return Math.floor(Date.now() / 1000); }
 function randomToken(): string { const bytes = new Uint8Array(32); crypto.getRandomValues(bytes); return base64UrlBytes(bytes); }
@@ -369,6 +496,29 @@ async function constantTimeEquals(left: string, right: string): Promise<boolean>
 }
 async function sha256Bytes(value: string): Promise<Uint8Array> { return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 async function sha256Base64Url(value: string): Promise<string> { return base64UrlBytes(await sha256Bytes(value)); }
+async function deriveOwnerCredentialMaterial(ownerSecret: string): Promise<OwnerCredentialMaterial> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(ownerSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signingBytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("mcp-edge-owner-signing-v1")));
+  return { ownerVerifierHash: await sha256Base64Url(ownerSecret), signingKey: base64UrlBytes(signingBytes) };
+}
+function isOwnerCredentialMaterial(value: unknown): value is OwnerCredentialMaterial {
+  return isRecord(value) && typeof value.ownerVerifierHash === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.ownerVerifierHash) &&
+    typeof value.signingKey === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.signingKey);
+}
+function constantTimeBase64UrlEquals(left: string, right: string): boolean {
+  const a = decodeBase64UrlBytes(left);
+  const b = decodeBase64UrlBytes(right);
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!;
+  return difference === 0;
+}
 function base64UrlText(value: string): string { return base64UrlBytes(new TextEncoder().encode(value)); }
 function base64UrlBytes(bytes: Uint8Array): string { let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, ""); }
 function decodeBase64UrlText(value: string): string { return new TextDecoder().decode(decodeBase64UrlBytes(value)); }

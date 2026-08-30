@@ -5,7 +5,13 @@
   "compatibility_date": "2026-08-17",
   "workers_dev": true,
   "vars": {
-    "MCP_EDGE_ENABLED": "true"
+    "MCP_EDGE_ENABLED": "true",
+    "MCP_EDGE_AUTH_MODE": "owner",
+    "MCP_PUBLIC_BASE_URL": "https://mcp-access-stack.rafaeldamasio77.workers.dev/",
+    "MCP_OWNER_OAUTH_SCOPES": "workspaces:read",
+    "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS": "3600",
+    "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS": "2592000",
+    "MCP_OWNER_RESOURCE_NAME": "MCP Access Stack"
   },
   "durable_objects": {
     "bindings": [
