@@ -40,6 +40,8 @@ $executionNodeTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 
 $edgeConnectorTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpEdgeConnectorTask.ps1') -Raw
 $browserWorkerTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpBrowserWorkerTask.ps1') -Raw
 $edgeConnectorLauncher = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Start-McpEdgeConnector.ps1') -Raw
+$edgeOwnerOAuthBootstrapPath = Join-Path $PSScriptRoot 'Invoke-McpEdgeOwnerOAuthBootstrap.ps1'
+$edgeOwnerOAuthBootstrap = Get-Content -LiteralPath $edgeOwnerOAuthBootstrapPath -Raw
 $edgeTerminalIndependenceTest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Test-McpEdgeConnectorTerminalIndependence.ps1') -Raw
 $executionNodeCutover = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1') -Raw
 $executionNodeCutoverTaskInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-McpWindowsExecutionNodeCutoverTask.ps1') -Raw
@@ -111,6 +113,8 @@ if (
     -not $distributionBuilder.Contains('Install-McpEdgeConnectorTask.ps1') -or
     -not $distributionBuilder.Contains('Install-McpBrowserWorkerTask.ps1') -or
     -not $distributionBuilder.Contains('Start-McpEdgeConnector.ps1') -or
+    -not $distributionBuilder.Contains('Invoke-McpEdgeOwnerOAuthBootstrap.ps1') -or
+    -not $distributionBuilder.Contains('edgeOwnerOAuthBootstrapTarget') -or
     -not $distributionBuilder.Contains('Test-McpEdgeConnectorTerminalIndependence.ps1') -or
     -not $distributionBuilder.Contains("-Role 'edge-connector'") -or
     -not $distributionBuilder.Contains("-Role 'edge-connector-launcher'") -or
@@ -122,6 +126,44 @@ if (
     -not $distributionBuilder.Contains('Set-AuthenticodeSignature')
 ) {
     throw 'Public release workflow must build and sign the execution-node distribution and release attestation.'
+}
+$bootstrapGateClosed = $false
+try {
+    & $edgeOwnerOAuthBootstrapPath `
+        -EdgeBaseUrl 'https://edge.example/' `
+        -ConnectorTokenFile 'missing-connector-token.txt' `
+        -OwnerTokenFile 'missing-owner-token.txt' `
+        -OwnerOAuthStatePath 'missing-owner-state.json'
+}
+catch {
+    $bootstrapGateClosed = $_.Exception.Message -like '*intentionally gated*'
+}
+if (-not $bootstrapGateClosed) {
+    throw 'Owner OAuth bootstrap helper must fail closed without -Execute.'
+}
+foreach ($required in @(
+    '/_internal/owner-oauth/bootstrap',
+    'ConnectorTokenFile',
+    'OwnerTokenFile',
+    'OwnerOAuthStatePath',
+    'Get-FileHash',
+    'Invoke-WebRequest',
+    'stateSha256',
+    'owner_bootstrap_already_complete'
+)) {
+    if (-not $edgeOwnerOAuthBootstrap.Contains($required)) {
+        throw "Owner OAuth bootstrap helper contract is missing: $required"
+    }
+}
+foreach ($forbidden in @(
+    'Write-Host $connectorToken',
+    'Write-Output $connectorToken',
+    'Write-Host $ownerToken',
+    'Write-Output $ownerToken'
+)) {
+    if ($edgeOwnerOAuthBootstrap.Contains($forbidden)) {
+        throw "Owner OAuth bootstrap helper must not log credentials: $forbidden"
+    }
 }
 foreach ($required in @(
     'McpHost.exe',
