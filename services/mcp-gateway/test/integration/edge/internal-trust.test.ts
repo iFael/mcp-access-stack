@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { EDGE_PROTOCOL_VERSION } from "@mcp-access-stack/edge-protocol";
 import { createGatewayApplication } from "../../../src/app.js";
+import type { AgentRelay } from "../../../src/relay/service.js";
+import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import { EdgeConnector } from "../../../src/edge/connector.js";
 import { listen as listenGateway, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
 
@@ -128,9 +130,7 @@ describe("embedded Gateway edge-trusted mode", () => {
     };
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: {
-        listWorkspaces: async () => [],
-      },
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });
@@ -161,9 +161,7 @@ describe("embedded Gateway edge-trusted mode", () => {
     };
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: {
-        listWorkspaces: async () => [],
-      },
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });
