@@ -6,6 +6,8 @@ import { EDGE_PROTOCOL_VERSION, isAllowedEdgeRequest } from "@mcp-access-stack/e
 import { EdgeConnector } from "../../../src/edge/connector.js";
 
 const servers: Array<{ close(): Promise<void> }> = [];
+const TEST_PRINCIPAL = { subject: "owner:test", scopes: ["mcp:tools"], ownerScope: "owner" };
+const TEST_INTERNAL_ASSERTION = "a".repeat(43);
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -105,6 +107,7 @@ describe("EdgeConnector", () => {
       edgeUrl: `ws://127.0.0.1:${edgePort}/connector`,
       localBaseUrl: `http://127.0.0.1:${localPort}/`,
       token: "t".repeat(48),
+      internalAssertion: TEST_INTERNAL_ASSERTION,
       reconnectMinMs: 10,
       reconnectMaxMs: 20,
       heartbeatIntervalMs: 5_000,
@@ -134,6 +137,7 @@ describe("EdgeConnector", () => {
         origin: "https://chatgpt.com",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      principal: TEST_PRINCIPAL,
     }));
 
     const response = await waitForMessage(edgeSocket);
@@ -149,7 +153,7 @@ describe("EdgeConnector", () => {
       "www-authenticate": "Bearer test",
     });
     expect((response.headers as Record<string, string>)["x-local-secret"]).toBeUndefined();
-    expect(observedAuthorization).toBe("Bearer mcp-token");
+    expect(observedAuthorization).toBeUndefined();
     expect(observedSecretHeader).toBeUndefined();
     expect(observedOrigin).toBe("https://chatgpt.com");
 
@@ -179,6 +183,7 @@ describe("EdgeConnector", () => {
       edgeUrl: `ws://127.0.0.1:${edgePort}/connector`,
       localBaseUrl: `http://127.0.0.1:${localPort}/`,
       token: "c".repeat(48),
+      internalAssertion: TEST_INTERNAL_ASSERTION,
       reconnectMinMs: 10,
       reconnectMaxMs: 20,
     });
@@ -195,6 +200,7 @@ describe("EdgeConnector", () => {
       path: "/mcp",
       headers: { "content-type": "application/json" },
       body: "{}",
+      principal: TEST_PRINCIPAL,
     }));
     await new Promise((resolve) => setTimeout(resolve, 50));
     edgeSocket.send(JSON.stringify({

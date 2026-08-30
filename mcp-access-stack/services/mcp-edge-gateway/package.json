@@ -1,19 +1,20 @@
 {
-  "name": "@mcp-access-stack/edge-gateway",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "check": "tsc --noEmit -p tsconfig.json && wrangler deploy --dry-run --outdir .wrangler/dry-run",
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "5.20260817.1",
-    "typescript": "6.0.3",
-    "wrangler": "4.123.0"
-  },
-  "dependencies": {
-    "@mcp-access-stack/edge-protocol": "0.1.0"
-  }
+    "name":  "@mcp-access-stack/edge-gateway",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "scripts":  {
+                    "check":  "tsc --noEmit -p tsconfig.json \u0026\u0026 wrangler deploy --dry-run --outdir .wrangler/dry-run",
+                    "deploy":  "wrangler deploy",
+                    "dev":  "wrangler dev"
+                },
+    "devDependencies":  {
+                            "@cloudflare/workers-types":  "5.20260817.1",
+                            "typescript":  "6.0.3",
+                            "wrangler":  "4.123.0"
+                        },
+    "dependencies":  {
+                         "@mcp-access-stack/edge-protocol":  "0.1.0",
+                         "jose":  "6.2.3"
+                     }
 }

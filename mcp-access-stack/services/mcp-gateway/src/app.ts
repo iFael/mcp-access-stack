@@ -35,6 +35,10 @@ import {
 } from "./auth/owner-mount.js";
 import { mountGptActions } from "./actions/service.js";
 import {
+  createEdgeTrustedAuthenticationMiddleware,
+  type EdgeTrustConfig,
+} from "./edge/internal-trust.js";
+import {
   createAuthenticationMiddleware,
   createChallenge,
   createIpRateLimiter,
@@ -58,6 +62,7 @@ export interface GatewayApplicationDependencies {
   browser?: BrowserExecutor;
   workspaceExecutor?: WorkspaceExecutor;
   workspaceReady?: () => boolean;
+  edgeTrust?: EdgeTrustConfig;
 }
 
 export function createGatewayApplication(
@@ -182,8 +187,15 @@ export function createGatewayApplication(
     mcpMiddlewares.push(ownerAuthMiddleware);
   }
 
+  if (config.authMode === "edge-trusted") {
+    if (!dependencies.edgeTrust) {
+      throw new Error("edge-trusted authentication requires an internal Edge trust assertion.");
+    }
+    mcpMiddlewares.push(createEdgeTrustedAuthenticationMiddleware(dependencies.edgeTrust));
+  }
+
   mcpMiddlewares.push(createIpRateLimiter(config));
-  if (config.authMode === "oauth") {
+  if (config.authMode === "oauth" || config.authMode === "edge-trusted") {
     mcpMiddlewares.push(createSubjectRateLimiter(config));
   }
 
