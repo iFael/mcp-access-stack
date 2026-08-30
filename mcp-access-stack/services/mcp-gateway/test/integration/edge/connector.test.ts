@@ -79,6 +79,37 @@ describe("edge protocol route allowlist", () => {
   });
 });
 describe("EdgeConnector", () => {
+  it("qualifies the outbound connection as protocol v3 for cutover routing", async () => {
+    const edgeHttp = createServer();
+    const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/connector" });
+    const edgePort = await listen(edgeHttp);
+    servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
+
+    let observedUrl = "";
+    const connectionPromise = new Promise<WebSocket>((resolve) => {
+      edgeWss.once("connection", (socket, request) => {
+        observedUrl = request.url ?? "";
+        resolve(socket);
+      });
+    });
+    const controller = new AbortController();
+    const connector = new EdgeConnector({
+      edgeUrl: `ws://127.0.0.1:${edgePort}/connector`,
+      localBaseUrl: "http://127.0.0.1:39999/",
+      token: "v".repeat(48),
+      internalAssertion: TEST_INTERNAL_ASSERTION,
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+    });
+    const runPromise = connector.run(controller.signal);
+    const edgeSocket = await connectionPromise;
+    expect(observedUrl).toBe(`/connector?protocol=${EDGE_PROTOCOL_VERSION}`);
+
+    controller.abort();
+    edgeSocket.terminate();
+    await runPromise;
+  });
+
   it("authenticates outbound, completes protocol handshake and relays allowlisted HTTP", async () => {
     let observedAuthorization: string | undefined;
     let observedSecretHeader: string | undefined;

@@ -119,6 +119,7 @@ export class EdgeConnector {
 
   constructor(private readonly options: EdgeConnectorOptions) {
     this.edgeUrl = validateEdgeUrl(options.edgeUrl);
+    this.edgeUrl.searchParams.set("protocol", String(EDGE_PROTOCOL_VERSION));
     this.localBaseUrl = validateLocalBaseUrl(options.localBaseUrl);
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
     this.maxConcurrentRequests = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
