@@ -32,7 +32,6 @@ export {
 
 const REQUEST_HEADER_ALLOWLIST = new Set([
   "accept",
-  "authorization",
   "content-type",
   "mcp-protocol-version",
   "mcp-session-id",

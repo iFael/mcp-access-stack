@@ -40,6 +40,14 @@ describe("gateway configuration loader", () => {
     ).toThrow();
   });
 
+  it("does not allow edge-trusted authentication to be selected from public environment", () => {
+    expect(() => loadGatewayConfig({
+      NODE_ENV: "test",
+      PUBLIC_BASE_URL: "https://mcp.example.com",
+      AUTH_MODE: "edge-trusted",
+      WORKSPACE_BACKEND: "in-process",
+    })).toThrow();
+  });
   it("supports auth mode none without oauth variables", () => {
     const config = loadGatewayConfig({
       NODE_ENV: "test",

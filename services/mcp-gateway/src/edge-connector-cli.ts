@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -24,18 +25,20 @@ interface ConnectorRuntimeConfig {
 async function main(): Promise<void> {
   const runtime = loadConnectorRuntimeConfig(process.env);
   const connectorToken = await readConnectorToken(runtime.tokenFile);
-  const gatewayConfig = loadGatewayConfig({
-    ...process.env,
-    NODE_ENV: "production",
-    PORT: "0",
-    PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
-    MCP_PATH: "/mcp",
-    TRUST_PROXY: "0",
-    WORKSPACE_BACKEND: "in-process",
-  });
-  if (gatewayConfig.authMode === "none") {
-    throw new AppError("POLICY_INVALID", "Edge Connector requires OAuth or Owner authentication; AUTH_MODE=none is not allowed.");
-  }
+  const gatewayConfig = {
+    ...loadGatewayConfig({
+      ...process.env,
+      NODE_ENV: "production",
+      PORT: "0",
+      PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
+      MCP_PATH: "/mcp",
+      TRUST_PROXY: "0",
+      WORKSPACE_BACKEND: "in-process",
+      AUTH_MODE: "none",
+    }),
+    authMode: "edge-trusted" as const,
+  };
+  const internalAssertion = randomBytes(32).toString("base64url");
 
   const agent = await LocalAgent.create(
     runtime.policyPath,
@@ -45,6 +48,7 @@ async function main(): Promise<void> {
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor,
     workspaceReady: () => true,
+    edgeTrust: { internalAssertion },
   });
   const localServer = await startLoopbackGateway(gateway.app);
   const localAddress = localServer.address();
@@ -55,6 +59,7 @@ async function main(): Promise<void> {
   const connector = new EdgeConnector({
     edgeUrl: runtime.connectorUrl,
     token: connectorToken,
+    internalAssertion,
     localBaseUrl,
     ...(runtime.maxConcurrentRequests === undefined ? {} : { maxConcurrentRequests: runtime.maxConcurrentRequests }),
     log: writeLog,

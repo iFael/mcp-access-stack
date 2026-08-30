@@ -1,10 +1,16 @@
-export const EDGE_PROTOCOL_VERSION = 2 as const;
+export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";
 export const EDGE_RELAY_TIMEOUT_MS = 330_000;
 export const MAX_EDGE_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
 export const MAX_EDGE_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
 
 export type EdgeHttpMethod = "GET" | "POST" | "DELETE";
+
+export type AuthenticatedEdgePrincipal = {
+  subject: string;
+  scopes: string[];
+  ownerScope?: string;
+};
 
 export type EdgeHelloMessage = {
   type: "edge-hello";
@@ -24,6 +30,7 @@ export type EdgeHttpRequestMessage = {
   path: string;
   headers: Record<string, string>;
   body: string;
+  principal: AuthenticatedEdgePrincipal;
 };
 
 export type EdgeHttpResponseMessage = {
@@ -100,6 +107,8 @@ export function parseEdgeToConnectorMessage(value: string): EdgeToConnectorMessa
   if (typeof parsed.method !== "string" || typeof parsed.path !== "string") return null;
   if (!isAllowedEdgeRequest(parsed.method, parsed.path)) return null;
   if (!isStringRecord(parsed.headers) || typeof parsed.body !== "string") return null;
+  const principal = parseAuthenticatedEdgePrincipal(parsed.principal);
+  if (!principal) return null;
 
   return {
     type: "http-request",
@@ -109,6 +118,7 @@ export function parseEdgeToConnectorMessage(value: string): EdgeToConnectorMessa
     path: parsed.path,
     headers: parsed.headers,
     body: parsed.body,
+    principal,
   };
 }
 
@@ -168,6 +178,34 @@ function parseRecord(value: string): Record<string, unknown> | null {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export function parseAuthenticatedEdgePrincipal(value: unknown): AuthenticatedEdgePrincipal | null {
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value).sort();
+  const allowedKeys = value.ownerScope === undefined
+    ? ["scopes", "subject"]
+    : ["ownerScope", "scopes", "subject"];
+  if (keys.length !== allowedKeys.length || keys.some((key, index) => key !== allowedKeys[index])) return null;
+  if (typeof value.subject !== "string" || value.subject.length === 0 || value.subject.length > 512) return null;
+  if (
+    !Array.isArray(value.scopes) ||
+    value.scopes.length === 0 ||
+    value.scopes.length > 64 ||
+    !value.scopes.every((scope) => typeof scope === "string" && scope.length > 0 && scope.length <= 256)
+  ) return null;
+  const scopes = value.scopes as string[];
+  if (new Set(scopes).size !== scopes.length) return null;
+  if (
+    value.ownerScope !== undefined &&
+    (typeof value.ownerScope !== "string" || value.ownerScope.length === 0 || value.ownerScope.length > 256)
+  ) return null;
+  return {
+    subject: value.subject,
+    scopes: [...scopes],
+    ...(value.ownerScope === undefined ? {} : { ownerScope: value.ownerScope as string }),
+  };
+}
+
 
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
