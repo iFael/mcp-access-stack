@@ -1,4 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import { EdgeAuthenticationError } from "./control-plane/auth.js";
+import {
+  EdgeControlPlaneConfigurationError,
+  createEdgeControlPlaneRuntime,
+  type EdgeControlPlaneEnv,
+  type EdgeControlPlaneRuntime,
+} from "./control-plane/runtime.js";
 import {
   EDGE_PROTOCOL_VERSION,
   EDGE_RELAY_TIMEOUT_MS,
@@ -15,7 +23,7 @@ import {
   type EdgeHttpRequestMessage,
 } from "./protocol.js";
 
-export type EdgeGatewayEnv = {
+export type EdgeGatewayEnv = EdgeControlPlaneEnv & {
   MCP_SESSION: DurableObjectNamespace<McpSession>;
   MCP_EDGE_ENABLED?: string;
   MCP_CONNECTOR_TOKEN?: string;
@@ -31,17 +39,35 @@ type PendingRelay = {
   resolve: (response: Response) => void;
   timeout: ReturnType<typeof setTimeout>;
   releaseAbort: () => void;
+  unavailableResponse?: (() => Response) | undefined;
 };
 
 export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly pending = new Map<string, PendingRelay>();
+  private controlRuntime: EdgeControlPlaneRuntime | undefined;
 
-  constructor(ctx: DurableObjectState, env: EdgeGatewayEnv) {
-    super(ctx, env);
+  constructor(ctx: DurableObjectState, private readonly edgeEnv: EdgeGatewayEnv) {
+    super(ctx, edgeEnv);
   }
 
-  getStatus(): { connectorReady: boolean } {
-    return { connectorReady: this.getReadyConnector() !== null };
+  getStatus(): {
+    controlPlaneReady: boolean;
+    executionPlaneReady: boolean;
+    connectorReady: boolean;
+  } {
+    const connectorReady = this.getReadyConnector() !== null;
+    let controlPlaneReady = false;
+    try {
+      this.getControlRuntime();
+      controlPlaneReady = true;
+    } catch (error) {
+      if (!(error instanceof EdgeControlPlaneConfigurationError)) throw error;
+    }
+    return {
+      controlPlaneReady,
+      executionPlaneReady: controlPlaneReady && connectorReady,
+      connectorReady,
+    };
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -51,10 +77,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return this.handleConnectorUpgrade(request);
     }
     if (url.pathname === "/status") {
-      return jsonResponse({ connectorReady: this.getReadyConnector() !== null });
+      return jsonResponse(this.getStatus());
     }
     if (isAllowedEdgeRequest(request.method, `${url.pathname}${url.search}`)) {
-      return this.handleHttpRequest(request);
+      return this.handleAllowedRequest(request);
     }
 
     return jsonResponse({ error: "not_found" }, 404);
@@ -120,6 +146,56 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
 
+  private async handleAllowedRequest(request: Request): Promise<Response> {
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return jsonResponse({ error: "edge_control_plane_not_configured" }, 503);
+      }
+      throw error;
+    }
+
+    const localResponse = await runtime.router.route(request);
+    if (localResponse) return localResponse;
+
+    const url = new URL(request.url);
+    if (url.pathname === "/mcp" && (request.method === "GET" || request.method === "DELETE")) {
+      let principal: AuthenticatedEdgePrincipal;
+      try {
+        principal = await runtime.authenticator.authenticate(request);
+      } catch (error) {
+        if (error instanceof EdgeAuthenticationError) return error.toResponse();
+        throw error;
+      }
+      return this.relayAuthenticatedRequest(request, "", principal);
+    }
+
+    return jsonResponse({ error: "edge_route_not_allowed" }, 404);
+  }
+
+  private getControlRuntime(): EdgeControlPlaneRuntime {
+    this.controlRuntime ??= createEdgeControlPlaneRuntime(
+      this.edgeEnv,
+      this.ctx.storage,
+      {
+        isReady: () => this.getReadyConnector() !== null,
+        getGeneration: () => null,
+        execute: async (body, principal, request) => {
+          if (!request) return agentUnavailableResponse(body);
+          return this.relayAuthenticatedRequest(
+            request,
+            JSON.stringify(body),
+            principal,
+            () => agentUnavailableResponse(body),
+          );
+        },
+      },
+    );
+    return this.controlRuntime;
+  }
+
   private handleConnectorUpgrade(request: Request): Response {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse({ error: "websocket_required" }, 426);
@@ -150,10 +226,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private async handleHttpRequest(request: Request): Promise<Response> {
+  private async relayAuthenticatedRequest(
+    request: Request,
+    body: string,
+    principal: AuthenticatedEdgePrincipal,
+    unavailableResponse?: () => Response,
+  ): Promise<Response> {
     const connector = this.getReadyConnector();
     if (!connector) {
-      return jsonResponse({ error: "connector_unavailable" }, 503);
+      return unavailableResponse?.() ?? jsonResponse({ error: "connector_unavailable" }, 503);
     }
 
     const url = new URL(request.url);
@@ -162,7 +243,6 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return jsonResponse({ error: "edge_route_not_allowed" }, 404);
     }
 
-    const body = request.method === "GET" ? "" : await request.text();
     if (utf8ByteLength(body) > MAX_EDGE_REQUEST_BODY_BYTES) {
       return jsonResponse({ error: "request_too_large" }, 413);
     }
@@ -176,6 +256,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       path,
       headers: collectAllowedRequestHeaders(request.headers),
       body,
+      principal,
     };
 
     return new Promise<Response>((resolve) => {
@@ -202,7 +283,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       request.signal.addEventListener("abort", onAbort, { once: true });
       const releaseAbort = () => request.signal.removeEventListener("abort", onAbort);
 
-      this.pending.set(requestId, { resolve, timeout, releaseAbort });
+      this.pending.set(requestId, {
+        resolve,
+        timeout,
+        releaseAbort,
+        ...(unavailableResponse === undefined ? {} : { unavailableResponse }),
+      });
 
       try {
         connector.send(JSON.stringify(envelope));
@@ -210,7 +296,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         clearTimeout(timeout);
         releaseAbort();
         this.pending.delete(requestId);
-        resolve(jsonResponse({ error: "connector_send_failed" }, 503));
+        resolve(unavailableResponse?.() ?? jsonResponse({ error: "connector_send_failed" }, 503));
       }
     });
   }
@@ -274,8 +360,27 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     for (const [requestId, pending] of this.pending) {
       clearTimeout(pending.timeout);
       pending.releaseAbort();
-      pending.resolve(jsonResponse({ error: reason }, 503));
+      pending.resolve(pending.unavailableResponse?.() ?? jsonResponse({ error: reason }, 503));
       this.pending.delete(requestId);
     }
   }
+}
+
+function agentUnavailableResponse(body: unknown): Response {
+  const id = readJsonRpcId(body);
+  return jsonResponse({
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: -32001,
+      message: "Execution backend unavailable",
+      data: { code: "AGENT_UNAVAILABLE" },
+    },
+  });
+}
+
+function readJsonRpcId(body: unknown): string | number | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body) || !("id" in body)) return null;
+  const id = (body as { id?: unknown }).id;
+  return typeof id === "string" || typeof id === "number" ? id : null;
 }

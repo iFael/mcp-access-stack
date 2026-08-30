@@ -130,7 +130,7 @@ export interface GatewayConfig {
   nodeEnv: "development" | "test" | "production";
   port: number;
   publicBaseUrl: URL;
-  authMode: "oauth" | "none" | "owner";
+  authMode: "oauth" | "none" | "owner" | "edge-trusted";
   mcpPath: string;
   trustProxy: number;
   oauth?: GatewayOAuthConfig | undefined;

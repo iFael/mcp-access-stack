@@ -1,4 +1,5 @@
 import { McpSession, type EdgeGatewayEnv } from "./mcp-session.js";
+import { createEdgeHealthStatus } from "./health.js";
 import {
   EDGE_SESSION_NAME,
   connectorTokenMatches,
@@ -15,13 +16,11 @@ export default {
     const session = env.MCP_SESSION.get(sessionId);
 
     if (url.pathname === "/health" && request.method === "GET") {
-      const status = await session.getStatus();
-      return jsonResponse({
-        service: "mcp-edge-gateway",
-        status: "ok",
-        edgeEnabled: env.MCP_EDGE_ENABLED === "true",
-        connectorReady: status.connectorReady === true,
-      });
+      const health = createEdgeHealthStatus(
+        env.MCP_EDGE_ENABLED === "true",
+        await session.getStatus(),
+      );
+      return jsonResponse(health.body, health.statusCode);
     }
 
     if (url.pathname === "/connector") {
