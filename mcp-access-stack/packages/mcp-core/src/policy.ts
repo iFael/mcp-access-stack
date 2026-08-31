@@ -115,7 +115,7 @@ export type PolicyFile = z.output<typeof policyFileSchema>;
 
 export const mandatoryBlockedGlobs = [
   "**/.env",
-  "**/.env.*",
+  "**/.env.!(example|sample|template)",
   "**/*.pem",
   "**/*.key",
   "**/*.pfx",

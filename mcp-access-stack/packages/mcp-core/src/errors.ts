@@ -84,19 +84,30 @@ export const errorCodes = [
 
 export type ErrorCode = (typeof errorCodes)[number];
 
+export interface ErrorDetails {
+  path?: string;
+  policyRule?: string;
+  operation?: string;
+  reason?: string;
+  safeAlternative?: string;
+}
+
 export interface SerializedError {
   code: ErrorCode;
   message: string;
   lifecycle?: OperationLifecycle;
+  details?: ErrorDetails;
 }
 
 export interface AppErrorOptions extends ErrorOptions {
   lifecycle?: OperationLifecycle;
+  details?: ErrorDetails;
 }
 
 export class AppError extends Error {
   readonly code: ErrorCode;
   readonly lifecycle: OperationLifecycle | undefined;
+  readonly details: ErrorDetails | undefined;
 
   constructor(code: ErrorCode, message: string, options?: AppErrorOptions) {
     super(
@@ -106,6 +117,7 @@ export class AppError extends Error {
     this.name = "AppError";
     this.code = code;
     this.lifecycle = options?.lifecycle;
+    this.details = options?.details;
   }
 
   toJSON(): SerializedError {
@@ -115,6 +127,7 @@ export class AppError extends Error {
       ...(this.lifecycle === undefined
         ? {}
         : { lifecycle: operationLifecycleSchema.parse(this.lifecycle) }),
+      ...(this.details === undefined ? {} : { details: { ...this.details } }),
     };
   }
 }

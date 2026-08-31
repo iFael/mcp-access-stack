@@ -59,7 +59,7 @@ export class FileService {
     input: ReadFileInput,
   ): Promise<ReadFileResult> {
     const security = new PathSecurity(workspace);
-    const authorized = await security.authorizeExisting(input.path, "file");
+    const authorized = await security.authorizeExisting(input.path, "file", false, "read_file");
     const contents = await readTextFile(
       authorized.canonicalPath,
       workspace.limits.maxFileBytes,

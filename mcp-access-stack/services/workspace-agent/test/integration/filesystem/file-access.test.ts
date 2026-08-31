@@ -113,6 +113,48 @@ describe("file access", () => {
     },
   );
 
+  test("allows env templates while blocking real environment files", async () => {
+    fixture = await createFixture({ allowedRoots: ["src"] });
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.example", "EXAMPLE=value\n");
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.sample", "SAMPLE=value\n");
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.template", "TEMPLATE=value\n");
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env", "SECRET=value\n");
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.local", "SECRET=value\n");
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.production", "SECRET=value\n");
+    const agent = await LocalAgent.create(fixture.policyPath);
+
+    for (const template of [".env.example", ".env.sample", ".env.template"]) {
+      await expect(
+        agent.readFile({ workspaceId: "test", path: `src/${template}` }),
+      ).resolves.toMatchObject({ path: `src/${template}` });
+    }
+
+    for (const environmentFile of [".env", ".env.local", ".env.production"]) {
+      await expect(
+        agent.readFile({ workspaceId: "test", path: `src/${environmentFile}` }),
+      ).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    }
+  });
+  test("allows workspace policy to block an env template explicitly", async () => {
+    fixture = await createFixture({
+      allowedRoots: ["src"],
+      blockedGlobs: ["src/.env.example"],
+    });
+    await writeWorkspaceFile(fixture.workspacePath, "src/.env.example", "EXAMPLE=value\n");
+    const agent = await LocalAgent.create(fixture.policyPath);
+
+    await expect(
+      agent.readFile({ workspaceId: "test", path: "src/.env.example" }),
+    ).rejects.toMatchObject({
+      code: "BLOCKED_PATH",
+      details: {
+        path: "src/.env.example",
+        policyRule: "src/.env.example",
+        operation: "read_file",
+        reason: "blocked_by_workspace_policy",
+      },
+    });
+  });
   test("blocks sensitive files and paths outside allowed roots", async () => {
     fixture = await createFixture({ allowedRoots: ["src"] });
     await writeWorkspaceFile(fixture.workspacePath, "src/.env", "secret");
@@ -121,7 +163,16 @@ describe("file access", () => {
 
     await expect(
       agent.readFile({ workspaceId: "test", path: "src/.env" }),
-    ).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    ).rejects.toMatchObject({
+      code: "BLOCKED_PATH",
+      details: {
+        path: "src/.env",
+        policyRule: "**/.env",
+        operation: "read_file",
+        reason: "blocked_by_workspace_policy",
+        safeAlternative: "run_workspace_validation(secret-scan)",
+      },
+    });
     await expect(
       agent.readFile({ workspaceId: "test", path: "outside.txt" }),
     ).rejects.toMatchObject({ code: "PATH_OUTSIDE_ALLOWED_ROOTS" });
