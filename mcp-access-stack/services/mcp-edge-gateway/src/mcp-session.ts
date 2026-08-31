@@ -3,6 +3,12 @@ import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
 import {
+  appendSessionDiagnostic,
+  classifySessionDiagnostic,
+  readSessionDiagnostics,
+  shouldPersistSessionDiagnostic,
+} from "./control-plane/session-diagnostics.js";
+import {
   EdgeControlPlaneConfigurationError,
   createEdgeControlPlaneRuntime,
   type EdgeControlPlaneEnv,
@@ -79,6 +85,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       executionPlaneReady: controlPlaneReady && connectorReady,
       connectorReady,
     };
+  }
+
+  async getSessionDiagnostics(): Promise<string> {
+    return JSON.stringify({ version: 1, events: await readSessionDiagnostics(this.ctx.storage) });
   }
 
   async bootstrapLegacyOwnerState(input: unknown): Promise<string> {
@@ -210,8 +220,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       throw error;
     }
 
+    const diagnosticRequest = request.clone();
     const localResponse = await runtime.router.route(request);
-    if (localResponse) return localResponse;
+    if (localResponse) {
+      await this.recordSessionDiagnostic(diagnosticRequest, localResponse.clone());
+      return localResponse;
+    }
 
     const url = new URL(request.url);
     if (url.pathname === "/mcp" && (request.method === "GET" || request.method === "DELETE")) {
@@ -219,13 +233,34 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       try {
         principal = await runtime.authenticator.authenticate(request);
       } catch (error) {
-        if (error instanceof EdgeAuthenticationError) return error.toResponse();
+        if (error instanceof EdgeAuthenticationError) {
+          const response = error.toResponse();
+          await this.recordSessionDiagnostic(request.clone(), response.clone());
+          return response;
+        }
         throw error;
       }
-      return this.relayAuthenticatedRequest(request, "", principal);
+      const diagnosticRequest = request.clone();
+      const response = await this.relayAuthenticatedRequest(request, "", principal);
+      await this.recordSessionDiagnostic(diagnosticRequest, response.clone());
+      return response;
     }
 
     return jsonResponse({ error: "edge_route_not_allowed" }, 404);
+  }
+
+  private async recordSessionDiagnostic(
+    request: Parameters<typeof classifySessionDiagnostic>[0],
+    response: Parameters<typeof classifySessionDiagnostic>[1],
+  ): Promise<void> {
+    try {
+      const event = await classifySessionDiagnostic(request, response);
+      if (!shouldPersistSessionDiagnostic(event)) return;
+      await appendSessionDiagnostic(this.ctx.storage, event);
+      console.log(JSON.stringify({ event: "mcp_session_diagnostic", ...event }));
+    } catch {
+      console.warn(JSON.stringify({ event: "mcp_session_diagnostic_failed" }));
+    }
   }
 
   private getControlRuntime(): EdgeControlPlaneRuntime {
