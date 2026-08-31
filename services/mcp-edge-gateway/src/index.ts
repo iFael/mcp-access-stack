@@ -23,6 +23,15 @@ export default {
       return jsonResponse(health.body, health.statusCode);
     }
 
+    if (url.pathname === "/_internal/session-diagnostics" && request.method === "GET") {
+      const expectedToken = env.MCP_CONNECTOR_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" } });
+      }
+      const result = JSON.parse(await session.getSessionDiagnostics()) as { version: 1; events: unknown[] };
+      return jsonResponse(result);
+    }
     if (url.pathname === "/_internal/owner-oauth/bootstrap" && request.method === "POST") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;
       if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);
