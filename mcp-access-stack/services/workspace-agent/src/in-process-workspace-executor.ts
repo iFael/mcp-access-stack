@@ -35,12 +35,14 @@ import type {
   RunPowerShellInput,
   RunPowerShellResult,
   WorkspaceExecutor,
+  GitRepositoryExecutor,
+  GitHubExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
 import type { LocalAgent } from "./local-agent.js";
 
 /** Delegates workspace operations to a LocalAgent running in the same process. */
-export class InProcessWorkspaceExecutor implements WorkspaceExecutor {
+export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
   constructor(private readonly agent: LocalAgent) {}
 
   listWorkspaces(context?: OperationContext): Promise<WorkspaceSummary[]> {
@@ -146,5 +148,38 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor {
     context?: OperationContext,
   ): Promise<BackgroundTaskLogsLookupResult> {
     return this.agent.readBackgroundTaskLogs(input, context);
+  }
+  createBranch(...args: Parameters<GitRepositoryExecutor["createBranch"]>) {
+    return this.agent.gitCreateBranch(...args);
+  }
+  stagePaths(...args: Parameters<GitRepositoryExecutor["stagePaths"]>) {
+    return this.agent.gitStagePaths(...args);
+  }
+  unstagePaths(...args: Parameters<GitRepositoryExecutor["unstagePaths"]>) {
+    return this.agent.gitUnstagePaths(...args);
+  }
+  commit(...args: Parameters<GitRepositoryExecutor["commit"]>) {
+    return this.agent.gitCommit(...args);
+  }
+  mergeBranch(...args: Parameters<GitRepositoryExecutor["mergeBranch"]>) {
+    return this.agent.gitMergeBranch(...args);
+  }
+  pushBranch(...args: Parameters<GitRepositoryExecutor["pushBranch"]>) {
+    return this.agent.gitPushBranch(...args);
+  }
+  getRepository(...args: Parameters<GitHubExecutor["getRepository"]>) {
+    return this.agent.githubGetRepository(...args);
+  }
+  createRepository(...args: Parameters<GitHubExecutor["createRepository"]>) {
+    return this.agent.githubCreateRepository(...args);
+  }
+  getPullRequest(...args: Parameters<GitHubExecutor["getPullRequest"]>) {
+    return this.agent.githubGetPullRequest(...args);
+  }
+  createPullRequest(...args: Parameters<GitHubExecutor["createPullRequest"]>) {
+    return this.agent.githubCreatePullRequest(...args);
+  }
+  mergePullRequest(...args: Parameters<GitHubExecutor["mergePullRequest"]>) {
+    return this.agent.githubMergePullRequest(...args);
   }
 }

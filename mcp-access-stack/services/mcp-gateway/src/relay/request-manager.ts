@@ -8,6 +8,7 @@ import {
   createOperationLifecycle,
   MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
   relayResultSchemas,
+  relayRequestSchema,
   remainingOperationTimeMs,
   type OperationContext,
   type RelayCancellation,
@@ -69,15 +70,27 @@ export class AgentRelayRequestManager {
           context.deadline,
         )
       : createOperationDeadline(this.options.requestTimeoutMs, undefined);
-    const request: RelayRequest = {
+    const parsedRequest = relayRequestSchema.safeParse({
       version: 1,
       type: "request",
       requestId,
       deadline,
+      context: {
+        ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+        ...(context.invocationId === undefined ? {} : { invocationId: context.invocationId }),
+        ...(context.idempotencyKey === undefined ? {} : { idempotencyKey: context.idempotencyKey }),
+        ...(context.ownerScope === undefined ? {} : { ownerScope: context.ownerScope }),
+      },
       operation,
-      input: input as never,
-    };
-    const payload = JSON.stringify(request);
+      input,
+    });
+    if (!parsedRequest.success) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Relay request does not match the strict operation schema.",
+      );
+    }
+    const request: RelayRequest = parsedRequest.data;    const payload = JSON.stringify(request);
     if (Buffer.byteLength(payload) > this.options.maxPayloadBytes) {
       throw new AppError("RELAY_PROTOCOL_ERROR", "Relay request exceeds the payload limit.");
     }

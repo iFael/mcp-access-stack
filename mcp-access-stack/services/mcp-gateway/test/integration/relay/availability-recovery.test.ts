@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import type { RelayRequest } from "@vs-code-gpt/shared";
+import { relayOperations, type RelayRequest } from "@vs-code-gpt/shared";
 import { afterEach, describe, expect, it } from "@jest/globals";
 import WebSocket from "ws";
 import { AgentRelay } from "../../../src/relay/service.js";
@@ -151,27 +151,7 @@ async function connectAgent(url: string): Promise<WebSocket> {
     version: 1,
     type: "hello",
     agentId: "test-agent",
-    capabilities: [
-      "listWorkspaces",
-      "listWorkspaceRoots",
-      "listFiles",
-      "readFile",
-      "readBinaryFile",
-      "writeFile",
-      "patchFile",
-      "runValidation",
-      "runCommand",
-      "runPowerShell",
-      "searchFiles",
-      "inspectGit",
-      "getWorkspaceContext",
-      "startBackgroundTask",
-      "getBackgroundTask",
-      "waitBackgroundTask",
-      "listBackgroundTasks",
-      "cancelBackgroundTask",
-      "readBackgroundTaskLogs",
-    ],
+    capabilities: [...relayOperations],
   }));
   closeCallbacks.push(() => socket.close());
   return socket;

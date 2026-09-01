@@ -42,6 +42,7 @@ import {
   runPowerShellResultSchema,
   type OperationContext,
   type RelayOperation,
+  type SourceControlRelayOperation,
   type RunCommandInput,
   type RunCommandResult,
   type RunPowerShellInput,
@@ -1024,7 +1025,7 @@ async function executePowerShell(
 }
 
 /** Maps relay operation names to workspace tool names for diagnostics. */
-export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName> = {
+export const relayOperationToToolName: Record<Exclude<RelayOperation, SourceControlRelayOperation>, WorkspaceToolName> = {
   listWorkspaces: "list_workspaces",
   listWorkspaceRoots: "list_workspace_roots",
   listFiles: "list_files",

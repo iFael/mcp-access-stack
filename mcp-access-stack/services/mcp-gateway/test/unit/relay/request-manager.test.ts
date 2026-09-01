@@ -86,7 +86,7 @@ describe("agent relay request manager", () => {
     await expect(pending).resolves.toEqual([]);
   });
   test("allows command teardown to return a structured timeout result", async () => {
-    const { manager } = createManager({ requestTimeoutMs: 20 });
+    const { manager } = createManager({ requestTimeoutMs: 100 });
     const sender = new FakeSender();
     const pending = manager.call(sender, "runCommand", {
       workspaceId: "project",
@@ -96,7 +96,7 @@ describe("agent relay request manager", () => {
     });
     const request = sender.request();
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 120));
     expect(manager.size).toBe(1);
     expect(sender.payloads).toHaveLength(1);
 
@@ -115,7 +115,7 @@ describe("agent relay request manager", () => {
         timedOut: true,
         lifecycle: {
           ...request.deadline,
-          elapsedMs: 40,
+          elapsedMs: 120,
           terminatedBy: "child_process",
           reason: "timeout",
         },
@@ -130,7 +130,6 @@ describe("agent relay request manager", () => {
     });
     expect(manager.size).toBe(0);
   });
-
   test("enforces concurrency and expires pending requests", async () => {
     const { manager } = createManager({ requestTimeoutMs: 20, maxConcurrency: 1 });
     const sender = new FakeSender();
@@ -211,5 +210,84 @@ describe("agent relay request manager", () => {
     await expect(first).rejects.toMatchObject({ code: "AGENT_UNAVAILABLE" });
     await expect(second).rejects.toMatchObject({ code: "AGENT_UNAVAILABLE" });
     expect(manager.size).toBe(0);
+  });
+});
+
+describe("source-control relay request context", () => {
+  test("serializes exactly the allowed operation-context fields and never the AbortSignal", async () => {
+    const { manager } = createManager({ requestTimeoutMs: 1_000 });
+    const sender = new FakeSender();
+    const controller = new AbortController();
+    const pending = manager.call(
+      sender,
+      "githubGetRepository",
+      { workspaceId: "project", owner: "octo", repository: "repo" },
+      {
+        correlationId: "corr-1",
+        invocationId: "inv-1",
+        idempotencyKey: "idem-1",
+        ownerScope: "owner-1",
+        signal: controller.signal,
+        deadline: createOperationDeadline(30_000, undefined),
+      },
+    );
+    const request = sender.request();
+
+    expect(request.context).toEqual({
+      correlationId: "corr-1",
+      invocationId: "inv-1",
+      idempotencyKey: "idem-1",
+      ownerScope: "owner-1",
+    });
+    expect(Object.keys(request.context).sort()).toEqual([
+      "correlationId",
+      "idempotencyKey",
+      "invocationId",
+      "ownerScope",
+    ]);
+    expect(JSON.stringify(request.context)).not.toContain("signal");
+    expect(JSON.stringify(request.context)).not.toContain("deadline");
+
+    manager.complete({
+      version: 1,
+      type: "response",
+      requestId: request.requestId,
+      ok: true,
+      result: {
+        owner: "octo",
+        name: "repo",
+        fullName: "octo/repo",
+        defaultBranch: "main",
+        visibility: "private",
+        url: "https://github.com/octo/repo",
+      },
+    });
+    await expect(pending).resolves.toMatchObject({ fullName: "octo/repo" });
+  });
+});
+describe("source-control relay strict input", () => {
+  test("rejects rawArgs and credential-like fields before anything is sent", () => {
+    const { manager } = createManager();
+    const sender = new FakeSender();
+
+    expect(() =>
+      manager.call(sender, "githubGetRepository", {
+        workspaceId: "project",
+        owner: "octo",
+        repository: "repo",
+        rawArgs: ["unexpected"],
+      }),
+    ).toThrow(expect.objectContaining({ code: "RELAY_PROTOCOL_ERROR" }));
+
+    expect(() =>
+      manager.call(sender, "githubGetRepository", {
+        workspaceId: "project",
+        owner: "octo",
+        repository: "repo",
+        githubToken: "redacted-fixture",
+      }),
+    ).toThrow(expect.objectContaining({ code: "RELAY_PROTOCOL_ERROR" }));
+
+    expect(sender.payloads).toHaveLength(0);
   });
 });

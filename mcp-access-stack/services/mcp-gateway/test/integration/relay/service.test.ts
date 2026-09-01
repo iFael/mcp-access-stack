@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { AppError, type RelayRequest } from "@vs-code-gpt/shared";
+import { AppError, relayOperations, type RelayRequest } from "@vs-code-gpt/shared";
 import { afterEach, describe, expect, it } from "@jest/globals";
 import WebSocket from "ws";
 import { AgentRelay } from "../../../src/relay/service.js";
@@ -120,27 +120,7 @@ describe("agent relay", () => {
       version: 1,
       type: "hello",
       agentId: "test-agent",
-      capabilities: [
-        "listWorkspaces",
-        "listWorkspaceRoots",
-        "listFiles",
-        "readFile",
-        "readBinaryFile",
-        "writeFile",
-        "patchFile",
-        "runValidation",
-        "runCommand",
-        "runPowerShell",
-        "searchFiles",
-        "inspectGit",
-        "getWorkspaceContext",
-        "startBackgroundTask",
-        "getBackgroundTask",
-        "waitBackgroundTask",
-        "listBackgroundTasks",
-        "cancelBackgroundTask",
-        "readBackgroundTaskLogs",
-      ],
+      capabilities: [...relayOperations],
     }));
     await waitFor(() => fixture.relay.isConnected);
 
@@ -149,11 +129,12 @@ describe("agent relay", () => {
   });
 
   it("closes a connection that exceeds the payload limit", async () => {
-    const fixture = await createRelay({ maxPayloadBytes: 512 });
+    const maxPayloadBytes = 2_048;
+    const fixture = await createRelay({ maxPayloadBytes });
     const agent = await connectAgent(fixture.wsUrl);
     await waitFor(() => fixture.relay.isConnected);
 
-    agent.send("x".repeat(513));
+    agent.send("x".repeat(maxPayloadBytes + 1));
 
     await expect(
       new Promise<number>((resolve) => agent.once("close", resolve)),
@@ -224,27 +205,7 @@ async function connectAgent(url: string): Promise<WebSocket> {
     version: 1,
     type: "hello",
     agentId: "test-agent",
-    capabilities: [
-      "listWorkspaces",
-      "listWorkspaceRoots",
-      "listFiles",
-      "readFile",
-      "readBinaryFile",
-      "writeFile",
-      "patchFile",
-      "runValidation",
-      "runCommand",
-      "runPowerShell",
-      "searchFiles",
-      "inspectGit",
-      "getWorkspaceContext",
-      "startBackgroundTask",
-      "getBackgroundTask",
-      "waitBackgroundTask",
-      "listBackgroundTasks",
-      "cancelBackgroundTask",
-      "readBackgroundTaskLogs",
-    ],
+    capabilities: [...relayOperations],
   }));
   closeCallbacks.push(() => socket.close());
   return socket;

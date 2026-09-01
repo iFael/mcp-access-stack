@@ -121,7 +121,8 @@ export class AgentRequestExecutor {
 
     try {
       const result = await dispatchRelayRequest(this.agent, request, {
-        correlationId: request.requestId,
+        ...(request.context ?? {}),
+        correlationId: request.context?.correlationId ?? request.requestId,
         deadline: request.deadline,
         signal: controller.signal,
       });

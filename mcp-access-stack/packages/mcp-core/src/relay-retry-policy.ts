@@ -15,6 +15,8 @@ export const RETRYABLE_RELAY_OPERATIONS = [
   "waitBackgroundTask",
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
+  "githubGetRepository",
+  "githubGetPullRequest",
 ] as const satisfies readonly RelayOperation[];
 
 const retryableRelayOperations = new Set<RelayOperation>(RETRYABLE_RELAY_OPERATIONS);

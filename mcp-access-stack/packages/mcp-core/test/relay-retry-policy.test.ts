@@ -19,6 +19,8 @@ const retryable: RelayOperation[] = [
   "waitBackgroundTask",
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
+  "githubGetRepository",
+  "githubGetPullRequest",
 ];
 
 const mutatingOrAmbiguous: RelayOperation[] = [
@@ -28,6 +30,15 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "runPowerShell",
   "startBackgroundTask",
   "cancelBackgroundTask",
+  "gitCreateBranch",
+  "gitStagePaths",
+  "gitUnstagePaths",
+  "gitCommit",
+  "gitMergeBranch",
+  "gitPushBranch",
+  "githubCreateRepository",
+  "githubCreatePullRequest",
+  "githubMergePullRequest",
 ];
 
 describe("relay retry policy", () => {

@@ -9,6 +9,7 @@ import type { LocalAgent } from "../../../src/local-agent.js";
 
 const operations: RelayOperation[] = [
   "listWorkspaces",
+  "listWorkspaceRoots",
   "listFiles",
   "readFile",
   "readBinaryFile",
@@ -26,6 +27,17 @@ const operations: RelayOperation[] = [
   "listBackgroundTasks",
   "cancelBackgroundTask",
   "readBackgroundTaskLogs",
+  "gitCreateBranch",
+  "gitStagePaths",
+  "gitUnstagePaths",
+  "gitCommit",
+  "gitMergeBranch",
+  "gitPushBranch",
+  "githubGetRepository",
+  "githubCreateRepository",
+  "githubGetPullRequest",
+  "githubCreatePullRequest",
+  "githubMergePullRequest",
 ];
 
 describe("connection request dispatcher", () => {
@@ -40,6 +52,9 @@ describe("connection request dispatcher", () => {
     const agent = fakeAgent as unknown as LocalAgent;
     const context: OperationContext = {
       correlationId: "request-correlation",
+      invocationId: "invocation-1",
+      idempotencyKey: "idem-1",
+      ownerScope: "owner-1",
       signal: new AbortController().signal,
     };
 
@@ -74,7 +89,13 @@ function createRequest(
       effectiveTimeoutMs: 5_000,
       deadlineAt: new Date(Date.now() + 5_000).toISOString(),
     },
+    context: {
+      correlationId: "request-correlation",
+      invocationId: "invocation-1",
+      idempotencyKey: "idem-1",
+      ownerScope: "owner-1",
+    },
     operation,
     input: input as never,
-  };
+  } as RelayRequest;
 }

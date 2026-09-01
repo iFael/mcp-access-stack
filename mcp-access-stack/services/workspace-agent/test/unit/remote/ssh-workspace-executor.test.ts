@@ -160,6 +160,29 @@ describe("SshWorkspaceExecutor", () => {
     expect(second.status).toBe("executed");
     expect(transport.commands).toHaveLength(1);
   });
+
+  it("fails closed for every typed source-control port without touching the SSH transport", async () => {
+    const methods = [
+      "createBranch",
+      "stagePaths",
+      "unstagePaths",
+      "commit",
+      "mergeBranch",
+      "pushBranch",
+      "getRepository",
+      "createRepository",
+      "getPullRequest",
+      "createPullRequest",
+      "mergePullRequest",
+    ] as const;
+
+    for (const method of methods) {
+      await expect((executor as any)[method]({ workspaceId: "test" })).rejects.toMatchObject({
+        code: "CAPABILITY_UNSUPPORTED",
+      });
+    }
+    expect(transport.commands).toHaveLength(0);
+  });
 });
 
 function sha256(value: Buffer): string {
