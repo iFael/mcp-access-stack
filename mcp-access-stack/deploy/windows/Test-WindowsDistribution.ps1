@@ -31,6 +31,7 @@ $executionNodeBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'New-M
 $mcpHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHost.cs') -Raw
 $mcpHostSupervisorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostSupervisor.cs') -Raw
 $mcpHostPersistenceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpHostPersistence.cs') -Raw
+$mcpEdgeHostSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\tooling\windows-edge-host\McpEdgeHost.cs') -Raw
 $authenticodeVerifierSourcePath = Join-Path $PSScriptRoot '..\..\tooling\windows-execution-node\McpAuthenticodeVerifier.cs'
 $authenticodeVerifierSource = Get-Content -LiteralPath $authenticodeVerifierSourcePath -Raw
 $executionNodeCommon = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1') -Raw
@@ -106,6 +107,7 @@ if (
     -not $distributionBuilder.Contains('execution-node-manifest.json') -or
     -not $distributionBuilder.Contains('ExecutionNodeNativeDirectory') -or
     -not $distributionBuilder.Contains('McpHost.exe') -or
+    -not $distributionBuilder.Contains('McpEdgeHost.exe') -or
     -not $distributionBuilder.Contains('WindowsExecutionNode.Common.ps1') -or
     -not $distributionBuilder.Contains('Stage-McpWindowsExecutionNodeCandidate.ps1') -or
     -not $distributionBuilder.Contains('Invoke-McpWindowsExecutionNodeTransition.ps1') -or
@@ -170,6 +172,7 @@ foreach ($required in @(
     'McpHostSupervisor.cs',
     'McpHostPersistence.cs',
     'McpNodeHostLauncher.exe',
+    'McpEdgeHost.exe',
     'McpCredentialBroker.exe',
     'Microsoft.NET\Framework64\v4.0.30319\csc.exe',
     'System.Web.Extensions.dll',
@@ -198,7 +201,7 @@ foreach ($installerContract in @(
     }
 }
 foreach ($required in @(
-    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
+    'four legacy, six Edge PowerShell, seven native-Edge legacy, or eight split-owner critical artifacts',
     'edge-connector',
     'edge-connector-launcher',
     'edge-native-launcher'
@@ -228,11 +231,12 @@ foreach ($required in @(
     '-MultipleInstances IgnoreNew',
     '-RestartCount 5',
     '-RunLevel Limited',
-    'McpNodeHostLauncher.exe',
-    '--env-file',
-    'BROWSER_WORKER_TOKEN=',
+    'McpEdgeHost.exe',
+    '--connector-token-file',
+    '--owner-token-file',
+    '--browser-worker-token-file',
     'EnableBrowserWorker',
-    'edge-native-launcher',
+    'edge-host',
     'ValidateOnly'
 )) {
     if (-not $edgeConnectorTaskInstaller.Contains($required)) {
@@ -260,6 +264,19 @@ foreach ($required in @(
         throw "Native Browser Worker task contract is missing: $required"
     }
 }
+foreach ($required in @(
+    'mcp-edge-host-contract-v1',
+    'JobObjectLimitKillOnJobClose',
+    'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js',
+    'edge-host',
+    '--connector-token-file',
+    '--owner-token-file',
+    '--browser-worker-token-file'
+)) {
+    if (-not $mcpEdgeHostSource.Contains($required)) {
+        throw "McpEdgeHost fixed runtime contract is missing: $required"
+    }
+}
 foreach ($required in @('--version', '--validate-release-root', '--supervise', '--run-active', 'installation-root', 'expected-manifest-sha256', 'qualification-owner-pid')) {
     if (-not $mcpHostSource.Contains($required)) {
         throw "McpHost supervisor CLI contract is missing: $required"
@@ -272,9 +289,10 @@ foreach ($required in @(
     'eventName, "connected"',
     'host-state.json',
     'mcp_host_qualification_owner_exited',
-    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
-    'services/mcp-gateway/dist/edge-connector-cli.js',
+    'four legacy, six Edge PowerShell, seven native-Edge legacy, or eight split-owner critical artifacts',
+    'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js',
     'deploy/windows/Start-McpEdgeConnector.ps1',
+    'native/McpEdgeHost.exe',
     'compat/McpNodeHostLauncher.exe',
     'Edge connector launcher artifact must require Authenticode.'
 )) {
@@ -291,6 +309,8 @@ foreach ($required in @(
     'originalLauncherAlive',
     'originalNodeAlive',
     'sameProcessTree',
+    'McpEdgeHost.exe',
+    'edge_host_owner_mismatch',
     'Wait-McpTerminalProbeRecovery',
     'terminalIndependent'
 )) {
@@ -556,7 +576,7 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
             throw 'Execution-node native builder CI smoke failed.'
         }
         $result = $resultJson | ConvertFrom-Json
-        if ([string]$result.status -ne 'built' -or @($result.artifacts).Count -ne 3) {
+        if ([string]$result.status -ne 'built' -or @($result.artifacts).Count -ne 4) {
             throw 'Execution-node native builder CI smoke returned unexpected evidence.'
         }
     }
