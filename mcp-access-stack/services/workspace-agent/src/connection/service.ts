@@ -26,6 +26,7 @@ const capabilities: AgentHello["capabilities"] = [
   "getWorkspaceContext",
   "startBackgroundTask",
   "getBackgroundTask",
+  "waitBackgroundTask",
   "listBackgroundTasks",
   "cancelBackgroundTask",
   "readBackgroundTaskLogs",

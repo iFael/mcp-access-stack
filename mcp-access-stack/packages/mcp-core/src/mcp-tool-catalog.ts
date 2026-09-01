@@ -8,7 +8,7 @@ import {
 export const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 
 export const MCP_TOOL_CATALOG_CONTRACT_REVISION =
-  "3d95fd60b0e7946c4c41855188e6657322360a4ad4f339877067e6b5f8f13d77";
+  "4fe3c8fa015e0127310f69a81f2aa4c3f1e4560987d1dcfd81261fe7131f1605";
 
 export const MCP_FULL_TOOL_CATALOG_NAMES = [
   ...WORKSPACE_TOOL_NAMES,

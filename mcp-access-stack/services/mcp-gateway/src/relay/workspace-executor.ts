@@ -2,6 +2,7 @@ import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskWaitResultSchema,
   getWorkspaceContextResultSchema,
   inspectGitResultSchema,
   listFilesResultSchema,
@@ -17,6 +18,7 @@ import {
   writeFileResultSchema,
   type CancelBackgroundTaskInput,
   type GetBackgroundTaskInput,
+  type WaitBackgroundTaskInput,
   type GetWorkspaceContextInput,
   type InspectGitInput,
   type ListBackgroundTasksInput,
@@ -132,6 +134,15 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor {
   ) {
     return backgroundTaskResultSchema.parse(
       await this.relay.call("getBackgroundTask", input, context),
+    );
+  }
+
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context?: OperationContext,
+  ) {
+    return backgroundTaskWaitResultSchema.parse(
+      await this.relay.call("waitBackgroundTask", input, context),
     );
   }
 

@@ -95,6 +95,12 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor {
       Promise.reject(this.notImplemented("getBackgroundTask"));
   }
 
+  waitBackgroundTask(
+    ...args: Parameters<WorkspaceExecutor["waitBackgroundTask"]>
+  ) {
+    return this.fallback?.waitBackgroundTask(...args) ??
+      Promise.reject(this.notImplemented("waitBackgroundTask"));
+  }
   listBackgroundTasks(
     ...args: Parameters<WorkspaceExecutor["listBackgroundTasks"]>
   ) {

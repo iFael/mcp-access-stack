@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   AppError,
+  BACKGROUND_WAIT_COMPLETION_GRACE_MS,
   COMMAND_TERMINATION_GRACE_MS,
   createAgentUnavailableDetails,
   createOperationDeadline,
@@ -97,7 +98,7 @@ export class AgentRelayRequestManager {
         return;
       }
 
-      const watchdogMs = remainingMs + commandTerminationGraceMs(operation);
+      const watchdogMs = remainingMs + operationCompletionGraceMs(operation);
       const timeout = setTimeout(() => {
         this.cancelPending(
           sender,
@@ -302,9 +303,12 @@ export class AgentRelayRequestManager {
   }
 }
 
-function commandTerminationGraceMs(operation: RelayOperation): number {
-  return operation === "runCommand" || operation === "runPowerShell"
-    ? COMMAND_TERMINATION_GRACE_MS
+function operationCompletionGraceMs(operation: RelayOperation): number {
+  if (operation === "runCommand" || operation === "runPowerShell") {
+    return COMMAND_TERMINATION_GRACE_MS;
+  }
+  return operation === "waitBackgroundTask"
+    ? BACKGROUND_WAIT_COMPLETION_GRACE_MS
     : 0;
 }
 

@@ -103,6 +103,50 @@ describe("connection request executor", () => {
     expect(executor.activeRequestCount).toBe(0);
   });
 
+  test("allows background wait timeout to finish within completion grace", async () => {
+    const waitBackgroundTask = jest.fn(
+      async (_input: unknown, context: { signal?: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => resolve({ task: null, logs: null, timedOut: true, elapsedMs: 20 }),
+            40,
+          );
+          const signal = context.signal!;
+          signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        }),
+    );
+    const executor = new AgentRequestExecutor(
+      { waitBackgroundTask } as unknown as LocalAgent,
+    );
+
+    const response = await executor.execute(
+      createRequest(
+        "waitBackgroundTask",
+        {
+          workspaceId: "project",
+          id: "123e4567-e89b-42d3-a456-426614174000",
+          timeoutMs: 20,
+          maxBytes: 100,
+        },
+        20,
+      ),
+      1,
+    );
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { timedOut: true, elapsedMs: 20 },
+    });
+    expect(executor.activeRequestCount).toBe(0);
+  });
+
   test("allows command teardown to finish after the execution deadline", async () => {
     const runCommand = jest.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 40));

@@ -11,6 +11,7 @@ const lateToolNames = [
   "list_workspace_roots",
   "start_background_task",
   "get_background_task",
+  "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
@@ -70,7 +71,7 @@ describe("stateless MCP catalog identity", () => {
       });
       expect(capabilities).toMatchObject({ tools: { listChanged: false } });
       expect(initializeCatalog).toEqual(MCP_FULL_TOOL_CATALOG_METADATA);
-      expect(tools).toHaveLength(49);
+      expect(tools).toHaveLength(50);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );

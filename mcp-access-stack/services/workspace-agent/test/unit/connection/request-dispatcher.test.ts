@@ -22,6 +22,7 @@ const operations: RelayOperation[] = [
   "getWorkspaceContext",
   "startBackgroundTask",
   "getBackgroundTask",
+  "waitBackgroundTask",
   "listBackgroundTasks",
   "cancelBackgroundTask",
   "readBackgroundTaskLogs",

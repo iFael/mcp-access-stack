@@ -86,6 +86,33 @@ describe("agent relay", () => {
     expect(fixture.relay.isConnected).toBe(true);
   });
 
+  it("allows wait_background_task to return its timeout result within completion grace", async () => {
+    const fixture = await createRelay({ requestTimeoutMs: 20 });
+    const agent = await connectAgent(fixture.wsUrl);
+    agent.once("message", (data) => {
+      const request = JSON.parse(data.toString()) as RelayRequest;
+      setTimeout(() => {
+        agent.send(JSON.stringify({
+          version: 1,
+          type: "response",
+          requestId: request.requestId,
+          ok: true,
+          result: { task: null, logs: null, timedOut: true, elapsedMs: 20 },
+        }));
+      }, 40);
+    });
+    await waitFor(() => fixture.relay.isConnected);
+
+    await expect(
+      fixture.relay.call("waitBackgroundTask", {
+        workspaceId: "project",
+        id: "123e4567-e89b-42d3-a456-426614174000",
+        timeoutMs: 20,
+        maxBytes: 100,
+      }),
+    ).resolves.toMatchObject({ timedOut: true, elapsedMs: 20 });
+  });
+
   it("closes an agent that stops answering heartbeat pings", async () => {
     const fixture = await createRelay({ heartbeatMs: 20 });
     const socket = await openSocket(fixture.wsUrl, token, { autoPong: false });
@@ -109,6 +136,7 @@ describe("agent relay", () => {
         "getWorkspaceContext",
         "startBackgroundTask",
         "getBackgroundTask",
+        "waitBackgroundTask",
         "listBackgroundTasks",
         "cancelBackgroundTask",
         "readBackgroundTaskLogs",
@@ -212,6 +240,7 @@ async function connectAgent(url: string): Promise<WebSocket> {
       "getWorkspaceContext",
       "startBackgroundTask",
       "getBackgroundTask",
+      "waitBackgroundTask",
       "listBackgroundTasks",
       "cancelBackgroundTask",
       "readBackgroundTaskLogs",

@@ -2,8 +2,10 @@ import type {
   BackgroundTaskListResult,
   BackgroundTaskLogsLookupResult,
   BackgroundTaskResult,
+  BackgroundTaskWaitResult,
   CancelBackgroundTaskInput,
   GetBackgroundTaskInput,
+  WaitBackgroundTaskInput,
   GetWorkspaceContextInput,
   GetWorkspaceContextResult,
   InspectGitInput,
@@ -119,6 +121,12 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor {
     return this.agent.getBackgroundTask(input, context);
   }
 
+  waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context?: OperationContext,
+  ): Promise<BackgroundTaskWaitResult> {
+    return this.agent.waitBackgroundTask(input, context);
+  }
   listBackgroundTasks(
     input: ListBackgroundTasksInput,
     context?: OperationContext,

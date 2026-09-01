@@ -417,6 +417,94 @@ describe("BackgroundTaskManager", () => {
     expect(persistedStderr).not.toContain("hunter2");
   });
 
+  it("waits for an active task to finish and returns a bounded redacted log tail", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const started = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "check",
+      command: "npm run check",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "running",
+    );
+
+    const waitBackgroundTask = (manager as unknown as {
+      wait_background_task?: (
+        id: string,
+        options: { timeoutMs: number; maxBytes: number },
+      ) => Promise<unknown>;
+    }).wait_background_task;
+    expect(typeof waitBackgroundTask).toBe("function");
+
+    const waiting = waitBackgroundTask!.call(manager, started.id, {
+      timeoutMs: 500,
+      maxBytes: 8,
+    });
+    await runner.succeed({ stdout: "0123456789", stderr: "ERR" });
+
+    await expect(waiting).resolves.toMatchObject({
+      task: {
+        id: started.id,
+        state: "succeeded",
+        result: { exitCode: 0, timedOut: false },
+      },
+      logs: {
+        id: started.id,
+        stdout: "23456789",
+        stderr: "ERR",
+        stdoutBytes: 10,
+        stderrBytes: 3,
+        truncated: true,
+      },
+      timedOut: false,
+      elapsedMs: expect.any(Number),
+    });
+  });
+
+  it("stops waiting on wait timeout without cancelling the background task", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const started = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "check",
+      command: "npm run check",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "running",
+    );
+
+    const waitBackgroundTask = (manager as unknown as {
+      wait_background_task?: (
+        id: string,
+        options: { timeoutMs: number; maxBytes: number },
+      ) => Promise<unknown>;
+    }).wait_background_task;
+    expect(typeof waitBackgroundTask).toBe("function");
+
+    const result = await waitBackgroundTask!.call(manager, started.id, {
+      timeoutMs: 25,
+      maxBytes: 100,
+    });
+
+    expect(result).toMatchObject({
+      task: { id: started.id, state: "running" },
+      timedOut: true,
+      elapsedMs: expect.any(Number),
+    });
+    expect(runner.signal?.aborted).toBe(false);
+    expect(runner.terminateCalls).toEqual([]);
+
+    await runner.succeed();
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "succeeded",
+    );
+  });
   it("marks a persisted active task as interrupted when its pid is gone", async () => {
     const id = "123e4567-e89b-42d3-a456-426614174000";
     await writeFile(

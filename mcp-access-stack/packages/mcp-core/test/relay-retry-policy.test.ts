@@ -16,6 +16,7 @@ const retryable: RelayOperation[] = [
   "inspectGit",
   "getWorkspaceContext",
   "getBackgroundTask",
+  "waitBackgroundTask",
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
 ];

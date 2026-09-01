@@ -40,6 +40,8 @@ export async function dispatchRelayRequest(
       return agent.startBackgroundTask(request.input, context);
     case "getBackgroundTask":
       return agent.getBackgroundTask(request.input, context);
+    case "waitBackgroundTask":
+      return agent.waitBackgroundTask(request.input, context);
     case "listBackgroundTasks":
       return agent.listBackgroundTasks(request.input, context);
     case "cancelBackgroundTask":

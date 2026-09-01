@@ -18,7 +18,7 @@ import type {
   WorkspaceExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
-import { registerWorkspaceTools } from "../src/mcp-workspace-tools.js";
+import { WORKSPACE_TOOL_NAMES, registerWorkspaceTools } from "../src/mcp-workspace-tools.js";
 
 const backgroundTask = {
   version: 1 as const,
@@ -202,6 +202,23 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { task: backgroundTask };
   }
 
+  async waitBackgroundTask(): Promise<import("@vs-code-gpt/shared").BackgroundTaskWaitResult> {
+    this.calls.push("waitBackgroundTask");
+    return {
+      task: { ...backgroundTask, state: "succeeded" },
+      logs: {
+        id: backgroundTask.id,
+        stdout: "done",
+        stderr: "",
+        stdoutBytes: 4,
+        stderrBytes: 0,
+        truncated: false,
+      },
+      timedOut: false,
+      elapsedMs: 12,
+    };
+  }
+
   async listBackgroundTasks(): Promise<BackgroundTaskListResult> {
     this.calls.push("listBackgroundTasks");
     return { tasks: [backgroundTask] };
@@ -373,6 +390,25 @@ describe("registerWorkspaceTools", () => {
     ]);
   });
 
+  it("publishes wait_background_task as a workspace tool", () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
+      "wait_background_task",
+    );
+
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["wait_background_task"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    expect(Object.keys(registeredTools(server))).toEqual([
+      "wait_background_task",
+    ]);
+  });
   it("keeps a 300 second command in the synchronous path", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(

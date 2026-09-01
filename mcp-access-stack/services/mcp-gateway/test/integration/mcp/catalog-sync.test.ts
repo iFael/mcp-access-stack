@@ -16,6 +16,7 @@ const expectedLateTools = [
   "list_workspace_roots",
   "start_background_task",
   "get_background_task",
+  "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
@@ -44,7 +45,7 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(49);
+      expect(listed.tools).toHaveLength(50);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -98,11 +99,11 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(16);
+      expect(listed.tools).toHaveLength(17);
       expect(client.getServerVersion()?.version).not.toBe(
         MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
       );
-      expect(catalogMeta).toMatchObject({ toolCount: 16 });
+      expect(catalogMeta).toMatchObject({ toolCount: 17 });
     } finally {
       await client.close().catch(() => undefined);
       await server.close().catch(() => undefined);

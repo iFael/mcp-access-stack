@@ -105,7 +105,7 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(49);
+      expect(names).toHaveLength(50);
       expect(names).toEqual(expect.arrayContaining([
         "browser_open_authorized_site",
         "browser_profile_page",
@@ -114,6 +114,7 @@ describe("advanced browser tools list", () => {
         "browser_navigate_path",
         "start_background_task",
         "get_background_task",
+        "wait_background_task",
         "list_background_tasks",
         "cancel_background_task",
         "read_background_task_logs",

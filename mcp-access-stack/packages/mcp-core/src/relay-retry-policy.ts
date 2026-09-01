@@ -12,6 +12,7 @@ export const RETRYABLE_RELAY_OPERATIONS = [
   "inspectGit",
   "getWorkspaceContext",
   "getBackgroundTask",
+  "waitBackgroundTask",
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
 ] as const satisfies readonly RelayOperation[];

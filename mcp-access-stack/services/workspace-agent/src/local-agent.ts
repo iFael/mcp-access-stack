@@ -6,6 +6,7 @@ import {
   asAppError,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
+  waitBackgroundTaskInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
@@ -24,9 +25,11 @@ import {
   type BackgroundTaskListResult,
   type BackgroundTaskLogsLookupResult,
   type BackgroundTaskResult,
+  type BackgroundTaskWaitResult,
   type CancelBackgroundTaskInput,
   type DirectRunCommandInput,
   type GetBackgroundTaskInput,
+  type WaitBackgroundTaskInput,
   type ListBackgroundTasksInput,
   type ReadBackgroundTaskLogsInput,
   type StartBackgroundTaskInput,
@@ -449,6 +452,33 @@ export class LocalAgent {
       async (_workspace, parsed) => {
         const task = await this.backgroundTaskManager.get_background_task(parsed.id);
         return { task: task?.workspaceId === parsed.workspaceId ? task : null };
+      },
+    );
+  }
+
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskWaitResult> {
+    return this.runValidatedAudited(
+      "waitBackgroundTask",
+      "read",
+      waitBackgroundTaskInputSchema,
+      input,
+      context,
+      (parsed) => ({ query: parsed.id }),
+      async (_workspace, parsed, activeContext) => {
+        const current = await this.backgroundTaskManager.get_background_task(parsed.id);
+        if (current?.workspaceId !== parsed.workspaceId) {
+          return { task: null, logs: null, timedOut: false, elapsedMs: 0 };
+        }
+        return this.backgroundTaskManager.wait_background_task(parsed.id, {
+          timeoutMs: parsed.timeoutMs,
+          maxBytes: parsed.maxBytes,
+          ...(activeContext.signal === undefined
+            ? {}
+            : { signal: activeContext.signal }),
+        });
       },
     );
   }

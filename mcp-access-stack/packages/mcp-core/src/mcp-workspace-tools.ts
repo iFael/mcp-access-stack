@@ -6,8 +6,10 @@ import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskWaitResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
+  waitBackgroundTaskInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
@@ -85,6 +87,7 @@ export type WorkspaceToolName =
   | "get_workspace_context"
   | "start_background_task"
   | "get_background_task"
+  | "wait_background_task"
   | "list_background_tasks"
   | "cancel_background_task"
   | "read_background_task_logs";
@@ -103,6 +106,7 @@ export const WORKSPACE_TOOL_NAMES = [
   "get_workspace_context",
   "start_background_task",
   "get_background_task",
+  "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
@@ -188,6 +192,14 @@ function formatBackgroundTaskText(
     : "Background task not found.";
 }
 
+function formatBackgroundTaskWaitText(
+  result: z.infer<typeof backgroundTaskWaitResultSchema>,
+): string {
+  if (!result.task) return "Background task not found.";
+  return result.timedOut
+    ? `Background task ${result.task.id} is still ${result.task.state} after waiting ${result.elapsedMs} ms; the wait timed out without cancelling the task.`
+    : `Background task ${result.task.id} reached ${result.task.state} after waiting ${result.elapsedMs} ms.`;
+}
 function formatBackgroundTaskLogsText(
   result: z.infer<typeof backgroundTaskLogsLookupResultSchema>,
 ): string {
@@ -625,6 +637,43 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("wait_background_task", include)) {
+    server.registerTool(
+      "wait_background_task",
+      {
+        title: "Wait for background task",
+        description:
+          "Waits up to timeoutMs for one persisted background task to reach a terminal state. A wait timeout stops waiting only and never cancels the task. Returns the current/terminal task plus size-limited redacted stdout/stderr tails.",
+        inputSchema: waitBackgroundTaskInputSchema,
+        outputSchema: backgroundTaskWaitResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsedInput = waitBackgroundTaskInputSchema.parse(input);
+          const structuredContent = backgroundTaskWaitResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              parsedInput.timeoutMs,
+              (context) => executor.waitBackgroundTask(parsedInput, context),
+            ),
+          );
+          return {
+            content: [
+              { type: "text", text: formatBackgroundTaskWaitText(structuredContent) },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
   if (shouldInclude("list_background_tasks", include)) {
     server.registerTool(
       "list_background_tasks",
@@ -991,6 +1040,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   getWorkspaceContext: "get_workspace_context",
   startBackgroundTask: "start_background_task",
   getBackgroundTask: "get_background_task",
+  waitBackgroundTask: "wait_background_task",
   listBackgroundTasks: "list_background_tasks",
   cancelBackgroundTask: "cancel_background_task",
   readBackgroundTaskLogs: "read_background_task_logs",

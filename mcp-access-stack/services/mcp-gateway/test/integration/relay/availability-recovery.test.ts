@@ -167,6 +167,7 @@ async function connectAgent(url: string): Promise<WebSocket> {
       "getWorkspaceContext",
       "startBackgroundTask",
       "getBackgroundTask",
+      "waitBackgroundTask",
       "listBackgroundTasks",
       "cancelBackgroundTask",
       "readBackgroundTaskLogs",

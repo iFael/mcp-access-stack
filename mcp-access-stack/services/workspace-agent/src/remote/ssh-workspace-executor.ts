@@ -7,8 +7,10 @@ import {
   type BackgroundTaskListResult,
   type BackgroundTaskLogsLookupResult,
   type BackgroundTaskResult,
+  type BackgroundTaskWaitResult,
   type CancelBackgroundTaskInput,
   type GetBackgroundTaskInput,
+  type WaitBackgroundTaskInput,
   type GetWorkspaceContextInput,
   type GetWorkspaceContextResult,
   type InspectGitInput,
@@ -690,6 +692,21 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor {
     return { task: task?.workspaceId === input.workspaceId ? task : null };
   }
 
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskWaitResult> {
+    this.workspace(input.workspaceId);
+    const task = await this.background.get_background_task(input.id);
+    if (!task || task.workspaceId !== input.workspaceId) {
+      return { task: null, logs: null, timedOut: false, elapsedMs: 0 };
+    }
+    return this.background.wait_background_task(input.id, {
+      timeoutMs: input.timeoutMs ?? 60_000,
+      maxBytes: input.maxBytes ?? 100_000,
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
+    });
+  }
   async listBackgroundTasks(input: ListBackgroundTasksInput): Promise<BackgroundTaskListResult> {
     this.workspace(input.workspaceId);
     const tasks = await this.background.list_background_tasks({

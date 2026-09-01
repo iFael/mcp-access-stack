@@ -84,6 +84,7 @@ describe("gateway HTTP surface", () => {
         "run_powershell",
         "start_background_task",
         "get_background_task",
+        "wait_background_task",
         "list_background_tasks",
         "cancel_background_task",
         "read_background_task_logs",
@@ -184,7 +185,7 @@ describe("gateway personal mode without oauth", () => {
       };
 
       expect(response.status).toBe(200);
-      expect(body.result.tools).toHaveLength(16);
+      expect(body.result.tools).toHaveLength(17);
       for (const tool of body.result.tools) {
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
