@@ -591,4 +591,5 @@ if ([string]$env:GITHUB_ACTIONS -eq 'true') {
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeTransition.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodePersistence.ps1')
 & (Join-Path $PSScriptRoot 'Test-McpEdgeConnectorPersistence.ps1')
+& (Join-Path $PSScriptRoot 'Test-McpWindowsEdgeCandidateWorkflow.ps1')
 Write-Output 'Windows distribution scripts have valid syntax and safety gates.'
