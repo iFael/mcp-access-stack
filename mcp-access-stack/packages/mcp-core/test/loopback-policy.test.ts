@@ -63,6 +63,35 @@ describe("loopbackBasePolicySchema", () => {
       allowedShells: ["powershell"],
     });
     expect(parsed.confirmationMode).toBe("standard");
+    expect(parsed.sourceControl).toBeUndefined();
+  });
+
+  it("accepts explicit source-control policy without changing legacy defaults", () => {
+    const parsed = workspacePolicySchema.parse({
+      id: "source-control",
+      name: "Source Control",
+      rootPath: "C:/repo",
+      enabled: true,
+      permissionProfile: "full-repo-write",
+      allowedRoots: ["."],
+      blockedGlobs: [],
+      limits,
+      allowWrites: ["."],
+      allowShell: [],
+      allowedShells: ["powershell"],
+      sourceControl: {
+        capabilities: ["git.index.write", "github.repository.read"],
+        accountOwners: ["acme"],
+        additionalRepositories: ["acme/other"],
+      },
+    });
+
+    expect(parsed.confirmationMode).toBe("standard");
+    expect(parsed.sourceControl).toEqual({
+      capabilities: ["git.index.write", "github.repository.read"],
+      accountOwners: ["acme"],
+      additionalRepositories: ["acme/other"],
+    });
   });
 
   it("accepts trusted-workspace only with full-repo-write", () => {

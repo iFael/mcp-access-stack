@@ -296,6 +296,56 @@ describe("policy-merge", () => {
     expect(outside?.allowWrites).toEqual([]);
   });
 
+  it("preserves explicit source-control policy and grants none to discovered workspaces", () => {
+    const explicitPath = "C:/projects/explicit";
+    const discoveredPath = "C:/projects/discovered";
+    const result = mergeWorkspacePolicies(
+      mergeBase([
+        entry({
+          id: "explicit-source-control",
+          name: "Explicit Source Control",
+          rootPath: explicitPath,
+          enabled: true,
+          permissionProfile: "full-repo-write",
+          allowedRoots: ["."],
+          blockedGlobs: [],
+          limits: explicitLimits,
+          allowWrites: ["."],
+          allowShell: [],
+          allowedShells: ["powershell"],
+          sourceControl: {
+            capabilities: ["git.index.write", "github.repository.read"],
+            accountOwners: ["acme"],
+            additionalRepositories: ["acme/other"],
+          },
+        }),
+      ]),
+      [
+        {
+          name: "Explicit Source Control",
+          rootPath: explicitPath,
+          canonicalRootPath: explicitPath,
+          trusted: true,
+        },
+        {
+          name: "Discovered",
+          rootPath: discoveredPath,
+          canonicalRootPath: discoveredPath,
+          trusted: true,
+        },
+      ],
+    );
+
+    const explicit = result.policy.workspaces.find((workspace) => workspace.id === "explicit-source-control");
+    const discovered = result.policy.workspaces.find((workspace) => workspace.name === "Discovered");
+    expect(explicit?.sourceControl).toEqual({
+      capabilities: ["git.index.write", "github.repository.read"],
+      accountOwners: ["acme"],
+      additionalRepositories: ["acme/other"],
+    });
+    expect(discovered?.sourceControl).toBeUndefined();
+  });
+
   it("upgrades explicit readonly workspaces under project when discovered remotely", () => {
     const projectRoot = "C:/Users/me/Desktop/Project";
     const childPath = `${projectRoot}/MCP VS CODE - GPT`;

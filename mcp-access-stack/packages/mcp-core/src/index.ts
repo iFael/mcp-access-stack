@@ -19,6 +19,7 @@ export * from "./qualified-command-invocation-contracts.js";
 export * from "./relay-retry-policy.js";
 export * from "./source-control-contracts.js";
 export * from "./source-control-executor.js";
+export * from "./source-control-policy.js";
 export * from "./timeout-policy.js";
 export * from "./windows-execution-node-contracts.js";
 export * from "./workspace-catalog.js";
