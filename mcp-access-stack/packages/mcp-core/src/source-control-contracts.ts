@@ -140,6 +140,22 @@ const githubVisibilitySchema = z.enum(["private", "public", "internal"]);
 const githubPullRequestStateSchema = z.enum(["open", "closed"]);
 const githubMergeMethodSchema = z.enum(["merge", "squash"]);
 
+export const sourceControlCapabilities = [
+  "git.branch.write",
+  "git.index.write",
+  "git.commit.write",
+  "git.merge.write",
+  "git.remote.push",
+  "github.repository.read",
+  "github.repository.create",
+  "github.pull_request.read",
+  "github.pull_request.create",
+  "github.pull_request.merge",
+] as const;
+
+export const sourceControlCapabilitySchema = z.enum(sourceControlCapabilities);
+export type SourceControlCapability = z.infer<typeof sourceControlCapabilitySchema>;
+
 export const sourceControlOperationNameSchema = z.enum([
   "git_create_branch",
   "git_stage_paths",

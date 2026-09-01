@@ -23,6 +23,8 @@ import {
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
+  sourceControlCapabilities,
+  sourceControlCapabilitySchema,
   sourceControlConfirmationRequiredSchema,
   sourceControlOperationNameSchema,
 } from "../src/source-control-contracts.js";
@@ -39,6 +41,22 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
+  test("publishes exactly ten source-control capabilities", () => {
+    expect(sourceControlCapabilities).toEqual([
+      "git.branch.write",
+      "git.index.write",
+      "git.commit.write",
+      "git.merge.write",
+      "git.remote.push",
+      "github.repository.read",
+      "github.repository.create",
+      "github.pull_request.read",
+      "github.pull_request.create",
+      "github.pull_request.merge",
+    ]);
+    expect(sourceControlCapabilitySchema.options).toEqual(sourceControlCapabilities);
+  });
+
   test("publishes Task 1 contracts and typed error codes through the core boundary", () => {
     expect(core.gitCreateBranchInputSchema).toBe(gitCreateBranchInputSchema);
     expect(core.gitMergeBranchInputSchema).toBe(gitMergeBranchInputSchema);
