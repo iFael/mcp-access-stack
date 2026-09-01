@@ -17,6 +17,8 @@ export * from "./project-write-policy.js";
 export * from "./qualified-command-contracts.js";
 export * from "./qualified-command-invocation-contracts.js";
 export * from "./relay-retry-policy.js";
+export * from "./source-control-contracts.js";
+export * from "./source-control-executor.js";
 export * from "./timeout-policy.js";
 export * from "./windows-execution-node-contracts.js";
 export * from "./workspace-catalog.js";
