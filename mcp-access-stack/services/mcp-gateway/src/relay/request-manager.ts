@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   AppError,
   COMMAND_TERMINATION_GRACE_MS,
+  createAgentUnavailableDetails,
   createOperationDeadline,
   createOperationLifecycle,
   MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
@@ -28,6 +29,7 @@ export interface AgentRelayRequestManagerOptions {
 
 interface PendingRequest {
   operation: RelayOperation;
+  generation: number;
   startedAt: number;
   timeout: NodeJS.Timeout;
   signal?: AbortSignal;
@@ -59,6 +61,7 @@ export class AgentRelayRequestManager {
     }
 
     const requestId = randomUUID();
+    const generation = this.options.generation();
     const deadline = context.deadline
       ? createOperationDeadline(
           MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
@@ -127,6 +130,7 @@ export class AgentRelayRequestManager {
 
       this.pending.set(requestId, {
         operation,
+        generation,
         startedAt,
         timeout,
         ...(context.signal === undefined
@@ -145,7 +149,7 @@ export class AgentRelayRequestManager {
         effectiveTimeoutMs: deadline.effectiveTimeoutMs,
         deadlineAt: deadline.deadlineAt,
         pendingRequests: this.pending.size,
-        generation: this.options.generation(),
+        generation,
       });
 
       if (context.signal?.aborted) {
@@ -164,6 +168,12 @@ export class AgentRelayRequestManager {
               reason: "client_disconnected",
               diagnostic: "The relay WebSocket failed before the request was delivered.",
             }),
+            details: createAgentUnavailableDetails(
+              operation,
+              "relay_send_failed",
+              "unknown",
+              generation,
+            ),
           }),
         );
         this.logCompletion(requestId, operation, startedAt, "send_error");
@@ -183,6 +193,9 @@ export class AgentRelayRequestManager {
           ...(response.error.lifecycle === undefined
             ? {}
             : { lifecycle: response.error.lifecycle }),
+          ...(response.error.details === undefined
+            ? {}
+            : { details: response.error.details }),
         }),
       );
       this.logCompletion(response.requestId, pending.operation, pending.startedAt, "error");
@@ -199,10 +212,47 @@ export class AgentRelayRequestManager {
     this.logCompletion(response.requestId, pending.operation, pending.startedAt, "success");
   }
 
-  rejectAll(code: "AGENT_UNAVAILABLE", message: string): void {
+  rejectAll(
+    code: "AGENT_UNAVAILABLE",
+    message: string,
+    reason: "agent_disconnected" | "gateway_shutdown" = "agent_disconnected",
+  ): void {
     for (const requestId of [...this.pending.keys()]) {
       const pending = this.takePending(requestId);
-      pending?.reject(new AppError(code, message));
+      if (!pending) continue;
+      pending.reject(
+        new AppError(code, message, {
+          details: createAgentUnavailableDetails(
+            pending.operation,
+            reason,
+            "unknown",
+            pending.generation,
+          ),
+        }),
+      );
+    }
+  }
+
+  rejectGeneration(
+    generation: number,
+    code: "AGENT_UNAVAILABLE",
+    message: string,
+    reason: "agent_disconnected" = "agent_disconnected",
+  ): void {
+    for (const [requestId, candidate] of [...this.pending.entries()]) {
+      if (candidate.generation !== generation) continue;
+      const pending = this.takePending(requestId);
+      if (!pending) continue;
+      pending.reject(
+        new AppError(code, message, {
+          details: createAgentUnavailableDetails(
+            pending.operation,
+            reason,
+            "unknown",
+            pending.generation,
+          ),
+        }),
+      );
     }
   }
 

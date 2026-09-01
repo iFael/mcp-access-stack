@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   operationLifecycleSchema,
   type OperationLifecycle,
@@ -84,13 +85,21 @@ export const errorCodes = [
 
 export type ErrorCode = (typeof errorCodes)[number];
 
-export interface ErrorDetails {
-  path?: string;
-  policyRule?: string;
-  operation?: string;
-  reason?: string;
-  safeAlternative?: string;
-}
+export const errorDetailsSchema = z
+  .object({
+    path: z.string().optional(),
+    policyRule: z.string().optional(),
+    operation: z.string().optional(),
+    reason: z.string().optional(),
+    safeAlternative: z.string().optional(),
+    retryable: z.boolean().optional(),
+    retryAttempted: z.boolean().optional(),
+    outcome: z.enum(["not_started", "unknown"]).optional(),
+    connectionGeneration: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export type ErrorDetails = z.infer<typeof errorDetailsSchema>;
 
 export interface SerializedError {
   code: ErrorCode;
@@ -127,7 +136,9 @@ export class AppError extends Error {
       ...(this.lifecycle === undefined
         ? {}
         : { lifecycle: operationLifecycleSchema.parse(this.lifecycle) }),
-      ...(this.details === undefined ? {} : { details: { ...this.details } }),
+      ...(this.details === undefined
+        ? {}
+        : { details: errorDetailsSchema.parse(this.details) }),
     };
   }
 }

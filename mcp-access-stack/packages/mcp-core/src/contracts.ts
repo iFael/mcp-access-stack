@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorCodes } from "./errors.js";
+import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
   commandAttemptSchema,
@@ -755,6 +755,7 @@ export const serializedErrorSchema = z
     code: z.enum(errorCodes),
     message: z.string(),
     lifecycle: operationLifecycleSchema.optional(),
+    details: errorDetailsSchema.optional(),
   })
   .strict();
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@jest/globals";
-import { AppError } from "../src/index.js";
+import { AppError, serializedErrorSchema } from "../src/index.js";
 
 describe("AppError serialization", () => {
   test("preserves code and message while serializing sanitized operational details", () => {
@@ -24,5 +24,20 @@ describe("AppError serialization", () => {
         safeAlternative: "run_workspace_validation(secret-scan)",
       },
     });
+  });
+
+  test("keeps availability details valid across the serialized relay error schema", () => {
+    const serialized = new AppError("AGENT_UNAVAILABLE", "The local agent disconnected.", {
+      details: {
+        operation: "listWorkspaces",
+        reason: "agent_disconnected",
+        retryable: true,
+        retryAttempted: true,
+        outcome: "unknown",
+        connectionGeneration: 8,
+      },
+    }).toJSON();
+
+    expect(serializedErrorSchema.parse(serialized)).toEqual(serialized);
   });
 });
