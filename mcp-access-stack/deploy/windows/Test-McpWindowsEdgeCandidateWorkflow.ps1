@@ -91,6 +91,12 @@ foreach ($required in @(
     }
 }
 
+if (-not $builder.Contains('robocopy.exe')) {
+    throw 'Windows Edge candidate builder must use robocopy for the official base release tree.'
+}
+if ($builder.Contains('Copy-Item -LiteralPath $baseRelease -Destination $releaseParent -Recurse')) {
+    throw 'Windows Edge candidate builder must not use recursive Copy-Item for the official base release tree.'
+}
 if ($validator.Contains('-RuntimeSmoke')) {
     throw 'Windows Edge candidate validator must not execute the legacy McpHost release-root runtime smoke against the 8-role patch manifest.'
 }

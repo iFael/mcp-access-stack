@@ -222,12 +222,30 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $candidateCertificatePath) | Out-Null
     Copy-Item -LiteralPath $signerCertificatePath -Destination $candidateCertificatePath
 
-    Copy-Item -LiteralPath $baseRelease -Destination $releaseParent -Recurse
-    $copiedBase = Join-Path $releaseParent $baseReleaseId
-    if (-not (Test-Path -LiteralPath $copiedBase -PathType Container)) {
+    $robocopy = Get-Command robocopy.exe -ErrorAction Stop
+    New-Item -ItemType Directory -Force -Path $candidateRelease | Out-Null
+    $robocopyArguments = @(
+        $baseRelease,
+        $candidateRelease,
+        '/E',
+        '/COPY:DAT',
+        '/DCOPY:DAT',
+        '/R:2',
+        '/W:1',
+        '/NFL',
+        '/NDL',
+        '/NJH',
+        '/NJS',
+        '/NP'
+    )
+    & $robocopy.Source @robocopyArguments *> $null
+    $robocopyExitCode = $LASTEXITCODE
+    if ($robocopyExitCode -ge 8) {
+        throw "Official base release materialization failed with robocopy exit code $robocopyExitCode."
+    }
+    if (-not (Test-Path -LiteralPath $candidateRelease -PathType Container)) {
         throw 'Base release copy did not materialize under the candidate stage.'
     }
-    Move-Item -LiteralPath $copiedBase -Destination $candidateRelease
 
     $releaseLauncher = Join-Path $candidateRelease 'deploy\windows\Start-McpEdgeConnector.ps1'
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseLauncher) | Out-Null
