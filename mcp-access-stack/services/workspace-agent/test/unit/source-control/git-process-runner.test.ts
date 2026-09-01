@@ -55,10 +55,10 @@ describe("HardenedGitProcessRunner", () => {
     const spawnProcess = jest.fn((executable: string, args: readonly string[], options: Record<string, unknown>) => {
       complete(child, { stdout: `${"a".repeat(40)}\n` });
       return child as never;
-    }) as unknown as GitSpawnProcess;
+    });
     const runner = new HardenedGitProcessRunner({
       gitExecutable: absoluteGitForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GitSpawnProcess,
       baseEnvironment: {
         PATH: process.env.PATH ?? "",
         SystemRoot: process.env.SystemRoot,
@@ -124,7 +124,7 @@ describe("HardenedGitProcessRunner", () => {
     }) as unknown as GitSpawnProcess;
     const runner = new HardenedGitProcessRunner({
       gitExecutable: absoluteGitForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GitSpawnProcess,
     });
     const sha = "b".repeat(40);
 
@@ -151,7 +151,7 @@ describe("HardenedGitProcessRunner", () => {
     const spawnProcess = jest.fn(() => child as never) as unknown as GitSpawnProcess;
     const runner = new HardenedGitProcessRunner({
       gitExecutable: absoluteGitForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GitSpawnProcess,
       terminateProcessTree,
     });
     const controller = new AbortController();
@@ -194,7 +194,7 @@ describe("HardenedGitProcessRunner", () => {
     }) as unknown as GitSpawnProcess;
     const runner = new HardenedGitProcessRunner({
       gitExecutable: absoluteGitForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GitSpawnProcess,
     });
 
     let captured: unknown;
@@ -215,10 +215,10 @@ describe("HardenedGitProcessRunner", () => {
     const spawnProcess = jest.fn((_executable: string, _args: readonly string[]) => {
       complete(child);
       return child as never;
-    }) as unknown as GitSpawnProcess;
+    });
     const runner = new HardenedGitProcessRunner({
       gitExecutable: absoluteGitForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GitSpawnProcess,
     });
 
     await runner.commit(process.cwd(), "typed commit");

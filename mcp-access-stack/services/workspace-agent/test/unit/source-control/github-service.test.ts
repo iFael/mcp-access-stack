@@ -89,10 +89,10 @@ describe("GitHubService read mapping", () => {
 
 describe("GitHubService repository creation", () => {
   it("reconciles an ambiguous personal repository creation with repository lookup", async () => {
-    const createUserRepository = jest.fn(async () => {
+    const createUserRepository = jest.fn<GitHubApiClient["createUserRepository"]>(async () => {
       throw ambiguousError();
     });
-    const getRepository = jest.fn(async () => repositoryRecord());
+    const getRepository = jest.fn<GitHubApiClient["getRepository"]>(async () => repositoryRecord());
     const api = client({ createUserRepository, getRepository });
     const service = new GitHubService(api);
 
@@ -123,10 +123,10 @@ describe("GitHubService repository creation", () => {
   });
 
   it("uses the fixed organization repository path when owner differs from current user", async () => {
-    const createOrganizationRepository = jest.fn(async () =>
+    const createOrganizationRepository = jest.fn<GitHubApiClient["createOrganizationRepository"]>(async () =>
       repositoryRecord({ owner: { login: "octo-org" }, full_name: "octo-org/repo" }),
     );
-    const createUserRepository = jest.fn();
+    const createUserRepository = jest.fn<GitHubApiClient["createUserRepository"]>();
     const api = client({
       getCurrentUser: jest.fn(async () => ({ login: "octo" })),
       createOrganizationRepository,
@@ -153,10 +153,10 @@ describe("GitHubService repository creation", () => {
 
 describe("GitHubService pull request creation", () => {
   it("reconciles ambiguous PR creation by exact head/base query", async () => {
-    const createPullRequest = jest.fn(async () => {
+    const createPullRequest = jest.fn<GitHubApiClient["createPullRequest"]>(async () => {
       throw ambiguousError();
     });
-    const findPullRequests = jest.fn(async () => [pullRequestRecord()]);
+    const findPullRequests = jest.fn<GitHubApiClient["findPullRequests"]>(async () => [pullRequestRecord()]);
     const api = client({ createPullRequest, findPullRequests });
     const service = new GitHubService(api);
 
@@ -182,10 +182,10 @@ describe("GitHubService pull request creation", () => {
   });
 
   it("does not reconcile deterministic validation failures", async () => {
-    const createPullRequest = jest.fn(async () => {
+    const createPullRequest = jest.fn<GitHubApiClient["createPullRequest"]>(async () => {
       throw new AppError("INVALID_ARGUMENT", "GitHub rejected the request.");
     });
-    const findPullRequests = jest.fn();
+    const findPullRequests = jest.fn<GitHubApiClient["findPullRequests"]>();
     const service = new GitHubService(client({ createPullRequest, findPullRequests }));
 
     await expect(
@@ -204,7 +204,7 @@ describe("GitHubService pull request creation", () => {
 
 describe("GitHubService pull request merge", () => {
   it("re-reads PR head before mutation and sends exact expected sha + merge_method", async () => {
-    const mergePullRequest = jest.fn(async () => ({ sha: mergeSha, merged: true, message: "merged" }));
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>(async () => ({ sha: mergeSha, merged: true, message: "merged" }));
     const api = client({ mergePullRequest });
     const service = new GitHubService(api);
 
@@ -228,7 +228,7 @@ describe("GitHubService pull request merge", () => {
   });
 
   it("fails before merge when the PR head changed", async () => {
-    const mergePullRequest = jest.fn();
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>();
     const api = client({
       getPullRequest: jest.fn(async () =>
         pullRequestRecord({ head: { sha: "d".repeat(40) } }),
@@ -252,7 +252,7 @@ describe("GitHubService pull request merge", () => {
 
   it("reconciles ambiguous merge by re-reading merged PR state and merge SHA", async () => {
     const getPullRequest = jest
-      .fn()
+      .fn<GitHubApiClient["getPullRequest"]>()
       .mockResolvedValueOnce(pullRequestRecord())
       .mockResolvedValueOnce(
         pullRequestRecord({
@@ -261,7 +261,7 @@ describe("GitHubService pull request merge", () => {
           merge_commit_sha: mergeSha,
         }),
       );
-    const mergePullRequest = jest.fn(async () => {
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>(async () => {
       throw ambiguousError();
     });
     const service = new GitHubService(client({ getPullRequest, mergePullRequest }));

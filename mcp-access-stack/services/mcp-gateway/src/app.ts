@@ -1,4 +1,4 @@
-import type { BrowserExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
+import type { BrowserExecutor, SourceControlExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import compression from "compression";
@@ -61,6 +61,7 @@ export interface GatewayApplicationDependencies {
   tokenVerifier?: AccessTokenVerifier;
   browser?: BrowserExecutor;
   workspaceExecutor?: WorkspaceExecutor;
+  sourceControlExecutor?: SourceControlExecutor;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
 }
@@ -84,10 +85,14 @@ export function createGatewayApplication(
         logger,
       )
     : undefined;
-  const workspaceExecutor = dependencies.workspaceExecutor ??
-    (relay ? new RelayWorkspaceExecutor(relay) : undefined);
+  const relayExecutor = relay ? new RelayWorkspaceExecutor(relay) : undefined;
+  const workspaceExecutor = dependencies.workspaceExecutor ?? relayExecutor;
+  const sourceControlExecutor = dependencies.sourceControlExecutor ?? relayExecutor;
   if (!workspaceExecutor) {
     throw new Error("A workspace executor is required when the relay backend is disabled.");
+  }
+  if (!sourceControlExecutor) {
+    throw new Error("A source-control executor is required when the relay backend is disabled.");
   }
   const workspaceReady = dependencies.workspaceReady ?? (() => relay?.isConnected ?? false);
   const browser = dependencies.browser ?? (config.browserWorker
@@ -254,6 +259,7 @@ export function createGatewayApplication(
     }
     const server = createMcpServer({
       workspaceExecutor,
+      sourceControlExecutor,
       ...(browser === undefined ? {} : { browser }),
       auth: mcpAuth,
       operationContextFactory,

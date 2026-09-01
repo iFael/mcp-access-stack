@@ -43,10 +43,10 @@ describe("GhCliUserCredentialProvider", () => {
     const spawnProcess = jest.fn((_executable: string, _args: readonly string[], _options: Record<string, unknown>) => {
       complete(child, { stdout: "unit-test-token\n" });
       return child as never;
-    }) as unknown as GhSpawnProcess;
+    });
     const provider = new GhCliUserCredentialProvider({
       ghExecutable: absoluteGhForTest(),
-      spawnProcess,
+      spawnProcess: spawnProcess as unknown as GhSpawnProcess,
       baseEnvironment: {
         PATH: process.env.PATH ?? "",
         SystemRoot: process.env.SystemRoot,
@@ -88,7 +88,7 @@ describe("GhCliUserCredentialProvider", () => {
         code: 1,
       });
       return child as never;
-    }) as unknown as GhSpawnProcess;
+    });
     const provider = new GhCliUserCredentialProvider({
       ghExecutable: absoluteGhForTest(),
       spawnProcess,

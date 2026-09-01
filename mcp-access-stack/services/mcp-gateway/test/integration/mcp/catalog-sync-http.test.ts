@@ -71,7 +71,7 @@ describe("stateless MCP catalog identity", () => {
       });
       expect(capabilities).toMatchObject({ tools: { listChanged: false } });
       expect(initializeCatalog).toEqual(MCP_FULL_TOOL_CATALOG_METADATA);
-      expect(tools).toHaveLength(50);
+      expect(tools).toHaveLength(61);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );

@@ -91,6 +91,17 @@ describe("gateway HTTP surface", () => {
         "search_files",
         "inspect_workspace_git",
         "get_workspace_context",
+        "git_create_branch",
+        "git_stage_paths",
+        "git_unstage_paths",
+        "git_commit",
+        "git_merge_branch",
+        "git_push_branch",
+        "github_get_repository",
+        "github_create_repository",
+        "github_get_pull_request",
+        "github_create_pull_request",
+        "github_merge_pull_request",
       ]);
       const writeTool = body.result.tools.find((tool) => tool.name === "write_file");
       expect(writeTool?.annotations).toEqual({
@@ -107,6 +118,17 @@ describe("gateway HTTP surface", () => {
             "run_powershell",
             "start_background_task",
             "cancel_background_task",
+            "git_create_branch",
+            "git_stage_paths",
+            "git_unstage_paths",
+            "git_commit",
+            "git_merge_branch",
+            "git_push_branch",
+            "github_get_repository",
+            "github_create_repository",
+            "github_get_pull_request",
+            "github_create_pull_request",
+            "github_merge_pull_request",
           ].includes(entry.name as string),
       )) {
         expect(tool.annotations).toEqual({
@@ -185,7 +207,7 @@ describe("gateway personal mode without oauth", () => {
       };
 
       expect(response.status).toBe(200);
-      expect(body.result.tools).toHaveLength(17);
+      expect(body.result.tools).toHaveLength(28);
       for (const tool of body.result.tools) {
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });

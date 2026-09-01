@@ -239,7 +239,7 @@ describe("source-control relay request context", () => {
       idempotencyKey: "idem-1",
       ownerScope: "owner-1",
     });
-    expect(Object.keys(request.context).sort()).toEqual([
+    expect(Object.keys(request.context ?? {}).sort()).toEqual([
       "correlationId",
       "idempotencyKey",
       "invocationId",

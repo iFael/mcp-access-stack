@@ -166,7 +166,7 @@ const cases = [
 
 describe("RelayWorkspaceExecutor typed source control", () => {
   test("maps every Task 1 source-control port method to exactly one strict internal relay call", async () => {
-    const call = jest.fn(async (operation: string) => {
+    const call = jest.fn(async (operation: string, _input: unknown, _context?: OperationContext) => {
       const selected = cases.find((candidate) => candidate.operation === operation);
       if (!selected) throw new Error(`unexpected operation ${operation}`);
       return selected.result;

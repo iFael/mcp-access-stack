@@ -25,6 +25,17 @@ const expectedLateTools = [
   "browser_dom_index",
   "browser_frame_sequence",
   "browser_navigate_path",
+  "git_create_branch",
+  "git_stage_paths",
+  "git_unstage_paths",
+  "git_commit",
+  "git_merge_branch",
+  "git_push_branch",
+  "github_get_repository",
+  "github_create_repository",
+  "github_get_pull_request",
+  "github_create_pull_request",
+  "github_merge_pull_request",
 ] as const;
 
 describe("MCP connector catalog synchronization", () => {
@@ -45,7 +56,7 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(50);
+      expect(listed.tools).toHaveLength(61);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -85,7 +96,7 @@ describe("MCP connector catalog synchronization", () => {
   });
 
   it("publishes a different server identity when the available tool set is reduced", async () => {
-    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay) });
+    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay), sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay) });
     const client = createClient("workspace-only-catalog-test");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -99,11 +110,11 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(17);
+      expect(listed.tools).toHaveLength(28);
       expect(client.getServerVersion()?.version).not.toBe(
         MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
       );
-      expect(catalogMeta).toMatchObject({ toolCount: 17 });
+      expect(catalogMeta).toMatchObject({ toolCount: 28 });
     } finally {
       await client.close().catch(() => undefined);
       await server.close().catch(() => undefined);
@@ -162,6 +173,7 @@ describe("MCP connector catalog synchronization", () => {
 function createFullServer() {
   return createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
     browser: {} as BrowserExecutor,
   });
 }

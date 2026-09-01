@@ -490,5 +490,5 @@ function createRequest(
     },
     operation,
     input: input as never,
-  };
+  } as RelayRequest;
 }

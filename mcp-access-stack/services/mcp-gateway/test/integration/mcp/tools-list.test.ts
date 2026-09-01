@@ -19,6 +19,7 @@ describe("advanced browser tools list", () => {
   it("publishes ChatGPT-compatible object schemas for all advanced tools", async () => {
     const server = createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       browser: {} as BrowserExecutor,
     });
     const client = new Client(
@@ -89,6 +90,7 @@ describe("advanced browser tools list", () => {
   it("publishes the complete browser and workspace tool catalog", async () => {
     const server = createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       browser: {} as BrowserExecutor,
     });
     const client = new Client(
@@ -105,7 +107,7 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(50);
+      expect(names).toHaveLength(61);
       expect(names).toEqual(expect.arrayContaining([
         "browser_open_authorized_site",
         "browser_profile_page",
@@ -118,6 +120,10 @@ describe("advanced browser tools list", () => {
         "list_background_tasks",
         "cancel_background_task",
         "read_background_task_logs",
+        "git_create_branch",
+        "git_push_branch",
+        "github_get_repository",
+        "github_merge_pull_request",
       ]));
 
       const authorizedSite = listed.tools.find(
@@ -149,6 +155,7 @@ describe("advanced browser tools list", () => {
     } as unknown as BrowserExecutor;
     const server = createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       browser,
     });
     const client = new Client(
@@ -180,6 +187,7 @@ describe("advanced browser tools list", () => {
     } as unknown as BrowserExecutor;
     const server = createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       browser,
     });
     const client = new Client(
@@ -230,7 +238,7 @@ describe("workspace command output schemas", () => {
         throw new Error("Unexpected relay operation: " + operation);
       },
     } as unknown as AgentRelay;
-    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor(relay) });
+    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor(relay), sourceControlExecutor: new RelayWorkspaceExecutor(relay) });
     const client = new Client(
       { name: "workspace-command-schema-test", version: "0.0.0" },
       { capabilities: {} },

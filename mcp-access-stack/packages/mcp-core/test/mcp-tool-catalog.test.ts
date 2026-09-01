@@ -7,8 +7,10 @@ import {
   createMcpToolCatalogMetadata,
   createMcpToolSetRevision,
 } from "../src/mcp-tool-catalog.js";
+import { SOURCE_CONTROL_TOOL_NAMES } from "../src/mcp-workspace-tools.js";
 
 const staleConnectorMissingTools = [
+  ...SOURCE_CONTROL_TOOL_NAMES,
   "list_workspace_roots",
   "start_background_task",
   "get_background_task",
@@ -24,12 +26,12 @@ const staleConnectorMissingTools = [
 ] as const;
 
 describe("MCP tool catalog identity", () => {
-  it("identifies the complete 50-tool catalog", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(50);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(50);
+  it("identifies the complete 61-tool catalog", () => {
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(61);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(61);
     expect(MCP_TOOL_CATALOG_CONTRACT_REVISION).toMatch(/^[a-f0-9]{64}$/u);
     expect(MCP_FULL_TOOL_CATALOG_METADATA).toMatchObject({
-      toolCount: 50,
+      toolCount: 61,
       contractRevision: MCP_TOOL_CATALOG_CONTRACT_REVISION,
     });
     expect(MCP_FULL_TOOL_CATALOG_METADATA.serverVersion).toMatch(
@@ -43,7 +45,7 @@ describe("MCP tool catalog identity", () => {
       (name) => !missing.has(name),
     );
 
-    expect(staleConnectorMissingTools).toHaveLength(12);
+    expect(staleConnectorMissingTools).toHaveLength(23);
     expect(staleNames).toHaveLength(38);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([...staleConnectorMissingTools]),
@@ -58,12 +60,12 @@ describe("MCP tool catalog identity", () => {
     );
   });
 
-  it("identifies a 49-tool connector missing only list_workspace_roots as stale", () => {
+  it("identifies a 60-tool connector missing only list_workspace_roots as stale", () => {
     const staleNames = MCP_FULL_TOOL_CATALOG_NAMES.filter(
       (name) => name !== "list_workspace_roots",
     );
 
-    expect(staleNames).toHaveLength(49);
+    expect(staleNames).toHaveLength(60);
     const stale = createMcpToolCatalogMetadata(staleNames);
     expect(stale.toolSetRevision).not.toBe(
       MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,

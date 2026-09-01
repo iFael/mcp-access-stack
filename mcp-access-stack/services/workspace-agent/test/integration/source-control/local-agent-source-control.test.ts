@@ -63,8 +63,8 @@ async function setupAgent(options: {
   const workspace = {
     ...makeWorkspacePolicy(fixture.workspacePath, { profile: "full-repo-write" }),
     sourceControl: sourceControlPolicy(options.capabilities, {
-      accountOwners: options.accountOwners,
-      additionalRepositories: options.additionalRepositories,
+      ...(options.accountOwners === undefined ? {} : { accountOwners: options.accountOwners }),
+      ...(options.additionalRepositories === undefined ? {} : { additionalRepositories: options.additionalRepositories }),
     }),
   };
   await writePolicy(fixture.policyPath, [workspace]);
@@ -88,29 +88,29 @@ async function setupAgent(options: {
 
 function fakeGitExecutor(): GitRepositoryExecutor {
   return {
-    createBranch: jest.fn(async (input) => ({
+    createBranch: jest.fn<GitRepositoryExecutor["createBranch"]>(async (input) => ({
       root: input.root ?? ".",
       branch: input.branch,
       headSha: input.expectedHeadSha.toLowerCase(),
     })),
-    stagePaths: jest.fn(async (input) => ({
+    stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
       indexTreeSha: SHA_B,
       paths: input.paths,
     })),
-    unstagePaths: jest.fn(async (input) => ({
+    unstagePaths: jest.fn<GitRepositoryExecutor["unstagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: input.expectedHeadSha.toLowerCase(),
       indexTreeSha: SHA_B,
       paths: input.paths,
     })),
-    commit: jest.fn(async (input) => ({
+    commit: jest.fn<GitRepositoryExecutor["commit"]>(async (input) => ({
       root: input.root ?? ".",
       branch: "feature/task6",
       commitSha: SHA_C,
     })),
-    mergeBranch: jest.fn(async (input) => ({
+    mergeBranch: jest.fn<GitRepositoryExecutor["mergeBranch"]>(async (input) => ({
       root: input.root ?? ".",
       branch: "feature/task6",
       previousHeadSha: input.expectedTargetHeadSha.toLowerCase(),
@@ -118,7 +118,7 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(),
       fastForwarded: true as const,
     })),
-    pushBranch: jest.fn(async (input) => ({
+    pushBranch: jest.fn<GitRepositoryExecutor["pushBranch"]>(async (input) => ({
       status: "completed" as const,
       root: input.root ?? ".",
       remote: input.remote ?? "origin",
@@ -131,7 +131,7 @@ function fakeGitExecutor(): GitRepositoryExecutor {
 
 function fakeGitHubExecutor(): GitHubExecutor {
   return {
-    getRepository: jest.fn(async (input) => ({
+    getRepository: jest.fn<GitHubExecutor["getRepository"]>(async (input) => ({
       owner: input.owner,
       name: input.repository,
       fullName: `${input.owner}/${input.repository}`,
@@ -139,7 +139,7 @@ function fakeGitHubExecutor(): GitHubExecutor {
       visibility: "private" as const,
       url: `https://github.com/${input.owner}/${input.repository}`,
     })),
-    createRepository: jest.fn(async (input) => ({
+    createRepository: jest.fn<GitHubExecutor["createRepository"]>(async (input) => ({
       status: "completed" as const,
       owner: input.owner,
       name: input.name,
@@ -148,7 +148,7 @@ function fakeGitHubExecutor(): GitHubExecutor {
       visibility: input.visibility,
       url: `https://github.com/${input.owner}/${input.name}`,
     })),
-    getPullRequest: jest.fn(async (input) => ({
+    getPullRequest: jest.fn<GitHubExecutor["getPullRequest"]>(async (input) => ({
       number: input.pullNumber,
       state: "open" as const,
       title: "typed pr",
@@ -157,7 +157,7 @@ function fakeGitHubExecutor(): GitHubExecutor {
       baseSha: SHA_A,
       merged: false,
     })),
-    createPullRequest: jest.fn(async (input) => ({
+    createPullRequest: jest.fn<GitHubExecutor["createPullRequest"]>(async (input) => ({
       status: "completed" as const,
       number: 7,
       state: "open" as const,
@@ -167,7 +167,7 @@ function fakeGitHubExecutor(): GitHubExecutor {
       baseSha: SHA_A,
       merged: false,
     })),
-    mergePullRequest: jest.fn(async (input) => ({
+    mergePullRequest: jest.fn<GitHubExecutor["mergePullRequest"]>(async (input) => ({
       status: "completed" as const,
       number: input.pullNumber,
       merged: true,
@@ -362,7 +362,7 @@ describe("LocalAgent confirmation and receipt completeness", () => {
   ])("requires typed confirmation for $name before backend invocation", async (candidate) => {
     const { agent, githubExecutor } = await setupAgent({
       capabilities: candidate.capabilities,
-      accountOwners: candidate.accountOwners,
+      ...(candidate.accountOwners === undefined ? {} : { accountOwners: candidate.accountOwners }),
     });
 
     const pending = await (agent as any)[candidate.method](candidate.input, {
