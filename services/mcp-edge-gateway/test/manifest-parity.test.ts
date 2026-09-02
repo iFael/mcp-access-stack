@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
-import type { WorkspaceExecutor } from "@vs-code-gpt/shared";
+import type { SourceControlExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
 import { MCP_TOOL_CATALOG_META_KEY } from "@vs-code-gpt/shared";
 import { loadGatewayConfig } from "../../mcp-gateway/src/config.js";
 import { createMcpServer } from "../../mcp-gateway/src/mcp/server.js";
@@ -26,6 +26,7 @@ describe("Edge MCP generated manifest parity", () => {
 
     const server = createMcpServer({
       workspaceExecutor: {} as WorkspaceExecutor,
+      sourceControlExecutor: {} as SourceControlExecutor,
       auth: {
         requiredScope: canonicalScope!,
         resourceMetadataUrl: new URL("https://edge.invalid/.well-known/oauth-protected-resource/mcp"),

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   operationLifecycleSchema,
   type OperationLifecycle,
@@ -26,6 +27,16 @@ export const errorCodes = [
   "LIMIT_EXCEEDED",
   "NOT_GIT_REPOSITORY",
   "GIT_ERROR",
+  "SOURCE_CONTROL_CAPABILITY_DENIED",
+  "SOURCE_CONTROL_CONFIRMATION_INVALID",
+  "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT",
+  "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+  "GIT_HEAD_MISMATCH",
+  "GIT_BRANCH_CONFLICT",
+  "GIT_INDEX_CHANGED",
+  "GIT_REMOTE_CHANGED",
+  "GIT_MERGE_NOT_FAST_FORWARD",
+  "GIT_PROTECTED_BRANCH",
   "AUDIT_FAILED",
   "AGENT_UNAVAILABLE",
   "AGENT_BUSY",
@@ -84,19 +95,38 @@ export const errorCodes = [
 
 export type ErrorCode = (typeof errorCodes)[number];
 
+export const errorDetailsSchema = z
+  .object({
+    path: z.string().optional(),
+    policyRule: z.string().optional(),
+    operation: z.string().optional(),
+    reason: z.string().optional(),
+    safeAlternative: z.string().optional(),
+    retryable: z.boolean().optional(),
+    retryAttempted: z.boolean().optional(),
+    outcome: z.enum(["not_started", "unknown"]).optional(),
+    connectionGeneration: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export type ErrorDetails = z.infer<typeof errorDetailsSchema>;
+
 export interface SerializedError {
   code: ErrorCode;
   message: string;
   lifecycle?: OperationLifecycle;
+  details?: ErrorDetails;
 }
 
 export interface AppErrorOptions extends ErrorOptions {
   lifecycle?: OperationLifecycle;
+  details?: ErrorDetails;
 }
 
 export class AppError extends Error {
   readonly code: ErrorCode;
   readonly lifecycle: OperationLifecycle | undefined;
+  readonly details: ErrorDetails | undefined;
 
   constructor(code: ErrorCode, message: string, options?: AppErrorOptions) {
     super(
@@ -106,6 +136,7 @@ export class AppError extends Error {
     this.name = "AppError";
     this.code = code;
     this.lifecycle = options?.lifecycle;
+    this.details = options?.details;
   }
 
   toJSON(): SerializedError {
@@ -115,6 +146,9 @@ export class AppError extends Error {
       ...(this.lifecycle === undefined
         ? {}
         : { lifecycle: operationLifecycleSchema.parse(this.lifecycle) }),
+      ...(this.details === undefined
+        ? {}
+        : { details: errorDetailsSchema.parse(this.details) }),
     };
   }
 }

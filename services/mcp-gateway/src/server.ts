@@ -23,6 +23,7 @@ const gateway = createGatewayApplication(
   sshWorkspace
     ? {
         workspaceExecutor: sshWorkspace,
+        sourceControlExecutor: sshWorkspace,
         workspaceReady: () => sshWorkspace.isReady(),
       }
     : {},

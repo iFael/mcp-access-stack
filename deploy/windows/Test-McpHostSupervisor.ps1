@@ -38,7 +38,10 @@ foreach ($required in @(
     'BROWSER_WORKER_PROFILE_MODE"] = "persistent"',
     'services/mcp-gateway/dist/edge-connector-cli.js',
     'deploy/windows/Start-McpEdgeConnector.ps1',
-    'four legacy, six Edge PowerShell, or seven native-Edge critical artifacts',
+    'four legacy, six Edge PowerShell, seven native-Edge legacy, or eight split-owner critical artifacts',
+    'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js',
+    'native/McpEdgeHost.exe',
+    'edge-host',
     'Edge connector launcher artifact must require Authenticode.'
 )) {
     if (-not $supervisorSource.Contains($required)) {
@@ -217,6 +220,9 @@ setInterval(() => {}, 1000);
         -Path (Join-Path $releaseRoot 'services\mcp-gateway\dist\edge-connector-cli.js') `
         -Content "setInterval(() => {}, 1000);`n"
     Write-Utf8NoBom `
+        -Path (Join-Path $releaseRoot 'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js') `
+        -Content "setInterval(() => {}, 1000);`n"
+    Write-Utf8NoBom `
         -Path (Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1') `
         -Content "Write-Output 'edge-launcher'`n"
 
@@ -290,6 +296,13 @@ setInterval(() => {}, 1000);
     Copy-Item `
         -LiteralPath (Join-Path $buildOutput 'McpHost.exe') `
         -Destination (Join-Path $releaseRoot 'native\McpHost.exe')
+    Copy-Item `
+        -LiteralPath (Join-Path $buildOutput 'McpEdgeHost.exe') `
+        -Destination (Join-Path $releaseRoot 'native\McpEdgeHost.exe')
+    New-Item -ItemType Directory -Force -Path (Join-Path $releaseRoot 'compat') | Out-Null
+    Copy-Item `
+        -LiteralPath (Join-Path $buildOutput 'McpNodeHostLauncher.exe') `
+        -Destination (Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe')
 
     $legacyArtifacts = @(
         (New-ArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
@@ -320,6 +333,17 @@ setInterval(() => {}, 1000);
         throw 'McpHost supervisor CI Edge-capable 6-artifact release validation failed.'
     }
 
+    $splitOwnerArtifacts = @($legacyArtifacts) + @(
+        (New-ArtifactRecord -Role 'edge-connector' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+        (New-ArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+        (New-ArtifactRecord -Role 'edge-host' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
+        (New-ArtifactRecord -Role 'edge-native-launcher' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true)
+    )
+    $splitManifestHash = Write-ExecutionManifest -Artifacts $splitOwnerArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
+    $splitValidation = @(& $hostPath --validate-release-root $releaseRoot)
+    if ($LASTEXITCODE -ne 0 -or $splitValidation.Count -ne 1 -or [string]$splitValidation[0] -ne 'release-root-valid') {
+        throw 'McpHost supervisor CI split-owner 8-artifact release validation failed.'
+    }
     $partialArtifacts = @($edgeArtifacts | Select-Object -First 5)
     $null = Write-ExecutionManifest -Artifacts $partialArtifacts -ReleaseId $releaseId -Commit $commit -ReleaseRoot $releaseRoot
     $partialValidation = @(& $hostPath --validate-release-root $releaseRoot 2>&1)

@@ -3,6 +3,7 @@ import {
   agentHelloSchema,
   asAppError,
   relayAgentMessageSchema,
+  relayOperations,
   type AgentHello,
   type RelayOperation,
 } from "@vs-code-gpt/shared";
@@ -10,26 +11,7 @@ import WebSocket, { type RawData } from "ws";
 import type { LocalAgent } from "../local-agent.js";
 import { AgentRequestExecutor } from "./request-executor.js";
 
-const capabilities: AgentHello["capabilities"] = [
-  "listWorkspaces",
-  "listWorkspaceRoots",
-  "listFiles",
-  "readFile",
-  "readBinaryFile",
-  "writeFile",
-  "patchFile",
-  "runValidation",
-  "runCommand",
-  "runPowerShell",
-  "searchFiles",
-  "inspectGit",
-  "getWorkspaceContext",
-  "startBackgroundTask",
-  "getBackgroundTask",
-  "listBackgroundTasks",
-  "cancelBackgroundTask",
-  "readBackgroundTaskLogs",
-];
+const capabilities: AgentHello["capabilities"] = [...relayOperations];
 
 export interface AgentConnectionOptions {
   gatewayUrl: string;

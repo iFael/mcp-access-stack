@@ -11,6 +11,7 @@ import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
 import {
   createFixture,
   defaultLimits,
+  makeWorkspacePolicy,
   writePolicy,
 } from "../../support/helpers.js";
 
@@ -25,6 +26,28 @@ describe("WorkspaceRegistry.fromPolicy", () => {
       const policy = JSON.parse(raw);
       const fromPolicy = await WorkspaceRegistry.fromPolicy(policy);
       expect(fromPolicy.listEnabled()).toEqual(fromDisk);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("preserves explicit source-control policy on the resolved workspace", async () => {
+    const fixture = await createFixture({ profile: "full-repo-write" });
+    try {
+      const sourceControl = {
+        capabilities: ["git.branch.write", "github.repository.read"],
+        accountOwners: ["example-owner"],
+        additionalRepositories: ["example-owner/other-repo"],
+      };
+      await writePolicy(fixture.policyPath, [
+        {
+          ...makeWorkspacePolicy(fixture.workspacePath, { profile: "full-repo-write" }),
+          sourceControl,
+        },
+      ]);
+
+      const registry = await WorkspaceRegistry.load(fixture.policyPath);
+      expect(registry.get("test")).toMatchObject({ sourceControl });
     } finally {
       await fixture.cleanup();
     }

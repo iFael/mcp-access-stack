@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { RelayRequest, RelayResponse } from "@vs-code-gpt/shared";
+import { relayRequestSchema, type RelayRequest, type RelayResponse } from "@vs-code-gpt/shared";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { AgentConnection, type AgentConnectionLog } from "../../src/connection/service.js";
@@ -246,7 +246,7 @@ function createRequest(
   input: unknown,
   deadlineInMs = 2_000,
 ): RelayRequest {
-  return {
+  return relayRequestSchema.parse({
     version: 1,
     type: "request",
     requestId: randomUUID(),
@@ -256,8 +256,8 @@ function createRequest(
       deadlineAt: new Date(Date.now() + deadlineInMs).toISOString(),
     },
     operation,
-    input: input as never,
-  };
+    input,
+  });
 }
 
 async function createGatewayFixture(): Promise<{

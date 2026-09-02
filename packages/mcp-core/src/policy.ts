@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sourceControlPolicySchema } from "./source-control-policy.js";
 
 export const supportedShells = [
   "powershell",
@@ -58,6 +59,7 @@ export const workspacePolicySchema = z
     allowWrites: z.array(z.string().trim().min(1)).default([]),
     allowShell: z.array(z.string().trim().min(1)).default([]),
     allowedShells: z.array(shellNameSchema).default(["powershell"]),
+    sourceControl: sourceControlPolicySchema.optional(),
   })
   .strict()
   .superRefine((workspace, context) => {
@@ -115,7 +117,7 @@ export type PolicyFile = z.output<typeof policyFileSchema>;
 
 export const mandatoryBlockedGlobs = [
   "**/.env",
-  "**/.env.*",
+  "**/.env.!(example|sample|template)",
   "**/*.pem",
   "**/*.key",
   "**/*.pfx",

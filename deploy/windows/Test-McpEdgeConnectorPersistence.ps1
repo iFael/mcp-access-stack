@@ -37,12 +37,18 @@ foreach ($required in @(
     '-MultipleInstances IgnoreNew',
     '-RestartCount 5',
     '-RunLevel Limited',
-    'McpNodeHostLauncher.exe',
-    '--env-file',
-    'BROWSER_WORKER_TOKEN=',
+    'McpEdgeHost.exe',
+    '--connector-token-file',
+    '--owner-token-file',
+    '--browser-worker-token-file',
+    '--browser-enabled',
     'EnableBrowserWorker',
-    'edge-native-launcher',
+    'edge-host',
     'processSubsystem',
+    'Assert-McpPublicSignature -Path $edgeHostPath',
+    'Assert-McpPublicReleaseAttestation',
+    'executionNode.manifestSha256',
+    '--validate-only',
     'ValidateOnly'
 )) {
     if (-not $installerContent.Contains($required)) {
@@ -52,12 +58,17 @@ foreach ($required in @(
 if ($installerContent -match 'OWNER_TOKEN\s*=\s*["''][^$]') {
     throw 'Edge Connector task installer must not embed an Owner token value.'
 }
+foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OWNER_TOKEN=', 'Assert-McpWindowsExecutionNodeRelease')) {
+    if ($installerContent.Contains($forbidden)) {
+        throw "Edge Connector fixed host installer must not use generic environment injection: $forbidden"
+    }
+}
 
 $fixtureRoot = Join-Path $env:TEMP ('mcp-edge-persistence-' + [guid]::NewGuid().ToString('N'))
 $releaseRoot = Join-Path $fixtureRoot 'release'
 $runtimeRoot = Join-Path $fixtureRoot 'private-runtime'
 $launcher = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
-$edgeCli = Join-Path $releaseRoot 'services\mcp-gateway\dist\edge-connector-cli.js'
+$edgeCli = Join-Path $releaseRoot 'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js'
 $nodePath = Join-Path $releaseRoot 'runtime\node\node.exe'
 $connectorTokenFile = Join-Path $runtimeRoot 'connector-token.txt'
 $ownerTokenFile = Join-Path $runtimeRoot 'owner-token.txt'
@@ -102,7 +113,7 @@ try {
         runtimeMode = 'bundled-node'
         integrityRoot = 'signed-distribution-manifest'
         artifacts = @(
-            (New-FixtureArtifact -Role 'edge-connector' -Path $edgeCli -RelativePath 'services/mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+            (New-FixtureArtifact -Role 'edge-connector' -Path $edgeCli -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
             (New-FixtureArtifact -Role 'edge-connector-launcher' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
             (New-FixtureArtifact -Role 'node-runtime' -Path $nodePath -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
@@ -178,7 +189,11 @@ try {
         -BrowserWorkerUrl 'http://127.0.0.1:3350' `
         -BrowserWorkerTokenFile $browserTokenFile 2>&1)
     if ($LASTEXITCODE -ne 0 -or $planOutput.Count -ne 1) {
-        throw 'Edge Connector task installer plan smoke failed.'
+        $diagnostic = ($planOutput -join [Environment]::NewLine)
+        foreach ($secret in @($connectorToken, $ownerToken, $browserToken)) {
+            $diagnostic = $diagnostic.Replace($secret, '<redacted>')
+        }
+        throw "Edge Connector task installer plan smoke failed. exit=$LASTEXITCODE count=$($planOutput.Count) diagnostic=$diagnostic"
     }
     $planText = [string]$planOutput[0]
     if ($planText.Contains($connectorToken) -or $planText.Contains($ownerToken) -or $planText.Contains($browserToken)) {
@@ -192,7 +207,7 @@ try {
         $plan.plan.browserEnabled -ne $true -or
         [string]$plan.plan.browserWorkerUrl -ne 'http://127.0.0.1:3350' -or
         $plan.plan.consoleAttached -ne $false -or
-        [string]$plan.plan.execute -notmatch 'McpNodeHostLauncher\.exe$' -or
+        [string]$plan.plan.execute -notmatch 'McpEdgeHost\.exe$' -or
         $plan.plan.activated -ne $false) {
         throw 'Edge Connector task installer returned an unexpected plan.'
     }

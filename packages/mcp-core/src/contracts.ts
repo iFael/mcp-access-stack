@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorCodes } from "./errors.js";
+import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
   commandAttemptSchema,
@@ -18,12 +18,37 @@ import {
   synchronousTimeoutMsSchema,
 } from "./timeout-policy.js";
 import {
+  gitCommitInputSchema,
+  gitCommitResultSchema,
+  gitCreateBranchInputSchema,
+  gitCreateBranchResultSchema,
+  gitMergeBranchInputSchema,
+  gitMergeBranchResultSchema,
+  gitPushBranchInputSchema,
+  gitPushBranchResultSchema,
+  gitStagePathsInputSchema,
+  gitStagePathsResultSchema,
+  gitUnstagePathsInputSchema,
+  gitUnstagePathsResultSchema,
+  githubCreatePullRequestInputSchema,
+  githubCreatePullRequestResultSchema,
+  githubCreateRepositoryInputSchema,
+  githubCreateRepositoryResultSchema,
+  githubGetPullRequestInputSchema,
+  githubGetRepositoryInputSchema,
+  githubMergePullRequestInputSchema,
+  githubMergePullRequestResultSchema,
+  githubPullRequestResultSchema,
+  githubRepositoryResultSchema,
+} from "./source-control-contracts.js";import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
+  backgroundTaskWaitResultSchema,
   backgroundTaskRecordSchema,
   backgroundTaskResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
+  waitBackgroundTaskInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
@@ -609,7 +634,31 @@ export type OperationContext = z.infer<typeof operationContextSchema> & {
   signal?: AbortSignal;
 };
 
-export const relayOperationSchema = z.enum([
+export const relayOperationContextSchema = operationContextSchema.pick({
+  correlationId: true,
+  invocationId: true,
+  idempotencyKey: true,
+  ownerScope: true,
+});
+
+export type RelayOperationContext = z.infer<typeof relayOperationContextSchema>;
+
+export const sourceControlRelayOperations = [
+  "gitCreateBranch",
+  "gitStagePaths",
+  "gitUnstagePaths",
+  "gitCommit",
+  "gitMergeBranch",
+  "gitPushBranch",
+  "githubGetRepository",
+  "githubCreateRepository",
+  "githubGetPullRequest",
+  "githubCreatePullRequest",
+  "githubMergePullRequest",
+] as const;
+export type SourceControlRelayOperation = (typeof sourceControlRelayOperations)[number];
+
+export const relayOperations = [
   "listWorkspaces",
   "listWorkspaceRoots",
   "listFiles",
@@ -625,10 +674,14 @@ export const relayOperationSchema = z.enum([
   "getWorkspaceContext",
   "startBackgroundTask",
   "getBackgroundTask",
+  "waitBackgroundTask",
   "listBackgroundTasks",
   "cancelBackgroundTask",
   "readBackgroundTaskLogs",
-]);
+  ...sourceControlRelayOperations,
+] as const;
+
+export const relayOperationSchema = z.enum(relayOperations);
 
 export type RelayOperation = z.infer<typeof relayOperationSchema>;
 
@@ -637,6 +690,7 @@ const relayRequestBase = {
   type: z.literal("request"),
   requestId: z.uuid(),
   deadline: operationDeadlineSchema,
+  context: relayOperationContextSchema.optional(),
 };
 
 export const relayRequestSchema = z.discriminatedUnion("operation", [
@@ -717,6 +771,11 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   }).strict(),
   z.object({
     ...relayRequestBase,
+    operation: z.literal("waitBackgroundTask"),
+    input: waitBackgroundTaskInputSchema,
+  }).strict(),
+  z.object({
+    ...relayRequestBase,
     operation: z.literal("listBackgroundTasks"),
     input: listBackgroundTasksInputSchema,
   }).strict(),
@@ -730,6 +789,17 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     operation: z.literal("readBackgroundTaskLogs"),
     input: readBackgroundTaskLogsInputSchema,
   }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitCreateBranch"), input: gitCreateBranchInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitStagePaths"), input: gitStagePathsInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitUnstagePaths"), input: gitUnstagePathsInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitCommit"), input: gitCommitInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitMergeBranch"), input: gitMergeBranchInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitPushBranch"), input: gitPushBranchInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubGetRepository"), input: githubGetRepositoryInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubCreateRepository"), input: githubCreateRepositoryInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubGetPullRequest"), input: githubGetPullRequestInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubCreatePullRequest"), input: githubCreatePullRequestInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubMergePullRequest"), input: githubMergePullRequestInputSchema }).strict(),
 ]);
 
 export type RelayRequest = z.infer<typeof relayRequestSchema>;
@@ -755,6 +825,7 @@ export const serializedErrorSchema = z
     code: z.enum(errorCodes),
     message: z.string(),
     lifecycle: operationLifecycleSchema.optional(),
+    details: errorDetailsSchema.optional(),
   })
   .strict();
 
@@ -809,7 +880,19 @@ export const relayResultSchemas = {
   getWorkspaceContext: getWorkspaceContextResultSchema,
   startBackgroundTask: backgroundTaskResultSchema,
   getBackgroundTask: backgroundTaskResultSchema,
+  waitBackgroundTask: backgroundTaskWaitResultSchema,
   listBackgroundTasks: backgroundTaskListResultSchema,
   cancelBackgroundTask: backgroundTaskResultSchema,
   readBackgroundTaskLogs: backgroundTaskLogsLookupResultSchema,
+  gitCreateBranch: gitCreateBranchResultSchema,
+  gitStagePaths: gitStagePathsResultSchema,
+  gitUnstagePaths: gitUnstagePathsResultSchema,
+  gitCommit: gitCommitResultSchema,
+  gitMergeBranch: gitMergeBranchResultSchema,
+  gitPushBranch: gitPushBranchResultSchema,
+  githubGetRepository: githubRepositoryResultSchema,
+  githubCreateRepository: githubCreateRepositoryResultSchema,
+  githubGetPullRequest: githubPullRequestResultSchema,
+  githubCreatePullRequest: githubCreatePullRequestResultSchema,
+  githubMergePullRequest: githubMergePullRequestResultSchema,
 } as const;

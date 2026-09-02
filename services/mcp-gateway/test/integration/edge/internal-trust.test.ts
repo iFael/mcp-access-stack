@@ -131,6 +131,7 @@ describe("embedded Gateway edge-trusted mode", () => {
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });
@@ -162,6 +163,7 @@ describe("embedded Gateway edge-trusted mode", () => {
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });

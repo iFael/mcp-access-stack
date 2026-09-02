@@ -1,67 +1,132 @@
-# Typed Git/GitHub Source-Control Implementation Plan
+# Typed Git/GitHub Source-Control Phase 4 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reconstruct the approved nine-operation typed Git/GitHub source-control boundary on the durable recovery branch without arbitrary command escape hatches, with explicit policy, typed confirmation, mutation reconciliation, sanitized credentials/audit, strict relay integration, and first-class MCP registration.
+**Goal:** Implement the approved Phase 4 typed source-control boundary with exactly eleven MCP tools and ten capabilities, covering six local Git operations and five GitHub operations without arbitrary shell, Git argv, `gh api`, force/history rewrite or caller-controlled HTTP escape hatches.
 
-**Architecture:** Keep local Git and GitHub API operations behind separate `GitRepositoryExecutor` and `GitHubExecutor` ports. MCP tools call those typed ports; Gateway maps them one-to-one onto strict relay operations; LocalAgent performs policy/target/confirmation/idempotency checks before invoking hardened Git/GitHub services. The reconstruction is based on `4d5747957d5512ef61827761efe00b045188502b`; the divergent `e73316b…` line is observation-only and is never merged implicitly.
+**Architecture:** Keep local Git and GitHub API operations behind separate `GitRepositoryExecutor` and `GitHubExecutor` ports. MCP tools call those typed ports; Gateway maps them one-to-one onto strict relay operations; LocalAgent performs policy, protected-branch, typed-confirmation, idempotency/reconciliation and audit checks before invoking hardened Git/GitHub services. The existing `GitService` remains inspection-oriented; mutable Git operations use a separate hardened `GitRepositoryService`.
 
 **Tech Stack:** TypeScript, Node.js, Zod, Jest, MCP SDK, Git CLI via `spawn(..., { shell: false })`, GitHub REST API via `fetch`, PowerShell only for repository orchestration/validation.
 
-**Spec:** `docs/superpowers/specs/2026-08-26-typed-source-control-github-design.md` (reconstituted approved SHA-256 `0c046147fc93bf776e740e8545f98bdfb79a0bf24233bb8ace1539613d5b1e63`)
+**Spec:** `docs/superpowers/specs/2026-08-26-typed-source-control-github-design.md`
 
-## Provenance
+## Current boundary and baseline
 
-Historical plan path: `docs/superpowers/plans/2026-08-26-typed-source-control-github.md`.
-Historical SHA-256: `285cec19dc6d460e445ba0cc1420de6c025a769a1517db81c5112bf8c82c2fca`.
+- Workspace: `mcp-access-stack`.
+- Project root: `runtime/source-worktrees/daily-operational-hardening-phase1/mcp-access-stack`.
+- Branch: `feat/daily-operational-hardening-phase1`.
+- Phase 3 local HEAD at Phase 4 opening: `950c504fc421cc756636d12f89dd57ae118bcd59`.
+- Remote branch remains at Phase 1: `2704b473a89fed349921201238730f4a04145478`.
+- Origin/main baseline remains `59d00ba76584a23e582844f36b8acaecb5980a1c`.
+- Original operational checkout remains protected on `feat/minimal-windows-execution-node` with its 19 pre-existing modified `.ps1` files and empty staging.
+- No push, PR, merge, deploy, restart or cutover is part of Phase 4 implementation.
 
-This file is a semantic reconstruction, not a byte-identical recovery. Tasks 1–7 preserve the known historical sequence. Task 8 is explicitly newly specified as the final end-to-end/security gate because the exact historical Task 8 text was not recovered.
+## Global constraints
 
-## Global Constraints
+- Use exclusively MCP GPT - OFICIAL V3 for repository/runtime work.
+- TDD is mandatory for new production behavior: focused RED -> minimal GREEN -> affected regression.
+- Keep exactly eleven public source-control MCP tools and exactly ten source-control capabilities.
+- Keep local Git and GitHub as separate trust domains and executor ports.
+- No generic `source_control`, `git_execute`, `github_execute`, raw Git argv, arbitrary `gh`, arbitrary GitHub URL/method/header or caller-provided credentials.
+- No force push, force-with-lease, reset as a public operation, amend, rebase, history rewrite, branch deletion, destructive checkout, non-fast-forward local merge or automatic conflict resolution.
+- `main` is structurally protected from direct typed commit, local merge and push. Creating a feature branch from an expected `main` HEAD is allowed.
+- `github_merge_pull_request` is a distinct typed remote integration operation; no production merge is executed during Phase 4 implementation.
+- Mutating relay operations are never added to automatic transport retry merely because their backend can reconcile.
+- Credentials, Authorization, raw Git stderr, raw GitHub bodies and confirmation secrets must never appear in MCP results, audit records, receipts, generated manifests or public errors.
+- Catalog identity and Edge manifest are generated/recalculated through existing canonical repository mechanisms; never hand-invent revision hashes.
+- `.codex` remains local operational state and is never committed.
+- Each Task may receive its own local commit after GREEN/review gates; no Phase 4 commit is pushed while Phases 4–7 remain in progress.
 
-- Authoritative Git boundary: `%USERPROFILE%\MCP-GPT-Boundaries\mcp-access-stack-typed-source-control`.
-- Branch: `recovery/typed-source-control`; starting HEAD: `4d5747957d5512ef61827761efe00b045188502b`.
-- Do not merge/cherry-pick `recovery/observed-main-e73316b` without a separate reviewed decision.
-- Use only MCP GPT OFICIAL V3 for repository/runtime work.
-- TDD is mandatory: observe the focused RED before production implementation for every behavioral task.
-- Preserve the checkout operational boundary; no writes there except ignored `.codex` checkpoint files.
-- No reset/clean/stash/destructive checkout, force push, history rewrite, branch deletion, arbitrary `gh api`, raw Git argv, raw GitHub URL/header, or permanent PAT.
-- No commit until the user explicitly authorizes that Task's commit gate. A `Prossiga` after a stated commit gate authorizes only that commit/next stated gate, not push/deploy.
-- No push, real GitHub mutation, release, deploy, activation, restart, or cutover without separate explicit authorization.
-- Historical PASS results from the lost scratch are provenance only; every reconstructed Task needs fresh evidence.
-- Heavy repository-wide gates should run as persisted/background V3 tasks when they exceed the synchronous window.
-- Source-control public V1 surface is exactly nine tools and exactly nine capabilities.
+## Exact Phase 4 surface
 
-## Canonical V1 Contract Matrix
+Public tools:
 
-All schemas are `.strict()`. All inputs contain `workspaceId`; repository-local operations also accept optional `root`. `confirmationId` is optional only on operations that can require typed confirmation.
+```ts
+export const SOURCE_CONTROL_TOOL_NAMES = [
+  "git_create_branch",
+  "git_stage_paths",
+  "git_unstage_paths",
+  "git_commit",
+  "git_merge_branch",
+  "git_push_branch",
+  "github_get_repository",
+  "github_create_repository",
+  "github_get_pull_request",
+  "github_create_pull_request",
+  "github_merge_pull_request",
+] as const;
+```
 
-| Operation | Required operation-specific input | Optional input | Result core fields |
-| --- | --- | --- | --- |
-| `git_create_branch` | `branch`, `expectedHeadSha` | `root` | `root`, `branch`, `headSha` |
-| `git_stage_paths` | non-empty unique `paths` | `root` | `root`, `headSha`, `indexTreeSha`, `paths` |
-| `git_commit` | `message`, `expectedHeadSha`, `expectedIndexTreeSha` | `root` | `root`, `branch`, `commitSha` |
-| `git_push_branch` | `branch`, `expectedLocalSha` | `root`, `remote`=`origin`, `expectedRemoteSha`, `confirmationId` | `root`, `remote`, `branch`, `localSha`, `remoteSha` |
-| `github_get_repository` | `owner`, `repository` | `root` | `owner`, `name`, `fullName`, `defaultBranch`, `visibility`, `url` |
-| `github_create_repository` | `owner`, `name`, `visibility` | `description`, `confirmationId` | repository result above |
-| `github_get_pull_request` | `owner`, `repository`, `pullNumber` | `root` | `number`, `state`, `title`, `url`, `headSha`, `baseSha`, `merged` |
-| `github_create_pull_request` | `owner`, `repository`, `title`, `head`, `base` | `root`, `body`, `draft`, `confirmationId` | pull-request result above |
-| `github_merge_pull_request` | `owner`, `repository`, `pullNumber`, `expectedPullRequestHeadSha`, `mergeMethod` (`merge` or `squash`) | `root`, `confirmationId` | `number`, `merged`, `mergeSha` |
+Capabilities:
 
-Validation primitives:
+```ts
+export const sourceControlCapabilities = [
+  "git.branch.write",
+  "git.index.write",
+  "git.commit.write",
+  "git.merge.write",
+  "git.remote.push",
+  "github.repository.read",
+  "github.repository.create",
+  "github.pull_request.read",
+  "github.pull_request.create",
+  "github.pull_request.merge",
+] as const;
+```
 
-- Git SHA: lowercase/uppercase hexadecimal 40 characters normalized to lowercase.
-- Git branch: 1–255 chars, reject control chars, whitespace-only names, leading `-`, `..`, `@{`, backslash, `~`, `^`, `:`, `?`, `*`, `[`, trailing `.`, trailing `/`, and `.lock` suffix segments.
-- Git paths: workspace-relative POSIX-normalized strings; reject absolute paths, `..` traversal, `.git` internals, duplicates; max 200 entries.
-- Commit message: trimmed 1–4000 chars; no NUL.
-- GitHub owner/repository: GitHub-compatible safe slug, 1–100 chars, no slash/path traversal; `fullName` is `owner/repository`.
-- Pull number: positive integer.
-- Visibility: `private | public | internal`; service must reject `internal` when GitHub API/provider reports it is not accepted for the target owner instead of silently changing visibility.
-- `expectedRemoteSha` omission means the caller does not assert the prior remote SHA; the service must still snapshot and detect an intra-operation remote change before publishing/reconciling.
+Catalog acceptance after Task 7:
+- full MCP catalog: exactly 61 tools;
+- Edge workspace manifest: exactly 28 tools.
 
-### Structured confirmation result
+---
 
-The four operations that can require typed confirmation (`git_push_branch`, `github_create_repository`, `github_create_pull_request`, `github_merge_pull_request`) return a strict discriminated union. Define `confirmableSourceControlOperationNameSchema = z.enum(["git_push_branch", "github_create_repository", "github_create_pull_request", "github_merge_pull_request"])`; the generic `sourceControlOperationNameSchema` contains all nine V1 names. The first authorized-but-unconfirmed call returns:
+### Task 1: Strict eleven-operation contracts and separate executor ports
+
+**Files:**
+- Create: `packages/mcp-core/src/source-control-contracts.ts`
+- Create: `packages/mcp-core/src/source-control-executor.ts`
+- Modify: `packages/mcp-core/src/errors.ts`
+- Modify: `packages/mcp-core/src/index.ts`
+- Create: `packages/mcp-core/test/source-control-contracts.test.ts`
+- Create: `packages/mcp-core/test/source-control-executor.test.ts`
+
+**Interfaces:**
+- Consumes: existing `OperationContext` from `packages/mcp-core/src/contracts.ts`.
+- Produces: all eleven strict input/result schemas/types; `GitRepositoryExecutor`; `GitHubExecutor`; source-control operation-name enums; reusable Git/GitHub domain primitives.
+
+Required executor signatures:
+
+```ts
+export interface GitRepositoryExecutor {
+  createBranch(input: GitCreateBranchInput, context?: OperationContext): Promise<GitCreateBranchResult>;
+  stagePaths(input: GitStagePathsInput, context?: OperationContext): Promise<GitStagePathsResult>;
+  unstagePaths(input: GitUnstagePathsInput, context?: OperationContext): Promise<GitUnstagePathsResult>;
+  commit(input: GitCommitInput, context?: OperationContext): Promise<GitCommitResult>;
+  mergeBranch(input: GitMergeBranchInput, context?: OperationContext): Promise<GitMergeBranchResult>;
+  pushBranch(input: GitPushBranchInput, context?: OperationContext): Promise<GitPushBranchResult>;
+}
+
+export interface GitHubExecutor {
+  getRepository(input: GitHubGetRepositoryInput, context?: OperationContext): Promise<GitHubRepositoryResult>;
+  createRepository(input: GitHubCreateRepositoryInput, context?: OperationContext): Promise<GitHubCreateRepositoryResult>;
+  getPullRequest(input: GitHubGetPullRequestInput, context?: OperationContext): Promise<GitHubPullRequestResult>;
+  createPullRequest(input: GitHubCreatePullRequestInput, context?: OperationContext): Promise<GitHubCreatePullRequestResult>;
+  mergePullRequest(input: GitHubMergePullRequestInput, context?: OperationContext): Promise<GitHubMergePullRequestResult>;
+}
+```
+
+Confirmable operations are exactly:
+
+```ts
+export const confirmableSourceControlOperationNameSchema = z.enum([
+  "git_push_branch",
+  "github_create_repository",
+  "github_create_pull_request",
+  "github_merge_pull_request",
+]);
+```
+
+Required confirmation result:
 
 ```ts
 export const sourceControlConfirmationRequiredSchema = z.object({
@@ -73,85 +138,36 @@ export const sourceControlConfirmationRequiredSchema = z.object({
 }).strict();
 ```
 
-The successful mutation variant carries `status: "completed"` plus the result fields from the matrix. Backend services in Tasks 4–5 only produce the completed variant; LocalAgent Task 6 may return the confirmation-required variant before invoking a backend. Read operations remain direct strict result objects.
-Exact V1 capabilities:
+Required error codes added to `AppErrorCode`:
 
 ```ts
-export const sourceControlCapabilities = [
-  "git.branch.write",
-  "git.index.write",
-  "git.commit.write",
-  "git.remote.push",
-  "github.repository.read",
-  "github.repository.create",
-  "github.pull_request.read",
-  "github.pull_request.create",
-  "github.pull_request.merge",
-] as const;
+"SOURCE_CONTROL_CAPABILITY_DENIED"
+"SOURCE_CONTROL_CONFIRMATION_INVALID"
+"SOURCE_CONTROL_IDEMPOTENCY_CONFLICT"
+"SOURCE_CONTROL_RECONCILIATION_REQUIRED"
+"GIT_HEAD_MISMATCH"
+"GIT_BRANCH_CONFLICT"
+"GIT_INDEX_CHANGED"
+"GIT_REMOTE_CHANGED"
+"GIT_MERGE_NOT_FAST_FORWARD"
+"GIT_PROTECTED_BRANCH"
 ```
 
-## Spec Coverage Map
+- [ ] **Step 1: Write RED contract tests for exact domain primitives and escape-hatch rejection**
 
-| Design requirement | Implemented/proved by |
-| --- | --- |
-| §1 objective / typed least-privilege boundary | Global constraints; Tasks 1–8 |
-| §2 non-goals / no raw Git, `gh`, URL/header, force/history rewrite or PAT | Tasks 1, 4, 5 and Task 8 static/public-boundary gate |
-| §3 exact nine public tools | Task 1 contracts; Task 7 registration; Task 8 exact-set invariant |
-| §4 exact nine capabilities and target policy | Task 2; Task 6 authorization; Task 8 exact-set invariant |
-| §5 strict contracts and separate Git/GitHub ports | Task 1; Task 7 keeps `sourceControlExecutor` separate from `WorkspaceExecutor` |
-| §6 typed confirmation | Task 3 registry; Task 6 operation binding; Task 8 integration |
-| §7 idempotency/reconciliation | Task 3 receipt stores; Tasks 4–6 reconciliation; Task 8 regression |
-| §8 hardened `GitRepositoryService` | Task 4; Task 8 static gate |
-| §9 GitHub credential/HTTP boundary | Task 5; Task 8 redaction/secret gate |
-| §10 LocalAgent pipeline/canonical origin | Task 6 LocalAgent tests and implementation |
-| §11 strict relay/context/hello | Task 6 relay tests and implementation |
-| §12 sanitized audit/errors | Tasks 1, 5, 6; Task 8 leakage assertions |
-| §13 first-class MCP registration/catalog | Task 7; Task 8 MCP integration |
-| §14 TDD/verification | Every behavioral Task; Task 8 global gates |
-| §15 sequencing boundary | Tasks 1–8 in this plan; Task 8 explicitly marked reconstructed-new |
-| §16 acceptance criteria | Task 8 plus Final Completion Criteria |
-
----
-
-### Task 1: Strict source-control contracts and executor ports
-
-**Files:**
-- Create: `packages/mcp-core/src/source-control-contracts.ts`
-- Create: `packages/mcp-core/src/source-control-executor.ts`
-- Modify: `packages/mcp-core/src/errors.ts`
-- Modify: `packages/mcp-core/src/index.ts`
-- Test: `packages/mcp-core/test/source-control-contracts.test.ts`
-- Test: `packages/mcp-core/test/source-control-executor.test.ts`
-
-**Interfaces:**
-- Consumes: existing `OperationContext` from `packages/mcp-core/src/contracts.ts`.
-- Produces: all nine strict input/result schemas/types plus `GitRepositoryExecutor` and `GitHubExecutor` used by Tasks 4–7.
+Create `source-control-contracts.test.ts` and assert:
 
 ```ts
-export interface GitRepositoryExecutor {
-  createBranch(input: GitCreateBranchInput, context?: OperationContext): Promise<GitCreateBranchResult>;
-  stagePaths(input: GitStagePathsInput, context?: OperationContext): Promise<GitStagePathsResult>;
-  commit(input: GitCommitInput, context?: OperationContext): Promise<GitCommitResult>;
-  pushBranch(input: GitPushBranchInput, context?: OperationContext): Promise<GitPushBranchResult>;
-}
-
-export interface GitHubExecutor {
-  getRepository(input: GitHubGetRepositoryInput, context?: OperationContext): Promise<GitHubRepositoryResult>;
-  createRepository(input: GitHubCreateRepositoryInput, context?: OperationContext): Promise<GitHubRepositoryResult>;
-  getPullRequest(input: GitHubGetPullRequestInput, context?: OperationContext): Promise<GitHubPullRequestResult>;
-  createPullRequest(input: GitHubCreatePullRequestInput, context?: OperationContext): Promise<GitHubPullRequestResult>;
-  mergePullRequest(input: GitHubMergePullRequestInput, context?: OperationContext): Promise<GitHubMergePullRequestResult>;
-}
-```
-
-- [ ] **Step 1: Write contract RED tests for exact fields and forbidden escape hatches**
-
-```ts
-expect(gitPushBranchInputSchema.parse({
+expect(gitShaSchema.parse("A".repeat(40))).toBe("a".repeat(40));
+expect(() => gitBranchSchema.parse("../main")).toThrow();
+expect(() => gitStagePathsInputSchema.parse({
   workspaceId: "repo",
-  branch: "feature/x",
-  expectedLocalSha: "a".repeat(40),
-}).remote).toBe("origin");
+  paths: ["src/a.ts", "src/a.ts"],
+})).toThrow();
+expect(() => gitStagePathsInputSchema.parse({
+  workspaceId: "repo",
+  paths: [".git/config"],
+})).toThrow();
 expect(() => gitPushBranchInputSchema.parse({
   workspaceId: "repo",
   branch: "feature/x",
@@ -166,71 +182,105 @@ expect(() => githubGetRepositoryInputSchema.parse({
 })).toThrow();
 ```
 
-Also test all matrix fields, SHA normalization, invalid branch names, path traversal/`.git`, duplicate stage paths, unknown fields, PR number, visibility and merge-method enums. Test the confirmation-required discriminant and prove the four confirmable result schemas accept only the exact confirmation-required or completed variant.
+Also assert all eleven schemas are `.strict()` by adding one unknown field to each valid fixture and expecting rejection.
 
-- [ ] **Step 2: Run the focused tests and capture RED**
-
-Run:
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts
-```
-Expected: FAIL because the source-control modules/exports do not exist.
-
-- [ ] **Step 3: Implement strict schemas/types and ports**
-
-Implement the matrix exactly in `source-control-contracts.ts`. Export schema/type pairs named:
-`gitCreateBranchInputSchema`, `gitCreateBranchResultSchema`, `gitStagePathsInputSchema`, `gitStagePathsResultSchema`, `gitCommitInputSchema`, `gitCommitResultSchema`, `gitPushBranchInputSchema`, `gitPushBranchResultSchema`, `githubGetRepositoryInputSchema`, `githubRepositoryResultSchema`, `githubCreateRepositoryInputSchema`, `githubGetPullRequestInputSchema`, `githubPullRequestResultSchema`, `githubCreatePullRequestInputSchema`, `githubMergePullRequestInputSchema`, `githubMergePullRequestResultSchema`, `sourceControlConfirmationRequiredSchema`, `sourceControlOperationNameSchema`, `confirmableSourceControlOperationNameSchema`, plus reusable `gitShaSchema`, `gitBranchSchema`, `githubOwnerSchema`, `githubRepositoryNameSchema`, `githubRepositoryFullNameSchema`.
-
-Add these error codes in `errors.ts`, for use by later Tasks:
+- [ ] **Step 2: Write RED tests for the two new local operations**
 
 ```ts
-"SOURCE_CONTROL_CAPABILITY_DENIED",
-"SOURCE_CONTROL_CONFIRMATION_INVALID",
-"SOURCE_CONTROL_IDEMPOTENCY_CONFLICT",
-"SOURCE_CONTROL_RECONCILIATION_REQUIRED",
-"GIT_HEAD_MISMATCH",
-"GIT_BRANCH_CONFLICT",
-"GIT_INDEX_CHANGED",
-"GIT_REMOTE_CHANGED",
+expect(gitUnstagePathsInputSchema.parse({
+  workspaceId: "repo",
+  paths: ["src/a.ts"],
+  expectedHeadSha: "a".repeat(40),
+  expectedIndexTreeSha: "b".repeat(40),
+})).toEqual({
+  workspaceId: "repo",
+  paths: ["src/a.ts"],
+  expectedHeadSha: "a".repeat(40),
+  expectedIndexTreeSha: "b".repeat(40),
+});
+
+expect(gitMergeBranchInputSchema.parse({
+  workspaceId: "repo",
+  sourceBranch: "feature/x",
+  expectedTargetHeadSha: "a".repeat(40),
+  expectedSourceHeadSha: "b".repeat(40),
+})).toMatchObject({ sourceBranch: "feature/x" });
 ```
 
-Re-export both new modules from `index.ts`.
+Assert `gitMergeBranchInputSchema` rejects `strategy`, `noFf`, `squash`, `rebase`, `force` and a caller-supplied target branch field.
 
-- [ ] **Step 4: Run GREEN + core typecheck**
+- [ ] **Step 3: Write RED executor-port compile tests**
 
-```bash
+Create minimal compile-time/runtime structural fixtures in `source-control-executor.test.ts` that instantiate objects satisfying all six Git methods and five GitHub methods, then assert method names are exactly those eleven logical operations.
+
+- [ ] **Step 4: Run RED**
+
+Run:
+
+```powershell
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts
+```
+
+Expected: FAIL because the new modules/exports do not exist.
+
+- [ ] **Step 5: Implement minimal contracts and ports**
+
+Implement the exact matrix from the approved spec, including:
+- `gitCreateBranchInputSchema` / `gitCreateBranchResultSchema`;
+- `gitStagePathsInputSchema` / `gitStagePathsResultSchema`;
+- `gitUnstagePathsInputSchema` / `gitUnstagePathsResultSchema`;
+- `gitCommitInputSchema` / `gitCommitResultSchema`;
+- `gitMergeBranchInputSchema` / `gitMergeBranchResultSchema`;
+- `gitPushBranchInputSchema` / completed/confirmation union result;
+- `githubGetRepositoryInputSchema` / `githubRepositoryResultSchema`;
+- `githubCreateRepositoryInputSchema` / `githubCreateRepositoryResultSchema` (confirmation-required or completed repository union);
+- `githubGetPullRequestInputSchema` / `githubPullRequestResultSchema`;
+- `githubCreatePullRequestInputSchema` / `githubCreatePullRequestResultSchema` (confirmation-required or completed PR union);
+- `githubMergePullRequestInputSchema` / `githubMergePullRequestResultSchema` (confirmation-required or completed merge union);
+- `gitPushBranchResultSchema` as the strict confirmation-required/completed push union;
+- `sourceControlOperationNameSchema` with exactly eleven names;
+- `confirmableSourceControlOperationNameSchema` with exactly four names;
+- reusable `gitShaSchema`, `gitBranchSchema`, `gitPathSchema`, `githubOwnerSchema`, `githubRepositoryNameSchema`, `githubRepositoryFullNameSchema`.
+
+Git path normalization must reject absolute paths, `..`, `.git` and duplicates; max array size = 200.
+
+- [ ] **Step 6: Run GREEN + core typecheck**
+
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts
 npx tsc --noEmit -p packages/mcp-core/tsconfig.json
 ```
-Expected: both commands exit 0.
 
-- [ ] **Step 5: Review Task 1 diff/security**
+Expected: both exit 0.
 
-Verify `git diff --check`, no `force`, raw command/argv/url/header input fields, and no credentials. Confirm only Task 1 files are staged when the commit gate is reached.
+- [ ] **Step 7: Review Task 1 boundary and create local commit**
 
-- [ ] **Step 6: STOP for explicit commit authorization, then commit only if authorized**
+Run `git diff --check`, source-control path secret scan and static search for forbidden public input keys. Stage only Task 1 files and commit locally:
 
-```bash
-git add packages/mcp-core/src/source-control-contracts.ts packages/mcp-core/src/source-control-executor.ts packages/mcp-core/src/errors.ts packages/mcp-core/src/index.ts packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts
-git commit -m "feat(mcp): add typed source control contracts"
+```text
+feat(mcp): add typed source control contracts
 ```
+
+No push.
 
 ---
 
-### Task 2: Explicit source-control policy and target authorization
+### Task 2: Explicit ten-capability policy and protected-target authorization
 
 **Files:**
 - Create: `packages/mcp-core/src/source-control-policy.ts`
 - Modify: `packages/mcp-core/src/policy.ts`
 - Modify: `packages/mcp-core/src/index.ts`
 - Modify: `config/workspace-policy.example.json`
-- Test: `packages/mcp-core/test/source-control-policy.test.ts`
-- Test: `packages/mcp-core/test/loopback-policy.test.ts`
-- Test: `packages/mcp-core/test/policy-merge.test.ts` (regression only; production `policy-merge.ts` should remain unchanged unless this test proves a defect)
+- Create: `packages/mcp-core/test/source-control-policy.test.ts`
+- Modify: `packages/mcp-core/test/loopback-policy.test.ts`
+- Modify: `packages/mcp-core/test/policy-merge.test.ts` only for regression coverage.
 
 **Interfaces:**
-- Consumes: `SourceControlCapability` and GitHub full-name primitives from Task 1; `WorkspacePolicy`/`PermissionProfile`.
-- Produces: optional `WorkspacePolicy.sourceControl`, `sourceControlPolicySchema`, and `assertSourceControlCapability()` for LocalAgent Task 6.
+- Consumes: `SourceControlCapability`, GitHub full-name primitives from Task 1 and existing `WorkspacePolicy`.
+- Produces: `sourceControlPolicySchema`, `WorkspacePolicy.sourceControl`, `assertSourceControlCapability()`, protected-branch helper(s) used by LocalAgent/GitRepositoryService.
+
+Required schema:
 
 ```ts
 export const sourceControlPolicySchema = z.object({
@@ -238,7 +288,11 @@ export const sourceControlPolicySchema = z.object({
   accountOwners: z.array(githubOwnerSchema).default([]),
   additionalRepositories: z.array(githubRepositoryFullNameSchema).default([]),
 }).strict();
+```
 
+Required capability assertion shape:
+
+```ts
 export function assertSourceControlCapability(input: {
   policy: Pick<WorkspacePolicy, "permissionProfile" | "sourceControl">;
   capability: SourceControlCapability;
@@ -249,47 +303,76 @@ export function assertSourceControlCapability(input: {
 }): void;
 ```
 
-- [ ] **Step 1: Write RED tests**
+- [ ] **Step 1: Write RED policy tests**
 
-Cover: legacy policy parses with no `sourceControl`; exact capability required; mutation denied unless `full-repo-write`; read allowed independently of shell permission; canonical repository allowed; different repository denied unless in `additionalRepositories`; repository creation owner denied unless in `accountOwners`. Add a `policy-merge.test.ts` regression proving an explicit workspace preserves its parsed `sourceControl` object unchanged while a discovered workspace receives no `sourceControl` privileges.
+Assert:
+- legacy policy with no `sourceControl` parses and grants none;
+- exact capability is required;
+- `full-repo-write` alone grants none;
+- mutation requires `full-repo-write` plus exact capability;
+- `git_stage_paths` and `git_unstage_paths` both map to `git.index.write`;
+- `git_merge_branch` requires `git.merge.write` and not `git.branch.write`;
+- canonical repository is authorized only when exact target matches;
+- `additionalRepositories` authorizes explicit non-canonical target;
+- repository creation owner must be in `accountOwners`.
+
+- [ ] **Step 2: Write RED protected-branch tests**
+
+Test a typed helper with explicit state rather than shell strings:
 
 ```ts
-expect(() => assertSourceControlCapability({
-  policy: writablePolicy({ capabilities: ["github.repository.read"] }),
-  capability: "github.repository.read",
-  repository: "acme/other",
-  canonicalRepository: "acme/app",
-  mutation: false,
-})).toThrow(expect.objectContaining({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" }));
+expect(() => assertTypedGitBranchMutationAllowed({
+  operation: "git_commit",
+  currentBranch: "main",
+})).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
+
+expect(() => assertTypedGitBranchMutationAllowed({
+  operation: "git_merge_branch",
+  currentBranch: "main",
+})).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
+
+expect(() => assertTypedGitBranchMutationAllowed({
+  operation: "git_push_branch",
+  currentBranch: "feature/x",
+  branch: "main",
+})).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
 ```
 
-- [ ] **Step 2: Run RED**
+Also assert branch creation from current `main` is not rejected solely because the source branch is protected.
 
-```bash
+- [ ] **Step 3: Run RED**
+
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-policy.test.ts packages/mcp-core/test/loopback-policy.test.ts packages/mcp-core/test/policy-merge.test.ts
 ```
-Expected: new policy tests fail before production support.
 
-- [ ] **Step 3: Implement additive fail-closed policy**
+Expected: new policy/protected-branch tests fail before production support.
 
-Add optional `sourceControl` to `workspacePolicySchema`; preserve legacy behavior when omitted. Do not add custom source-control merge logic unless the RED regression demonstrates a defect: the current merge passes explicit `WorkspacePolicy` objects through and discovered workspaces are constructed without `sourceControl`. Export `assertSourceControlCapability` and keep error messages target-safe.
+- [ ] **Step 4: Implement additive fail-closed policy**
 
-Update the example JSON with an explicit example block containing all three arrays but no credentials.
+Add optional `sourceControl` to `workspacePolicySchema`. Preserve legacy behavior when omitted. Export the ten-capability enum/list and typed protected-branch helper. Do not tie authorization to `allowShell` or `confirmationMode`.
 
-- [ ] **Step 4: Run GREEN + core regression/typecheck**
+Update `config/workspace-policy.example.json` with a non-secret example containing explicit arrays and all ten capability names.
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-policy.test.ts packages/mcp-core/test/loopback-policy.test.ts packages/mcp-core/test/policy-merge.test.ts
+- [ ] **Step 5: Run GREEN + core regression/typecheck**
+
+Run the Task 2 focused command plus:
+
+```powershell
 npx tsc --noEmit -p packages/mcp-core/tsconfig.json
 ```
+
 Expected: exit 0.
 
-- [ ] **Step 5: STOP for explicit commit authorization, then commit only if authorized**
+- [ ] **Step 6: Review and local commit**
 
-```bash
-git add packages/mcp-core/src/source-control-policy.ts packages/mcp-core/src/policy.ts packages/mcp-core/src/index.ts config/workspace-policy.example.json packages/mcp-core/test/source-control-policy.test.ts packages/mcp-core/test/loopback-policy.test.ts packages/mcp-core/test/policy-merge.test.ts
-git commit -m "feat(policy): add source control capabilities"
+Run diff-check/secret-scan; verify no legacy workspace receives implicit source-control privileges. Commit locally:
+
+```text
+feat(policy): add typed source control capabilities
 ```
+
+No push.
 
 ---
 
@@ -300,23 +383,33 @@ git commit -m "feat(policy): add source control capabilities"
 - Create: `packages/mcp-core/src/mutation-receipts.ts`
 - Modify: `packages/mcp-core/src/index.ts`
 - Create: `services/workspace-agent/src/source-control/file-mutation-receipt-store.ts`
-- Test: `packages/mcp-core/test/typed-confirmation.test.ts`
-- Test: `packages/mcp-core/test/mutation-receipts.test.ts`
-- Test: `services/workspace-agent/test/unit/source-control/file-mutation-receipt-store.test.ts`
+- Create: `packages/mcp-core/test/typed-confirmation.test.ts`
+- Create: `packages/mcp-core/test/mutation-receipts.test.ts`
+- Create: `services/workspace-agent/test/unit/source-control/file-mutation-receipt-store.test.ts`
 
 **Interfaces:**
-- Consumes: `OperationContext.idempotencyKey`, `AppError`, typed operation names/targets from Task 1.
-- Produces: `TypedConfirmationRegistry`, canonical argument digest helpers, `MutationReceiptStore`, `InMemoryMutationReceiptStore`, and `FileMutationReceiptStore` used by Task 6.
+- Consumes: Task 1 operation names and `OperationContext.idempotencyKey`.
+- Produces: canonical argument digest, `TypedConfirmationRegistry`, `MutationReceiptStore`, in-memory implementation and persistent file implementation.
+
+Canonical confirmation binding:
 
 ```ts
 export interface TypedConfirmationBinding {
   workspaceId: string;
-  operation: string;
+  operation: ConfirmableSourceControlOperationName;
   targetResource: string;
   canonicalArgumentsDigest: string;
 }
+```
 
-export interface MutationReceiptIdentity extends TypedConfirmationBinding {
+Receipt identity/state:
+
+```ts
+export interface MutationReceiptIdentity {
+  workspaceId: string;
+  operation: SourceControlOperationName;
+  targetResource: string;
+  canonicalArgumentsDigest: string;
   idempotencyKey: string;
 }
 
@@ -327,165 +420,219 @@ export type MutationReceiptState =
   | "reconciliation_required";
 ```
 
-- [ ] **Step 1: Write confirmation RED tests**
+- [ ] **Step 1: Write RED typed-confirmation tests**
 
-Prove TTL <= 10 minutes, one-shot consume, argument/target/workspace/operation mismatch rejection without consuming the original grant, expiry rejection, and canonical digest stability independent of object key order.
+Prove TTL <= 10 minutes, opaque ids, one-shot consume, expiry, exact workspace/operation/target/digest binding and that mismatched consumption does not invalidate the original matching grant.
 
-- [ ] **Step 2: Write receipt RED tests**
+- [ ] **Step 2: Write RED canonical-digest tests**
 
-Prove reserve -> executing -> completed; completed same identity replay; same idempotency key + different binding throws `SOURCE_CONTROL_IDEMPOTENCY_CONFLICT`; executing/reconciliation states cannot blind retry; stored records never contain credential fields.
+Prove object-key-order independence and semantic difference sensitivity:
 
-For file store, prove atomic temp-write/rename semantics, reload persistence, per-idempotency-key serialization and restrictive runtime-private directory placement.
+```ts
+expect(canonicalSourceControlArgumentsDigest({ a: 1, b: 2 }))
+  .toBe(canonicalSourceControlArgumentsDigest({ b: 2, a: 1 }));
+expect(canonicalSourceControlArgumentsDigest({ a: 1 }))
+  .not.toBe(canonicalSourceControlArgumentsDigest({ a: 2 }));
+```
 
-- [ ] **Step 3: Run RED**
+- [ ] **Step 3: Write RED mutation-receipt tests**
 
-```bash
+Prove:
+- reserve -> executing -> completed;
+- completed same-identity replay returns stored validated result without backend intent;
+- same idempotency key + changed identity throws `SOURCE_CONTROL_IDEMPOTENCY_CONFLICT`;
+- `executing` cannot be blindly retried;
+- `reconciliation_required` remains explicit;
+- receipts reject credential-like fields from persisted public result projections.
+
+- [ ] **Step 4: Write RED persistent file-store tests**
+
+Prove atomic temp-write/rename, reload persistence, per-idempotency-key serialization and storage under `.runtime-private/source-control-receipts` or the existing runtime-private convention resolved by the service. Verify the store does not write confirmation IDs or credentials.
+
+- [ ] **Step 5: Run RED**
+
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/typed-confirmation.test.ts packages/mcp-core/test/mutation-receipts.test.ts
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/file-mutation-receipt-store.test.ts
 ```
+
 Expected: FAIL before modules exist.
 
-- [ ] **Step 4: Implement confirmation + receipt stores**
+- [ ] **Step 6: Implement minimal confirmation/receipt state machines**
 
-`TypedConfirmationRegistry.issue(binding, ttlMs)` returns an opaque confirmation id; `consume(id, binding)` validates exact canonical binding and one-shot semantics. Do not derive authorization from command strings.
+Implement only typed APIs needed by Phase 4. `TypedConfirmationRegistry` must not reuse `CommandConfirmationRegistry`; shell-command text must not enter its binding. `MutationReceiptStore` must persist only validated public result data and canonical identity metadata.
 
-`MutationReceiptStore` must expose typed operations equivalent to:
+- [ ] **Step 7: Run GREEN + affected typechecks**
 
-```ts
-interface MutationReceiptStore {
-  get(idempotencyKey: string): Promise<MutationReceipt | undefined>;
-  reserve(identity: MutationReceiptIdentity): Promise<MutationReceipt>;
-  markExecuting(identity: MutationReceiptIdentity): Promise<void>;
-  complete(identity: MutationReceiptIdentity, result: unknown): Promise<void>;
-  markReconciliationRequired(identity: MutationReceiptIdentity): Promise<void>;
-}
-```
+Run Step 5 commands plus:
 
-Persist only validated public result data and canonical identity metadata. Never persist credential providers, Authorization, raw errors or confirmation secrets.
-
-- [ ] **Step 5: Run GREEN + affected typechecks**
-
-Run the two commands from Step 3, then:
-
-```bash
+```powershell
 npx tsc --noEmit -p packages/mcp-core/tsconfig.json
 npx tsc --noEmit -p services/workspace-agent/tsconfig.json
 ```
-Expected: exit 0.
 
-- [ ] **Step 6: STOP for explicit commit authorization, then commit only if authorized**
+- [ ] **Step 8: Review and local commit**
 
-```bash
-git add packages/mcp-core/src/typed-confirmation.ts packages/mcp-core/src/mutation-receipts.ts packages/mcp-core/src/index.ts services/workspace-agent/src/source-control/file-mutation-receipt-store.ts packages/mcp-core/test/typed-confirmation.test.ts packages/mcp-core/test/mutation-receipts.test.ts services/workspace-agent/test/unit/source-control/file-mutation-receipt-store.test.ts
-git commit -m "feat(source-control): add confirmation and mutation receipts"
+Secret scan all Task 3 paths; search for `token`, `authorization`, `confirmationId` inside persisted receipt serialization and verify only schema/type names are present where appropriate, not persisted values. Commit locally:
+
+```text
+feat(source-control): add confirmation and mutation receipts
 ```
+
+No push.
 
 ---
 
-### Task 4: Hardened local Git repository service
+### Task 4: Hardened six-operation GitRepositoryService
 
 **Files:**
+- Create: `services/workspace-agent/src/source-control/git-process-runner.ts`
 - Create: `services/workspace-agent/src/source-control/git-repository-service.ts`
-- Test: `services/workspace-agent/test/unit/source-control/git-repository-service.test.ts`
-- Test support: `services/workspace-agent/test/support/helpers.ts` only if the existing Git fixture needs a narrowly scoped helper.
+- Modify: `services/workspace-agent/src/git/service.ts` only if a narrow shared path/root authorization primitive must be extracted.
+- Modify/Create narrow shared helper under `services/workspace-agent/src/git/` or `services/workspace-agent/src/source-control/` for root authorization only if RED coverage proves duplication otherwise.
+- Create: `services/workspace-agent/test/unit/source-control/git-process-runner.test.ts`
+- Create: `services/workspace-agent/test/unit/source-control/git-repository-service.test.ts`
 
 **Interfaces:**
-- Consumes: `GitRepositoryExecutor` and four Git contracts from Task 1.
-- Produces: `GitRepositoryService` and hardened internal `runGitChecked()` behavior used by Task 6 canonical-origin resolution.
+- Consumes: `GitRepositoryExecutor` and six Git contracts from Task 1, protected-branch helper from Task 2.
+- Produces: hardened Git mutation service; canonical GitHub origin resolution support for Task 6.
 
-```ts
-export class GitRepositoryService implements GitRepositoryExecutor {
-  createBranch(input: GitCreateBranchInput, context?: OperationContext): Promise<GitCreateBranchResult>;
-  stagePaths(input: GitStagePathsInput, context?: OperationContext): Promise<GitStagePathsResult>;
-  commit(input: GitCommitInput, context?: OperationContext): Promise<GitCommitResult>;
-  pushBranch(input: GitPushBranchInput, context?: OperationContext): Promise<GitPushBranchResult>;
-}
-```
-
-- [ ] **Step 1: Write RED tests for process hardening**
-
-Inject a fake spawn/process runner and assert: absolute Git executable; `shell:false`; argv constructed internally; no raw caller argv/config/env; child env allowlist excludes token/OIDC/Git credential variables; cancellation/deadline terminates child; raw stderr is sanitized.
-
-```ts
-expect(spawnCall.options.shell).toBe(false);
-expect(spawnCall.argv).not.toContain("--force");
-expect(Object.keys(spawnCall.options.env)).not.toEqual(expect.arrayContaining([
-  "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
-]));
-```
-
-- [ ] **Step 2: Write RED tests for Git state/preconditions**
-
-Use isolated fixture repositories. Prove:
-- create branch checks `expectedHeadSha`, rejects conflict with `GIT_BRANCH_CONFLICT`;
-- stage only explicit validated paths and returns `indexTreeSha`;
-- commit checks both expected HEAD and expected index tree;
-- push checks `expectedLocalSha`, optional expected remote SHA, snapshots remote state, never force pushes, and reconciles ambiguous outcome by querying the remote;
-- deterministic stale-state errors use `GIT_HEAD_MISMATCH`, `GIT_INDEX_CHANGED`, `GIT_REMOTE_CHANGED` before mutation.
-
-- [ ] **Step 3: Run RED**
-
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/git-repository-service.test.ts
-```
-Expected: FAIL because service does not exist.
-
-- [ ] **Step 4: Implement minimal hardened Git service**
-
-Allowed internal argv templates only:
+Allowed internal command templates are restricted to the operation set needed by the spec:
 
 ```text
 git rev-parse HEAD
-git rev-parse --verify <ref>
+git rev-parse --abbrev-ref HEAD
+git rev-parse --verify refs/heads/<branch>
 git check-ref-format --branch <branch>
 git switch -c <branch> <expectedHeadSha>
-git add -- <validated paths...>
+git add -- <paths...>
+git restore --staged -- <paths...>
 git write-tree
 git diff --cached --quiet
+git diff --quiet
 git commit -m <message>
-git rev-parse HEAD
+git merge-base --is-ancestor <targetSha> <sourceSha>
+git merge --ff-only <expectedSourceSha>
 git ls-remote --heads <remote> <branch>
 git push <remote> <localSha>:refs/heads/<branch>
 git remote get-url origin
 ```
 
-Do not expose a general `run(args)` public method. A private/test-seamed `runGitChecked(cwd, fixedArgv)` may exist only inside the service module and must still use the hardened executable/env/process runner.
+No public/general runner accepts caller argv.
 
-- [ ] **Step 5: Run GREEN + agent typecheck**
+- [ ] **Step 1: Write RED process-hardening tests**
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/git-repository-service.test.ts
+Inject a fake child-process seam and assert:
+- resolved Git executable is absolute;
+- `shell:false`;
+- caller cannot choose executable/argv/env/config;
+- child env excludes `GITHUB_TOKEN`, `GH_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_URL`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` unless the service itself intentionally sets a safe fixed value;
+- cancellation/deadline terminates process tree;
+- public error does not expose raw stderr.
+
+- [ ] **Step 2: Write RED create/stage/unstage tests**
+
+Use isolated repositories and prove:
+- create branch rejects stale `expectedHeadSha` with `GIT_HEAD_MISMATCH`;
+- existing branch rejects with `GIT_BRANCH_CONFLICT`;
+- feature branch can be created from `main`;
+- stage mutates only explicit validated paths and returns `indexTreeSha`;
+- unstage checks both `expectedHeadSha` and `expectedIndexTreeSha`, touches only explicit paths and uses restore-staged semantics rather than reset.
+
+- [ ] **Step 3: Write RED commit tests**
+
+Prove:
+- commit on current `main` fails `GIT_PROTECTED_BRANCH` before `git commit` invocation;
+- stale HEAD -> `GIT_HEAD_MISMATCH`;
+- changed index tree -> `GIT_INDEX_CHANGED`;
+- normal commit returns new commit SHA and branch;
+- no amend/signing/config caller field exists.
+
+- [ ] **Step 4: Write RED fast-forward merge tests**
+
+Prove:
+- current `main` fails before merge invocation;
+- target HEAD must equal `expectedTargetHeadSha`;
+- source branch resolves exactly to `expectedSourceHeadSha`;
+- dirty worktree or dirty index fails closed before merge;
+- non-ancestor source rejects `GIT_MERGE_NOT_FAST_FORWARD`;
+- successful merge uses fixed `merge --ff-only <expectedSourceHeadSha>` and returns `previousHeadSha`, `headSha`, `sourceHeadSha`, `fastForwarded:true`.
+
+- [ ] **Step 5: Write RED push/reconciliation tests**
+
+Prove:
+- source or target `main` is blocked;
+- local SHA mismatch is detected before push;
+- optional remote SHA mismatch returns `GIT_REMOTE_CHANGED`;
+- force flags are impossible;
+- ambiguous push outcome is reconciled by `ls-remote` before deciding completed vs `SOURCE_CONTROL_RECONCILIATION_REQUIRED`.
+
+- [ ] **Step 6: Run RED**
+
+```powershell
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/git-process-runner.test.ts services/workspace-agent/test/unit/source-control/git-repository-service.test.ts
+```
+
+Expected: FAIL because the hardened service/runner do not exist.
+
+- [ ] **Step 7: Implement the minimal hardened Git boundary**
+
+Do not reuse inspection `runGitStrict()` as the mutation process boundary unless it is first refactored under RED coverage to satisfy absolute executable, allowlisted environment and sanitized-error requirements. Prefer the dedicated `git-process-runner.ts` to avoid weakening inspection behavior.
+
+Extract only the root/path authorization primitive needed to share existing traversal/symlink/worktree checks; do not duplicate a weaker path policy.
+
+- [ ] **Step 8: Run GREEN + Agent typecheck**
+
+Run Step 6 plus:
+
+```powershell
 npx tsc --noEmit -p services/workspace-agent/tsconfig.json
 ```
-Expected: exit 0.
 
-- [ ] **Step 6: Static security review**
+- [ ] **Step 9: Static security review and local commit**
 
-Search Task 4 delta for `execSync`, `spawnSync`, `shell: true`, `--force`, `--force-with-lease`, `reset`, `rebase`, raw `process.env` pass-through and caller-provided Git config. Any finding in production code blocks the commit.
+Search Task 4 production delta for:
 
-- [ ] **Step 7: STOP for explicit commit authorization, then commit only if authorized**
-
-```bash
-git add services/workspace-agent/src/source-control/git-repository-service.ts services/workspace-agent/test/unit/source-control/git-repository-service.test.ts
-# Add test/support/helpers.ts only if this Task changed it and review that hunk separately.
-git commit -m "feat(agent): add typed git repository service"
+```text
+execSync
+spawnSync
+shell: true
+--force
+--force-with-lease
+reset
+rebase
+--amend
+process.env.GITHUB_TOKEN
+process.env.GH_TOKEN
 ```
+
+`reset`, `rebase` and amend must have zero production occurrences in the source-control mutation boundary. Commit locally:
+
+```text
+feat(agent): add hardened typed git service
+```
+
+No push.
+
 ---
 
-### Task 5: GitHub credential provider, fixed HTTP client and typed GitHub service
+### Task 5: GitHub credential provider, fixed HTTP client and five-operation GitHubService
 
 **Files:**
-- Modify: `packages/mcp-core/src/errors.ts`
 - Create: `services/workspace-agent/src/source-control/github-credential-provider.ts`
 - Create: `services/workspace-agent/src/source-control/gh-cli-user-credential-provider.ts`
 - Create: `services/workspace-agent/src/source-control/github-http-client.ts`
 - Create: `services/workspace-agent/src/source-control/github-service.ts`
-- Test: `services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts`
-- Test: `services/workspace-agent/test/unit/source-control/github-service.test.ts`
+- Create: `services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts`
+- Create: `services/workspace-agent/test/unit/source-control/github-http-client.test.ts`
+- Create: `services/workspace-agent/test/unit/source-control/github-service.test.ts`
+- Modify: `packages/mcp-core/src/errors.ts` only if a focused RED proves an existing typed error category is insufficient.
 
 **Interfaces:**
-- Consumes: `GitHubExecutor`, GitHub contracts and sanitized `AppError` surface from Task 1.
-- Produces: `GitHubCredentialProvider`, `GhCliUserCredentialProvider`, `GitHubHttpClient`, `GitHubService` used by Task 6.
+- Consumes: `GitHubExecutor` and five GitHub contracts from Task 1.
+- Produces: opaque credential provider, fixed GitHub transport and typed GitHub service for Task 6.
+
+Credential interface:
 
 ```ts
 export interface GitHubCredential {
@@ -498,95 +645,89 @@ export interface GitHubCredentialProvider {
 }
 ```
 
-The credential object is private to the service boundary. Public MCP/result/audit schemas never import or serialize it.
+Fixed API configuration:
 
-- [ ] **Step 1: Write provider RED tests**
+```text
+base URL: https://api.github.com
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2022-11-28
+Authorization: Bearer <opaque token> (injected internally)
+```
 
-Inject a fake `gh` process runner. Assert the only accepted argv is exactly:
+- [ ] **Step 1: Write RED `gh auth token` provider tests**
+
+Assert exact allowed argv is only:
 
 ```text
 gh auth token
 ```
 
-Reject/never construct `gh api`, `gh repo`, arbitrary caller args or shell command strings. Assert `shell:false`, sanitized errors and that a fake token value never appears in thrown messages/causes/loggable return values.
+Assert `shell:false`, no arbitrary caller args, no `gh api`, no `gh repo`, no token in thrown `AppError.message`, `cause`, returned diagnostics or logs.
 
-- [ ] **Step 2: Write GitHubService RED tests**
+- [ ] **Step 2: Write RED fixed HTTP client tests**
 
-Inject fake credential provider + fake fetch transport and verify fixed request mapping:
+Assert caller cannot supply URL, method or headers. Test exact internally built request templates for:
 
 ```text
-GET  /user                               (resolve authenticated user login for account routing)
+GET  /user
 GET  /repos/{owner}/{repo}
-POST /user/repos                         (user-owned creation when authenticated owner matches)
-POST /orgs/{owner}/repos                 (organization-owned creation)
+POST /user/repos
+POST /orgs/{owner}/repos
 GET  /repos/{owner}/{repo}/pulls/{number}
 POST /repos/{owner}/{repo}/pulls
 PUT  /repos/{owner}/{repo}/pulls/{number}/merge
 ```
 
-`GitHubHttpClient` fixes base URL `https://api.github.com`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, User-Agent owned by the application, and injects `Authorization: Bearer <opaque token>` internally.
+Include narrowly scoped fixed reconciliation query construction for PR creation. Verify raw response body and raw fetch exception are not exposed publicly.
 
-Test that input cannot supply URL/path/header/method. Test strict JSON parsing and sanitized failures: credential, raw response body, raw fetch exception, raw `gh` stderr and raw JSON parse text must not survive in `AppError.message` or `cause`.
-
-- [ ] **Step 3: Write reconciliation/TOCTOU RED tests**
+- [ ] **Step 3: Write RED typed service and reconciliation tests**
 
 Prove:
-- repository create timeout/ambiguous response reconciles with `GET /repos/{owner}/{name}` before deciding success vs `SOURCE_CONTROL_RECONCILIATION_REQUIRED`;
-- PR create ambiguous response reconciles by querying matching open PRs/head/base with an internally fixed endpoint/query builder;
-- merge first reads PR, verifies `head.sha === expectedPullRequestHeadSha`, then sends that expected SHA in the merge request body;
-- merge ambiguous response re-reads PR state/merge SHA before deciding;
-- deterministic 4xx validation/auth errors are not blindly retried.
-
-Representative merge body:
-
-```ts
-expect(request.body).toEqual({
-  sha: expectedPullRequestHeadSha,
-  merge_method: "squash",
-});
-```
+- repository create ambiguous outcome reconciles with repository lookup;
+- PR create ambiguous outcome reconciles by exact head/base query;
+- merge re-reads PR and checks `head.sha === expectedPullRequestHeadSha`;
+- merge request body includes expected SHA and exact `merge_method`;
+- ambiguous merge re-reads PR state/merge SHA;
+- deterministic 4xx/auth/validation failures are not blindly retried.
 
 - [ ] **Step 4: Run RED**
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts services/workspace-agent/test/unit/source-control/github-service.test.ts
+```powershell
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts services/workspace-agent/test/unit/source-control/github-http-client.test.ts services/workspace-agent/test/unit/source-control/github-service.test.ts
 ```
-Expected: FAIL before the provider/client/service exist.
 
-- [ ] **Step 5: Implement provider/client/service**
+Expected: FAIL because provider/client/service do not exist.
 
-Keep HTTP endpoint construction private and typed. `GitHubService` implements exactly the five `GitHubExecutor` methods and validates every public result with Task 1 schemas before returning. Do not add a generic request method to the public executor.
+- [ ] **Step 5: Implement minimal provider/client/service**
 
-Use existing `AUTHENTICATION_FAILED`, `INVALID_ARGUMENT`, and `SOURCE_CONTROL_RECONCILIATION_REQUIRED` where appropriate; add a new error code only if a test proves that none of the existing typed categories can represent a sanitized deterministic failure.
+`GitHubService` implements exactly five executor methods. Public executor methods never expose credentials or generic request primitives. Every returned value is parsed against Task 1 result schemas.
 
-- [ ] **Step 6: Run GREEN + Agent regression/typecheck**
+- [ ] **Step 6: Run GREEN + Agent typecheck**
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts services/workspace-agent/test/unit/source-control/github-service.test.ts
+Run Step 4 plus:
+
+```powershell
 npx tsc --noEmit -p services/workspace-agent/tsconfig.json
 ```
-Expected: exit 0.
 
-- [ ] **Step 7: Secret/redaction gate**
+- [ ] **Step 7: Secret/redaction gate and local commit**
 
-Run Gitleaks over the seven Task 5 paths. Search production delta for `gh api`, arbitrary URL concatenation from caller input, `console.*` of credential/headers, `process.env.GITHUB_TOKEN`, `process.env.GH_TOKEN`, and raw response/error inclusion in `cause`.
+Run official Gitleaks over Task 5 paths and static search for `gh api`, arbitrary caller URL/header/method, `console.*` containing credential/header data, `process.env.GITHUB_TOKEN`, `process.env.GH_TOKEN`, raw response bodies and raw transport causes. Commit locally:
 
-- [ ] **Step 8: STOP for explicit commit authorization, then commit only if authorized**
-
-```bash
-git add packages/mcp-core/src/errors.ts services/workspace-agent/src/source-control/github-credential-provider.ts services/workspace-agent/src/source-control/gh-cli-user-credential-provider.ts services/workspace-agent/src/source-control/github-http-client.ts services/workspace-agent/src/source-control/github-service.ts services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts services/workspace-agent/test/unit/source-control/github-service.test.ts
-git commit -m "feat(agent): add typed github api service"
+```text
+feat(agent): add typed github api service
 ```
+
+No push.
 
 ---
 
-### Task 6: LocalAgent policy/confirmation/idempotency integration and strict relay routing
+### Task 6: LocalAgent authorization, protected branches, receipts, audit and strict relay routing
 
 **Files:**
 - Modify: `packages/mcp-core/src/contracts.ts`
 - Modify: `packages/mcp-core/src/audit.ts`
-- Modify: `packages/mcp-core/src/source-control-policy.ts`
-- Modify: `packages/mcp-core/src/mcp-workspace-tools.ts`
+- Modify: `packages/mcp-core/src/relay-retry-policy.ts`
 - Modify: `services/workspace-agent/src/internal-types.ts`
 - Modify: `services/workspace-agent/src/workspace-registry.ts`
 - Modify: `services/workspace-agent/src/local-agent.ts`
@@ -594,28 +735,31 @@ git commit -m "feat(agent): add typed github api service"
 - Modify: `services/workspace-agent/src/connection/request-executor.ts`
 - Modify: `services/workspace-agent/src/connection/service.ts`
 - Modify: `services/workspace-agent/src/in-process-workspace-executor.ts`
+- Modify: `services/workspace-agent/src/remote/ssh-workspace-executor.ts` only if the supported runtime requires direct typed source-control parity there; otherwise fail closed explicitly and cover that behavior.
 - Modify: `services/workspace-agent/src/subprocess-workspace-executor.ts`
 - Modify: `services/mcp-gateway/src/relay/workspace-executor.ts`
-- Modify: `services/mcp-gateway/src/relay/request-manager.ts`
-- Test: `services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts`
-- Test: `services/workspace-agent/test/unit/connection/request-dispatcher.test.ts`
-- Test: `services/workspace-agent/test/unit/connection/request-executor.test.ts`
-- Test: `services/workspace-agent/test/e2e/agent-connection.test.ts`
-- Test: `services/mcp-gateway/test/unit/relay/source-control-workspace-executor.test.ts`
-- Test: `services/mcp-gateway/test/unit/relay/request-manager.test.ts`
-- Test: `services/mcp-gateway/test/integration/relay/service.test.ts`
+- Modify: `services/mcp-gateway/src/relay/request-manager.ts` only for strict context/result handling, not mutation retries.
+- Create: `services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts`
+- Modify: `services/workspace-agent/test/unit/connection/request-dispatcher.test.ts`
+- Modify: `services/workspace-agent/test/unit/connection/request-executor.test.ts`
+- Modify: `services/workspace-agent/test/e2e/agent-connection.test.ts`
+- Create: `services/mcp-gateway/test/unit/relay/source-control-workspace-executor.test.ts`
+- Modify: `services/mcp-gateway/test/unit/relay/request-manager.test.ts`
+- Modify: `services/mcp-gateway/test/integration/relay/service.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 contracts/ports, Task 2 capability assertion, Task 3 confirmations/receipts, Task 4 Git service and Task 5 GitHub service.
-- Produces: LocalAgent methods for all nine operations; strict internal relay operations; serializable source-control operation identity context. Public MCP tool catalog remains unchanged until Task 7.
+- Consumes: Tasks 1–5.
+- Produces: eleven LocalAgent typed methods, eleven strict internal relay operations, sanitized audit metadata and context propagation. Public MCP tool catalog remains unchanged until Task 7.
 
-Internal relay operation mapping is exact:
+Internal relay operations exactly:
 
 ```ts
 const sourceControlRelayOperations = [
   "gitCreateBranch",
   "gitStagePaths",
+  "gitUnstagePaths",
   "gitCommit",
+  "gitMergeBranch",
   "gitPushBranch",
   "githubGetRepository",
   "githubCreateRepository",
@@ -625,59 +769,64 @@ const sourceControlRelayOperations = [
 ] as const;
 ```
 
-- [ ] **Step 1: Write LocalAgent RED tests**
-
-Create an Agent integration fixture with injectable fake `GitRepositoryExecutor`, `GitHubExecutor`, `TypedConfirmationRegistry`, `MutationReceiptStore`, and optional canonical repository resolver.
-
-Required RED cases:
+Serializable context fields exactly:
 
 ```ts
-await expect(agent.getRepository({
-  workspaceId: "repo",
-  owner: "acme",
-  repository: "app",
-})).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
-expect(githubCalls).toHaveLength(0);
-```
-
-Also prove:
-- local branch/stage/commit execute without extra source-control confirmation when policy authorizes;
-- push returns confirmation-required behavior on first call and executes only with exact confirmation binding;
-- repository create and merge always require exact typed confirmation;
-- PR create requires confirmation by default;
-- changed args/target cannot reuse a grant;
-- completed mutation replay with same identity does not call backend again and does not re-consume confirmation;
-- same idempotency key + changed args throws `SOURCE_CONTROL_IDEMPOTENCY_CONFLICT` before backend;
-- canonical GitHub repository resolves from real `origin` forms (`git@github.com:owner/repo.git`, `https://github.com/owner/repo.git`, `ssh://git@github.com/owner/repo.git`);
-- non-GitHub/malformed/query-bearing origin fails closed unless target is explicitly `additionalRepositories`;
-- repository creation authorizes `accountOwners`, not a nonexistent canonical repository.
-
-- [ ] **Step 2: Run LocalAgent RED**
-
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts
-```
-Expected: FAIL because LocalAgent source-control methods/wiring do not exist.
-
-- [ ] **Step 3: Implement LocalAgent pipeline and safe audit metadata**
-
-Add `LocalAgentOptions.sourceControl` dependency seams and defaults:
-
-```ts
-interface LocalAgentSourceControlOptions {
-  gitRepository?: GitRepositoryExecutor;
-  github?: GitHubExecutor;
-  confirmations?: TypedConfirmationRegistry;
-  receipts?: MutationReceiptStore;
-  canonicalRepositoryResolver?: (workspaceRoot: string) => Promise<string | undefined>;
+{
+  correlationId?: string;
+  invocationId?: string;
+  idempotencyKey?: string;
+  ownerScope?: string;
 }
 ```
 
-Each method performs, in order: parse -> resolve workspace/policy -> resolve typed target -> capability/target check -> completed replay/conflict check -> typed confirmation if required -> receipt reserve/executing -> one typed backend call -> result parse -> receipt complete -> sanitized audit.
+- [ ] **Step 1: Write RED LocalAgent authorization tests**
 
-For mutations without explicit `context.idempotencyKey`, derive an operation-stable key from confirmation id when present, otherwise `invocationId`, otherwise `correlationId`; if none exists, throw `INVALID_ARGUMENT`. Never derive it from credentials or random retry-local state.
+Create fixtures with injectable fake Git/GitHub executors, confirmation registry and receipt store. Prove capability denial happens before backend invocation for each domain. Specifically prove `git.merge.write` is independently required and stage/unstage share `git.index.write`.
 
-Extend `AuditEntry` only with:
+- [ ] **Step 2: Write RED protected-branch LocalAgent tests**
+
+Prove direct commit/current-main, merge/current-main and push source/destination-main fail before backend mutation; branch creation from main remains allowed when SHA precondition passes.
+
+- [ ] **Step 3: Write RED confirmation/idempotency tests**
+
+Prove:
+- first push/create-repository/create-PR/merge-PR call returns typed confirmation-required result;
+- exact confirmation binding allows execution;
+- changed args/target cannot reuse a grant;
+- completed same-identity replay does not call backend again and does not consume another confirmation;
+- same idempotency key with changed identity throws conflict;
+- ambiguous/executing receipt state does not invoke backend blindly.
+
+- [ ] **Step 4: Write RED canonical GitHub target tests**
+
+Resolve exact canonical repository from:
+
+```text
+git@github.com:owner/repo.git
+https://github.com/owner/repo.git
+ssh://git@github.com/owner/repo.git
+```
+
+Reject malformed, query-bearing and non-GitHub origins unless the requested repository is in `additionalRepositories`.
+
+- [ ] **Step 5: Run LocalAgent RED**
+
+```powershell
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts
+```
+
+- [ ] **Step 6: Implement LocalAgent source-control pipeline**
+
+For each repository-scoped operation execute in this order:
+
+```text
+parse -> workspace/root -> typed target -> capability/target -> protected branch -> completed replay/conflict -> typed confirmation -> reserve/executing receipt -> one backend call -> result parse -> receipt complete -> sanitized audit
+```
+
+For mutations without `context.idempotencyKey`, derive a stable operation key from confirmation id when present, otherwise `invocationId`, otherwise `correlationId`; if none exists, fail `INVALID_ARGUMENT`. Do not derive from credentials or retry-local randomness.
+
+Audit additions are limited to:
 
 ```ts
 sourceControlCapability?: SourceControlCapability;
@@ -687,111 +836,75 @@ resultSha?: string;
 idempotencyOutcome?: "executed" | "completed_replay" | "confirmation_required";
 ```
 
-- [ ] **Step 4: Write relay/hello/context RED tests**
+- [ ] **Step 7: Write RED relay request/result/context tests**
 
-Agent/Gateway tests must fail before relay production changes and prove:
-- all nine operations are accepted by strict `relayRequestSchema` with exact inputs;
-- unknown field such as `rawArgs` is rejected;
-- `relayResultSchemas` rejects extra/sensitive fields;
-- Gateway method -> exactly one camelCase relay call;
-- Agent dispatcher -> exactly one LocalAgent method;
-- hello advertises all operations from the authoritative relay schema, with no manual drift list;
-- `correlationId`, `invocationId`, `idempotencyKey`, `ownerScope` cross Gateway -> Agent;
-- `signal` is not serialized and deadline remains in the envelope.
+Prove all eleven operations parse exact inputs/results, reject unknown `rawArgs`/credential-like fields, map Gateway -> one relay call -> Agent dispatcher -> one LocalAgent method, preserve serializable context, keep `signal` local and deadline in the envelope.
 
-- [ ] **Step 5: Implement strict relay contracts/routing**
+Agent hello capability names must derive from one authoritative relay-operation source rather than a manually duplicated list.
 
-Extend `relayOperationSchema`, discriminated `relayRequestSchema` and `relayResultSchemas` with the exact nine schemas. Validate the complete outgoing request in Gateway before JSON serialization.
+- [ ] **Step 8: Write RED relay retry classification tests**
 
-Add a strict serializable `context` object to the relay request base containing only `correlationId`, `invocationId`, `idempotencyKey`, and `ownerScope`. Rebuild the Agent-side `OperationContext` from that object plus the envelope deadline and local cancellation `signal`; never place `signal` inside JSON.
+Assert only `githubGetRepository` and `githubGetPullRequest` are eligible for existing read-only/idempotent bounded retry. Assert all six Git mutations and the three GitHub mutations are not in `RETRYABLE_RELAY_OPERATIONS`.
 
-In `mcp-workspace-tools.ts`, keep public catalog unchanged during Task 6 by typing existing public mapping as an exclusion of the nine source-control relay operations. Do not register source-control MCP names here yet.
+- [ ] **Step 9: Implement strict relay routing**
 
-`RelayWorkspaceExecutor` implements `WorkspaceExecutor`, `GitRepositoryExecutor`, and `GitHubExecutor`; every new method performs one `relay.call()` and parses one exact result schema.
+Extend `relayOperationSchema`, request discriminated union, result map and executor methods. Do not register public source-control MCP names in Task 6.
 
-Agent `connection/service.ts` derives hello capabilities from `relayOperationSchema.options` rather than a fixed list.
+- [ ] **Step 10: Run focused GREEN**
 
-- [ ] **Step 6: Run focused GREEN**
-
-```bash
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts services/workspace-agent/test/unit/connection/request-dispatcher.test.ts services/workspace-agent/test/unit/connection/request-executor.test.ts services/workspace-agent/test/e2e/agent-connection.test.ts
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/unit/relay/source-control-workspace-executor.test.ts services/mcp-gateway/test/unit/relay/request-manager.test.ts services/mcp-gateway/test/integration/relay/service.test.ts
 ```
-Expected: exit 0.
 
-- [ ] **Step 7: Run reconstructed source-control regression and type/build gates**
+- [ ] **Step 11: Run affected type/build/security gates and local commit**
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts packages/mcp-core/test/source-control-policy.test.ts packages/mcp-core/test/typed-confirmation.test.ts packages/mcp-core/test/mutation-receipts.test.ts
+```powershell
 npx tsc --noEmit -p packages/mcp-core/tsconfig.json
 npx tsc --noEmit -p services/workspace-agent/tsconfig.json
 npx tsc --noEmit -p services/mcp-gateway/tsconfig.json
-npm run build --workspace @vs-code-gpt/shared
 ```
 
-If package workspace names differ at the reconstructed HEAD, use the repository's existing direct `tsc -p ...` build commands rather than changing package identity just to satisfy this plan.
+Then run diff-check, secret-scan and static search for generic relay execute operations, credential fields, mutation retry classification and source-control public MCP registration. Commit locally:
 
-- [ ] **Step 8: Task 6 security gate**
-
-Run `git diff --check`, BOM scan on Task 6 paths, Gitleaks on the Task 6 delta, and static search for raw `gh api`, `shell:true`, raw Authorization/token fields, generic relay execute operations, source-control public registration, force/reset/rebase/history rewrite.
-
-- [ ] **Step 9: STOP for explicit commit authorization, then selectively stage and commit only if authorized**
-
-`packages/mcp-core/src/mcp-workspace-tools.ts` and `services/workspace-agent/src/local-agent.ts` historically overlapped other work in the lost scratch. In the durable reconstruction they should begin clean; nevertheless inspect their full diff and stage only Task 6 hunks if any unrelated change appears.
-
-Commit subject:
-
-```bash
-git commit -m "feat(relay): route typed source control operations"
+```text
+feat(relay): route typed source control operations
 ```
 
 No push.
 
 ---
 
-### Task 7: Register exactly nine first-class MCP tools and update catalog identity
+### Task 7: Register exactly eleven MCP tools and regenerate catalog/Edge identity
 
 **Files:**
 - Modify: `packages/mcp-core/src/mcp-workspace-tools.ts`
 - Modify: `packages/mcp-core/src/mcp-tool-catalog.ts`
-- Test: `packages/mcp-core/test/mcp-workspace-tools.test.ts`
-- Test: `packages/mcp-core/test/mcp-tool-catalog.test.ts`
+- Modify: `packages/mcp-core/test/mcp-workspace-tools.test.ts`
+- Modify: `packages/mcp-core/test/mcp-tool-catalog.test.ts`
 - Modify: `services/mcp-gateway/src/mcp/server.ts`
 - Modify: `services/mcp-gateway/src/app.ts`
-- Modify: `services/mcp-gateway/test/support/helpers.ts` only for the typed source-control fake required by MCP tests.
-- Test: `services/mcp-gateway/test/integration/mcp/tools-list.test.ts`
-- Test: `services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts`
-- Test: `services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts`
+- Modify: `services/mcp-gateway/test/support/helpers.ts` only if a typed source-control fake is needed.
+- Modify: `services/mcp-gateway/test/integration/mcp/tools-list.test.ts`
+- Modify: `services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts`
+- Modify: `services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts`
+- Modify: `services/mcp-gateway/test/integration/http/gateway.test.ts`
+- Regenerate: `services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts`
+- Use existing generator: `tooling/mcp/generate-edge-control-plane-manifest.ts`.
 
 **Interfaces:**
-- Consumes: Task 1 source-control ports/contracts and Task 6 `RelayWorkspaceExecutor` implementing both source-control ports.
-- Produces: public nine-tool MCP registration and recalculated catalog metadata. Keeps `WorkspaceExecutor` separate from source-control authorization/execution.
+- Consumes: Task 1 ports/contracts and Task 6 relay-backed executor.
+- Produces: exact eleven public source-control MCP tools, full catalog count 61, workspace/Edge count 28 and regenerated catalog identity.
 
-`McpServerOptions` becomes:
-
-```ts
-export interface McpServerOptions {
-  workspaceExecutor: WorkspaceExecutor;
-  sourceControlExecutor: GitRepositoryExecutor & GitHubExecutor;
-  browser?: BrowserExecutor;
-  auth?: McpServerAuthOptions;
-  operationContextFactory?: ToolOperationContextFactory;
-}
-```
-
-In production Gateway, pass the same Task 6 `RelayWorkspaceExecutor` instance as both `workspaceExecutor` and `sourceControlExecutor`; this is structural implementation reuse, not interface fusion.
-
-- [ ] **Step 1: Write MCP registration RED tests**
-
-Add the nine exact names to expected catalog assertions and create fake source-control executor spies. For each tool, invoke through MCP registration and prove it calls exactly one corresponding typed method with parsed input and operation context.
-
-Tool annotations:
+Required tool annotations:
 
 | Tool | readOnly | destructive | idempotent |
 | --- | --- | --- | --- |
 | `git_create_branch` | false | false | false |
 | `git_stage_paths` | false | false | true |
+| `git_unstage_paths` | false | false | true |
 | `git_commit` | false | false | false |
+| `git_merge_branch` | false | false | true |
 | `git_push_branch` | false | true | true |
 | `github_get_repository` | true | false | true |
 | `github_create_repository` | false | true | true |
@@ -799,71 +912,91 @@ Tool annotations:
 | `github_create_pull_request` | false | true | true |
 | `github_merge_pull_request` | false | true | true |
 
-`destructiveHint` here means externally impactful/high-impact, not that force/history rewrite is permitted.
+- [ ] **Step 1: Write MCP registration RED tests**
 
-- [ ] **Step 2: Run RED**
+Assert source-control public names equal exactly the eleven names and each handler calls exactly one corresponding typed method with parsed input and operation context. Assert old tools remain present and authentication metadata unchanged.
 
-```bash
+- [ ] **Step 2: Write catalog-count RED tests**
+
+Update expected full catalog from 50 to 61 and workspace-only catalog from 17 to 28. Assert no twelfth source-control name exists.
+
+- [ ] **Step 3: Run RED**
+
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/mcp-workspace-tools.test.ts packages/mcp-core/test/mcp-tool-catalog.test.ts
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/integration/mcp/tools-list.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/integration/mcp/tools-list.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts services/mcp-gateway/test/integration/http/gateway.test.ts
 ```
-Expected: FAIL because the nine tools/catalog entries are not registered.
 
-- [ ] **Step 3: Implement public registration without merging ports**
+Expected: FAIL because the eleven tools are not yet registered/catalogued.
 
-Add the nine names to `WorkspaceToolName`/`WORKSPACE_TOOL_NAMES`. Extend `RegisterWorkspaceToolsOptions` with required `sourceControlExecutor`. Each handler uses `withToolOperationContext`, validates its exact input/output schema, and calls only the corresponding source-control executor method.
+- [ ] **Step 4: Implement public registration without port fusion**
 
-Update `relayOperationToToolName` so the nine internal Task 6 operations map to the nine public names now that public registration exists.
+`McpServerOptions` carries `workspaceExecutor` separately from `sourceControlExecutor: GitRepositoryExecutor & GitHubExecutor`. The production Gateway may pass the same relay-backed object for both interfaces, but public types remain separate.
 
-Update Gateway `createMcpServer()` and app construction to provide the source-control executor separately. Recalculate catalog metadata through existing `createMcpToolCatalogMetadata`; do not hard-code a hash/version string.
+Register each tool with exact schema/result parse and annotations. Add all eleven public names to `relayOperationToToolName` only now.
 
-- [ ] **Step 4: GREEN + catalog regression**
+- [ ] **Step 5: Derive new descriptor/catalog revision using canonical code**
 
-Run the commands from Step 2 plus:
+Use the same real `createMcpServer` projection/generator path already used by the repository. Do not type a guessed revision. Update `MCP_TOOL_CATALOG_CONTRACT_REVISION` only with the value computed from the actual 61-tool descriptor set.
 
-```bash
-npx tsc --noEmit -p packages/mcp-core/tsconfig.json
-npx tsc --noEmit -p services/mcp-gateway/tsconfig.json
+- [ ] **Step 6: Regenerate Edge manifest canonically**
+
+Run:
+
+```powershell
+npx tsx tooling/mcp/generate-edge-control-plane-manifest.ts
+npx tsx tooling/mcp/generate-edge-control-plane-manifest.ts --check
 ```
-Expected: exit 0 and tool count increases by exactly nine, with no extra source-control names.
 
-- [ ] **Step 5: Verify authentication/context invariants**
+Then run the manifest parity test and assert generated `toolCount` is exactly 28 and all eleven source-control names are present.
 
-Existing OAuth/noauth metadata must remain unchanged for old tools. New source-control tools receive the same MCP authentication gate and `OperationContext` factory; no credential or confirmation token is placed in tool descriptions, catalog metadata or diagnostic text.
+- [ ] **Step 7: Run GREEN + Edge check**
 
-- [ ] **Step 6: STOP for explicit commit authorization, then commit only if authorized**
+Run Step 3 commands plus:
 
-```bash
-git add packages/mcp-core/src/mcp-workspace-tools.ts packages/mcp-core/src/mcp-tool-catalog.ts packages/mcp-core/test/mcp-workspace-tools.test.ts packages/mcp-core/test/mcp-tool-catalog.test.ts services/mcp-gateway/src/mcp/server.ts services/mcp-gateway/src/app.ts services/mcp-gateway/test/integration/mcp/tools-list.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts
-# Stage services/mcp-gateway/test/support/helpers.ts only if changed and after hunk review.
-git commit -m "feat(mcp): register typed source control tools"
+```powershell
+npm run typecheck
+npm run build
+npm run check:edge
 ```
+
+Expected: exit 0; Edge command is dry-run only.
+
+- [ ] **Step 8: Review and local commit**
+
+Run official diff-check/secret-scan. Confirm no credentials/confirmation ids are emitted into manifest metadata. Commit locally:
+
+```text
+feat(mcp): register typed source control tools
+```
+
+No push.
 
 ---
 
-### Task 8: NEW reconstructed final end-to-end and security hardening gate
-
-**Provenance:** This Task's exact historical text was not recovered. This is a newly specified final gate derived from the approved spec acceptance criteria and the known architecture; do not describe it as verbatim historical recovery.
+### Task 8: Final source-control public-boundary, security and regression gate
 
 **Files:**
 - Create: `packages/mcp-core/test/source-control-public-boundary.test.ts`
 - Create: `services/mcp-gateway/test/integration/mcp/source-control-tools.test.ts`
-- Modify production files only if a RED test exposes a concrete defect; any such production change must stay narrowly inside the source-control boundary and receive its own RED/GREEN evidence.
+- Modify production files only when one of these final invariant tests produces a concrete RED; any correction must be narrowly scoped and retain its own RED/GREEN evidence.
 
 **Interfaces:**
 - Consumes: completed Tasks 1–7.
-- Produces: durable executable invariants proving exact surface, no escape hatches, strict result redaction, confirmation/idempotency propagation, and repository-wide regression readiness.
+- Produces: executable invariants proving exact public surface, capability set, no escape hatches, result redaction, protected branches, relay safety and generated catalog parity.
 
-- [ ] **Step 1: Write exact public-boundary invariant test**
+- [ ] **Step 1: Add exact public-boundary invariant test**
 
-Test programmatically that the public source-control names equal exactly this set and nothing else:
+Assert exact eleven-tool set:
 
 ```ts
 expect(publicSourceControlNames.sort()).toEqual([
   "git_commit",
   "git_create_branch",
+  "git_merge_branch",
   "git_push_branch",
   "git_stage_paths",
+  "git_unstage_paths",
   "github_create_pull_request",
   "github_create_repository",
   "github_get_pull_request",
@@ -872,116 +1005,126 @@ expect(publicSourceControlNames.sort()).toEqual([
 ].sort());
 ```
 
-Recursively inspect the nine input schema JSON shapes/parse behavior and assert forbidden keys (`command`, `args`, `argv`, `force`, `forceWithLease`, `url`, `headers`, `authorization`, `token`) are rejected everywhere they are not explicit safe domain fields. Assert exact nine capabilities too.
+Assert exact ten-capability set and recursively reject forbidden keys such as `command`, `args`, `argv`, `force`, `forceWithLease`, `url`, `headers`, `authorization`, `token`, `strategy`, `rebase`, `reset` where they are not explicit safe domain fields.
 
-- [ ] **Step 2: Write MCP integration boundary test**
+- [ ] **Step 2: Add MCP integration boundary test**
 
-Use `createMcpServer` with fake workspace + source-control executors and invoke all nine tools. Prove:
-- exact input reaches exactly one typed method;
-- exact result returns in structured content;
-- extra backend field such as `authorization`, `token`, `rawResponse`, or `stderr` is rejected by result parsing and never emitted;
-- `OperationContext` has correlation/invocation/owner/deadline fields;
-- confirmed mutation inputs may carry only opaque `confirmationId`, never credentials;
-- read tools are non-mutating and mutation tools do not call shell executor methods.
+Invoke all eleven tools through `createMcpServer` with fake source-control executors. Prove exact input -> exactly one typed method -> exact structured result. Inject extra backend fields such as `authorization`, `token`, `rawResponse`, `stderr` and prove strict result parsing rejects them and emits none.
 
-- [ ] **Step 3: Run Task 8 RED/GREEN cycle**
+Prove operation context contains correlation/invocation/owner/deadline fields and confirmation-capable inputs carry only opaque `confirmationId`, never credentials.
 
-First run the new tests before any Task 8 production correction. If both are already GREEN, record that no production correction was required; do not manufacture a code change merely to force RED. If a test exposes an unmet spec requirement, capture RED, implement the minimal correction, rerun GREEN.
+- [ ] **Step 3: Run Task 8 tests before any correction**
 
-```bash
+```powershell
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-public-boundary.test.ts
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/integration/mcp/source-control-tools.test.ts
 ```
 
-- [ ] **Step 4: Run complete reconstructed source-control regression**
+If both are GREEN, record no production correction required. If either is RED, preserve the failing evidence, implement only the defect exposed, and rerun until GREEN.
 
-Run all files matching the reconstructed boundary explicitly so unrelated repository tests cannot hide a skipped suite:
+- [ ] **Step 4: Run complete Phase 4 focused regression**
 
-```bash
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/source-control-contracts.test.ts packages/mcp-core/test/source-control-executor.test.ts packages/mcp-core/test/source-control-policy.test.ts packages/mcp-core/test/typed-confirmation.test.ts packages/mcp-core/test/mutation-receipts.test.ts packages/mcp-core/test/source-control-public-boundary.test.ts packages/mcp-core/test/mcp-workspace-tools.test.ts packages/mcp-core/test/mcp-tool-catalog.test.ts
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/source-control/file-mutation-receipt-store.test.ts services/workspace-agent/test/unit/source-control/git-repository-service.test.ts services/workspace-agent/test/unit/source-control/gh-cli-user-credential-provider.test.ts services/workspace-agent/test/unit/source-control/github-service.test.ts services/workspace-agent/test/integration/source-control/local-agent-source-control.test.ts services/workspace-agent/test/unit/connection/request-dispatcher.test.ts services/workspace-agent/test/unit/connection/request-executor.test.ts services/workspace-agent/test/e2e/agent-connection.test.ts
-node --experimental-vm-modules node_modules/jest/bin/jest.js --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/unit/relay/source-control-workspace-executor.test.ts services/mcp-gateway/test/unit/relay/request-manager.test.ts services/mcp-gateway/test/integration/relay/service.test.ts services/mcp-gateway/test/integration/mcp/source-control-tools.test.ts services/mcp-gateway/test/integration/mcp/tools-list.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync.test.ts services/mcp-gateway/test/integration/mcp/catalog-sync-http.test.ts
-```
+Run all source-control core/agent/gateway test files explicitly, including:
+- contracts/executor/policy/confirmation/receipts/public-boundary;
+- Git process/service;
+- GitHub provider/client/service;
+- LocalAgent source-control integration;
+- request-dispatcher/request-executor/agent e2e;
+- relay executor/request manager/service;
+- MCP source-control tools/catalog/tool-list/catalog-sync.
 
-- [ ] **Step 5: Run fresh typecheck/build gates**
+Use explicit `--runTestsByPath` groups so a skipped discovery pattern cannot masquerade as coverage.
 
-```bash
-npx tsc --noEmit -p packages/mcp-core/tsconfig.json
-npx tsc --noEmit -p services/workspace-agent/tsconfig.json
-npx tsc --noEmit -p services/mcp-gateway/tsconfig.json
-npm run build
-```
-Expected: all exit 0. If `npm run build` exceeds synchronous V3 execution, run it as a persisted background task and read final state/logs before claiming PASS.
-
-- [ ] **Step 6: Run repository-wide regression as a heavy persisted gate**
+- [ ] **Step 5: Run full affected suites and build gates**
 
 Run:
 
-```bash
-npm run check
+```powershell
+npm run test:mcp-core
+npm run test:mcp-gateway:unit
+npm run test:mcp-gateway:integration
+npm run test:mcp-gateway:e2e
+npm run test:workspace-agent:unit
+npm run test:workspace-agent:integration
+npm run test:workspace-agent:e2e
+npm run typecheck
+npm run build
+npm run check:edge
 ```
 
-Prefer V3 background execution. Record task id, final exit code, failing suite if any, and do not substitute partial output for PASS.
+For the known Gateway environment-isolation issue, run the unit suite with `AUTH_MODE` absent only in that child process if inherited `AUTH_MODE=owner` triggers the already-documented default-auth test; do not modify unrelated production behavior.
 
-- [ ] **Step 7: Final static/security verification**
+- [ ] **Step 6: Run repository-wide heavy regression**
+
+Run `npm run check` as a persisted background task when the runtime supports it. Use `wait_background_task` to obtain terminal state rather than caller polling. A timeout of the wait is not a task failure; only terminal task result determines PASS/FAIL.
+
+- [ ] **Step 7: Run final static/security gates**
 
 Required:
-- `git diff --check` over the entire reconstructed branch delta;
-- UTF-8 BOM scan for all new/modified source-control files;
-- Gitleaks/secret scan over the reconstructed delta;
-- static search in production delta for `gh api`, `execSync`, `spawnSync`, `shell: true`, force push/history rewrite, raw `GITHUB_TOKEN`/`GH_TOKEN`, caller-provided URL/header/argv/config, and generic source-control execute operations;
-- confirm no credential/Authorization values in fixtures, audit, receipt or MCP result schemas;
-- confirm public source-control tools count = 9 and capabilities count = 9;
-- confirm working tree/staging partition contains no unrelated operational `.ps1` changes because the durable boundary started from a clean independent base.
+- official `diff-check`, scope changes;
+- official `secret-scan`, scope changes, Gitleaks;
+- UTF-8/BOM scan for all new/modified source-control files;
+- static production-delta search for `gh api`, `execSync`, `spawnSync`, `shell: true`, force push/history rewrite, raw `GITHUB_TOKEN`/`GH_TOKEN`, caller-provided URL/header/argv/config and generic source-control execute operations;
+- verify mutation operations absent from relay automatic retry allowlist;
+- verify public source-control tools = 11;
+- capabilities = 10;
+- full catalog = 61;
+- Edge workspace manifest = 28;
+- manifest generator `--check` passes.
 
-- [ ] **Step 8: Revalidate protected operational checkout**
+- [ ] **Step 8: Revalidate original operational checkout**
 
-From the operational workspace, verify branch/HEAD, staged count, non-PS1 count, and Authenticode status of the 19 preexisting PowerShell modifications. Any unexpected write outside ignored `.codex` is a blocker.
+Verify branch `feat/minimal-windows-execution-node`, exactly the known 19 pre-existing modified `.ps1` files, staging empty and no unexpected non-`.codex` write.
 
-- [ ] **Step 9: STOP for explicit Task 8 commit authorization**
+- [ ] **Step 9: Close Phase 4 and create final local Task 8/Phase 4 commit**
 
-If Task 8 added only the two invariant tests:
+If Task 8 adds only invariant tests, commit them locally with:
 
-```bash
-git add packages/mcp-core/test/source-control-public-boundary.test.ts services/mcp-gateway/test/integration/mcp/source-control-tools.test.ts
-git commit -m "test(source-control): harden typed source control boundary"
+```text
+test(source-control): harden typed source control boundary
 ```
 
-If Task 8 required a production correction, list the exact extra files and RED/GREEN evidence before asking authorization; never silently include them in the test commit.
+If a production correction was required, include only the exact reviewed correction files in the same final Phase 4 gate after RED/GREEN evidence is recorded.
 
-No push follows this commit without a separate explicit gate.
+Update exactly the six `.codex` files to the Phase 4 complete checkpoint after the local commit. No push.
 
 ---
 
-## Implementation Execution Protocol
+## Spec coverage map
 
-Before Task 1 implementation begins:
+| Spec requirement | Plan task(s) |
+| --- | --- |
+| Exact 11 tools / no generic escape hatch | 1, 7, 8 |
+| Exact 10 capabilities | 2, 8 |
+| Stage + unstage explicit paths | 1, 4, 8 |
+| Fast-forward-only local merge | 1, 2, 4, 6, 8 |
+| Protected `main` | 2, 4, 6, 8 |
+| Separate Git/GitHub ports | 1, 4, 5, 7 |
+| Typed confirmation | 3, 6, 8 |
+| Mutation receipts/idempotency/reconciliation | 3, 4, 5, 6, 8 |
+| Hardened Git process boundary | 4, 8 |
+| Fixed GitHub credential/HTTP boundary | 5, 8 |
+| LocalAgent typed pipeline + audit | 6, 8 |
+| Strict relay/context/hello + retry safety | 6, 8 |
+| MCP catalog 61 / Edge 28 | 7, 8 |
+| TDD + regression/security gates | 1–8 |
+| Operational checkout preservation | 8 |
 
-1. Verify branch `recovery/typed-source-control` and HEAD expected from the documentation gate.
-2. Verify the only current untracked documentation files are the reconstituted spec and this plan; staged count must be zero.
-3. Install dependencies in the durable clone using the lockfile-compatible repository command (`npm ci`) if `node_modules` is absent. Dependency installation must not modify lockfiles.
-4. Run a focused baseline typecheck for `mcp-core`, `workspace-agent`, and `mcp-gateway`. If the historical base itself fails before source-control changes, record the failure and investigate instead of attributing it to Task 1.
-5. Because spec/plan are currently untracked, request an explicit documentation commit gate before Task 1. Recommended documentation commit after approval:
+## Final completion criteria
 
-```bash
-git add mcp-access-stack/docs/superpowers/specs/2026-08-26-typed-source-control-github-design.md mcp-access-stack/docs/superpowers/plans/2026-08-26-typed-source-control-github.md
-git commit -m "docs(source-control): restore typed GitHub design"
-```
+Phase 4 is not complete until:
 
-The Git root is the boundary parent, so paths in this documentation-only commit are Git-root-relative as shown above. Task implementation commands in Tasks 1–8 assume `cwd=mcp-access-stack`.
+- Tasks 1–8 have fresh RED/GREEN/review evidence;
+- all eleven typed tools and ten capabilities exist with no additional generic source-control surface;
+- local Git mutations use the hardened typed Git service;
+- GitHub operations use fixed typed API endpoints and isolated credentials;
+- protected `main`, confirmation and idempotency/reconciliation rules are executable invariants;
+- relay mutation retries remain fail-safe;
+- full catalog = 61 and Edge workspace manifest = 28 with canonical identity/parity checks GREEN;
+- affected full suites, root typecheck/build, Edge dry-run, diff-check and Gitleaks are GREEN;
+- original operational checkout remains untouched outside permitted `.codex` state;
+- Phase 4 commits remain local; remote branch remains at the Phase 1 snapshot until the final roadmap integration gate.
 
-## Final Completion Criteria
+## Execution handoff
 
-The reconstruction is not complete until:
-
-- reconstituted spec and plan have explicit approval and durable Git commits;
-- Tasks 1–8 have fresh review gates and authorized commits;
-- all nine tools/capabilities exist and no additional generic source-control surface exists;
-- policy, confirmation, idempotency/reconciliation, Git process isolation, GitHub credential isolation, relay strictness, MCP catalog and audit redaction are proven by tests;
-- full source-control regression, typechecks/builds, repository `npm run check`, diff/BOM/static/secret gates are fresh and green;
-- protected operational checkout remains unchanged outside `.codex`;
-- no push/deploy/cutover has occurred without its own explicit authorization.
-
-## Execution Handoff
-
-After this plan is approved, the next authorized action should be limited to the documentation commit gate above and Task 1 RED preflight. Use `superpowers:executing-plans` for inline execution in this same agent context, preserving a review/authorization checkpoint after each Task. Do not use a temporary clone and do not begin Task 2 automatically after a Task 1 commit unless the user has explicitly authorized that next gate.
+Execute this plan task-by-task in the existing isolated cumulative worktree. The current conversation has been operating inline with explicit checkpoints, so the natural execution mode is `superpowers:executing-plans`. Do not start Task 2 until Task 1 RED/GREEN/review and local commit are complete. Do not push any Task commit.

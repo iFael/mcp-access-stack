@@ -195,6 +195,7 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
 
 $expectedNativeArtifacts = @(
     'McpHost.exe',
+    'McpEdgeHost.exe',
     'McpNodeHostLauncher.exe',
     'McpCredentialBroker.exe'
 )
@@ -209,6 +210,7 @@ $nativeTarget = Join-Path $releaseTarget 'native'
 $compatTarget = Join-Path $releaseTarget 'compat'
 New-Item -ItemType Directory -Force -Path $nativeTarget, $compatTarget | Out-Null
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpHost.exe') -Destination (Join-Path $nativeTarget 'McpHost.exe')
+Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpEdgeHost.exe') -Destination (Join-Path $nativeTarget 'McpEdgeHost.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpNodeHostLauncher.exe') -Destination (Join-Path $compatTarget 'McpNodeHostLauncher.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpCredentialBroker.exe') -Destination (Join-Path $compatTarget 'McpCredentialBroker.exe')
 
@@ -292,9 +294,10 @@ try {
     }
 
     $hostExecutablePath = Join-Path $releaseTarget 'native\McpHost.exe'
+    $edgeHostExecutablePath = Join-Path $releaseTarget 'native\McpEdgeHost.exe'
     $compatLauncherPath = Join-Path $releaseTarget 'compat\McpNodeHostLauncher.exe'
     $compatBrokerPath = Join-Path $releaseTarget 'compat\McpCredentialBroker.exe'
-    foreach ($nativeExecutable in @($hostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
+    foreach ($nativeExecutable in @($hostExecutablePath, $edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
         Sign-Script -Path $nativeExecutable -Certificate $certificate
     }
 
@@ -341,8 +344,9 @@ try {
             (New-ExecutionNodeArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Role 'edge-connector' -RelativePath 'services/mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Role 'edge-connector' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Role 'edge-host' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'edge-native-launcher' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )

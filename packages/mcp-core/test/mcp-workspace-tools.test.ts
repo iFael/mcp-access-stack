@@ -18,7 +18,12 @@ import type {
   WorkspaceExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
-import { registerWorkspaceTools } from "../src/mcp-workspace-tools.js";
+import {
+  SOURCE_CONTROL_TOOL_NAMES,
+  WORKSPACE_TOOL_NAMES,
+  registerSourceControlTools,
+  registerWorkspaceTools,
+} from "../src/mcp-workspace-tools.js";
 
 const backgroundTask = {
   version: 1 as const,
@@ -202,6 +207,23 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { task: backgroundTask };
   }
 
+  async waitBackgroundTask(): Promise<import("@vs-code-gpt/shared").BackgroundTaskWaitResult> {
+    this.calls.push("waitBackgroundTask");
+    return {
+      task: { ...backgroundTask, state: "succeeded" },
+      logs: {
+        id: backgroundTask.id,
+        stdout: "done",
+        stderr: "",
+        stdoutBytes: 4,
+        stderrBytes: 0,
+        truncated: false,
+      },
+      timedOut: false,
+      elapsedMs: 12,
+    };
+  }
+
   async listBackgroundTasks(): Promise<BackgroundTaskListResult> {
     this.calls.push("listBackgroundTasks");
     return { tasks: [backgroundTask] };
@@ -373,6 +395,25 @@ describe("registerWorkspaceTools", () => {
     ]);
   });
 
+  it("publishes wait_background_task as a workspace tool", () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
+      "wait_background_task",
+    );
+
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["wait_background_task"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    expect(Object.keys(registeredTools(server))).toEqual([
+      "wait_background_task",
+    ]);
+  });
   it("keeps a 300 second command in the synchronous path", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -396,5 +437,117 @@ describe("registerWorkspaceTools", () => {
 
     expect(result.structuredContent).toMatchObject({ status: "executed" });
     expect(executor.calls).toEqual(["runCommand"]);
+  });
+});
+
+const sourceControlShaA = "a".repeat(40);
+const sourceControlShaB = "b".repeat(40);
+const sourceControlShaC = "c".repeat(40);
+
+class MockSourceControlExecutor {
+  calls: Array<{ method: string; input: unknown; context: unknown }> = [];
+
+  private record(method: string, input: unknown, context: unknown) {
+    this.calls.push({ method, input, context });
+  }
+
+  async createBranch(input: any, context?: unknown) {
+    this.record("createBranch", input, context);
+    return { root: input.root ?? ".", branch: input.branch, headSha: input.expectedHeadSha };
+  }
+  async stagePaths(input: any, context?: unknown) {
+    this.record("stagePaths", input, context);
+    return { root: input.root ?? ".", headSha: sourceControlShaA, indexTreeSha: sourceControlShaB, paths: input.paths };
+  }
+  async unstagePaths(input: any, context?: unknown) {
+    this.record("unstagePaths", input, context);
+    return { root: input.root ?? ".", headSha: input.expectedHeadSha, indexTreeSha: sourceControlShaB, paths: input.paths };
+  }
+  async commit(input: any, context?: unknown) {
+    this.record("commit", input, context);
+    return { root: input.root ?? ".", branch: "feature/task7", commitSha: sourceControlShaC };
+  }
+  async mergeBranch(input: any, context?: unknown) {
+    this.record("mergeBranch", input, context);
+    return { root: input.root ?? ".", branch: "feature/task7", previousHeadSha: input.expectedTargetHeadSha, headSha: input.expectedSourceHeadSha, sourceHeadSha: input.expectedSourceHeadSha, fastForwarded: true as const };
+  }
+  async pushBranch(input: any, context?: unknown) {
+    this.record("pushBranch", input, context);
+    return { status: "completed" as const, root: input.root ?? ".", remote: input.remote ?? "origin", branch: input.branch, localSha: input.expectedLocalSha, remoteSha: input.expectedLocalSha };
+  }
+  async getRepository(input: any, context?: unknown) {
+    this.record("getRepository", input, context);
+    return { owner: input.owner, name: input.repository, fullName: `${input.owner}/${input.repository}`, defaultBranch: "main", visibility: "private" as const, url: `https://github.com/${input.owner}/${input.repository}` };
+  }
+  async createRepository(input: any, context?: unknown) {
+    this.record("createRepository", input, context);
+    return { status: "completed" as const, owner: input.owner, name: input.name, fullName: `${input.owner}/${input.name}`, defaultBranch: "main", visibility: input.visibility, url: `https://github.com/${input.owner}/${input.name}` };
+  }
+  async getPullRequest(input: any, context?: unknown) {
+    this.record("getPullRequest", input, context);
+    return { number: input.pullNumber, state: "open" as const, title: "typed", url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`, headSha: sourceControlShaB, baseSha: sourceControlShaA, merged: false };
+  }
+  async createPullRequest(input: any, context?: unknown) {
+    this.record("createPullRequest", input, context);
+    return { status: "completed" as const, number: 7, state: "open" as const, title: input.title, url: `https://github.com/${input.owner}/${input.repository}/pull/7`, headSha: sourceControlShaB, baseSha: sourceControlShaA, merged: false };
+  }
+  async mergePullRequest(input: any, context?: unknown) {
+    this.record("mergePullRequest", input, context);
+    return { status: "completed" as const, number: input.pullNumber, merged: true, mergeSha: sourceControlShaC };
+  }
+}
+
+const sourceControlCases = [
+  ["git_create_branch", "createBranch", { workspaceId: "ws", branch: "feature/task7", expectedHeadSha: sourceControlShaA }],
+  ["git_stage_paths", "stagePaths", { workspaceId: "ws", paths: ["a.txt"] }],
+  ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
+  ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
+  ["git_merge_branch", "mergeBranch", { workspaceId: "ws", sourceBranch: "feature/source", expectedTargetHeadSha: sourceControlShaA, expectedSourceHeadSha: sourceControlShaB }],
+  ["git_push_branch", "pushBranch", { workspaceId: "ws", branch: "feature/task7", expectedLocalSha: sourceControlShaA }],
+  ["github_get_repository", "getRepository", { workspaceId: "ws", owner: "octo", repository: "repo" }],
+  ["github_create_repository", "createRepository", { workspaceId: "ws", owner: "octo", name: "repo", visibility: "private" }],
+  ["github_get_pull_request", "getPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7 }],
+  ["github_create_pull_request", "createPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", title: "typed", head: "feature/task7", base: "main" }],
+  ["github_merge_pull_request", "mergePullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB, mergeMethod: "squash" }],
+] as const;
+
+const expectedSourceControlAnnotations = {
+  git_create_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  git_merge_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_push_branch: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_create_repository: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_get_pull_request: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_create_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+} as const;
+
+describe("registerSourceControlTools", () => {
+  it("publishes exactly eleven source-control names inside the 28-tool workspace surface", () => {
+    expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(28);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(28);
+  });
+
+  it("registers exact annotations and routes each tool to exactly one typed method", async () => {
+    const executor = new MockSourceControlExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerSourceControlTools(server, executor, { securitySchemes: [{ type: "noauth" }] });
+    const tools = (server as unknown as { _registeredTools: Record<string, RegisteredTool & { annotations?: unknown }> })._registeredTools;
+    expect(Object.keys(tools)).toEqual([...SOURCE_CONTROL_TOOL_NAMES]);
+
+    for (const [name, method, input] of sourceControlCases) {
+      expect(tools[name]?.annotations).toMatchObject(expectedSourceControlAnnotations[name]);
+      const before = executor.calls.length;
+      const result = await tools[name]!.handler(input, { signal: new AbortController().signal });
+      expect(result.isError).not.toBe(true);
+      expect(executor.calls).toHaveLength(before + 1);
+      expect(executor.calls.at(-1)).toMatchObject({ method, input });
+      expect(executor.calls.at(-1)?.context).toMatchObject({ signal: expect.any(AbortSignal) });
+    }
   });
 });

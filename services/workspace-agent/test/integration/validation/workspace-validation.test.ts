@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
@@ -23,6 +23,10 @@ const installedGitleaksPath = path.resolve(
   "8.30.1",
   process.platform === "win32" ? "gitleaks.exe" : "gitleaks",
 );
+const availableGitleaksPath =
+  process.env.GITLEAKS_PATH && existsSync(process.env.GITLEAKS_PATH)
+    ? process.env.GITLEAKS_PATH
+    : installedGitleaksPath;
 
 afterEach(async () => {
   if (previousGitleaksPath === undefined) delete process.env.GITLEAKS_PATH;
@@ -196,6 +200,71 @@ describe("workspace validation", () => {
     expect(result.warnings.some((warning) => warning.includes("was skipped"))).toBe(false);
   });
 
+  (existsSync(availableGitleaksPath) ? test : test.skip)(
+    "secret-scan changes warns and skips deleted paths",
+    async () => {
+      const agent = await createValidationAgent();
+      initializeGitRepository(fixture!.workspacePath);
+      await writeWorkspaceFile(fixture!.workspacePath, "deleted.txt", "tracked\n");
+      git(fixture!.workspacePath, ["add", "deleted.txt"]);
+      git(fixture!.workspacePath, ["commit", "-m", "initial"]);
+      await rename(
+        path.join(fixture!.workspacePath, "deleted.txt"),
+        path.join(fixture!.basePath, "moved-deleted.txt"),
+      );
+      process.env.GITLEAKS_PATH = availableGitleaksPath;
+
+      const result = await agent.runValidation({
+        workspaceId: "test",
+        root: ".",
+        validation: "secret-scan",
+        scope: "changes",
+      });
+
+      expect(result.executed).toBe(true);
+      expect(result.passed).toBe(true);
+      expect(result.filesScanned).toBe(0);
+      expect(result.warnings).toContain(
+        "Changed path no longer exists and was skipped: deleted.txt",
+      );
+    },
+  );
+  (existsSync(availableGitleaksPath) ? test : test.skip)(
+    "secret-scan changes audits staged, unstaged and untracked blocked env files",
+    async () => {
+      const agent = await createValidationAgent();
+      initializeGitRepository(fixture!.workspacePath);
+      await writeWorkspaceFile(fixture!.workspacePath, "staged.txt", "initial\n");
+      await writeWorkspaceFile(fixture!.workspacePath, "unstaged.txt", "initial\n");
+      git(fixture!.workspacePath, ["add", "staged.txt", "unstaged.txt"]);
+      git(fixture!.workspacePath, ["commit", "-m", "initial"]);
+      await writeWorkspaceFile(fixture!.workspacePath, "staged.txt", "staged change\n");
+      git(fixture!.workspacePath, ["add", "staged.txt"]);
+      await writeWorkspaceFile(fixture!.workspacePath, "unstaged.txt", "unstaged change\n");
+      const fakeSecret = "ghp_" + "0123456789abcdef".repeat(2) + "01234567";
+      await writeWorkspaceFile(fixture!.workspacePath, ".env", `TOKEN=${fakeSecret}\n`);
+      process.env.GITLEAKS_PATH = availableGitleaksPath;
+
+      await expect(
+        agent.readFile({ workspaceId: "test", path: ".env" }),
+      ).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+
+      const result = await agent.runValidation({
+        workspaceId: "test",
+        root: ".",
+        validation: "secret-scan",
+        scope: "changes",
+      });
+
+      expect(result.executed).toBe(true);
+      expect(result.filesScanned).toBe(3);
+      expect(result.passed).toBe(false);
+      expect(result.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: ".env" })]),
+      );
+      expect(JSON.stringify(result)).not.toContain(fakeSecret);
+    },
+  );
   (existsSync(installedGitleaksPath) ? test : test.skip)(
     "redacts secrets returned by the installed Gitleaks binary",
     async () => {

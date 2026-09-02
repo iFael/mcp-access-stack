@@ -1,0 +1,201 @@
+name: Windows Edge candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: windows-edge-candidate-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  guard-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require trusted main ref
+        shell: bash
+        env:
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$CURRENT_REF" != 'refs/heads/main' ]]; then
+            echo 'Windows Edge candidate signing is restricted to refs/heads/main.' >&2
+            exit 1
+          fi
+
+  sign-candidate:
+    needs: guard-main
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: public-release
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact trusted main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require successful canonical CI for exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          $runs = @(
+            gh run list `
+              --repo $env:REPOSITORY `
+              --workflow CI `
+              --branch main `
+              --commit $env:GITHUB_SHA `
+              --event push `
+              --status success `
+              --limit 2 `
+              --json databaseId,headSha,conclusion | ConvertFrom-Json
+          )
+          if ($LASTEXITCODE -ne 0 -or $runs.Count -ne 1) {
+            throw 'Expected exactly one successful canonical CI push run for the trusted main commit.'
+          }
+          if ([string]$runs[0].headSha -ne $env:GITHUB_SHA -or [string]$runs[0].conclusion -ne 'success') {
+            throw 'Canonical CI evidence does not match the trusted main commit.'
+          }
+
+      - name: Download and verify official beta.24 Windows base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $downloadRoot = Join-Path $env:RUNNER_TEMP 'edge-candidate-base-download'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'edge-candidate-base-extracted'
+          New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
+          gh release download v1.1.0-beta.24 `
+            --repo $env:REPOSITORY `
+            --pattern 'v1.1.0-beta.24-windows-x64.zip' `
+            --pattern 'v1.1.0-beta.24-windows-x64.zip.sha256' `
+            --dir $downloadRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to download the official beta.24 Windows release assets.'
+          }
+
+          $zip = Join-Path $downloadRoot 'v1.1.0-beta.24-windows-x64.zip'
+          $sidecar = "$zip.sha256"
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
+            throw 'Official beta.24 Windows ZIP or .sha256 sidecar is missing.'
+          }
+          $sidecarText = [IO.File]::ReadAllText($sidecar, [Text.Encoding]::UTF8).Trim()
+          if ($sidecarText -notmatch '^([a-f0-9]{64}) \*v1\.1\.0-beta\.24-windows-x64\.zip$') {
+            throw 'Official beta.24 Windows SHA256 sidecar has an unexpected format.'
+          }
+          $expectedHash = $Matches[1]
+          $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw 'Official beta.24 Windows ZIP hash mismatch.'
+          }
+
+          Expand-Archive -LiteralPath $zip -DestinationPath $extractRoot -Force
+          . (Join-Path $PWD 'deploy\windows\PublicDistribution.Common.ps1')
+          Set-McpPublicSignatureValidationMode -Mode 'OfflinePinned'
+          $distribution = Assert-McpPublicDistribution -Root $extractRoot
+          if ([string]$distribution.releaseId -ne '1.1.0-beta.24') {
+            throw 'Official beta.24 signed distribution-manifest.ps1 identity is invalid.'
+          }
+
+          $baseReleaseRoot = Join-Path $extractRoot 'releases\1.1.0-beta.24'
+          $baseManifestPath = Join-Path $baseReleaseRoot 'manifest.json'
+          if (-not (Test-Path -LiteralPath $baseManifestPath -PathType Leaf)) {
+            throw 'Official beta.24 release root was not found after extraction.'
+          }
+          $baseManifest = Get-Content -LiteralPath $baseManifestPath -Raw | ConvertFrom-Json
+          if ([string]$baseManifest.releaseId -ne '1.1.0-beta.24' -or
+              [string]$baseManifest.commit -notmatch '^[a-f0-9]{40}$' -or
+              [string]$distribution.commit -ne [string]$baseManifest.commit) {
+            throw 'Official beta.24 release identity is invalid.'
+          }
+          "BASE_RELEASE_ROOT=$baseReleaseRoot" >> $env:GITHUB_ENV
+          "BASE_RELEASE_ID=$($baseManifest.releaseId)" >> $env:GITHUB_ENV
+          "BASE_COMMIT=$($baseManifest.commit)" >> $env:GITHUB_ENV
+
+      - name: Build Windows native artifacts from trusted source
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          $nativeOutput = Join-Path $env:RUNNER_TEMP 'edge-candidate-native'
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpWindowsExecutionNodeArtifacts.ps1 `
+            -ReleaseRoot $env:BASE_RELEASE_ROOT `
+            -ReleaseId $env:BASE_RELEASE_ID `
+            -SourceCommit $env:BASE_COMMIT `
+            -OutputDirectory $nativeOutput
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows native artifact build failed for Edge candidate.'
+          }
+          $edgeHost = Join-Path $nativeOutput 'McpEdgeHost.exe'
+          if (-not (Test-Path -LiteralPath $edgeHost -PathType Leaf)) {
+            throw 'McpEdgeHost.exe was not produced by the native builder.'
+          }
+          "EDGE_HOST_EXECUTABLE=$edgeHost" >> $env:GITHUB_ENV
+          $candidateId = '1.1.0-beta.24-edgehost-' + $env:GITHUB_SHA.Substring(0, 12)
+          "CANDIDATE_ID=$candidateId" >> $env:GITHUB_ENV
+
+      - name: Assemble and sign Windows Edge candidate
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          $candidateOutput = Join-Path $env:RUNNER_TEMP 'windows-edge-candidate'
+          $resultJson = pwsh -NoLogo -NoProfile -File deploy/windows/New-McpWindowsEdgeCandidate.ps1 `
+            -BaseReleaseRoot $env:BASE_RELEASE_ROOT `
+            -CandidateId $env:CANDIDATE_ID `
+            -PatchCommit $env:GITHUB_SHA `
+            -EdgeHostExecutable $env:EDGE_HOST_EXECUTABLE `
+            -OutputDirectory $candidateOutput
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows Edge candidate assembly failed.'
+          }
+          $result = $resultJson | ConvertFrom-Json
+          if ([string]$result.status -ne 'created' -or $result.signed -ne $true) {
+            throw 'Signed Windows Edge candidate builder returned unexpected evidence.'
+          }
+          "CANDIDATE_OUTPUT=$candidateOutput" >> $env:GITHUB_ENV
+
+      - name: Validate signed candidate and simulated legacy-artifact loss
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          $validationJson = pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsEdgeCandidate.ps1 `
+            -CandidateRoot (Join-Path $env:CANDIDATE_OUTPUT 'stage') `
+            -CandidateId $env:CANDIDATE_ID `
+            -PatchCommit $env:GITHUB_SHA `
+            -OfflinePinnedAuthenticode `
+            -SimulateLegacyLauncherLoss
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows Edge candidate qualification failed.'
+          }
+          $validation = $validationJson | ConvertFrom-Json
+          if ([string]$validation.status -ne 'validated' -or
+              $validation.legacyLauncherPresent -ne $false -or
+              $validation.serviceCliPresent -ne $false -or
+              $validation.packageCliPresent -ne $true -or
+              $validation.edgeHostPresent -ne $true -or
+              [string]$validation.installerPlanStatus -ne 'planned') {
+            throw 'Signed Windows Edge candidate qualification returned unexpected evidence.'
+          }
+
+      - name: Upload signed Windows Edge candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-edge-candidate-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/windows-edge-candidate/*-windows-edge-candidate.zip
+            ${{ runner.temp }}/windows-edge-candidate/*-windows-edge-candidate.zip.sha256
+          if-no-files-found: error
+          retention-days: 1

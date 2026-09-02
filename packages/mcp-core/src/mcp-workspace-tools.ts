@@ -6,8 +6,10 @@ import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskWaitResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
+  waitBackgroundTaskInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
@@ -40,10 +42,38 @@ import {
   runPowerShellResultSchema,
   type OperationContext,
   type RelayOperation,
+  type SourceControlRelayOperation,
   type RunCommandInput,
   type RunCommandResult,
   type RunPowerShellInput,
 } from "./contracts.js";
+import {
+  gitCommitInputSchema,
+  gitCommitResultSchema,
+  gitCreateBranchInputSchema,
+  gitCreateBranchResultSchema,
+  gitMergeBranchInputSchema,
+  gitMergeBranchResultSchema,
+  gitPushBranchInputSchema,
+  gitPushBranchResultSchema,
+  gitStagePathsInputSchema,
+  gitStagePathsResultSchema,
+  gitUnstagePathsInputSchema,
+  gitUnstagePathsResultSchema,
+  githubCreatePullRequestInputSchema,
+  githubCreatePullRequestResultSchema,
+  githubCreateRepositoryInputSchema,
+  githubCreateRepositoryResultSchema,
+  githubGetPullRequestInputSchema,
+  githubGetRepositoryInputSchema,
+  githubMergePullRequestInputSchema,
+  githubMergePullRequestResultSchema,
+  githubPullRequestResultSchema,
+  githubRepositoryResultSchema,
+  sourceControlOperationNameSchema,
+  type SourceControlOperationName,
+} from "./source-control-contracts.js";
+import type { GitHubExecutor, GitRepositoryExecutor } from "./source-control-executor.js";
 import { AppError as AppErrorClass, asAppError } from "./errors.js";
 import {
   createOperationDeadline,
@@ -71,25 +101,13 @@ const listWorkspacesOutputSchema = z
   .object({ workspaces: listWorkspacesResultSchema })
   .strict();
 
-export type WorkspaceToolName =
-  | "list_workspaces"
-  | "list_workspace_roots"
-  | "list_files"
-  | "read_file"
-  | "write_file"
-  | "run_workspace_validation"
-  | "run_command"
-  | "run_powershell"
-  | "search_files"
-  | "inspect_workspace_git"
-  | "get_workspace_context"
-  | "start_background_task"
-  | "get_background_task"
-  | "list_background_tasks"
-  | "cancel_background_task"
-  | "read_background_task_logs";
+export type SourceControlToolName = SourceControlOperationName;
 
-export const WORKSPACE_TOOL_NAMES = [
+export const SOURCE_CONTROL_TOOL_NAMES = [
+  ...sourceControlOperationNameSchema.options,
+] as const satisfies readonly SourceControlToolName[];
+
+const BASE_WORKSPACE_TOOL_NAMES = [
   "list_workspaces",
   "list_workspace_roots",
   "list_files",
@@ -103,11 +121,19 @@ export const WORKSPACE_TOOL_NAMES = [
   "get_workspace_context",
   "start_background_task",
   "get_background_task",
+  "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
-] as const satisfies readonly WorkspaceToolName[];
+] as const;
 
+type BaseWorkspaceToolName = (typeof BASE_WORKSPACE_TOOL_NAMES)[number];
+export type WorkspaceToolName = BaseWorkspaceToolName | SourceControlToolName;
+
+export const WORKSPACE_TOOL_NAMES = [
+  ...BASE_WORKSPACE_TOOL_NAMES,
+  ...SOURCE_CONTROL_TOOL_NAMES,
+] as const satisfies readonly WorkspaceToolName[];
 export interface WorkspaceToolSecurityScheme {
   type: "oauth2" | "noauth";
   scopes?: string[];
@@ -188,6 +214,14 @@ function formatBackgroundTaskText(
     : "Background task not found.";
 }
 
+function formatBackgroundTaskWaitText(
+  result: z.infer<typeof backgroundTaskWaitResultSchema>,
+): string {
+  if (!result.task) return "Background task not found.";
+  return result.timedOut
+    ? `Background task ${result.task.id} is still ${result.task.state} after waiting ${result.elapsedMs} ms; the wait timed out without cancelling the task.`
+    : `Background task ${result.task.id} reached ${result.task.state} after waiting ${result.elapsedMs} ms.`;
+}
 function formatBackgroundTaskLogsText(
   result: z.infer<typeof backgroundTaskLogsLookupResultSchema>,
 ): string {
@@ -625,6 +659,43 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("wait_background_task", include)) {
+    server.registerTool(
+      "wait_background_task",
+      {
+        title: "Wait for background task",
+        description:
+          "Waits up to timeoutMs for one persisted background task to reach a terminal state. A wait timeout stops waiting only and never cancels the task. Returns the current/terminal task plus size-limited redacted stdout/stderr tails.",
+        inputSchema: waitBackgroundTaskInputSchema,
+        outputSchema: backgroundTaskWaitResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsedInput = waitBackgroundTaskInputSchema.parse(input);
+          const structuredContent = backgroundTaskWaitResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              parsedInput.timeoutMs,
+              (context) => executor.waitBackgroundTask(parsedInput, context),
+            ),
+          );
+          return {
+            content: [
+              { type: "text", text: formatBackgroundTaskWaitText(structuredContent) },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
   if (shouldInclude("list_background_tasks", include)) {
     server.registerTool(
       "list_background_tasks",
@@ -974,6 +1045,429 @@ async function executePowerShell(
   return { status: "background_task_started", task: result.task };
 }
 
+export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor;
+
+export interface RegisterSourceControlToolsOptions {
+  securitySchemes?: WorkspaceToolSecurityScheme[];
+  includeTools?: readonly SourceControlToolName[];
+  operationContextFactory?: ToolOperationContextFactory;
+  auth?: {
+    requiredScope: string;
+    resourceMetadataUrl: URL;
+  };
+}
+
+const mcpSourceControlWorkspaceId = z.string().trim().min(1);
+const mcpSourceControlRoot = z.string().trim().min(1).max(4_096);
+const mcpSourceControlSha = z.string().regex(/^[a-fA-F0-9]{40}$/u);
+const mcpSourceControlBranch = z.string().min(1).max(255);
+const mcpSourceControlPath = z.string().min(1).max(4_096);
+const mcpSourceControlPaths = z.array(mcpSourceControlPath).min(1).max(200);
+const mcpSourceControlConfirmationId = z.string().min(1).max(128);
+const mcpGitHubOwner = z.string().min(1).max(100);
+const mcpGitHubRepositoryName = z.string().min(1).max(100);
+const mcpGitHubRepositoryFullName = z.string().min(3).max(201);
+const mcpGitHubUrl = z.string().url();
+const mcpGitHubPullRef = z.string().min(1).max(255);
+const mcpGitHubVisibility = z.enum(["private", "public", "internal"]);
+const mcpGitHubPullRequestState = z.enum(["open", "closed"]);
+const mcpGitHubMergeMethod = z.enum(["merge", "squash"]);
+
+const mcpSourceControlConfirmationRequired = z.object({
+  status: z.literal("confirmation_required"),
+  confirmationId: mcpSourceControlConfirmationId,
+  expiresAt: z.string().datetime(),
+  operation: sourceControlOperationNameSchema,
+  targetResource: z.string().min(1).max(512),
+}).strict();
+const mcpGitHubRepositoryResult = z.object({
+  owner: mcpGitHubOwner,
+  name: mcpGitHubRepositoryName,
+  fullName: mcpGitHubRepositoryFullName,
+  defaultBranch: mcpSourceControlBranch,
+  visibility: mcpGitHubVisibility,
+  url: mcpGitHubUrl,
+}).strict();
+const mcpGitHubPullRequestResult = z.object({
+  number: z.number().int().positive(),
+  state: mcpGitHubPullRequestState,
+  title: z.string().min(1).max(256),
+  url: mcpGitHubUrl,
+  headSha: mcpSourceControlSha,
+  baseSha: mcpSourceControlSha,
+  merged: z.boolean(),
+}).strict();
+
+const sourceControlMcpSchemas = {
+  git_create_branch: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), branch: mcpSourceControlBranch, expectedHeadSha: mcpSourceControlSha }).strict(),
+    output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, headSha: mcpSourceControlSha }).strict(),
+  },
+  git_stage_paths: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), paths: mcpSourceControlPaths }).strict(),
+    output: z.object({ root: mcpSourceControlRoot, headSha: mcpSourceControlSha, indexTreeSha: mcpSourceControlSha, paths: mcpSourceControlPaths }).strict(),
+  },
+  git_unstage_paths: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), paths: mcpSourceControlPaths, expectedHeadSha: mcpSourceControlSha, expectedIndexTreeSha: mcpSourceControlSha }).strict(),
+    output: z.object({ root: mcpSourceControlRoot, headSha: mcpSourceControlSha, indexTreeSha: mcpSourceControlSha, paths: mcpSourceControlPaths }).strict(),
+  },
+  git_commit: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), message: z.string().trim().min(1).max(4_000), expectedHeadSha: mcpSourceControlSha, expectedIndexTreeSha: mcpSourceControlSha }).strict(),
+    output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, commitSha: mcpSourceControlSha }).strict(),
+  },
+  git_merge_branch: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), sourceBranch: mcpSourceControlBranch, expectedTargetHeadSha: mcpSourceControlSha, expectedSourceHeadSha: mcpSourceControlSha }).strict(),
+    output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, previousHeadSha: mcpSourceControlSha, headSha: mcpSourceControlSha, sourceHeadSha: mcpSourceControlSha, fastForwarded: z.literal(true) }).strict(),
+  },
+  git_push_branch: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), branch: mcpSourceControlBranch, expectedLocalSha: mcpSourceControlSha, remote: z.string().min(1).max(255).optional(), expectedRemoteSha: mcpSourceControlSha.optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.discriminatedUnion("status", [
+      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("git_push_branch") }),
+      z.object({ status: z.literal("completed"), root: mcpSourceControlRoot, remote: z.string().min(1).max(255), branch: mcpSourceControlBranch, localSha: mcpSourceControlSha, remoteSha: mcpSourceControlSha }).strict(),
+    ]),
+  },
+  github_get_repository: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName }).strict(),
+    output: mcpGitHubRepositoryResult,
+  },
+  github_create_repository: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, owner: mcpGitHubOwner, name: mcpGitHubRepositoryName, visibility: mcpGitHubVisibility, description: z.string().max(350).optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.discriminatedUnion("status", [
+      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_create_repository") }),
+      mcpGitHubRepositoryResult.extend({ status: z.literal("completed") }),
+    ]),
+  },
+  github_get_pull_request: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive() }).strict(),
+    output: mcpGitHubPullRequestResult,
+  },
+  github_create_pull_request: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, title: z.string().trim().min(1).max(256), head: mcpGitHubPullRef, base: mcpGitHubPullRef, body: z.string().max(65_536).optional(), draft: z.boolean().optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.discriminatedUnion("status", [
+      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_create_pull_request") }),
+      mcpGitHubPullRequestResult.extend({ status: z.literal("completed") }),
+    ]),
+  },
+  github_merge_pull_request: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.discriminatedUnion("status", [
+      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_merge_pull_request") }),
+      z.object({ status: z.literal("completed"), number: z.number().int().positive(), merged: z.boolean(), mergeSha: mcpSourceControlSha }).strict(),
+    ]),
+  },
+} as const;
+const sourceControlAnnotations: Record<SourceControlToolName, {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  openWorldHint: boolean;
+  idempotentHint: boolean;
+}> = {
+  git_create_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+  git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+  git_merge_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+  github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_create_repository: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+  github_get_pull_request: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_create_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+  github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+};
+
+export function registerSourceControlTools(
+  server: McpServer,
+  executor: SourceControlExecutor,
+  options: RegisterSourceControlToolsOptions = {},
+): void {
+  const meta = toolMeta(options);
+  const include = options.includeTools;
+
+  if (shouldInclude("git_create_branch", include)) {
+    server.registerTool(
+      "git_create_branch",
+      {
+        title: "Create Git branch",
+        description: "Creates a local Git branch at the exact expected HEAD in an authorized workspace repository.",
+        inputSchema: sourceControlMcpSchemas.git_create_branch.input,
+        outputSchema: sourceControlMcpSchemas.git_create_branch.output,
+        annotations: sourceControlAnnotations.git_create_branch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitCreateBranchInputSchema.parse(input);
+          const structuredContent = gitCreateBranchResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.createBranch(parsed, context)),
+          );
+          return sourceControlSuccess("Git branch created.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_stage_paths", include)) {
+    server.registerTool(
+      "git_stage_paths",
+      {
+        title: "Stage Git paths",
+        description: "Stages an explicit bounded list of workspace-relative Git paths.",
+        inputSchema: sourceControlMcpSchemas.git_stage_paths.input,
+        outputSchema: sourceControlMcpSchemas.git_stage_paths.output,
+        annotations: sourceControlAnnotations.git_stage_paths,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitStagePathsInputSchema.parse(input);
+          const structuredContent = gitStagePathsResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.stagePaths(parsed, context)),
+          );
+          return sourceControlSuccess("Git paths staged.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_unstage_paths", include)) {
+    server.registerTool(
+      "git_unstage_paths",
+      {
+        title: "Unstage Git paths",
+        description: "Unstages an explicit bounded list of workspace-relative Git paths when HEAD and index preconditions match.",
+        inputSchema: sourceControlMcpSchemas.git_unstage_paths.input,
+        outputSchema: sourceControlMcpSchemas.git_unstage_paths.output,
+        annotations: sourceControlAnnotations.git_unstage_paths,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitUnstagePathsInputSchema.parse(input);
+          const structuredContent = gitUnstagePathsResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.unstagePaths(parsed, context)),
+          );
+          return sourceControlSuccess("Git paths unstaged.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_commit", include)) {
+    server.registerTool(
+      "git_commit",
+      {
+        title: "Commit staged Git changes",
+        description: "Creates one local Git commit when the expected HEAD and index-tree preconditions match.",
+        inputSchema: sourceControlMcpSchemas.git_commit.input,
+        outputSchema: sourceControlMcpSchemas.git_commit.output,
+        annotations: sourceControlAnnotations.git_commit,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitCommitInputSchema.parse(input);
+          const structuredContent = gitCommitResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.commit(parsed, context)),
+          );
+          return sourceControlSuccess("Git commit created.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_merge_branch", include)) {
+    server.registerTool(
+      "git_merge_branch",
+      {
+        title: "Fast-forward Git branch",
+        description: "Fast-forwards the current local branch to an exact expected source SHA; merge commits and conflict resolution are not supported.",
+        inputSchema: sourceControlMcpSchemas.git_merge_branch.input,
+        outputSchema: sourceControlMcpSchemas.git_merge_branch.output,
+        annotations: sourceControlAnnotations.git_merge_branch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitMergeBranchInputSchema.parse(input);
+          const structuredContent = gitMergeBranchResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.mergeBranch(parsed, context)),
+          );
+          return sourceControlSuccess("Git branch fast-forwarded.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_push_branch", include)) {
+    server.registerTool(
+      "git_push_branch",
+      {
+        title: "Push Git branch",
+        description: "Pushes one explicit non-protected branch to a named remote after typed confirmation; ambiguous outcomes require reconciliation.",
+        inputSchema: sourceControlMcpSchemas.git_push_branch.input,
+        outputSchema: sourceControlMcpSchemas.git_push_branch.output,
+        annotations: sourceControlAnnotations.git_push_branch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitPushBranchInputSchema.parse(input);
+          const structuredContent = gitPushBranchResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.pushBranch(parsed, context)),
+          );
+          return sourceControlSuccess("Git push processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_get_repository", include)) {
+    server.registerTool(
+      "github_get_repository",
+      {
+        title: "Get GitHub repository",
+        description: "Reads typed metadata for an authorized GitHub repository.",
+        inputSchema: sourceControlMcpSchemas.github_get_repository.input,
+        outputSchema: sourceControlMcpSchemas.github_get_repository.output,
+        annotations: sourceControlAnnotations.github_get_repository,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubGetRepositoryInputSchema.parse(input);
+          const structuredContent = githubRepositoryResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.getRepository(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub repository read.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_create_repository", include)) {
+    server.registerTool(
+      "github_create_repository",
+      {
+        title: "Create GitHub repository",
+        description: "Creates a GitHub repository for an explicitly authorized account owner after typed confirmation.",
+        inputSchema: sourceControlMcpSchemas.github_create_repository.input,
+        outputSchema: sourceControlMcpSchemas.github_create_repository.output,
+        annotations: sourceControlAnnotations.github_create_repository,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubCreateRepositoryInputSchema.parse(input);
+          const structuredContent = githubCreateRepositoryResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.createRepository(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub repository creation processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_get_pull_request", include)) {
+    server.registerTool(
+      "github_get_pull_request",
+      {
+        title: "Get GitHub pull request",
+        description: "Reads typed metadata for a pull request in an authorized GitHub repository.",
+        inputSchema: sourceControlMcpSchemas.github_get_pull_request.input,
+        outputSchema: sourceControlMcpSchemas.github_get_pull_request.output,
+        annotations: sourceControlAnnotations.github_get_pull_request,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubGetPullRequestInputSchema.parse(input);
+          const structuredContent = githubPullRequestResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.getPullRequest(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub pull request read.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_create_pull_request", include)) {
+    server.registerTool(
+      "github_create_pull_request",
+      {
+        title: "Create GitHub pull request",
+        description: "Creates a pull request in an authorized GitHub repository after typed confirmation.",
+        inputSchema: sourceControlMcpSchemas.github_create_pull_request.input,
+        outputSchema: sourceControlMcpSchemas.github_create_pull_request.output,
+        annotations: sourceControlAnnotations.github_create_pull_request,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubCreatePullRequestInputSchema.parse(input);
+          const structuredContent = githubCreatePullRequestResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.createPullRequest(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub pull-request creation processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_merge_pull_request", include)) {
+    server.registerTool(
+      "github_merge_pull_request",
+      {
+        title: "Merge GitHub pull request",
+        description: "Merges an authorized pull request at an exact expected head SHA after typed confirmation.",
+        inputSchema: sourceControlMcpSchemas.github_merge_pull_request.input,
+        outputSchema: sourceControlMcpSchemas.github_merge_pull_request.output,
+        annotations: sourceControlAnnotations.github_merge_pull_request,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubMergePullRequestInputSchema.parse(input);
+          const structuredContent = githubMergePullRequestResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.mergePullRequest(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub pull-request merge processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+}
+
+function sourceControlSuccess(
+  message: string,
+  structuredContent: Record<string, unknown>,
+): CallToolResult {
+  return {
+    content: [{ type: "text", text: message }],
+    structuredContent,
+  };
+}
 /** Maps relay operation names to workspace tool names for diagnostics. */
 export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName> = {
   listWorkspaces: "list_workspaces",
@@ -991,7 +1485,19 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   getWorkspaceContext: "get_workspace_context",
   startBackgroundTask: "start_background_task",
   getBackgroundTask: "get_background_task",
+  waitBackgroundTask: "wait_background_task",
   listBackgroundTasks: "list_background_tasks",
   cancelBackgroundTask: "cancel_background_task",
   readBackgroundTaskLogs: "read_background_task_logs",
+  gitCreateBranch: "git_create_branch",
+  gitStagePaths: "git_stage_paths",
+  gitUnstagePaths: "git_unstage_paths",
+  gitCommit: "git_commit",
+  gitMergeBranch: "git_merge_branch",
+  gitPushBranch: "git_push_branch",
+  githubGetRepository: "github_get_repository",
+  githubCreateRepository: "github_create_repository",
+  githubGetPullRequest: "github_get_pull_request",
+  githubCreatePullRequest: "github_create_pull_request",
+  githubMergePullRequest: "github_merge_pull_request",
 };

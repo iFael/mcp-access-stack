@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   MCP_TOOL_CATALOG_META_KEY,
+  type SourceControlExecutor,
   type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
 import { loadGatewayConfig } from "../../services/mcp-gateway/src/config.js";
@@ -30,6 +31,7 @@ if (!requiredScope) {
 
 const server = createMcpServer({
   workspaceExecutor: {} as WorkspaceExecutor,
+  sourceControlExecutor: {} as SourceControlExecutor,
   auth: {
     requiredScope,
     resourceMetadataUrl: new URL("https://edge.invalid/.well-known/oauth-protected-resource/mcp"),

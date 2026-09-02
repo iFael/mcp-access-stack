@@ -1,3 +1,5 @@
+import { mkdir, symlink } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
 import {
@@ -22,6 +24,39 @@ afterEach(async () => {
 }, 30_000);
 
 describe("filesystem discovery", () => {
+  test("secret-scan authorization bypasses blocked globs without bypassing containment", async () => {
+    fixture = await createFixture();
+    await writeWorkspaceFile(fixture.workspacePath, ".env", "secret\n");
+    const externalTarget = path.join(fixture.basePath, "external-validator-target");
+    await mkdir(externalTarget);
+    await writeWorkspaceFile(
+      fixture.basePath,
+      "external-validator-target/secret.txt",
+      "outside\n",
+    );
+    await symlink(
+      externalTarget,
+      path.join(fixture.workspacePath, "external-validator-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const registry = await WorkspaceRegistry.load(fixture.policyPath);
+    const workspace = registry.get("test");
+    const security = new PathSecurity(workspace);
+
+    await expect(security.authorizeExisting(".env", "file")).rejects.toMatchObject({
+      code: "BLOCKED_PATH",
+    });
+    await expect(
+      security.authorizeExistingForSecretScan(".env", "file"),
+    ).resolves.toMatchObject({ logicalPath: ".env", kind: "file" });
+    await expect(
+      security.authorizeExistingForSecretScan("../outside.txt"),
+    ).rejects.toMatchObject({ code: "INVALID_PATH" });
+    await expect(
+      security.authorizeExistingForSecretScan("external-validator-link/secret.txt", "file"),
+    ).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
+  });
   test("applies authorized roots, blocked paths, globs and stable ordering", async () => {
     fixture = await createFixture({ blockedGlobs: ["blocked/**"] });
     await writeWorkspaceFile(fixture.workspacePath, "src/b.ts", "b\n");

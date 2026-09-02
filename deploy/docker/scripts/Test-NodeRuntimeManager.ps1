@@ -13,38 +13,20 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 function New-FakeNodeExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Version,
-        [Parameter(Mandatory = $true)][string]$TypeName
+        [Parameter(Mandatory = $true)][string]$Version
     )
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
-    $source = @"
-using System;
-public static class $TypeName
-{
-    public static int Main(string[] args)
-    {
-        Console.WriteLine("$Version");
-        return 0;
-    }
-}
-"@
-    $sourcePath = [System.IO.Path]::ChangeExtension($Path, '.cs')
-    [IO.File]::WriteAllText($sourcePath, $source, [Text.UTF8Encoding]::new($false))
-    $compilerPath = @(
-        (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
-        (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
-    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-    if (-not $compilerPath) { throw 'C# compiler is unavailable for the fake Node fixture.' }
-    try {
-        & $compilerPath /nologo /target:exe /optimize+ "/out:$Path" $sourcePath
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            throw "Fake Node fixture compilation failed: $Version"
-        }
-    }
-    finally {
-        Remove-Item -LiteralPath $sourcePath -Force -ErrorAction SilentlyContinue
-    }
+    [IO.File]::WriteAllText(
+        $Path,
+        'managed-node-runtime-fixture' + [Environment]::NewLine,
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        ($Path + '.fixture-version'),
+        $Version + [Environment]::NewLine,
+        [Text.UTF8Encoding]::new($false)
+    )
 }
 
 function New-FixtureRelease {
@@ -76,6 +58,26 @@ function Quote-TestArgument {
 
 $projectRoot = Get-McpProjectRoot
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('mcp-node-runtime-manager-' + [guid]::NewGuid().ToString('N'))
+$script:OriginalTestMcpNodeExecutableVersion = ${function:Test-McpNodeExecutableVersion}
+$script:FixtureNodeRuntimeRoot = [IO.Path]::GetFullPath((Get-McpManagedNodeRuntimeRoot -ProjectRoot $tempRoot))
+function Test-McpNodeExecutableVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    $resolvedPath = [IO.Path]::GetFullPath($Path)
+    $fixturePrefix = $script:FixtureNodeRuntimeRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if ($resolvedPath.StartsWith($fixturePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $fixtureVersionPath = $resolvedPath + '.fixture-version'
+        if (Test-Path -LiteralPath $fixtureVersionPath -PathType Leaf) {
+            $fixtureVersion = (Get-Content -Raw -LiteralPath $fixtureVersionPath).Trim()
+            return $fixtureVersion -eq (ConvertTo-McpNodeVersion -Version $ExpectedVersion)
+        }
+    }
+
+    return & $script:OriginalTestMcpNodeExecutableVersion -Path $Path -ExpectedVersion $ExpectedVersion
+}
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
@@ -94,12 +96,10 @@ try {
     $runtimeRoot = Get-McpManagedNodeRuntimeRoot -ProjectRoot $tempRoot
     New-FakeNodeExecutable `
         -Path (Get-McpManagedNodeExecutablePath -Version 'v1.0.0' -ProjectRoot $tempRoot) `
-        -Version 'v1.0.0' `
-        -TypeName 'FakeNodeV1'
+        -Version 'v1.0.0'
     New-FakeNodeExecutable `
         -Path (Get-McpManagedNodeExecutablePath -Version 'v2.0.0' -ProjectRoot $tempRoot) `
-        -Version 'v2.0.0' `
-        -TypeName 'FakeNodeV2'
+        -Version 'v2.0.0'
 
     $passRelease = New-FixtureRelease -Root $tempRoot -ReleaseId 'runtime-pass' -NodeVersion 'v1.0.0'
     $initial = Initialize-McpReleaseNodeRuntimeState -ReleaseRoot $passRelease -ProjectRoot $tempRoot

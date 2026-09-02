@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -18,10 +18,9 @@ import {
 } from "./status.js";
 import {
   isContained,
-  normalizeRelativePath,
   PathSecurity,
-  toNativeAbsolute,
 } from "../path-security.js";
+import { authorizeGitOperationalRoot } from "./operational-root.js";
 
 interface GitContext {
   repositoryRoot: string;
@@ -226,66 +225,6 @@ export class GitService {
   }
 }
 
-async function authorizeGitOperationalRoot(
-  workspace: ResolvedWorkspace,
-  security: PathSecurity,
-  input: string,
-): Promise<AuthorizedPath> {
-  try {
-    return await security.authorizeExisting(input, "directory", true);
-  } catch (error) {
-    if (!(error instanceof AppError) || error.code !== "PATH_OUTSIDE_ALLOWED_ROOTS") {
-      throw error;
-    }
-  }
-
-  const logicalPath = normalizeRelativePath(input, { allowDot: true });
-  if (security.isBlocked(logicalPath)) {
-    throw new AppError("BLOCKED_PATH", "Path is blocked by workspace policy.");
-  }
-  const isAllowedAncestor = workspace.allowedRoots.some((allowedRoot) => {
-    const allowed = normalizeForComparison(allowedRoot.logicalPath);
-    const candidate = normalizeForComparison(logicalPath);
-    return candidate === "." || allowed === candidate || allowed.startsWith(`${candidate}/`);
-  });
-  if (!isAllowedAncestor) {
-    throw new AppError(
-      "PATH_OUTSIDE_ALLOWED_ROOTS",
-      "Git root must be an allowed path or an ancestor of an allowed root.",
-    );
-  }
-
-  const absolutePath = toNativeAbsolute(workspace.rootPath, logicalPath);
-  let canonicalPath: string;
-  try {
-    canonicalPath = await realpath(absolutePath);
-  } catch (error) {
-    throw new AppError("FILE_NOT_FOUND", "Requested Git root does not exist.", {
-      cause: error,
-    });
-  }
-  if (!isContained(workspace.canonicalRootPath, canonicalPath)) {
-    throw new AppError(
-      "PATH_OUTSIDE_WORKSPACE",
-      "Resolved Git root is outside the workspace.",
-    );
-  }
-  const canonicalRelativePath =
-    path.relative(workspace.canonicalRootPath, canonicalPath).split(path.sep).join("/") || ".";
-  if (security.isBlocked(canonicalRelativePath)) {
-    throw new AppError("BLOCKED_PATH", "Resolved Git root is blocked by workspace policy.");
-  }
-  if (!(await stat(canonicalPath)).isDirectory()) {
-    throw new AppError("NOT_A_DIRECTORY", "Requested Git root is not a directory.");
-  }
-  return {
-    logicalPath,
-    absolutePath,
-    canonicalPath,
-    canonicalRelativePath,
-    kind: "directory",
-  };
-}
 async function authorizeFilterPath(
   security: PathSecurity,
   root: string,

@@ -163,6 +163,17 @@ function Get-McpReleaseNodeHostLauncherSourcePath {
     return $sourcePath
 }
 
+function New-McpCSharpTemporaryExecutablePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[A-Za-z0-9._-]{1,64}$')]
+        [string]$Prefix
+    )
+
+    $fileName = $Prefix + '.' + [guid]::NewGuid().ToString('N') + '.exe'
+    return Join-Path ([System.IO.Path]::GetTempPath()) $fileName
+}
+
 function Get-McpNodeHostLauncherExecutable {
     param(
         [Parameter(Mandatory = $true)]
@@ -226,9 +237,7 @@ function Get-McpNodeHostLauncherExecutable {
     }
 
     New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
-    $temporaryExecutablePath = Join-Path $toolDirectory (
-        '.McpNodeHostLauncher.' + [guid]::NewGuid().ToString('N') + '.exe'
-    )
+    $temporaryExecutablePath = New-McpCSharpTemporaryExecutablePath -Prefix 'McpNodeHostLauncher'
     try {
         $compilerArguments = @(
             '/nologo',
@@ -348,9 +357,7 @@ function Get-McpCredentialBrokerExecutable {
     }
 
     New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
-    $temporaryExecutablePath = Join-Path $toolDirectory (
-        '.McpCredentialBroker.' + [guid]::NewGuid().ToString('N') + '.exe'
-    )
+    $temporaryExecutablePath = New-McpCSharpTemporaryExecutablePath -Prefix 'McpCredentialBroker'
     try {
         $compilerArguments = @(
             '/nologo',

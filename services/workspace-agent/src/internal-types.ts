@@ -2,6 +2,7 @@ import type {
   ConfirmationMode,
   PermissionProfile,
   ShellName,
+  SourceControlPolicy,
   WorkspaceKind,
   WorkspaceLimits,
 } from "@vs-code-gpt/shared";
@@ -28,6 +29,7 @@ export interface ResolvedWorkspace {
   allowWrites: string[];
   allowShell: string[];
   allowedShells: ShellName[];
+  sourceControl?: SourceControlPolicy;
 }
 
 export interface AuthorizedPath {

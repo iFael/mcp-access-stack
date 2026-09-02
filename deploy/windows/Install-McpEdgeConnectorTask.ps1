@@ -97,7 +97,7 @@ if ($EnableBrowserWorker) {
     $browserOrigin = $browserUri.GetLeftPart([UriPartial]::Authority)
 }
 $validationLauncherPath = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
-$nativeLauncherPath = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
+$edgeHostPath = Join-Path $releaseRoot 'native\McpEdgeHost.exe'
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 $executionCommonPath = Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1'
 $pwshCommand = Get-Command pwsh.exe -ErrorAction Stop
@@ -110,11 +110,11 @@ $plan = [ordered]@{
     releaseId = $ReleaseId
     releaseRoot = $releaseRoot
     validationLauncherPath = $validationLauncherPath
-    launcherPath = $nativeLauncherPath
+    edgeHostPath = $edgeHostPath
     runtimeRoot = $runtime
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
-    execute = $nativeLauncherPath
+    execute = $edgeHostPath
     processSubsystem = 'windows-gui'
     consoleAttached = $false
     validationExecutionPolicy = $executionPolicy
@@ -159,26 +159,53 @@ Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
-$release = Assert-McpWindowsExecutionNodeRelease `
-    -ReleaseRoot $releaseRoot `
-    -ExpectedReleaseId $ReleaseId `
-    -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
-    -RuntimeSmoke
-$manifestSha256 = [string]$release.executionManifestSha256
-
+$releaseManifestPath = Join-Path $releaseRoot 'manifest.json'
+$executionManifestPath = Join-Path $releaseRoot 'execution-node-manifest.json'
+$releaseManifest = Read-McpPublicJson -Path $releaseManifestPath
+$releaseAttestation = Assert-McpPublicReleaseAttestation -ReleaseRoot $releaseRoot -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$executionManifest = Read-McpPublicJson -Path $executionManifestPath
+$releaseCommit = [string]$releaseManifest.commit
+if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
+    $releaseCommit -notmatch '^[a-f0-9]{40}$' -or
+    [int]$executionManifest.version -ne 1 -or
+    [string]$executionManifest.releaseId -ne $ReleaseId -or
+    [string]$executionManifest.commit -ne $releaseCommit -or
+    [string]$executionManifest.platform -ne 'win32-x64' -or
+    [string]$executionManifest.runtimeMode -ne 'bundled-node' -or
+    [string]$executionManifest.integrityRoot -ne 'signed-distribution-manifest') {
+    throw 'Edge Connector release identity or execution manifest contract is invalid.'
+}
+$executionIdentity = $releaseManifest.executionNode
+if ($null -eq $executionIdentity -or
+    [int]$executionIdentity.schemaVersion -ne 1 -or
+    [string]$executionIdentity.manifestPath -ne 'execution-node-manifest.json') {
+    throw 'Edge Connector release manifest is missing execution-node identity.'
+}
+$expectedManifestSha256 = ([string]$releaseManifest.executionNode.manifestSha256).ToLowerInvariant()
+$manifestSha256 = (Get-FileHash -LiteralPath $executionManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($expectedManifestSha256 -notmatch '^[a-f0-9]{64}$' -or
+    $manifestSha256 -ne $expectedManifestSha256 -or
+    [string]$releaseAttestation.releaseId -ne $ReleaseId -or
+    [string]$releaseAttestation.commit -ne $releaseCommit) {
+    throw 'Edge Connector execution manifest is not bound to the signed release attestation.'
+}
 if (-not (Test-Path -LiteralPath $validationLauncherPath -PathType Leaf)) {
     throw "Edge Connector validation launcher is missing from release: $validationLauncherPath"
 }
-if (-not (Test-Path -LiteralPath $nativeLauncherPath -PathType Leaf)) {
-    throw "Edge Connector native launcher is missing from release: $nativeLauncherPath"
+if (-not (Test-Path -LiteralPath $edgeHostPath -PathType Leaf)) {
+    throw "Edge Connector native host is missing from release: $edgeHostPath"
 }
-$validationLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-connector-launcher' })
+Assert-McpPublicSignature -Path $validationLauncherPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicSignature -Path $edgeHostPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$validationLauncherRecord = @($executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-connector-launcher' })
 if ($validationLauncherRecord.Count -ne 1 -or $validationLauncherRecord[0].authenticodeRequired -ne $true) {
     throw 'Edge Connector validation launcher must be a signed critical release artifact.'
 }
-$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })
-if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $true) {
-    throw 'Edge Connector native launcher must be a signed critical release artifact.'
+$edgeHostRecord = @($executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-host' })
+if ($edgeHostRecord.Count -ne 1 -or
+    [string]$edgeHostRecord[0].path -ne 'native/McpEdgeHost.exe' -or
+    $edgeHostRecord[0].authenticodeRequired -ne $true) {
+    throw 'Edge Connector native host must be the signed native/McpEdgeHost.exe critical artifact.'
 }
 
 $validationArguments = @(
@@ -213,50 +240,47 @@ if ([string]$validation.status -ne 'validated' -or
     [bool]$validation.browserEnabled -ne [bool]$EnableBrowserWorker) {
     throw 'Edge Connector launcher validation returned unexpected evidence.'
 }
-$nodePath = [IO.Path]::GetFullPath([string]$validation.nodePath)
-$edgeCliPath = [IO.Path]::GetFullPath([string]$validation.edgeConnectorPath)
 $edgeOrigin = [string]$validation.edgeOrigin
-$stdoutLog = Join-Path $runtime 'logs\edge-connector.stdout.log'
-$stderrLog = Join-Path $runtime 'logs\edge-connector.stderr.log'
-$ownerOAuthStatePath = Join-Path $runtime 'owner-oauth-state.json'
-
-$arguments = [System.Collections.Generic.List[string]]::new()
-$launcherValues = @(
-    '--node', (Quote-McpEdgeTaskArgument $nodePath),
-    '--stdout-log', (Quote-McpEdgeTaskArgument $stdoutLog),
-    '--stderr-log', (Quote-McpEdgeTaskArgument $stderrLog),
-    '--env', (Quote-McpEdgeTaskArgument ("MCP_EDGE_BASE_URL=$edgeOrigin")),
-    '--env', (Quote-McpEdgeTaskArgument ("MCP_CONNECTOR_TOKEN_FILE=$connectorToken")),
-    '--env', (Quote-McpEdgeTaskArgument ("VS_CODE_GPT_POLICY_PATH=$policy")),
-    '--env', (Quote-McpEdgeTaskArgument ("MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=$MaxConcurrentRequests")),
-    '--env', (Quote-McpEdgeTaskArgument 'AUTH_MODE=owner'),
-    '--env-file', (Quote-McpEdgeTaskArgument ("OWNER_TOKEN=$ownerToken")),
-    '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_SCOPES=$OwnerOAuthScopes")),
-    '--env', (Quote-McpEdgeTaskArgument ("OWNER_OAUTH_STATE_PATH=$ownerOAuthStatePath")),
-    '--env', (Quote-McpEdgeTaskArgument ("ALLOWED_ORIGINS=$AllowedOrigins"))
+$browserEnabled = if ($EnableBrowserWorker) { 'true' } else { 'false' }
+$hostArguments = @(
+    '--release-root', $releaseRoot,
+    '--expected-manifest-sha256', $manifestSha256,
+    '--runtime-root', $runtime,
+    '--edge-base-url', $edgeOrigin,
+    '--connector-token-file', $connectorToken,
+    '--owner-token-file', $ownerToken,
+    '--policy-path', $policy,
+    '--allowed-origins', $AllowedOrigins,
+    '--owner-oauth-scopes', $OwnerOAuthScopes,
+    '--max-concurrent-requests', [string]$MaxConcurrentRequests,
+    '--restart-count', '0',
+    '--restart-interval-seconds', '60',
+    '--browser-enabled', $browserEnabled
 )
 if ($EnableBrowserWorker) {
-    $launcherValues += @(
-        '--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=true'),
-        '--env', (Quote-McpEdgeTaskArgument ("BROWSER_WORKER_URL=$browserOrigin")),
-        '--env-file', (Quote-McpEdgeTaskArgument ("BROWSER_WORKER_TOKEN=$browserTokenFile"))
+    $hostArguments += @(
+        '--browser-worker-url', $browserOrigin,
+        '--browser-worker-token-file', $browserTokenFile
     )
 }
-else {
-    $launcherValues += @('--env', (Quote-McpEdgeTaskArgument 'BROWSER_WORKER_ENABLED=false'))
+$edgeHostValidation = @(& $edgeHostPath @hostArguments '--validate-only' 2>&1)
+if ($LASTEXITCODE -ne 0 -or
+    $edgeHostValidation.Count -ne 1 -or
+    [string]$edgeHostValidation[0] -ne 'mcp-edge-host-contract-v1') {
+    throw 'McpEdgeHost fixed-contract validation failed before task installation.'
 }
-$launcherValues += @('--', (Quote-McpEdgeTaskArgument $edgeCliPath))
-foreach ($value in $launcherValues) {
-    $arguments.Add([string]$value)
+$hostValues = [System.Collections.Generic.List[string]]::new()
+for ($index = 0; $index -lt $hostArguments.Count; $index += 2) {
+    $hostValues.Add([string]$hostArguments[$index])
+    $hostValues.Add((Quote-McpEdgeTaskArgument ([string]$hostArguments[$index + 1])))
 }
-$argumentText = $arguments -join ' '
-
+$argumentText = $hostValues -join ' '
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $alreadyInstalled = $false
 if ($existing) {
     $actions = @($existing.Actions)
     $matches = $actions.Count -eq 1 -and
-        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq [IO.Path]::GetFullPath($nativeLauncherPath) -and
+        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq [IO.Path]::GetFullPath($edgeHostPath) -and
         [string]$actions[0].Arguments -eq $argumentText -and
         [string]$actions[0].WorkingDirectory -eq $releaseRoot -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
@@ -289,7 +313,7 @@ if (-not $alreadyInstalled) {
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -Hidden
     $action = New-ScheduledTaskAction `
-        -Execute $nativeLauncherPath `
+        -Execute $edgeHostPath `
         -Argument $argumentText `
         -WorkingDirectory $releaseRoot
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
@@ -301,7 +325,7 @@ if (-not $alreadyInstalled) {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the signed native GUI-subsystem launcher.'
+        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the signed fixed-contract McpEdgeHost.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 }
 
@@ -320,7 +344,7 @@ else {
     releaseId = $ReleaseId
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
-    nativeLauncherValidated = $true
+    edgeHostValidated = $true
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
 } | ConvertTo-Json -Compress

@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import {
   AppError,
+  abortSignalError,
   backgroundTaskRecordSchema,
   createOperationDeadline,
   createOperationLifecycle,
@@ -17,6 +18,7 @@ import {
   startBackgroundTaskInputSchema,
   type BackgroundTaskLogsResult,
   type BackgroundTaskRecord,
+  type BackgroundTaskWaitResult,
   type BackgroundTaskState,
   type DirectRunCommandInput,
   type RunCommandResult,
@@ -28,6 +30,7 @@ export {
   redactSensitiveText,
   type BackgroundTaskLogsResult,
   type BackgroundTaskRecord,
+  type BackgroundTaskWaitResult,
   type BackgroundTaskState,
   type StartBackgroundTaskInput,
 } from "@vs-code-gpt/shared";
@@ -55,6 +58,7 @@ export interface BackgroundTaskManagerOptions {
 }
 
 const ACTIVE_STATES = new Set<BackgroundTaskState>(["starting", "running"]);
+const BACKGROUND_WAIT_POLL_MS = 100;
 const TASK_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TASK_STATE_FILE_PATTERN = new RegExp(`^(${TASK_ID_PATTERN.source.slice(1, -1)})\\.json$`, "iu");
@@ -235,6 +239,58 @@ export class BackgroundTaskManager {
     };
   }
 
+  async wait_background_task(
+    id: string,
+    options: {
+      timeoutMs: number;
+      maxBytes: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<BackgroundTaskWaitResult> {
+    const startedAt = Date.now();
+    const deadline = startedAt + Math.max(1, Math.trunc(options.timeoutMs));
+
+    while (true) {
+      if (options.signal?.aborted) {
+        throw abortSignalError(options.signal, "Background task wait was cancelled.");
+      }
+
+      const task = await this.get_background_task(id);
+      if (!task) {
+        return {
+          task: null,
+          logs: null,
+          timedOut: false,
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      if (!ACTIVE_STATES.has(task.state)) {
+        return {
+          task,
+          logs: await this.read_background_task_logs(id, options.maxBytes),
+          timedOut: false,
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        return {
+          task,
+          logs: await this.read_background_task_logs(id, options.maxBytes),
+          timedOut: true,
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      await waitForBackgroundProgress(
+        this.executions.get(id),
+        Math.min(remainingMs, BACKGROUND_WAIT_POLL_MS),
+        options.signal,
+      );
+    }
+  }
   private async execute(
     initial: BackgroundTaskRecord,
     controller: AbortController,
@@ -588,6 +644,33 @@ function sanitizeRunCommandResult(
 }
 
 
+async function waitForBackgroundProgress(
+  execution: Promise<void> | undefined,
+  waitMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) {
+    throw abortSignalError(signal, "Background task wait was cancelled.");
+  }
+
+  let timeout: NodeJS.Timeout | undefined;
+  const timer = new Promise<void>((resolve) => {
+    timeout = setTimeout(resolve, waitMs);
+  });
+  try {
+    if (execution) {
+      await Promise.race([execution, timer]);
+    } else {
+      await timer;
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+
+  if (signal?.aborted) {
+    throw abortSignalError(signal, "Background task wait was cancelled.");
+  }
+}
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);

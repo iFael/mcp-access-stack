@@ -167,6 +167,7 @@ async function resolveWorkspaces(
       allowWrites,
       allowShell,
       allowedShells,
+      ...(workspace.sourceControl === undefined ? {} : { sourceControl: workspace.sourceControl }),
     });
   }
 

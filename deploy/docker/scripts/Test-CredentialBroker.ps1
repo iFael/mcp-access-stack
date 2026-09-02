@@ -8,6 +8,16 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 
 . (Join-Path $PSScriptRoot 'Common.ps1')
 
+$commonSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Common.ps1')
+foreach ($requiredCompilerTempContract in @(
+    'function New-McpCSharpTemporaryExecutablePath',
+    '$temporaryExecutablePath = New-McpCSharpTemporaryExecutablePath -Prefix ''McpNodeHostLauncher''',
+    '$temporaryExecutablePath = New-McpCSharpTemporaryExecutablePath -Prefix ''McpCredentialBroker'''
+)) {
+    if (-not $commonSource.Contains($requiredCompilerTempContract)) {
+        throw "C# helper compilation must use the short system temporary path contract: $requiredCompilerTempContract"
+    }
+}
 $root = Get-McpProjectRoot
 $sourcePath = Join-Path $root (Get-McpCredentialBrokerSourceRelativePath)
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {

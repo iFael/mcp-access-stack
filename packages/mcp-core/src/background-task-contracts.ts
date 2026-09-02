@@ -3,6 +3,7 @@ import { shellNameSchema } from "./policy.js";
 import {
   MAX_BACKGROUND_OPERATION_TIMEOUT_MS,
   operationLifecycleSchema,
+  synchronousTimeoutMsSchema,
 } from "./timeout-policy.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
@@ -97,6 +98,16 @@ export const getBackgroundTaskInputSchema = z
   .strict();
 export type GetBackgroundTaskInput = z.infer<typeof getBackgroundTaskInputSchema>;
 
+export const waitBackgroundTaskInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    id: taskIdSchema,
+    timeoutMs: synchronousTimeoutMsSchema,
+    maxBytes: z.number().int().positive().max(1_000_000).default(100_000),
+  })
+  .strict();
+export type WaitBackgroundTaskInput = z.input<typeof waitBackgroundTaskInputSchema>;
+export type ParsedWaitBackgroundTaskInput = z.output<typeof waitBackgroundTaskInputSchema>;
 export const listBackgroundTasksInputSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -155,4 +166,15 @@ export const backgroundTaskLogsLookupResultSchema = z
   .strict();
 export type BackgroundTaskLogsLookupResult = z.infer<
   typeof backgroundTaskLogsLookupResultSchema
+>;
+export const backgroundTaskWaitResultSchema = z
+  .object({
+    task: backgroundTaskRecordSchema.nullable(),
+    logs: backgroundTaskLogsResultSchema.nullable(),
+    timedOut: z.boolean(),
+    elapsedMs: z.number().int().nonnegative(),
+  })
+  .strict();
+export type BackgroundTaskWaitResult = z.infer<
+  typeof backgroundTaskWaitResultSchema
 >;
