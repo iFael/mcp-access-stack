@@ -49,7 +49,9 @@ foreach ($required in @(
     'Assert-McpPublicReleaseAttestation',
     'executionNode.manifestSha256',
     '--validate-only',
-    'ValidateOnly'
+    'ValidateOnly',
+    'ProcessStartInfo',
+    'WaitForExit()'
 )) {
     if (-not $installerContent.Contains($required)) {
         throw "Edge Connector task installer contract is missing: $required"
@@ -58,7 +60,7 @@ foreach ($required in @(
 if ($installerContent -match 'OWNER_TOKEN\s*=\s*["''][^$]') {
     throw 'Edge Connector task installer must not embed an Owner token value.'
 }
-foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OWNER_TOKEN=', 'Assert-McpWindowsExecutionNodeRelease')) {
+foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OWNER_TOKEN=', 'Assert-McpWindowsExecutionNodeRelease', '@(& $edgeHostPath')) {
     if ($installerContent.Contains($forbidden)) {
         throw "Edge Connector fixed host installer must not use generic environment injection: $forbidden"
     }
