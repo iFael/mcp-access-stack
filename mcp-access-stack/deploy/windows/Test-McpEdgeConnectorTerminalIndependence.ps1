@@ -48,6 +48,9 @@ function Get-McpEdgeProcessSnapshot {
     $launchers=@($all|Where-Object{[int]$_.ProcessId -eq [int]$node.ParentProcessId})
     if($launchers.Count -ne 1){throw 'Edge Connector launcher process could not be resolved from the Node.js parent.'}
     $launcher=$launchers[0]
+    if(-not [string]::Equals([string]$launcher.Name,'McpEdgeHost.exe',[StringComparison]::OrdinalIgnoreCase)){
+        throw ('edge_host_owner_mismatch: expected McpEdgeHost.exe, actual=' + [string]$launcher.Name)
+    }
     [pscustomobject]@{
         launcherPid=[int]$launcher.ProcessId
         launcherName=[string]$launcher.Name

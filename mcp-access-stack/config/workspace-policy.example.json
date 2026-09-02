@@ -24,7 +24,27 @@
       },
       "allowWrites": [
         ".codex/HANDOFF.md"
-      ]
+      ],
+      "sourceControl": {
+        "capabilities": [
+          "git.branch.write",
+          "git.index.write",
+          "git.commit.write",
+          "git.merge.write",
+          "git.remote.push",
+          "github.repository.read",
+          "github.repository.create",
+          "github.pull_request.read",
+          "github.pull_request.create",
+          "github.pull_request.merge"
+        ],
+        "accountOwners": [
+          "example-owner"
+        ],
+        "additionalRepositories": [
+          "example-owner/example-repository"
+        ]
+      }
     }
   ]
 }

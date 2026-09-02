@@ -6,8 +6,10 @@ import {
   WORKSPACE_TOOL_NAMES,
   createMcpToolCatalogMetadata,
   registerBrowserTools,
+  registerSourceControlTools,
   registerWorkspaceTools,
   type BrowserExecutor,
+  type SourceControlExecutor,
   type WorkspaceExecutor,
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
@@ -20,6 +22,7 @@ export interface McpServerAuthOptions {
 
 export interface McpServerOptions {
   workspaceExecutor: WorkspaceExecutor;
+  sourceControlExecutor: SourceControlExecutor;
   browser?: BrowserExecutor | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
@@ -46,6 +49,14 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     : [{ type: "noauth" as const }];
 
   registerWorkspaceTools(server, options.workspaceExecutor, {
+    ...(options.auth === undefined ? {} : { auth: options.auth }),
+    securitySchemes,
+    ...(options.operationContextFactory === undefined
+      ? {}
+      : { operationContextFactory: options.operationContextFactory }),
+  });
+
+  registerSourceControlTools(server, options.sourceControlExecutor, {
     ...(options.auth === undefined ? {} : { auth: options.auth }),
     securitySchemes,
     ...(options.operationContextFactory === undefined

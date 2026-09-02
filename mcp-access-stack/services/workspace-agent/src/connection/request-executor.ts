@@ -1,6 +1,7 @@
 import {
   AppError,
   asAppError,
+  BACKGROUND_WAIT_COMPLETION_GRACE_MS,
   COMMAND_TERMINATION_GRACE_MS,
   createOperationLifecycle,
   remainingOperationTimeMs,
@@ -92,7 +93,7 @@ export class AgentRequestExecutor {
     }
 
     const controller = new AbortController();
-    const watchdogMs = remainingMs + commandTerminationGraceMs(request.operation);
+    const watchdogMs = remainingMs + operationCompletionGraceMs(request.operation);
     const timeout = setTimeout(() => {
       controller.abort(
         new AppError("AGENT_TIMEOUT", "Relay request deadline has expired.", {
@@ -120,7 +121,8 @@ export class AgentRequestExecutor {
 
     try {
       const result = await dispatchRelayRequest(this.agent, request, {
-        correlationId: request.requestId,
+        ...(request.context ?? {}),
+        correlationId: request.context?.correlationId ?? request.requestId,
         deadline: request.deadline,
         signal: controller.signal,
       });
@@ -203,9 +205,12 @@ function isSynchronousShellOperation(operation: RelayOperation): boolean {
   return operation === "runCommand" || operation === "runPowerShell";
 }
 
-function commandTerminationGraceMs(operation: RelayOperation): number {
-  return operation === "runCommand" || operation === "runPowerShell"
-    ? COMMAND_TERMINATION_GRACE_MS
+function operationCompletionGraceMs(operation: RelayOperation): number {
+  if (operation === "runCommand" || operation === "runPowerShell") {
+    return COMMAND_TERMINATION_GRACE_MS;
+  }
+  return operation === "waitBackgroundTask"
+    ? BACKGROUND_WAIT_COMPLETION_GRACE_MS
     : 0;
 }
 

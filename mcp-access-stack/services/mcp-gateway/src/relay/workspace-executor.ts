@@ -2,6 +2,7 @@ import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskWaitResultSchema,
   getWorkspaceContextResultSchema,
   inspectGitResultSchema,
   listFilesResultSchema,
@@ -17,6 +18,7 @@ import {
   writeFileResultSchema,
   type CancelBackgroundTaskInput,
   type GetBackgroundTaskInput,
+  type WaitBackgroundTaskInput,
   type GetWorkspaceContextInput,
   type InspectGitInput,
   type ListBackgroundTasksInput,
@@ -35,10 +37,36 @@ import {
   type WriteFileInput,
   type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
+import {
+  gitCommitResultSchema,
+  gitCreateBranchResultSchema,
+  gitMergeBranchResultSchema,
+  gitPushBranchResultSchema,
+  gitStagePathsResultSchema,
+  gitUnstagePathsResultSchema,
+  githubCreatePullRequestResultSchema,
+  githubCreateRepositoryResultSchema,
+  githubMergePullRequestResultSchema,
+  githubPullRequestResultSchema,
+  githubRepositoryResultSchema,
+  type GitCommitInput,
+  type GitHubExecutor,
+  type GitRepositoryExecutor,
+  type GitCreateBranchInput,
+  type GitHubCreatePullRequestInput,
+  type GitHubCreateRepositoryInput,
+  type GitHubGetPullRequestInput,
+  type GitHubGetRepositoryInput,
+  type GitHubMergePullRequestInput,
+  type GitMergeBranchInput,
+  type GitPushBranchInput,
+  type GitStagePathsInput,
+  type GitUnstagePathsInput,
+} from "@vs-code-gpt/shared";
 import type { AgentRelay } from "./service.js";
 
 /** Forwards workspace operations to the connected local agent through the WSS relay. */
-export class RelayWorkspaceExecutor implements WorkspaceExecutor {
+export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
   constructor(private readonly relay: AgentRelay) {}
 
   async listWorkspaces(context?: OperationContext) {
@@ -135,6 +163,15 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor {
     );
   }
 
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context?: OperationContext,
+  ) {
+    return backgroundTaskWaitResultSchema.parse(
+      await this.relay.call("waitBackgroundTask", input, context),
+    );
+  }
+
   async listBackgroundTasks(
     input: ListBackgroundTasksInput,
     context?: OperationContext,
@@ -159,6 +196,71 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor {
   ) {
     return backgroundTaskLogsLookupResultSchema.parse(
       await this.relay.call("readBackgroundTaskLogs", input, context),
+    );
+  }
+  async createBranch(input: GitCreateBranchInput, context?: OperationContext) {
+    return gitCreateBranchResultSchema.parse(
+      await this.relay.call("gitCreateBranch", input, context),
+    );
+  }
+
+  async stagePaths(input: GitStagePathsInput, context?: OperationContext) {
+    return gitStagePathsResultSchema.parse(
+      await this.relay.call("gitStagePaths", input, context),
+    );
+  }
+
+  async unstagePaths(input: GitUnstagePathsInput, context?: OperationContext) {
+    return gitUnstagePathsResultSchema.parse(
+      await this.relay.call("gitUnstagePaths", input, context),
+    );
+  }
+
+  async commit(input: GitCommitInput, context?: OperationContext) {
+    return gitCommitResultSchema.parse(
+      await this.relay.call("gitCommit", input, context),
+    );
+  }
+
+  async mergeBranch(input: GitMergeBranchInput, context?: OperationContext) {
+    return gitMergeBranchResultSchema.parse(
+      await this.relay.call("gitMergeBranch", input, context),
+    );
+  }
+
+  async pushBranch(input: GitPushBranchInput, context?: OperationContext) {
+    return gitPushBranchResultSchema.parse(
+      await this.relay.call("gitPushBranch", input, context),
+    );
+  }
+
+  async getRepository(input: GitHubGetRepositoryInput, context?: OperationContext) {
+    return githubRepositoryResultSchema.parse(
+      await this.relay.call("githubGetRepository", input, context),
+    );
+  }
+
+  async createRepository(input: GitHubCreateRepositoryInput, context?: OperationContext) {
+    return githubCreateRepositoryResultSchema.parse(
+      await this.relay.call("githubCreateRepository", input, context),
+    );
+  }
+
+  async getPullRequest(input: GitHubGetPullRequestInput, context?: OperationContext) {
+    return githubPullRequestResultSchema.parse(
+      await this.relay.call("githubGetPullRequest", input, context),
+    );
+  }
+
+  async createPullRequest(input: GitHubCreatePullRequestInput, context?: OperationContext) {
+    return githubCreatePullRequestResultSchema.parse(
+      await this.relay.call("githubCreatePullRequest", input, context),
+    );
+  }
+
+  async mergePullRequest(input: GitHubMergePullRequestInput, context?: OperationContext) {
+    return githubMergePullRequestResultSchema.parse(
+      await this.relay.call("githubMergePullRequest", input, context),
     );
   }
 }

@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
   AppError,
+  BACKGROUND_WAIT_COMPLETION_GRACE_MS,
   COMMAND_TERMINATION_GRACE_MS,
+  createAgentUnavailableDetails,
   createOperationDeadline,
   createOperationLifecycle,
   MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
   relayResultSchemas,
+  relayRequestSchema,
   remainingOperationTimeMs,
   type OperationContext,
   type RelayCancellation,
@@ -28,6 +31,7 @@ export interface AgentRelayRequestManagerOptions {
 
 interface PendingRequest {
   operation: RelayOperation;
+  generation: number;
   startedAt: number;
   timeout: NodeJS.Timeout;
   signal?: AbortSignal;
@@ -59,21 +63,34 @@ export class AgentRelayRequestManager {
     }
 
     const requestId = randomUUID();
+    const generation = this.options.generation();
     const deadline = context.deadline
       ? createOperationDeadline(
           MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
           context.deadline,
         )
       : createOperationDeadline(this.options.requestTimeoutMs, undefined);
-    const request: RelayRequest = {
+    const parsedRequest = relayRequestSchema.safeParse({
       version: 1,
       type: "request",
       requestId,
       deadline,
+      context: {
+        ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+        ...(context.invocationId === undefined ? {} : { invocationId: context.invocationId }),
+        ...(context.idempotencyKey === undefined ? {} : { idempotencyKey: context.idempotencyKey }),
+        ...(context.ownerScope === undefined ? {} : { ownerScope: context.ownerScope }),
+      },
       operation,
-      input: input as never,
-    };
-    const payload = JSON.stringify(request);
+      input,
+    });
+    if (!parsedRequest.success) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Relay request does not match the strict operation schema.",
+      );
+    }
+    const request: RelayRequest = parsedRequest.data;    const payload = JSON.stringify(request);
     if (Buffer.byteLength(payload) > this.options.maxPayloadBytes) {
       throw new AppError("RELAY_PROTOCOL_ERROR", "Relay request exceeds the payload limit.");
     }
@@ -94,7 +111,7 @@ export class AgentRelayRequestManager {
         return;
       }
 
-      const watchdogMs = remainingMs + commandTerminationGraceMs(operation);
+      const watchdogMs = remainingMs + operationCompletionGraceMs(operation);
       const timeout = setTimeout(() => {
         this.cancelPending(
           sender,
@@ -127,6 +144,7 @@ export class AgentRelayRequestManager {
 
       this.pending.set(requestId, {
         operation,
+        generation,
         startedAt,
         timeout,
         ...(context.signal === undefined
@@ -145,7 +163,7 @@ export class AgentRelayRequestManager {
         effectiveTimeoutMs: deadline.effectiveTimeoutMs,
         deadlineAt: deadline.deadlineAt,
         pendingRequests: this.pending.size,
-        generation: this.options.generation(),
+        generation,
       });
 
       if (context.signal?.aborted) {
@@ -164,6 +182,12 @@ export class AgentRelayRequestManager {
               reason: "client_disconnected",
               diagnostic: "The relay WebSocket failed before the request was delivered.",
             }),
+            details: createAgentUnavailableDetails(
+              operation,
+              "relay_send_failed",
+              "unknown",
+              generation,
+            ),
           }),
         );
         this.logCompletion(requestId, operation, startedAt, "send_error");
@@ -183,6 +207,9 @@ export class AgentRelayRequestManager {
           ...(response.error.lifecycle === undefined
             ? {}
             : { lifecycle: response.error.lifecycle }),
+          ...(response.error.details === undefined
+            ? {}
+            : { details: response.error.details }),
         }),
       );
       this.logCompletion(response.requestId, pending.operation, pending.startedAt, "error");
@@ -199,10 +226,47 @@ export class AgentRelayRequestManager {
     this.logCompletion(response.requestId, pending.operation, pending.startedAt, "success");
   }
 
-  rejectAll(code: "AGENT_UNAVAILABLE", message: string): void {
+  rejectAll(
+    code: "AGENT_UNAVAILABLE",
+    message: string,
+    reason: "agent_disconnected" | "gateway_shutdown" = "agent_disconnected",
+  ): void {
     for (const requestId of [...this.pending.keys()]) {
       const pending = this.takePending(requestId);
-      pending?.reject(new AppError(code, message));
+      if (!pending) continue;
+      pending.reject(
+        new AppError(code, message, {
+          details: createAgentUnavailableDetails(
+            pending.operation,
+            reason,
+            "unknown",
+            pending.generation,
+          ),
+        }),
+      );
+    }
+  }
+
+  rejectGeneration(
+    generation: number,
+    code: "AGENT_UNAVAILABLE",
+    message: string,
+    reason: "agent_disconnected" = "agent_disconnected",
+  ): void {
+    for (const [requestId, candidate] of [...this.pending.entries()]) {
+      if (candidate.generation !== generation) continue;
+      const pending = this.takePending(requestId);
+      if (!pending) continue;
+      pending.reject(
+        new AppError(code, message, {
+          details: createAgentUnavailableDetails(
+            pending.operation,
+            reason,
+            "unknown",
+            pending.generation,
+          ),
+        }),
+      );
     }
   }
 
@@ -252,9 +316,12 @@ export class AgentRelayRequestManager {
   }
 }
 
-function commandTerminationGraceMs(operation: RelayOperation): number {
-  return operation === "runCommand" || operation === "runPowerShell"
-    ? COMMAND_TERMINATION_GRACE_MS
+function operationCompletionGraceMs(operation: RelayOperation): number {
+  if (operation === "runCommand" || operation === "runPowerShell") {
+    return COMMAND_TERMINATION_GRACE_MS;
+  }
+  return operation === "waitBackgroundTask"
+    ? BACKGROUND_WAIT_COMPLETION_GRACE_MS
     : 0;
 }
 

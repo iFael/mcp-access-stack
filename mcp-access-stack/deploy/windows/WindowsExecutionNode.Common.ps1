@@ -219,6 +219,7 @@ function Assert-McpWindowsExecutionNodeRelease {
     $artifacts = @($executionManifest.artifacts)
     $baseRoles = @('mcp-host', 'workspace-agent', 'browser-worker', 'node-runtime')
     $edgeRoles = @('edge-connector', 'edge-connector-launcher')
+    $edgeHostRoles = @('edge-host')
     $edgeNativeRoles = @('edge-native-launcher')
     if ($artifacts.Count -eq 4) {
         $expectedRoles = $baseRoles
@@ -229,8 +230,11 @@ function Assert-McpWindowsExecutionNodeRelease {
     elseif ($artifacts.Count -eq 7) {
         $expectedRoles = @($baseRoles + $edgeRoles + $edgeNativeRoles)
     }
+    elseif ($artifacts.Count -eq 8) {
+        $expectedRoles = @($baseRoles + $edgeRoles + $edgeHostRoles + $edgeNativeRoles)
+    }
     else {
-        throw 'Bundled-node execution manifest must contain four legacy, six Edge PowerShell, or seven native-Edge critical artifacts.'
+        throw 'Bundled-node execution manifest must contain four legacy, six Edge PowerShell, seven native-Edge legacy, or eight split-owner critical artifacts.'
     }
     foreach ($role in $expectedRoles) {
         $records = @($artifacts | Where-Object { [string]$_.role -eq $role })
@@ -261,6 +265,20 @@ function Assert-McpWindowsExecutionNodeRelease {
     $hostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
     if ($hostRecord.authenticodeRequired -ne $true) {
         throw 'McpHost must require Authenticode validation.'
+    }
+    if ($artifacts.Count -eq 8) {
+        $edgeConnectorRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-connector' })[0]
+        $edgeHostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-host' })[0]
+        $edgeLauncherRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })[0]
+        if ([string]$edgeConnectorRecord.path -ne 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js') {
+            throw 'Split-owner Edge connector must use the canonical package CLI.'
+        }
+        if ([string]$edgeHostRecord.path -ne 'native/McpEdgeHost.exe' -or $edgeHostRecord.authenticodeRequired -ne $true) {
+            throw 'Split-owner Edge host must be the signed native/McpEdgeHost.exe artifact.'
+        }
+        if ([string]$edgeLauncherRecord.path -ne 'compat/McpNodeHostLauncher.exe' -or $edgeLauncherRecord.authenticodeRequired -ne $true) {
+            throw 'Split-owner Browser Worker launcher must remain the signed compatibility launcher.'
+        }
     }
 
     foreach ($compatibilityExecutable in @(

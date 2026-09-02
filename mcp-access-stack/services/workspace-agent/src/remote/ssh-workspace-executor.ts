@@ -7,8 +7,10 @@ import {
   type BackgroundTaskListResult,
   type BackgroundTaskLogsLookupResult,
   type BackgroundTaskResult,
+  type BackgroundTaskWaitResult,
   type CancelBackgroundTaskInput,
   type GetBackgroundTaskInput,
+  type WaitBackgroundTaskInput,
   type GetWorkspaceContextInput,
   type GetWorkspaceContextResult,
   type InspectGitInput,
@@ -37,6 +39,8 @@ import {
   type ShellName,
   type StartBackgroundTaskInput,
   type WorkspaceExecutor,
+  type GitRepositoryExecutor,
+  type GitHubExecutor,
   type WorkspacePolicy,
   type WorkspaceSummary,
   type WriteFileInput,
@@ -81,7 +85,7 @@ export interface SshWorkspaceExecutorOptions {
   backgroundStateDirectory: string;
 }
 
-export class SshWorkspaceExecutor implements WorkspaceExecutor {
+export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
   private readonly workspaces: Map<string, RemoteWorkspace>;
   private readonly transport: SshWindowsTransport;
   private readonly confirmations = new CommandConfirmationRegistry();
@@ -690,6 +694,21 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor {
     return { task: task?.workspaceId === input.workspaceId ? task : null };
   }
 
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskWaitResult> {
+    this.workspace(input.workspaceId);
+    const task = await this.background.get_background_task(input.id);
+    if (!task || task.workspaceId !== input.workspaceId) {
+      return { task: null, logs: null, timedOut: false, elapsedMs: 0 };
+    }
+    return this.background.wait_background_task(input.id, {
+      timeoutMs: input.timeoutMs ?? 60_000,
+      maxBytes: input.maxBytes ?? 100_000,
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
+    });
+  }
   async listBackgroundTasks(input: ListBackgroundTasksInput): Promise<BackgroundTaskListResult> {
     this.workspace(input.workspaceId);
     const tasks = await this.background.list_background_tasks({
@@ -817,6 +836,47 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor {
     const candidate = logicalPath === "." ? "" : logicalPath;
     return workspace.blockedGlobs.some((pattern) =>
       minimatch(candidate, pattern, { dot: true, nocase: true, matchBase: false }),
+    );
+  }
+
+  createBranch(..._args: Parameters<GitRepositoryExecutor["createBranch"]>): ReturnType<GitRepositoryExecutor["createBranch"]> {
+    return Promise.reject(this.sourceControlUnsupported("createBranch"));
+  }
+  stagePaths(..._args: Parameters<GitRepositoryExecutor["stagePaths"]>): ReturnType<GitRepositoryExecutor["stagePaths"]> {
+    return Promise.reject(this.sourceControlUnsupported("stagePaths"));
+  }
+  unstagePaths(..._args: Parameters<GitRepositoryExecutor["unstagePaths"]>): ReturnType<GitRepositoryExecutor["unstagePaths"]> {
+    return Promise.reject(this.sourceControlUnsupported("unstagePaths"));
+  }
+  commit(..._args: Parameters<GitRepositoryExecutor["commit"]>): ReturnType<GitRepositoryExecutor["commit"]> {
+    return Promise.reject(this.sourceControlUnsupported("commit"));
+  }
+  mergeBranch(..._args: Parameters<GitRepositoryExecutor["mergeBranch"]>): ReturnType<GitRepositoryExecutor["mergeBranch"]> {
+    return Promise.reject(this.sourceControlUnsupported("mergeBranch"));
+  }
+  pushBranch(..._args: Parameters<GitRepositoryExecutor["pushBranch"]>): ReturnType<GitRepositoryExecutor["pushBranch"]> {
+    return Promise.reject(this.sourceControlUnsupported("pushBranch"));
+  }
+  getRepository(..._args: Parameters<GitHubExecutor["getRepository"]>): ReturnType<GitHubExecutor["getRepository"]> {
+    return Promise.reject(this.sourceControlUnsupported("getRepository"));
+  }
+  createRepository(..._args: Parameters<GitHubExecutor["createRepository"]>): ReturnType<GitHubExecutor["createRepository"]> {
+    return Promise.reject(this.sourceControlUnsupported("createRepository"));
+  }
+  getPullRequest(..._args: Parameters<GitHubExecutor["getPullRequest"]>): ReturnType<GitHubExecutor["getPullRequest"]> {
+    return Promise.reject(this.sourceControlUnsupported("getPullRequest"));
+  }
+  createPullRequest(..._args: Parameters<GitHubExecutor["createPullRequest"]>): ReturnType<GitHubExecutor["createPullRequest"]> {
+    return Promise.reject(this.sourceControlUnsupported("createPullRequest"));
+  }
+  mergePullRequest(..._args: Parameters<GitHubExecutor["mergePullRequest"]>): ReturnType<GitHubExecutor["mergePullRequest"]> {
+    return Promise.reject(this.sourceControlUnsupported("mergePullRequest"));
+  }
+
+  private sourceControlUnsupported(operation: string): AppError {
+    return new AppError(
+      "CAPABILITY_UNSUPPORTED",
+      `Typed source-control operation is not supported by the SSH workspace executor (${operation}).`,
     );
   }
 }

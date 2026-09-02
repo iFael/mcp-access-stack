@@ -89,18 +89,33 @@ export function toNativeAbsolute(rootPath: string, relativePath: string): string
   return path.resolve(rootPath, ...relativePath.split("/"));
 }
 
+function isRealEnvironmentFile(relativePath: string): boolean {
+  const fileName = relativePath.split("/").at(-1) ?? "";
+  const compared = comparisonValue(fileName);
+  const templates = new Set(
+    [".env.example", ".env.sample", ".env.template"].map(comparisonValue),
+  );
+  return (
+    compared === comparisonValue(".env") ||
+    (compared.startsWith(comparisonValue(".env.")) && !templates.has(compared))
+  );
+}
 export class PathSecurity {
   constructor(private readonly workspace: ResolvedWorkspace) {}
 
-  isBlocked(relativePath: string): boolean {
+  matchedBlockedPattern(relativePath: string): string | undefined {
     const candidate = relativePath === "." ? "" : relativePath;
-    return this.workspace.blockedGlobs.some((pattern) =>
+    return this.workspace.blockedGlobs.find((pattern) =>
       minimatch(candidate, pattern, {
         dot: true,
         nocase: isWindows,
         matchBase: false,
       }),
     );
+  }
+
+  isBlocked(relativePath: string): boolean {
+    return this.matchedBlockedPattern(relativePath) !== undefined;
   }
 
   isSubtreeBlocked(relativePath: string): boolean {
@@ -117,10 +132,11 @@ export class PathSecurity {
       });
     });
   }
-  authorizeLogical(input: string, allowDot = false): string {
+  authorizeLogical(input: string, allowDot = false, operation?: string): string {
     const logicalPath = normalizeRelativePath(input, { allowDot });
-    if (this.isBlocked(logicalPath)) {
-      throw new AppError("BLOCKED_PATH", "Path is blocked by workspace policy.");
+    const policyRule = this.matchedBlockedPattern(logicalPath);
+    if (policyRule) {
+      throw this.blockedPathError(logicalPath, policyRule, "Path is blocked by workspace policy.", operation);
     }
     if (!this.isWithinLogicalAllowedRoot(logicalPath)) {
       throw new AppError(
@@ -206,8 +222,35 @@ export class PathSecurity {
     input: string,
     expectedKind?: "file" | "directory",
     allowDot = false,
+    operation?: string,
   ): Promise<AuthorizedPath> {
-    const logicalPath = this.authorizeLogical(input, allowDot);
+    return this.authorizeExistingInternal(input, expectedKind, allowDot, true, operation);
+  }
+
+  async authorizeExistingForSecretScan(
+    input: string,
+    expectedKind?: "file" | "directory",
+    allowDot = false,
+  ): Promise<AuthorizedPath> {
+    return this.authorizeExistingInternal(input, expectedKind, allowDot, false);
+  }
+
+  private async authorizeExistingInternal(
+    input: string,
+    expectedKind: "file" | "directory" | undefined,
+    allowDot: boolean,
+    enforceBlockedPolicy: boolean,
+    operation?: string,
+  ): Promise<AuthorizedPath> {
+    const logicalPath = enforceBlockedPolicy
+      ? this.authorizeLogical(input, allowDot, operation)
+      : normalizeRelativePath(input, { allowDot });
+    if (!this.isWithinLogicalAllowedRoot(logicalPath)) {
+      throw new AppError(
+        "PATH_OUTSIDE_ALLOWED_ROOTS",
+        "Path is outside the workspace allowed roots.",
+      );
+    }
     const absolutePath = toNativeAbsolute(this.workspace.rootPath, logicalPath);
 
     let canonicalPath: string;
@@ -241,8 +284,16 @@ export class PathSecurity {
       .split(path.sep)
       .join("/");
     const portableCanonicalPath = canonicalRelativePath || ".";
-    if (this.isBlocked(portableCanonicalPath)) {
-      throw new AppError("BLOCKED_PATH", "Resolved path is blocked by workspace policy.");
+    const canonicalPolicyRule = enforceBlockedPolicy
+      ? this.matchedBlockedPattern(portableCanonicalPath)
+      : undefined;
+    if (canonicalPolicyRule) {
+      throw this.blockedPathError(
+        logicalPath,
+        canonicalPolicyRule,
+        "Resolved path is blocked by workspace policy.",
+        operation,
+      );
     }
 
     const pathStat = await stat(canonicalPath);
@@ -270,6 +321,26 @@ export class PathSecurity {
     };
   }
 
+  private blockedPathError(
+    logicalPath: string,
+    policyRule: string,
+    message: string,
+    operation?: string,
+  ): AppError {
+    const safeAlternative =
+      operation === "read_file" && isRealEnvironmentFile(logicalPath)
+        ? "run_workspace_validation(secret-scan)"
+        : undefined;
+    return new AppError("BLOCKED_PATH", message, {
+      details: {
+        path: logicalPath,
+        policyRule,
+        ...(operation === undefined ? {} : { operation }),
+        reason: "blocked_by_workspace_policy",
+        ...(safeAlternative === undefined ? {} : { safeAlternative }),
+      },
+    });
+  }
   async isSymbolicLink(input: string): Promise<boolean> {
     const logicalPath = normalizeRelativePath(input, { allowDot: true });
     const absolutePath = toNativeAbsolute(this.workspace.rootPath, logicalPath);

@@ -5,14 +5,20 @@ import {
   AppError,
   agentHelloSchema,
   asAppError,
+  createAgentUnavailableDetails,
+  isRetryableRelayOperation,
   relayResponseSchema,
   relayResultSchemas,
+  remainingOperationTimeMs,
+  type AgentAvailabilityOutcome,
   type OperationContext,
   type RelayOperation,
 } from "@vs-code-gpt/shared";
 import type { Logger } from "pino";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { AgentRelayRequestManager } from "./request-manager.js";
+
+const DEFAULT_RECONNECT_GRACE_MS = 3_000;
 
 export interface AgentRelayOptions {
   agentId: string;
@@ -22,21 +28,37 @@ export interface AgentRelayOptions {
   maxConcurrency: number;
   maxPayloadBytes: number;
   allowedOrigins?: ReadonlySet<string>;
+  reconnectGraceMs?: number;
+}
+
+interface ReadyWaiter {
+  minimumGeneration: number;
+  timeout: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  resolve: (ready: boolean) => void;
 }
 
 export class AgentRelay {
   private readonly webSocketServer: WebSocketServer;
   private readonly requestManager: AgentRelayRequestManager;
+  private readonly reconnectGraceMs: number;
+  private readonly readyWaiters = new Set<ReadyWaiter>();
   private socket: WebSocket | undefined;
   private ready = false;
   private heartbeat: NodeJS.Timeout | undefined;
   private alive = false;
   private connectionGeneration = 0;
+  private closed = false;
 
   constructor(
     private readonly options: AgentRelayOptions,
     private readonly logger: Logger,
   ) {
+    this.reconnectGraceMs = Math.max(
+      1,
+      Math.min(options.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS, options.requestTimeoutMs),
+    );
     this.webSocketServer = new WebSocketServer({
       noServer: true,
       maxPayload: options.maxPayloadBytes,
@@ -102,19 +124,109 @@ export class AgentRelay {
     input: unknown,
     context: OperationContext = {},
   ): Promise<unknown> {
-    const socket = this.socket;
-    if (!this.ready || !socket || socket.readyState !== WebSocket.OPEN) {
-      throw new AppError("AGENT_UNAVAILABLE", "The local agent is unavailable.");
+    const retryable = isRetryableRelayOperation(operation);
+    let recoveryAttempted = false;
+    let outcome: AgentAvailabilityOutcome = "not_started";
+
+    while (true) {
+      if (this.closed) {
+        throw new AppError("AGENT_UNAVAILABLE", "The gateway is shutting down.", {
+          details: createAgentUnavailableDetails(
+            operation,
+            "gateway_shutdown",
+            outcome,
+            this.connectionGeneration,
+            recoveryAttempted,
+          ),
+        });
+      }
+
+      const socket = this.socket;
+      if (!this.ready || !socket || socket.readyState !== WebSocket.OPEN) {
+        if (!retryable || recoveryAttempted || context.signal?.aborted) {
+          throw new AppError("AGENT_UNAVAILABLE", "The local agent is unavailable.", {
+            details: createAgentUnavailableDetails(
+              operation,
+              recoveryAttempted ? "reconnect_timeout" : "agent_not_connected",
+              outcome,
+              this.connectionGeneration,
+              recoveryAttempted,
+            ),
+          });
+        }
+
+        const minimumGeneration = socket?.readyState === WebSocket.OPEN
+          ? this.connectionGeneration
+          : this.connectionGeneration + 1;
+        recoveryAttempted = true;
+        const recovered = await this.waitForReadyGeneration(minimumGeneration, context);
+        if (!recovered) {
+          throw new AppError("AGENT_UNAVAILABLE", "The local agent did not reconnect in time.", {
+            details: createAgentUnavailableDetails(
+              operation,
+              "reconnect_timeout",
+              outcome,
+              this.connectionGeneration,
+              true,
+            ),
+          });
+        }
+        continue;
+      }
+
+      const attemptedGeneration = this.connectionGeneration;
+      try {
+        return await this.requestManager.call(socket, operation, input, context);
+      } catch (error) {
+        const appError = asAppError(error);
+        if (appError.code !== "AGENT_UNAVAILABLE") throw appError;
+
+        outcome = appError.details?.outcome ?? "unknown";
+        if (
+          !retryable ||
+          recoveryAttempted ||
+          appError.details?.reason === "gateway_shutdown" ||
+          context.signal?.aborted
+        ) {
+          if (recoveryAttempted && appError.details) {
+            throw new AppError(appError.code, appError.message, {
+              ...(appError.lifecycle === undefined ? {} : { lifecycle: appError.lifecycle }),
+              details: { ...appError.details, retryAttempted: true },
+            });
+          }
+          throw appError;
+        }
+
+        recoveryAttempted = true;
+        const recovered = await this.waitForReadyGeneration(attemptedGeneration + 1, context);
+        if (!recovered) {
+          throw new AppError("AGENT_UNAVAILABLE", "The local agent did not reconnect in time.", {
+            details: createAgentUnavailableDetails(
+              operation,
+              "reconnect_timeout",
+              outcome,
+              this.connectionGeneration,
+              true,
+            ),
+          });
+        }
+      }
     }
-    return this.requestManager.call(socket, operation, input, context);
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     if (this.heartbeat) {
       clearInterval(this.heartbeat);
       this.heartbeat = undefined;
     }
-    this.requestManager.rejectAll("AGENT_UNAVAILABLE", "The gateway is shutting down.");
+    this.resolveAllReadyWaiters(false);
+    this.requestManager.rejectAll(
+      "AGENT_UNAVAILABLE",
+      "The gateway is shutting down.",
+      "gateway_shutdown",
+    );
     this.ready = false;
     this.socket?.close(1001, "gateway shutdown");
     this.socket = undefined;
@@ -193,8 +305,13 @@ export class AgentRelay {
           clearInterval(this.heartbeat);
           this.heartbeat = undefined;
         }
-        this.requestManager.rejectAll("AGENT_UNAVAILABLE", "The local agent disconnected.");
       }
+      this.requestManager.rejectGeneration(
+        generation,
+        "AGENT_UNAVAILABLE",
+        "The local agent disconnected.",
+        "agent_disconnected",
+      );
       this.logger.info({
         event: "agent_disconnected",
         generation,
@@ -244,6 +361,7 @@ export class AgentRelay {
       }
       this.ready = true;
       this.startHeartbeat(socket, this.connectionGeneration);
+      this.resolveReadyWaiters();
       this.logger.info({
         event: "agent_connected",
         agentId: this.options.agentId,
@@ -280,6 +398,65 @@ export class AgentRelay {
     this.heartbeat.unref();
   }
 
+  private waitForReadyGeneration(
+    minimumGeneration: number,
+    context: OperationContext,
+  ): Promise<boolean> {
+    if (this.isConnected && this.connectionGeneration >= minimumGeneration) {
+      return Promise.resolve(true);
+    }
+    if (this.closed || context.signal?.aborted) return Promise.resolve(false);
+
+    const waitMs = this.reconnectWaitMs(context);
+    if (waitMs <= 0) return Promise.resolve(false);
+
+    return new Promise<boolean>((resolve) => {
+      let waiter: ReadyWaiter | undefined;
+      const finish = (ready: boolean) => {
+        if (!waiter) return;
+        clearTimeout(waiter.timeout);
+        waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+        this.readyWaiters.delete(waiter);
+        resolve(ready);
+      };
+      const timeout = setTimeout(() => finish(false), waitMs);
+      const onAbort = () => finish(false);
+      waiter = {
+        minimumGeneration,
+        timeout,
+        ...(context.signal === undefined ? {} : { signal: context.signal, onAbort }),
+        resolve: finish,
+      };
+      this.readyWaiters.add(waiter);
+      context.signal?.addEventListener("abort", onAbort, { once: true });
+      if (context.signal?.aborted) finish(false);
+      this.resolveReadyWaiters();
+    });
+  }
+
+  private reconnectWaitMs(context: OperationContext): number {
+    const bounded = Math.min(this.reconnectGraceMs, this.options.requestTimeoutMs);
+    if (!context.deadline) return bounded;
+    return Math.max(
+      0,
+      Math.min(bounded, remainingOperationTimeMs(context.deadline, Date.now())),
+    );
+  }
+
+  private resolveReadyWaiters(): void {
+    if (!this.isConnected) return;
+    for (const waiter of [...this.readyWaiters]) {
+      if (this.connectionGeneration >= waiter.minimumGeneration) {
+        waiter.resolve(true);
+      }
+    }
+  }
+
+  private resolveAllReadyWaiters(ready: boolean): void {
+    for (const waiter of [...this.readyWaiters]) {
+      waiter.resolve(ready);
+    }
+  }
 }
 
 function runtimeMetrics(): { rssBytes: number; heapUsedBytes: number } {

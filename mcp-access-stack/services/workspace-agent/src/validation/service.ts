@@ -257,11 +257,14 @@ async function resolveTargets(
     const relativePath = normalizeRelativePath(requestedPath, { allowDot: true });
     const logicalPath = joinLogicalPath(root.logicalPath, relativePath);
     try {
-      const authorized = await security.authorizeExisting(
-        logicalPath,
-        undefined,
-        true,
-      );
+      const authorized =
+        input.validation === "secret-scan" && input.scope === "changes"
+          ? await security.authorizeExistingForSecretScan(
+              logicalPath,
+              undefined,
+              true,
+            )
+          : await security.authorizeExisting(logicalPath, undefined, true);
       if (!isContained(root.canonicalPath, authorized.canonicalPath)) {
         throw new AppError(
           "PATH_OUTSIDE_ALLOWED_ROOTS",

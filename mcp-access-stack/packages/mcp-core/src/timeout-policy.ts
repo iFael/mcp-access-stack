@@ -4,6 +4,7 @@ export const QUICK_OPERATION_TIMEOUT_MS = 60_000;
 export const MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS = 300_000;
 export const MAX_BACKGROUND_OPERATION_TIMEOUT_MS = 86_400_000;
 export const COMMAND_TERMINATION_GRACE_MS = 30_000;
+export const BACKGROUND_WAIT_COMPLETION_GRACE_MS = 1_000;
 
 export const operationTerminalReasonSchema = z.enum([
   "timeout",
