@@ -171,6 +171,9 @@ internal static class Program
             "MCP_EDGE_BASE_URL",
             "MCP_CONNECTOR_TOKEN_FILE",
             "VS_CODE_GPT_POLICY_PATH",
+            "VS_CODE_GPT_DATA_DIR",
+            "VS_CODE_GPT_BACKGROUND_TASKS_DIR",
+            "VS_CODE_GPT_COMMAND_INVOCATIONS_DIR",
             "MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS",
             "AUTH_MODE",
             "OWNER_TOKEN",
@@ -253,8 +256,20 @@ internal static class Program
     if ($validation.text.Contains($connectorToken) -or $validation.text.Contains($ownerToken) -or $validation.text.Contains($browserToken)) {
         throw 'McpEdgeHost validate-only leaked a fixture secret.'
     }
-
-    $run = Invoke-EdgeHost -Executable $hostPath -Arguments $commonArgs
+    $previousDataDir = [Environment]::GetEnvironmentVariable('VS_CODE_GPT_DATA_DIR', 'Process')
+    $previousBackgroundTasksDir = [Environment]::GetEnvironmentVariable('VS_CODE_GPT_BACKGROUND_TASKS_DIR', 'Process')
+    $previousCommandInvocationsDir = [Environment]::GetEnvironmentVariable('VS_CODE_GPT_COMMAND_INVOCATIONS_DIR', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_DATA_DIR', (Join-Path $releaseRoot 'unsafe-data'), 'Process')
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_BACKGROUND_TASKS_DIR', (Join-Path $releaseRoot 'unsafe-background-tasks'), 'Process')
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_COMMAND_INVOCATIONS_DIR', (Join-Path $releaseRoot 'unsafe-command-invocations'), 'Process')
+        $run = Invoke-EdgeHost -Executable $hostPath -Arguments $commonArgs
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_DATA_DIR', $previousDataDir, 'Process')
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_BACKGROUND_TASKS_DIR', $previousBackgroundTasksDir, 'Process')
+        [Environment]::SetEnvironmentVariable('VS_CODE_GPT_COMMAND_INVOCATIONS_DIR', $previousCommandInvocationsDir, 'Process')
+    }
     if ($run.exitCode -ne 0) {
         throw "McpEdgeHost fixture run failed: $($run.text)"
     }
@@ -277,6 +292,9 @@ internal static class Program
         MCP_EDGE_BASE_URL = 'https://mcp-access-stack.example.workers.dev'
         MCP_CONNECTOR_TOKEN_FILE = [IO.Path]::GetFullPath($connectorTokenFile)
         VS_CODE_GPT_POLICY_PATH = [IO.Path]::GetFullPath($policyPath)
+        VS_CODE_GPT_DATA_DIR = [IO.Path]::GetFullPath($runtimeRoot)
+        VS_CODE_GPT_BACKGROUND_TASKS_DIR = ''
+        VS_CODE_GPT_COMMAND_INVOCATIONS_DIR = ''
         MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS = '8'
         AUTH_MODE = 'owner'
         OWNER_TOKEN = $ownerToken

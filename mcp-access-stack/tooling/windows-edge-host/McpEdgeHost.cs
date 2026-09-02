@@ -491,6 +491,9 @@ internal static class Program
         startInfo.EnvironmentVariables["MCP_EDGE_BASE_URL"] = edgeUri.GetLeftPart(UriPartial.Authority);
         startInfo.EnvironmentVariables["MCP_CONNECTOR_TOKEN_FILE"] = connectorTokenPath;
         startInfo.EnvironmentVariables["VS_CODE_GPT_POLICY_PATH"] = policyPath;
+        startInfo.EnvironmentVariables["VS_CODE_GPT_DATA_DIR"] = options.RuntimeRoot;
+        startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_BACKGROUND_TASKS_DIR");
+        startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_COMMAND_INVOCATIONS_DIR");
         startInfo.EnvironmentVariables["MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS"] = options.MaxConcurrentRequests.ToString();
         startInfo.EnvironmentVariables["AUTH_MODE"] = "owner";
         startInfo.EnvironmentVariables["OWNER_TOKEN"] = ownerToken;
