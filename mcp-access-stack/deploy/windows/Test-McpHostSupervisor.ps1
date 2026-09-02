@@ -218,7 +218,8 @@ setInterval(() => {}, 1000);
 
     Write-Utf8NoBom `
         -Path (Join-Path $releaseRoot 'services\mcp-gateway\dist\edge-connector-cli.js') `
-        -Content "setInterval(() => {}, 1000);`n"`r`n    Write-Utf8NoBom `
+        -Content "setInterval(() => {}, 1000);`n"
+    Write-Utf8NoBom `
         -Path (Join-Path $releaseRoot 'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js') `
         -Content "setInterval(() => {}, 1000);`n"
     Write-Utf8NoBom `
@@ -294,7 +295,8 @@ setInterval(() => {}, 1000);
     }
     Copy-Item `
         -LiteralPath (Join-Path $buildOutput 'McpHost.exe') `
-        -Destination (Join-Path $releaseRoot 'native\McpHost.exe')`r`n    Copy-Item `
+        -Destination (Join-Path $releaseRoot 'native\McpHost.exe')
+    Copy-Item `
         -LiteralPath (Join-Path $buildOutput 'McpEdgeHost.exe') `
         -Destination (Join-Path $releaseRoot 'native\McpEdgeHost.exe')
     New-Item -ItemType Directory -Force -Path (Join-Path $releaseRoot 'compat') | Out-Null
