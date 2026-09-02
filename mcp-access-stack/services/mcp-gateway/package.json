@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
-    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
-    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
+    "test": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:watch": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

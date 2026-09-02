@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "@jest/globals";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { EDGE_PROTOCOL_VERSION, isAllowedEdgeRequest } from "@mcp-access-stack/edge-protocol";
+import { EDGE_PROTOCOL_VERSION, isAllowedEdgeRequest, parseConnectorToEdgeMessage } from "@mcp-access-stack/edge-protocol";
 import { EdgeConnector } from "../../../src/edge/connector.js";
 
 const servers: Array<{ close(): Promise<void> }> = [];
@@ -244,5 +244,64 @@ describe("EdgeConnector", () => {
     await closedPromise;
     controller.abort();
     await runPromise;
+  });
+});
+
+describe("connector-ready runtime identity protocol", () => {
+  const runtime = {
+    version: 1,
+    connectorInstanceId: "11111111-1111-4111-8111-111111111111",
+    connectionGeneration: 3,
+    processStartedAt: "2026-09-02T12:00:00.000Z",
+    catalogContractRevision: "a".repeat(64),
+    toolSetRevision: "b".repeat(64),
+    toolCount: 61,
+    serverVersion: "1.1.0-beta.24-catalog.test",
+    nodePid: 1234,
+    hostPid: 5678,
+  };
+
+  it("accepts legacy connector-ready and preserves a strict runtime identity when present", () => {
+    expect(parseConnectorToEdgeMessage(JSON.stringify({
+      type: "connector-ready",
+      protocolVersion: EDGE_PROTOCOL_VERSION,
+    }))).toEqual({
+      type: "connector-ready",
+      protocolVersion: EDGE_PROTOCOL_VERSION,
+    });
+
+    expect(parseConnectorToEdgeMessage(JSON.stringify({
+      type: "connector-ready",
+      protocolVersion: EDGE_PROTOCOL_VERSION,
+      runtime,
+    }))).toEqual({
+      type: "connector-ready",
+      protocolVersion: EDGE_PROTOCOL_VERSION,
+      runtime,
+    });
+  });
+
+  it("rejects malformed runtime identity instead of partially trusting it", () => {
+    const malformed = [
+      { ...runtime, version: 2 },
+      { ...runtime, connectorInstanceId: "" },
+      { ...runtime, connectionGeneration: 0 },
+      { ...runtime, processStartedAt: "not-a-timestamp" },
+      { ...runtime, catalogContractRevision: "short" },
+      { ...runtime, toolSetRevision: "short" },
+      { ...runtime, toolCount: 0 },
+      { ...runtime, serverVersion: "" },
+      { ...runtime, nodePid: 0 },
+      { ...runtime, hostPid: -1 },
+      { ...runtime, extra: "not-allowed" },
+    ];
+
+    for (const candidate of malformed) {
+      expect(parseConnectorToEdgeMessage(JSON.stringify({
+        type: "connector-ready",
+        protocolVersion: EDGE_PROTOCOL_VERSION,
+        runtime: candidate,
+      }))).toBeNull();
+    }
   });
 });

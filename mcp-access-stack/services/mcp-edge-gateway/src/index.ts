@@ -30,7 +30,8 @@ export default {
         return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" } });
       }
       const result = JSON.parse(await session.getSessionDiagnostics()) as { version: 1; events: unknown[] };
-      return jsonResponse(result);
+      const runtimeTelemetry = await session.getRuntimeTelemetry();
+      return jsonResponse({ ...result, runtimeTelemetry });
     }
     if (url.pathname === "/_internal/owner-oauth/bootstrap" && request.method === "POST") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;

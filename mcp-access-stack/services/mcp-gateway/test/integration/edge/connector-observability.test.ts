@@ -7,7 +7,17 @@ import { EdgeConnector, type EdgeConnectorLog } from "../../../src/edge/connecto
 
 const INTERNAL_ASSERTION = "a".repeat(43);
 const servers: Array<{ close(): Promise<void> }> = [];
-
+const RUNTIME_IDENTITY = {
+  version: 1 as const,
+  connectorInstanceId: "8b08f94c-46d4-4f3d-a11d-06d5ab23392f",
+  processStartedAt: "2026-09-02T12:00:00.000Z",
+  catalogContractRevision: "a".repeat(64),
+  toolSetRevision: "b".repeat(64),
+  toolCount: 61,
+  serverVersion: "1.1.0-beta.24-catalog.test",
+  nodePid: 1234,
+  hostPid: 4321,
+};
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -59,6 +69,7 @@ function connectorOptions(edgePort: number, log: (entry: EdgeConnectorLog) => vo
     reconnectMinMs: 10,
     reconnectMaxMs: 40,
     heartbeatIntervalMs: 5_000,
+    runtimeIdentity: RUNTIME_IDENTITY,
     random: () => 0.5,
     log,
   };
@@ -93,6 +104,19 @@ describe("EdgeConnector resilience observability", () => {
     });
     const runPromise = connector.run(controller.signal);
     try {
+      const ready = await waitForLog(logs, "edge_connector_ready", (entry) => entry.generation === 1);
+      expect(ready).toMatchObject({
+        generation: 1,
+        connectorInstanceId: RUNTIME_IDENTITY.connectorInstanceId,
+        processStartedAt: RUNTIME_IDENTITY.processStartedAt,
+        catalogContractRevision: RUNTIME_IDENTITY.catalogContractRevision,
+        toolSetRevision: RUNTIME_IDENTITY.toolSetRevision,
+        toolCount: RUNTIME_IDENTITY.toolCount,
+        serverVersion: RUNTIME_IDENTITY.serverVersion,
+      });
+      expect(JSON.stringify(ready)).not.toContain("nodePid");
+      expect(JSON.stringify(ready)).not.toContain("hostPid");
+
       const disconnected = await waitForLog(logs, "edge_connector_disconnected", (entry) => entry.generation === 1);
       expect(disconnected).toMatchObject({
         generation: 1,

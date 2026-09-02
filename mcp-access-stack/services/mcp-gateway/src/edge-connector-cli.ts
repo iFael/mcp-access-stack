@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -9,7 +9,7 @@ import {
   LocalAgent,
   createQualifiedCommandRuntimeOptions,
 } from "@vs-code-gpt/local-agent";
-import { AppError, asAppError } from "@vs-code-gpt/shared";
+import { AppError, MCP_FULL_TOOL_CATALOG_METADATA, asAppError } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { EdgeConnector } from "./edge/connector.js";
@@ -23,6 +23,8 @@ interface ConnectorRuntimeConfig {
 }
 
 async function main(): Promise<void> {
+  const connectorInstanceId = randomUUID();
+  const processStartedAt = new Date().toISOString();
   const runtime = loadConnectorRuntimeConfig(process.env);
   const connectorToken = await readConnectorToken(runtime.tokenFile);
   const gatewayConfig = {
@@ -61,6 +63,17 @@ async function main(): Promise<void> {
     token: connectorToken,
     internalAssertion,
     localBaseUrl,
+    runtimeIdentity: {
+      version: 1,
+      connectorInstanceId,
+      processStartedAt,
+      catalogContractRevision: MCP_FULL_TOOL_CATALOG_METADATA.contractRevision,
+      toolSetRevision: MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,
+      toolCount: MCP_FULL_TOOL_CATALOG_METADATA.toolCount,
+      serverVersion: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
+      nodePid: process.pid,
+      hostPid: process.ppid,
+    },
     ...(runtime.maxConcurrentRequests === undefined ? {} : { maxConcurrentRequests: runtime.maxConcurrentRequests }),
     log: writeLog,
   });
@@ -78,7 +91,12 @@ async function main(): Promise<void> {
 
   writeLog({
     event: "edge_connector_process_started",
-    pid: process.pid,
+    connectorInstanceId,
+    processStartedAt,
+    catalogContractRevision: MCP_FULL_TOOL_CATALOG_METADATA.contractRevision,
+    toolSetRevision: MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,
+    toolCount: MCP_FULL_TOOL_CATALOG_METADATA.toolCount,
+    serverVersion: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
     edgeOrigin: runtime.edgeBaseUrl.origin,
     authMode: gatewayConfig.authMode,
   });
