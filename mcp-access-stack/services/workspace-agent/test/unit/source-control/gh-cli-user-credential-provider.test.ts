@@ -9,6 +9,7 @@ import {
 
 interface FakeChild extends EventEmitter {
   pid: number;
+  stdin: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
   kill: ReturnType<typeof jest.fn>;
@@ -17,6 +18,7 @@ interface FakeChild extends EventEmitter {
 function fakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.pid = 4200;
+  child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.kill = jest.fn();
@@ -35,6 +37,9 @@ function complete(child: FakeChild, options: { stdout?: string; stderr?: string;
 
 function absoluteGhForTest(): string {
   return path.join(path.parse(process.cwd()).root, "controlled", process.platform === "win32" ? "gh.exe" : "gh");
+}
+function absoluteGitForTest(): string {
+  return path.join(path.parse(process.cwd()).root, "controlled", process.platform === "win32" ? "git.exe" : "git");
 }
 
 describe("GhCliUserCredentialProvider", () => {
@@ -73,6 +78,53 @@ describe("GhCliUserCredentialProvider", () => {
     expect("execute" in provider).toBe(false);
   });
 
+  it("falls back to git credential fill when gh has no authenticated token", async () => {
+    const ghChild = fakeChild();
+    const gitChild = fakeChild();
+    let gitInput = "";
+    gitChild.stdin.on("data", (chunk) => {
+      gitInput += chunk.toString("utf8");
+    });
+    const spawnProcess = jest.fn((_executable: string, args: readonly string[], _options: Record<string, unknown>) => {
+      if (args[0] === "auth") {
+        complete(ghChild, { stderr: "not authenticated", code: 1 });
+        return ghChild as never;
+      }
+      complete(gitChild, {
+        stdout: "protocol=https\nhost=github.com\nusername=test-user\npassword=git-unit-test-token\n\n",
+      });
+      return gitChild as never;
+    });
+    const provider = new GhCliUserCredentialProvider({
+      ghExecutable: absoluteGhForTest(),
+      gitExecutable: absoluteGitForTest(),
+      spawnProcess: spawnProcess as unknown as GhSpawnProcess,
+      baseEnvironment: {
+        PATH: process.env.PATH ?? "",
+        SystemRoot: process.env.SystemRoot,
+        HOME: process.env.HOME,
+        USERPROFILE: process.env.USERPROFILE,
+        GH_TOKEN: "must-not-leak",
+        GITHUB_TOKEN: "must-not-leak",
+      },
+    });
+
+    await expect(provider.getCredential()).resolves.toEqual({
+      token: "git-unit-test-token",
+      source: "git-credential-user",
+    });
+
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    const [gitExecutable, gitArgs, gitOptions] = spawnProcess.mock.calls[1]!;
+    expect(gitExecutable).toBe(absoluteGitForTest());
+    expect(gitArgs).toEqual(["credential", "fill"]);
+    expect(gitOptions).toMatchObject({ shell: false, windowsHide: true });
+    const env = (gitOptions as { env: Record<string, string | undefined> }).env;
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(gitInput).toBe("protocol=https\nhost=github.com\n\n");
+  });
   it("rejects a relative gh executable path", () => {
     expect(
       () => new GhCliUserCredentialProvider({ ghExecutable: "gh" }),
