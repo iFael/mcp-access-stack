@@ -53,6 +53,29 @@ function Quote-McpEdgeTaskArgument {
     return '"' + $Value + '"'
 }
 
+function Invoke-McpEdgeTaskExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Executable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { $null = $startInfo.ArgumentList.Add([string]$argument) }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw "Native Edge validation process did not start: $Executable" }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [pscustomobject]@{ exitCode = $process.ExitCode; stdout = $stdout.Trim(); stderr = $stderr.Trim() }
+    }
+    finally { $process.Dispose() }
+}
 function Assert-McpEdgeTaskFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -263,10 +286,11 @@ if ($EnableBrowserWorker) {
         '--browser-worker-token-file', $browserTokenFile
     )
 }
-$edgeHostValidation = @(& $edgeHostPath @hostArguments '--validate-only' 2>&1)
-if ($LASTEXITCODE -ne 0 -or
-    $edgeHostValidation.Count -ne 1 -or
-    [string]$edgeHostValidation[0] -ne 'mcp-edge-host-contract-v1') {
+$edgeHostValidation = Invoke-McpEdgeTaskExecutable `
+    -Executable $edgeHostPath `
+    -Arguments (@($hostArguments) + '--validate-only')
+if ($edgeHostValidation.exitCode -ne 0 -or
+    [string]$edgeHostValidation.stdout -ne 'mcp-edge-host-contract-v1') {
     throw 'McpEdgeHost fixed-contract validation failed before task installation.'
 }
 $hostValues = [System.Collections.Generic.List[string]]::new()
