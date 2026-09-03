@@ -50,6 +50,7 @@ async function setupAgent(options: {
   branch?: string;
   gitExecutor?: GitRepositoryExecutor;
   githubExecutor?: GitHubExecutor;
+  confirmationMode?: "standard" | "trusted-workspace";
 }) {
   fixture = await createFixture({ profile: "full-repo-write" });
   initializeGitRepository(fixture.workspacePath);
@@ -61,7 +62,12 @@ async function setupAgent(options: {
     git(fixture.workspacePath, ["remote", "add", "origin", options.origin]);
   }
   const workspace = {
-    ...makeWorkspacePolicy(fixture.workspacePath, { profile: "full-repo-write" }),
+    ...makeWorkspacePolicy(fixture.workspacePath, {
+      profile: "full-repo-write",
+      ...(options.confirmationMode === undefined
+        ? {}
+        : { confirmationMode: options.confirmationMode }),
+    }),
     sourceControl: sourceControlPolicy(options.capabilities, {
       ...(options.accountOwners === undefined ? {} : { accountOwners: options.accountOwners }),
       ...(options.additionalRepositories === undefined ? {} : { additionalRepositories: options.additionalRepositories }),
@@ -318,6 +324,79 @@ describe("LocalAgent typed confirmation and mutation receipts", () => {
   });
 });
 
+describe("LocalAgent trusted-workspace typed confirmation policy", () => {
+  it("executes feature push without a confirmation round-trip", async () => {
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
+    });
+
+    await expect(
+      (agent as any).gitPushBranch(
+        {
+          workspaceId: "test",
+          branch: "feature/task8",
+          expectedLocalSha: SHA_A,
+          remote: "origin",
+        },
+        { invocationId: "trusted-push" },
+      ),
+    ).resolves.toMatchObject({ status: "completed", remoteSha: SHA_A });
+    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("executes pull-request creation from a non-main head without confirmation", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.pull_request.create"],
+      confirmationMode: "trusted-workspace",
+    });
+
+    await expect(
+      (agent as any).githubCreatePullRequest(
+        {
+          workspaceId: "test",
+          owner: "octo",
+          repository: "repo",
+          title: "trusted typed pr",
+          head: "feature/task8",
+          base: "main",
+        },
+        { invocationId: "trusted-pr-create" },
+      ),
+    ).resolves.toMatchObject({ status: "completed", number: 7 });
+    expect(githubExecutor.createPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps repository creation and pull-request merge confirmation-bound", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.repository.create", "github.pull_request.merge"],
+      accountOwners: ["octo"],
+      confirmationMode: "trusted-workspace",
+    });
+
+    await expect(
+      (agent as any).githubCreateRepository(
+        { workspaceId: "test", owner: "octo", name: "trusted-repo", visibility: "private" },
+        { invocationId: "trusted-repo-create" },
+      ),
+    ).resolves.toMatchObject({ status: "confirmation_required" });
+    await expect(
+      (agent as any).githubMergePullRequest(
+        {
+          workspaceId: "test",
+          owner: "octo",
+          repository: "repo",
+          pullNumber: 7,
+          expectedPullRequestHeadSha: SHA_B,
+          mergeMethod: "squash",
+        },
+        { invocationId: "trusted-pr-merge" },
+      ),
+    ).resolves.toMatchObject({ status: "confirmation_required" });
+    expect(githubExecutor.createRepository).not.toHaveBeenCalled();
+    expect(githubExecutor.mergePullRequest).not.toHaveBeenCalled();
+  });
+});
 describe("LocalAgent confirmation and receipt completeness", () => {
   it.each([
     {
