@@ -49,6 +49,7 @@ async function main(): Promise<void> {
   const workspaceExecutor = new InProcessWorkspaceExecutor(agent);
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor,
+    sourceControlExecutor: workspaceExecutor,
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
   });
