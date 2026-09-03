@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "@jest/globals";
 
 describe("edge connector CLI wiring", () => {
   it("passes the in-process executor as the source-control executor", () => {
