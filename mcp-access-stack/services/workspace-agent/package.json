@@ -16,12 +16,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
-    "test:unit": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-unit",
-    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-integration",
-    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-e2e",
-    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
-    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
+    "test": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:unit": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-unit",
+    "test:integration": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-integration",
+    "test:e2e": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --selectProjects workspace-agent-e2e",
+    "test:watch": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand --coverage"
   },
   "dependencies": {
     "@ast-grep/cli": "^0.44.1",
