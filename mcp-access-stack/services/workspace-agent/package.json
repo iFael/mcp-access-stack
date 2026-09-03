@@ -28,6 +28,6 @@
     "@vs-code-gpt/shared": "0.1.0",
     "iconv-lite": "^0.7.3",
     "minimatch": "^10.2.0",
-    "ws": "^8.21.0"
+    "ws": "^8.21.3"
   }
 }
