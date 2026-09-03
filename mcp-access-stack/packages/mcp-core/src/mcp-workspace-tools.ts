@@ -1073,13 +1073,11 @@ const mcpGitHubVisibility = z.enum(["private", "public", "internal"]);
 const mcpGitHubPullRequestState = z.enum(["open", "closed"]);
 const mcpGitHubMergeMethod = z.enum(["merge", "squash"]);
 
-const mcpSourceControlConfirmationRequired = z.object({
-  status: z.literal("confirmation_required"),
-  confirmationId: mcpSourceControlConfirmationId,
-  expiresAt: z.string().datetime(),
-  operation: sourceControlOperationNameSchema,
-  targetResource: z.string().min(1).max(512),
-}).strict();
+const mcpSourceControlConfirmationFields = {
+  confirmationId: mcpSourceControlConfirmationId.optional(),
+  expiresAt: z.string().datetime().optional(),
+  targetResource: z.string().min(1).max(512).optional(),
+} as const;
 const mcpGitHubRepositoryResult = z.object({
   owner: mcpGitHubOwner,
   name: mcpGitHubRepositoryName,
@@ -1121,10 +1119,18 @@ const sourceControlMcpSchemas = {
   },
   git_push_branch: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), branch: mcpSourceControlBranch, expectedLocalSha: mcpSourceControlSha, remote: z.string().min(1).max(255).optional(), expectedRemoteSha: mcpSourceControlSha.optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
-    output: z.discriminatedUnion("status", [
-      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("git_push_branch") }),
-      z.object({ status: z.literal("completed"), root: mcpSourceControlRoot, remote: z.string().min(1).max(255), branch: mcpSourceControlBranch, localSha: mcpSourceControlSha, remoteSha: mcpSourceControlSha }).strict(),
-    ]),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("git_push_branch").optional(),
+      root: mcpSourceControlRoot.optional(),
+      remote: z.string().min(1).max(255).optional(),
+      branch: mcpSourceControlBranch.optional(),
+      localSha: mcpSourceControlSha.optional(),
+      remoteSha: mcpSourceControlSha.optional(),
+    }).strict().refine((value) => gitPushBranchResultSchema.safeParse(value).success, {
+      message: "Invalid git_push_branch MCP result.",
+    }),
   },
   github_get_repository: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName }).strict(),
@@ -1132,10 +1138,19 @@ const sourceControlMcpSchemas = {
   },
   github_create_repository: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, owner: mcpGitHubOwner, name: mcpGitHubRepositoryName, visibility: mcpGitHubVisibility, description: z.string().max(350).optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
-    output: z.discriminatedUnion("status", [
-      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_create_repository") }),
-      mcpGitHubRepositoryResult.extend({ status: z.literal("completed") }),
-    ]),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_create_repository").optional(),
+      owner: mcpGitHubOwner.optional(),
+      name: mcpGitHubRepositoryName.optional(),
+      fullName: mcpGitHubRepositoryFullName.optional(),
+      defaultBranch: mcpSourceControlBranch.optional(),
+      visibility: mcpGitHubVisibility.optional(),
+      url: mcpGitHubUrl.optional(),
+    }).strict().refine((value) => githubCreateRepositoryResultSchema.safeParse(value).success, {
+      message: "Invalid github_create_repository MCP result.",
+    }),
   },
   github_get_pull_request: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive() }).strict(),
@@ -1143,17 +1158,33 @@ const sourceControlMcpSchemas = {
   },
   github_create_pull_request: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, title: z.string().trim().min(1).max(256), head: mcpGitHubPullRef, base: mcpGitHubPullRef, body: z.string().max(65_536).optional(), draft: z.boolean().optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
-    output: z.discriminatedUnion("status", [
-      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_create_pull_request") }),
-      mcpGitHubPullRequestResult.extend({ status: z.literal("completed") }),
-    ]),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_create_pull_request").optional(),
+      number: z.number().int().positive().optional(),
+      state: mcpGitHubPullRequestState.optional(),
+      title: z.string().min(1).max(256).optional(),
+      url: mcpGitHubUrl.optional(),
+      headSha: mcpSourceControlSha.optional(),
+      baseSha: mcpSourceControlSha.optional(),
+      merged: z.boolean().optional(),
+    }).strict().refine((value) => githubCreatePullRequestResultSchema.safeParse(value).success, {
+      message: "Invalid github_create_pull_request MCP result.",
+    }),
   },
   github_merge_pull_request: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
-    output: z.discriminatedUnion("status", [
-      mcpSourceControlConfirmationRequired.extend({ operation: z.literal("github_merge_pull_request") }),
-      z.object({ status: z.literal("completed"), number: z.number().int().positive(), merged: z.boolean(), mergeSha: mcpSourceControlSha }).strict(),
-    ]),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_merge_pull_request").optional(),
+      number: z.number().int().positive().optional(),
+      merged: z.boolean().optional(),
+      mergeSha: mcpSourceControlSha.optional(),
+    }).strict().refine((value) => githubMergePullRequestResultSchema.safeParse(value).success, {
+      message: "Invalid github_merge_pull_request MCP result.",
+    }),
   },
 } as const;
 const sourceControlAnnotations: Record<SourceControlToolName, {
