@@ -94,7 +94,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright Chromium
-        if: github.event_name == 'push' || needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'
+        if: needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'
         run: npx playwright install --only-shell chromium
 
       - name: Validate cheap syntax contracts
@@ -170,6 +170,10 @@ jobs:
         if: github.event_name == 'push'
         run: npm run ci:main
 
+      - name: Main browser integration
+        if: github.event_name == 'push' && (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+        run: npm run ci:main:browser
+
   release-images:
     name: release-images
     needs: impact
@@ -192,25 +196,34 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build gateway release image
+        if: needs.impact.result != 'success' || needs.impact.outputs.dockerGateway == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
           file: ./mcp-access-stack/deploy/docker/gateway.Dockerfile
           push: false
           tags: mcp-access-stack-gateway:ci
+          cache-from: type=gha,scope=ci-gateway
+          cache-to: type=gha,mode=max,scope=ci-gateway
 
       - name: Build browser worker release image
+        if: needs.impact.result != 'success' || needs.impact.outputs.dockerBrowser == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
           file: ./mcp-access-stack/deploy/remote/browser-worker.Dockerfile
           push: false
           tags: mcp-access-stack-browser-worker:ci
+          cache-from: type=gha,scope=ci-browser-worker
+          cache-to: type=gha,mode=max,scope=ci-browser-worker
 
       - name: Build proxy release image
+        if: needs.impact.result != 'success' || needs.impact.outputs.dockerProxy == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
           file: ./mcp-access-stack/deploy/docker/proxy.Dockerfile
           push: false
           tags: mcp-access-stack-proxy:ci
+          cache-from: type=gha,scope=ci-proxy
+          cache-to: type=gha,mode=max,scope=ci-proxy
