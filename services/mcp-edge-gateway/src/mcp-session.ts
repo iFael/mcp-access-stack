@@ -3,6 +3,11 @@ import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
 import {
+  ConnectorTelemetryStore,
+  type ConnectorTelemetryEvent,
+  type EdgeRuntimeTelemetryV1,
+} from "./connector-telemetry.js";
+import {
   appendSessionDiagnostic,
   classifySessionDiagnostic,
   readSessionDiagnostics,
@@ -43,6 +48,8 @@ type ConnectorAttachment = {
   role: "connector";
   ready: boolean;
   protocolVersion: number;
+  connectionGeneration?: number;
+  disconnectRecorded?: boolean;
 };
 
 type PendingRelay = {
@@ -54,17 +61,20 @@ type PendingRelay = {
 
 export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly pending = new Map<string, PendingRelay>();
+  private readonly connectorTelemetry: ConnectorTelemetryStore;
   private controlRuntime: EdgeControlPlaneRuntime | undefined;
   private v3CutoverComplete = false;
 
   constructor(ctx: DurableObjectState, private readonly edgeEnv: EdgeGatewayEnv) {
     super(ctx, edgeEnv);
+    this.connectorTelemetry = new ConnectorTelemetryStore(this.ctx.storage);
   }
 
   async getStatus(): Promise<{
     controlPlaneReady: boolean;
     executionPlaneReady: boolean;
     connectorReady: boolean;
+    runtimeTelemetry: EdgeRuntimeTelemetryV1;
   }> {
     const connector = this.getReadyConnector();
     const connectorReady = connector !== null;
@@ -84,11 +94,16 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       controlPlaneReady,
       executionPlaneReady: controlPlaneReady && connectorReady,
       connectorReady,
+      runtimeTelemetry: await this.connectorTelemetry.read(),
     };
   }
 
   async getSessionDiagnostics(): Promise<string> {
     return JSON.stringify({ version: 1, events: await readSessionDiagnostics(this.ctx.storage) });
+  }
+
+  async getRuntimeTelemetry(): Promise<EdgeRuntimeTelemetryV1> {
+    return this.connectorTelemetry.read();
   }
 
   async bootstrapLegacyOwnerState(input: unknown): Promise<string> {
@@ -161,11 +176,19 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     if (parsed.type === "connector-ready") {
+      const runtime = "runtime" in parsed ? parsed.runtime : undefined;
       webSocket.serializeAttachment({
         role: "connector",
         ready: true,
         protocolVersion: attachment.protocolVersion,
+        disconnectRecorded: false,
+        ...(runtime === undefined ? {} : { connectionGeneration: runtime.connectionGeneration }),
       } satisfies ConnectorAttachment);
+      this.updateConnectorTelemetry({
+        type: "ready",
+        at: new Date().toISOString(),
+        ...(runtime === undefined ? {} : { runtime }),
+      });
       if (attachment.protocolVersion === EDGE_PROTOCOL_VERSION) {
         this.v3CutoverComplete = true;
         this.ctx.waitUntil(this.ctx.storage.put("edge:v3-cutover-complete", true));
@@ -185,6 +208,14 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (attachment.protocolVersion === EDGE_PROTOCOL_VERSION) {
+      this.updateConnectorTelemetry({
+        type: "response",
+        at: new Date().toISOString(),
+        requestId: parsed.requestId,
+      });
+    }
+
     const headers = collectAllowedResponseHeaders(parsed.headers);
     if (!headers.has("content-type")) {
       headers.set("content-type", "application/json; charset=utf-8");
@@ -194,13 +225,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     pending.resolve(new Response(parsed.body, { status: parsed.status, headers }));
   }
 
-  override webSocketClose(_webSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {
+  override webSocketClose(webSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {
+    this.recordConnectorDisconnect(webSocket);
     if (this.getReadyConnector() === null) {
       this.failPendingRequests("connector_disconnected");
     }
   }
 
-  override webSocketError(_webSocket: WebSocket, _error: unknown): void {
+  override webSocketError(webSocket: WebSocket, _error: unknown): void {
+    this.recordConnectorDisconnect(webSocket);
     if (this.getReadyConnector() === null) {
       this.failPendingRequests("connector_error");
     }
@@ -269,7 +302,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.ctx.storage,
       {
         isReady: () => this.getReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
-        getGeneration: () => null,
+        getGeneration: () => this.getReadyConnectorGeneration(),
         execute: async (body, principal, request) => {
           if (!request) return agentUnavailableResponse(body);
           return this.relayAuthenticatedRequest(
@@ -309,6 +342,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       role: "connector",
       ready: false,
       protocolVersion,
+      disconnectRecorded: false,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
     server.send(JSON.stringify({ type: "edge-hello", protocolVersion }));
@@ -422,6 +456,11 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         ...(unavailableResponse === undefined ? {} : { unavailableResponse }),
       });
 
+      this.updateConnectorTelemetry({
+        type: "request",
+        at: new Date().toISOString(),
+        requestId,
+      });
       try {
         connector.send(JSON.stringify(envelope));
       } catch {
@@ -480,11 +519,54 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return null;
     }
 
+    if (
+      "connectionGeneration" in attachment &&
+      attachment.connectionGeneration !== undefined &&
+      (typeof attachment.connectionGeneration !== "number" ||
+        !Number.isSafeInteger(attachment.connectionGeneration) ||
+        attachment.connectionGeneration <= 0)
+    ) return null;
+    if (
+      "disconnectRecorded" in attachment &&
+      attachment.disconnectRecorded !== undefined &&
+      typeof attachment.disconnectRecorded !== "boolean"
+    ) return null;
+
     return {
       role: "connector",
       ready: attachment.ready,
       protocolVersion: attachment.protocolVersion,
+      ...("connectionGeneration" in attachment && attachment.connectionGeneration !== undefined
+        ? { connectionGeneration: attachment.connectionGeneration as number }
+        : {}),
+      ...("disconnectRecorded" in attachment && attachment.disconnectRecorded !== undefined
+        ? { disconnectRecorded: attachment.disconnectRecorded as boolean }
+        : {}),
     };
+  }
+
+  private getReadyConnectorGeneration(): number | null {
+    const connector = this.getReadyConnector(EDGE_PROTOCOL_VERSION);
+    if (!connector) return null;
+    return this.readConnectorAttachment(connector)?.connectionGeneration ?? null;
+  }
+
+  private updateConnectorTelemetry(event: ConnectorTelemetryEvent): void {
+    this.ctx.waitUntil(this.connectorTelemetry.record(event).then(() => undefined));
+  }
+
+  private recordConnectorDisconnect(webSocket: WebSocket): void {
+    const attachment = this.readConnectorAttachment(webSocket);
+    if (!attachment || attachment.disconnectRecorded === true) return;
+    webSocket.serializeAttachment({
+      ...attachment,
+      ready: false,
+      disconnectRecorded: true,
+    } satisfies ConnectorAttachment);
+    this.updateConnectorTelemetry({
+      type: "disconnected",
+      at: new Date().toISOString(),
+    });
   }
 
   private failPendingRequests(reason: string): void {

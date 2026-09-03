@@ -6,12 +6,12 @@
   "main": "./dist/server.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
-    "test:unit": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-unit",
-    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-integration",
-    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-e2e",
-    "test:watch": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
-    "test:coverage": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --coverage"
+    "test": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --runInBand",
+    "test:unit": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-unit",
+    "test:integration": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-integration",
+    "test:e2e": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --selectProjects browser-worker-e2e",
+    "test:watch": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --watch",
+    "test:coverage": "node --experimental-strip-types --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.ts --coverage"
   },
   "dependencies": {
     "@vs-code-gpt/shared": "0.1.0",

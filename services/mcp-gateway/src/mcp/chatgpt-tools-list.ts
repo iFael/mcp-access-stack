@@ -48,25 +48,28 @@ export function installChatGptToolsListCompatibility(
   const internals = server as unknown as {
     _registeredTools: Record<string, RegisteredTool>;
   };
+  const buildPublishedTools = (): PublishedTool[] => Object.entries(internals._registeredTools)
+    .filter(([, tool]) => tool.enabled)
+    .map(([name, tool]): PublishedTool => {
+      const definition: PublishedTool = {
+        name,
+        title: tool.title,
+        description: tool.description,
+        inputSchema: toInputJsonSchema(tool.inputSchema),
+        annotations: tool.annotations,
+        execution: tool.execution,
+        securitySchemes,
+        _meta: tool._meta,
+      };
+      if (tool.outputSchema) {
+        definition.outputSchema = toOutputJsonSchema(tool.outputSchema);
+      }
+      return definition;
+    });
+  const expectedDescriptorRevision = createMcpToolDescriptorRevision(buildPublishedTools());
+
   server.server.setRequestHandler(ListToolsRequestSchema, () => {
-    const tools = Object.entries(internals._registeredTools)
-      .filter(([, tool]) => tool.enabled)
-      .map(([name, tool]): PublishedTool => {
-        const definition: PublishedTool = {
-          name,
-          title: tool.title,
-          description: tool.description,
-          inputSchema: toInputJsonSchema(tool.inputSchema),
-          annotations: tool.annotations,
-          execution: tool.execution,
-          securitySchemes,
-          _meta: tool._meta,
-        };
-        if (tool.outputSchema) {
-          definition.outputSchema = toOutputJsonSchema(tool.outputSchema);
-        }
-        return definition;
-      });
+    const tools = buildPublishedTools();
 
     const actualCatalog = createMcpToolCatalogMetadata(
       tools.map((tool) => tool.name),
@@ -90,6 +93,11 @@ export function installChatGptToolsListCompatibility(
     ) {
       throw new Error(
         "MCP tool descriptors changed without updating the catalog contract revision.",
+      );
+    }
+    if (descriptorRevision !== expectedDescriptorRevision) {
+      throw new Error(
+        "MCP tool descriptors diverged from the server construction identity.",
       );
     }
 

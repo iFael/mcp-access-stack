@@ -50,6 +50,7 @@ describe("MCP connector catalog synchronization", () => {
         client.connect(clientTransport),
       ]);
       const listed = await client.listTools();
+      const listedAgain = await client.listTools();
       const serverVersion = client.getServerVersion();
       const capabilities = client.getServerCapabilities();
       const catalogMeta = listed._meta?.[MCP_TOOL_CATALOG_META_KEY] as
@@ -88,6 +89,10 @@ describe("MCP connector catalog synchronization", () => {
       });
       expect(createMcpToolDescriptorRevision(listed.tools)).toBe(
         MCP_TOOL_CATALOG_CONTRACT_REVISION,
+      );
+      expect(listedAgain.tools).toEqual(listed.tools);
+      expect(listedAgain._meta?.[MCP_TOOL_CATALOG_META_KEY]).toEqual(
+        listed._meta?.[MCP_TOOL_CATALOG_META_KEY],
       );
     } finally {
       await client.close().catch(() => undefined);
@@ -168,8 +173,79 @@ describe("MCP connector catalog synchronization", () => {
       await server.close().catch(() => undefined);
     }
   });
+  it("fails closed when a reduced-catalog descriptor changes after server construction", async () => {
+    const server = createMcpServer({
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+    });
+    const internals = server as unknown as {
+      _registeredTools: Record<string, { description?: string }>;
+    };
+    const listWorkspaces = internals._registeredTools.list_workspaces;
+    if (!listWorkspaces) throw new Error("Expected list_workspaces registration.");
+    listWorkspaces.description = `${listWorkspaces.description ?? ""} drift`;
+    const client = createClient("reduced-catalog-descriptor-drift-test");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    try {
+      await Promise.all([
+        server.connect(serverTransport),
+        client.connect(clientTransport),
+      ]);
+      await expect(client.listTools()).rejects.toThrow(
+        /descriptors diverged from the server construction identity/u,
+      );
+    } finally {
+      await client.close().catch(() => undefined);
+      await server.close().catch(() => undefined);
+    }
+  });
 });
 
+describe("MCP server instance catalog continuity", () => {
+  it("preserves exact catalog identity across disconnect and reconnect", async () => {
+    const server = createFullServer();
+    const firstClient = createClient("catalog-reconnect-first");
+    const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
+
+    await Promise.all([
+      server.connect(firstServerTransport),
+      firstClient.connect(firstClientTransport),
+    ]);
+    const firstList = await firstClient.listTools();
+    const firstServerVersion = firstClient.getServerVersion();
+    const firstCapabilities = firstClient.getServerCapabilities();
+    await firstClient.close();
+
+    const secondClient = createClient("catalog-reconnect-second");
+    const [secondClientTransport, secondServerTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([
+        server.connect(secondServerTransport),
+        secondClient.connect(secondClientTransport),
+      ]);
+      const secondList = await secondClient.listTools();
+      const secondServerVersion = secondClient.getServerVersion();
+      const secondCapabilities = secondClient.getServerCapabilities();
+      const names = secondList.tools.map((tool) => tool.name);
+
+      expect(secondList.tools).toEqual(firstList.tools);
+      expect(secondList._meta?.[MCP_TOOL_CATALOG_META_KEY]).toEqual(
+        firstList._meta?.[MCP_TOOL_CATALOG_META_KEY],
+      );
+      expect(secondServerVersion).toEqual(firstServerVersion);
+      expect(secondCapabilities).toEqual(firstCapabilities);
+      expect(names).toHaveLength(61);
+      expect(new Set(names).size).toBe(61);
+      expect(createMcpToolDescriptorRevision(secondList.tools)).toBe(
+        MCP_TOOL_CATALOG_CONTRACT_REVISION,
+      );
+    } finally {
+      await secondClient.close().catch(() => undefined);
+      await server.close().catch(() => undefined);
+    }
+  });
+});
 function createFullServer() {
   return createMcpServer({
       workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),

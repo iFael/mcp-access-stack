@@ -17,9 +17,23 @@ export type EdgeHelloMessage = {
   protocolVersion: typeof EDGE_PROTOCOL_VERSION;
 };
 
+export type ConnectorRuntimeIdentity = {
+  version: 1;
+  connectorInstanceId: string;
+  connectionGeneration: number;
+  processStartedAt: string;
+  catalogContractRevision: string;
+  toolSetRevision: string;
+  toolCount: number;
+  serverVersion: string;
+  nodePid: number;
+  hostPid: number;
+};
+
 export type ConnectorReadyMessage = {
   type: "connector-ready";
   protocolVersion: typeof EDGE_PROTOCOL_VERSION;
+  runtime?: ConnectorRuntimeIdentity;
 };
 
 export type EdgeHttpRequestMessage = {
@@ -127,7 +141,12 @@ export function parseConnectorToEdgeMessage(value: string): ConnectorToEdgeMessa
   if (!parsed || parsed.protocolVersion !== EDGE_PROTOCOL_VERSION || typeof parsed.type !== "string") return null;
 
   if (parsed.type === "connector-ready") {
-    return { type: "connector-ready", protocolVersion: EDGE_PROTOCOL_VERSION };
+    if (parsed.runtime === undefined) {
+      return { type: "connector-ready", protocolVersion: EDGE_PROTOCOL_VERSION };
+    }
+    const runtime = parseConnectorRuntimeIdentity(parsed.runtime);
+    if (!runtime) return null;
+    return { type: "connector-ready", protocolVersion: EDGE_PROTOCOL_VERSION, runtime };
   }
   if (parsed.type !== "http-response") return null;
   if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;
@@ -166,6 +185,62 @@ function isCancelReason(value: unknown): value is EdgeHttpCancelMessage["reason"
   return value === "timeout" || value === "client_disconnected" || value === "connector_replaced";
 }
 
+function parseConnectorRuntimeIdentity(value: unknown): ConnectorRuntimeIdentity | null {
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value).sort();
+  const allowedKeys = [
+    "catalogContractRevision",
+    "connectionGeneration",
+    "connectorInstanceId",
+    "hostPid",
+    "nodePid",
+    "processStartedAt",
+    "serverVersion",
+    "toolCount",
+    "toolSetRevision",
+    "version",
+  ];
+  if (keys.length !== allowedKeys.length || keys.some((key, index) => key !== allowedKeys[index])) return null;
+  if (value.version !== 1) return null;
+  if (typeof value.connectorInstanceId !== "string" || !isUuid(value.connectorInstanceId)) return null;
+  if (!isPositiveSafeInteger(value.connectionGeneration)) return null;
+  if (typeof value.processStartedAt !== "string" || !isIsoTimestamp(value.processStartedAt)) return null;
+  if (typeof value.catalogContractRevision !== "string" || !isSha256Hex(value.catalogContractRevision)) return null;
+  if (typeof value.toolSetRevision !== "string" || !isSha256Hex(value.toolSetRevision)) return null;
+  if (!isPositiveSafeInteger(value.toolCount)) return null;
+  if (typeof value.serverVersion !== "string" || value.serverVersion.length === 0 || value.serverVersion.length > 256) return null;
+  if (!isPositiveSafeInteger(value.nodePid) || !isPositiveSafeInteger(value.hostPid)) return null;
+  return {
+    version: 1,
+    connectorInstanceId: value.connectorInstanceId,
+    connectionGeneration: value.connectionGeneration,
+    processStartedAt: value.processStartedAt,
+    catalogContractRevision: value.catalogContractRevision,
+    toolSetRevision: value.toolSetRevision,
+    toolCount: value.toolCount,
+    serverVersion: value.serverVersion,
+    nodePid: value.nodePid,
+    hostPid: value.hostPid,
+  };
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isSha256Hex(value: string): boolean {
+  return /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function isIsoTimestamp(value: string): boolean {
+  if (value.length === 0 || value.length > 64) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
 function parseRecord(value: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(value);

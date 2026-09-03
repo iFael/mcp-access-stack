@@ -66,7 +66,7 @@ try {
     } catch {
       throw new Error("Generated Edge MCP manifest is missing; run generator without --check");
     }
-    if (committed !== moduleSource) {
+    if (committed.replace(/\r\n/gu, "\n") !== moduleSource) {
       throw new Error("Generated Edge MCP manifest drift detected; regenerate from createMcpServer");
     }
   } else {

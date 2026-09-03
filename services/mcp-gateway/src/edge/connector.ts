@@ -5,6 +5,7 @@ import {
   isAllowedEdgeRequest,
   parseEdgeToConnectorMessage,
   utf8ByteLength,
+  type ConnectorRuntimeIdentity,
   type EdgeHttpResponseMessage,
 } from "@mcp-access-stack/edge-protocol";
 import { AppError } from "@vs-code-gpt/shared";
@@ -47,6 +48,7 @@ export interface EdgeConnectorOptions {
   token: string;
   internalAssertion: string;
   localBaseUrl: string | URL;
+  runtimeIdentity?: Omit<ConnectorRuntimeIdentity, "connectionGeneration">;
   maxPayloadBytes?: number;
   maxConcurrentRequests?: number;
   heartbeatIntervalMs?: number;
@@ -87,6 +89,12 @@ export interface EdgeConnectorLog {
   connectionFailures?: number;
   consecutiveFailures?: number;
   offlineDurationMs?: number;
+  connectorInstanceId?: string;
+  processStartedAt?: string;
+  catalogContractRevision?: string;
+  toolSetRevision?: string;
+  toolCount?: number;
+  serverVersion?: string;
   error?: EdgeConnectorErrorDiagnostic;
 }
 
@@ -376,9 +384,13 @@ export class EdgeConnector {
       const offlineDurationMs = this.currentOfflineDurationMs(connectionState.readyAtMs);
       this.offlineSinceMs = null;
       this.consecutiveFailures = 0;
+      const runtime = this.options.runtimeIdentity === undefined
+        ? undefined
+        : { ...this.options.runtimeIdentity, connectionGeneration: generation };
       socket.send(JSON.stringify({
         type: "connector-ready",
         protocolVersion: EDGE_PROTOCOL_VERSION,
+        ...(runtime === undefined ? {} : { runtime }),
       }));
       this.log({
         event: "edge_connector_ready",
@@ -533,7 +545,18 @@ export class EdgeConnector {
   }
 
   private log(entry: EdgeConnectorLog): void {
-    this.options.log?.(entry);
+    const runtime = this.options.runtimeIdentity;
+    this.options.log?.({
+      ...(runtime === undefined ? {} : {
+        connectorInstanceId: runtime.connectorInstanceId,
+        processStartedAt: runtime.processStartedAt,
+        catalogContractRevision: runtime.catalogContractRevision,
+        toolSetRevision: runtime.toolSetRevision,
+        toolCount: runtime.toolCount,
+        serverVersion: runtime.serverVersion,
+      }),
+      ...entry,
+    });
   }
 }
 

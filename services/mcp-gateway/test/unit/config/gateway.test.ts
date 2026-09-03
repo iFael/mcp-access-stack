@@ -4,6 +4,7 @@ import { loadGatewayConfig } from "../../../src/config.js";
 const requiredEnv = {
   PORT: "3000",
   PUBLIC_BASE_URL: "https://mcp.example.com",
+  AUTH_MODE: "oauth",
   OAUTH_ISSUER: "https://issuer.example/",
   OAUTH_AUDIENCE: "https://mcp.example.com",
   OAUTH_JWKS_URL: "https://issuer.example/.well-known/jwks.json",
