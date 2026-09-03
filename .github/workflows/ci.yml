@@ -11,8 +11,58 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shared: ${{ steps.impact.outputs.shared }}
+      edgeProtocol: ${{ steps.impact.outputs.edgeProtocol }}
+      workspaceAgent: ${{ steps.impact.outputs.workspaceAgent }}
+      mcpGateway: ${{ steps.impact.outputs.mcpGateway }}
+      edgeGateway: ${{ steps.impact.outputs.edgeGateway }}
+      browserWorker: ${{ steps.impact.outputs.browserWorker }}
+      windowsRuntime: ${{ steps.impact.outputs.windowsRuntime }}
+      dockerGateway: ${{ steps.impact.outputs.dockerGateway }}
+      dockerBrowser: ${{ steps.impact.outputs.dockerBrowser }}
+      dockerProxy: ${{ steps.impact.outputs.dockerProxy }}
+      operationsTooling: ${{ steps.impact.outputs.operationsTooling }}
+      rootBroad: ${{ steps.impact.outputs.rootBroad }}
+      docsOnly: ${{ steps.impact.outputs.docsOnly }}
+      resolverFailed: ${{ steps.impact.outputs.resolverFailed }}
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: Resolve changed scope
+        id: impact
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: node mcp-access-stack/tooling/ci/resolve-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Report fail-closed resolver fallback
+        if: steps.impact.outputs.resolverFailed == 'true'
+        shell: bash
+        run: echo "Impact resolution failed; CI expanded to broad coverage."
+
   check:
+    needs: impact
+    if: ${{ always() }}
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
@@ -20,9 +70,10 @@ jobs:
         working-directory: mcp-access-stack
         shell: pwsh
     steps:
-      - name: Checkout repository
+      - name: Checkout exact source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Node.js
@@ -32,22 +83,109 @@ jobs:
           cache: npm
           cache-dependency-path: mcp-access-stack/package-lock.json
 
+      - name: Validate impact resolver
+        run: node tooling/ci/resolve-impact.test.mjs
+
+      - name: Validate repository structure
+        run: node tooling/structure/validate-repository-structure.test.mjs
+
       - name: Install dependencies
+        if: github.event_name == 'push' || needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true'
         run: npm ci
 
       - name: Install Playwright Chromium
+        if: github.event_name == 'push' || needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'
         run: npx playwright install --only-shell chromium
 
-      - name: Validate stack
-        run: npm run check
+      - name: Validate cheap syntax contracts
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        run: npm run check:syntax
+
+      - name: Validate public MCP contracts
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        run: npm run ci:contracts
+
+      - name: Build shared test dependency
+        if: >-
+          github.event_name == 'pull_request' &&
+          ((needs.impact.result != 'success' || needs.impact.outputs.shared == 'true') ||
+           (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true') ||
+           (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true') ||
+           (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'))
+        run: npm run build --workspace @vs-code-gpt/shared
+
+      - name: Build Edge protocol test dependency
+        if: >-
+          github.event_name == 'pull_request' &&
+          ((needs.impact.result != 'success' || needs.impact.outputs.edgeProtocol == 'true') || (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true'))
+        run: npm run build --workspace @mcp-access-stack/edge-protocol
+
+      - name: Build Workspace Agent test dependency
+        if: >-
+          github.event_name == 'pull_request' &&
+          ((needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true') || (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true'))
+        run: npm run build --workspace @vs-code-gpt/local-agent
+
+      - name: Test MCP core
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.shared == 'true')
+        run: npm run test:mcp-core
+
+      - name: Test Workspace Agent
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+        run: npm run test:workspace-agent
+
+      - name: Test MCP Gateway
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true')
+        run: npm run test:mcp-gateway
+
+      - name: Test Browser Worker
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+        run: npm run test:browser-worker
+
+      - name: Typecheck affected graph
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        run: npm run typecheck
+
+      - name: Build MCP Gateway
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true')
+        run: npm run build --workspace @vs-code-gpt/remote-mcp-gateway
+
+      - name: Build Browser Worker
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+        run: npm run build --workspace @vs-code-gpt/browser-worker
+
+      - name: Check Edge Gateway
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.edgeGateway == 'true')
+        run: npm run check:edge
+
+      - name: Validate operations and policy scripts
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.operationsTooling == 'true')
+        run: npm run check:operations
+
+      - name: Validate Windows and release runtime assurance
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
+        run: npm run check:runtime-assurance
+
+      - name: Main integration gate
+        if: github.event_name == 'push'
+        run: npm run ci:main
+
   release-images:
     name: release-images
+    needs: impact
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' ||
+       needs.impact.outputs.dockerGateway == 'true' ||
+       needs.impact.outputs.dockerBrowser == 'true' ||
+       needs.impact.outputs.dockerProxy == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
+      - name: Checkout exact source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Docker Buildx
