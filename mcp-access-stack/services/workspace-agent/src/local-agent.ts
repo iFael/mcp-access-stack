@@ -863,10 +863,15 @@ export class LocalAgent {
         metadata.sourceControlCapability = "git.remote.push";
         metadata.targetResource = targetResource;
         metadata.expectedSha = parsed.expectedLocalSha;
+        const confirmableOperation = sourceControlConfirmationOperation(
+          workspace,
+          "git_push_branch",
+          parsed.branch,
+        );
         return this.executeSourceControlMutation({
           workspace,
           operation: "git_push_branch",
-          confirmableOperation: "git_push_branch",
+          ...(confirmableOperation === undefined ? {} : { confirmableOperation }),
           capability: "git.remote.push",
           targetResource,
           input: parsed,
@@ -992,10 +997,15 @@ export class LocalAgent {
           true,
           activeContext.signal,
         );
+        const confirmableOperation = sourceControlConfirmationOperation(
+          workspace,
+          "github_create_pull_request",
+          parsed.head,
+        );
         return this.executeSourceControlMutation({
           workspace,
           operation: "github_create_pull_request",
-          confirmableOperation: "github_create_pull_request",
+          ...(confirmableOperation === undefined ? {} : { confirmableOperation }),
           capability: "github.pull_request.create",
           repository,
           canonicalRepositoryAlreadyAuthorized: true,
@@ -1524,6 +1534,30 @@ function deriveSourceControlIdempotencyKey(
     );
   }
   return value;
+}
+
+type ConfirmableSourceControlOperation =
+  | "git_push_branch"
+  | "github_create_repository"
+  | "github_create_pull_request"
+  | "github_merge_pull_request";
+
+function sourceControlConfirmationOperation(
+  workspace: ResolvedWorkspace,
+  operation: ConfirmableSourceControlOperation,
+  sourceBranch?: string,
+): ConfirmableSourceControlOperation | undefined {
+  const trusted =
+    workspace.confirmationMode === "trusted-workspace" &&
+    workspace.permissionProfile === "full-repo-write";
+  const trustedFeatureFlow =
+    operation === "git_push_branch" || operation === "github_create_pull_request";
+  const sourceIsProtectedMain = sourceBranch?.toLocaleLowerCase("en-US") === "main";
+
+  if (trusted && trustedFeatureFlow && sourceBranch && !sourceIsProtectedMain) {
+    return undefined;
+  }
+  return operation;
 }
 
 function readConfirmationId(input: unknown): string | undefined {
