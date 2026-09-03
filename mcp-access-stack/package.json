@@ -82,7 +82,9 @@
     "test:node": "node --test operations/runtime/gpt-mcp-proxy.test.mjs operations/runtime/gpt-only-production-initializer.test.mjs operations/browser/report-browser-reliability.test.mjs tooling/benchmarks/browser/benchmark-browser-fast-path.test.mjs tooling/benchmarks/browser/benchmark-browser-auth-cold-path.test.mjs tooling/benchmarks/browser/browser-benchmark-runtime.test.mjs tooling/benchmarks/browser/flow-benchmark-core.test.mjs tooling/benchmarks/browser/flow-benchmark-fixture.test.mjs tooling/benchmarks/browser/flow-benchmark-local.test.mjs tooling/benchmarks/mcp/run.test.mjs tooling/qualification/browser/semantic-allowlist-retry.test.mjs tooling/structure/validate-repository-structure.test.mjs deploy/docker/scripts/Run-DockerHostComponent.test.mjs",
     "build:remaining": "tsc -p packages/edge-protocol/tsconfig.json && tsc -p services/browser-worker/tsconfig.json && tsc -p services/mcp-gateway/tsconfig.json",
     "ci:contracts": "node --experimental-strip-types --experimental-vm-modules node_modules/jest/bin/jest.js --config packages/mcp-core/jest.config.ts --runInBand --runTestsByPath packages/mcp-core/test/mcp-tool-catalog.test.ts packages/mcp-core/test/source-control-public-boundary.test.ts",
-    "ci:main": "npm run check:structure && npm run check:syntax && npm run check:operations && npm run test && npm run typecheck && npm run build:remaining && npm run check:edge"
+    "ci:main": "npm run check:structure && npm run check:syntax && npm run check:operations && npm run test:node && tsc -p packages/mcp-core/tsconfig.json && tsc -p services/workspace-agent/tsconfig.json && npm run test:typescript:nonbrowser && npm run typecheck && npm run build --workspace @vs-code-gpt/remote-mcp-gateway && npm run check:edge",
+    "test:typescript:nonbrowser": "npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent",
+    "ci:main:browser": "npm run test:browser-worker && npm run build --workspace @vs-code-gpt/browser-worker"
   },
   "engines": {
     "node": ">=24"
