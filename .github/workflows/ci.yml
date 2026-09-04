@@ -210,6 +210,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Playwright Chromium for node shard
+        if: matrix.target == 'node'
+        run: npx playwright install chromium
+
       - name: Run main integration shard
         run: npm run ci:main:${{ matrix.target }}
 
