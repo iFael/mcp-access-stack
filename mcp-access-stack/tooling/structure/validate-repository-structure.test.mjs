@@ -77,3 +77,37 @@ test("isolates TypeScript test workspaces and serializes Browser Worker", async 
     /node_modules\/jest\/bin\/jest\.js/u,
   );
 });
+
+test("keeps authoritative development and build surfaces on Node 26", async () => {
+  const rootPackage = JSON.parse(
+    await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(rootPackage.engines.node, ">=26");
+  assert.match(rootPackage.devDependencies["@types/node"], /^\^26\./u);
+
+  for (const workflowPath of [
+    "../../../.github/workflows/ci.yml",
+    "../../../.github/workflows/release.yml",
+  ]) {
+    const workflow = await readFile(new URL(workflowPath, import.meta.url), "utf8");
+    const majors = [...workflow.matchAll(/node-version:\s*["']?(\d+)/gu)].map((match) => match[1]);
+    assert.ok(majors.length > 0, `${workflowPath} must configure Node.js`);
+    assert.deepEqual([...new Set(majors)], ["26"]);
+  }
+
+  const expectedDockerBase =
+    "26.8.1-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e";
+  for (const dockerfilePath of [
+    "../../deploy/docker/gateway.Dockerfile",
+    "../../deploy/docker/proxy.Dockerfile",
+    "../../deploy/remote/browser-worker.Dockerfile",
+  ]) {
+    const dockerfile = await readFile(new URL(dockerfilePath, import.meta.url), "utf8");
+    const bases = [...dockerfile.matchAll(/^FROM node:(\S+)/gmu)].map((match) => match[1]);
+    assert.ok(bases.length > 0, `${dockerfilePath} must use an official Node.js base image`);
+    assert.deepEqual([...new Set(bases)], [expectedDockerBase]);
+  }
+
+  const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8");
+  assert.match(readme, /Node\.js 26 ou superior/u);
+});

@@ -27,7 +27,7 @@ Não há Cursor, Codex, colaboração ou supervisor local na arquitetura ativa.
 ## Pré-requisitos
 
 - Windows 10 ou 11 x64;
-- Node.js 24 ou superior;
+- Node.js 26 ou superior;
 - npm compatível com o lockfile;
 - PowerShell 7;
 - Git;
