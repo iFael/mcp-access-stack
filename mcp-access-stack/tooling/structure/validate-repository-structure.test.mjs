@@ -111,3 +111,25 @@ test("keeps authoritative development and build surfaces on Node 26", async () =
   const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8");
   assert.match(readme, /Node\.js 26 ou superior/u);
 });
+
+test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const expected = `      - name: Typecheck affected graph
+        if: >-
+          github.event_name == 'pull_request' &&
+          (needs.impact.result != 'success' ||
+           needs.impact.outputs.shared == 'true' ||
+           needs.impact.outputs.edgeProtocol == 'true' ||
+           needs.impact.outputs.workspaceAgent == 'true' ||
+           needs.impact.outputs.mcpGateway == 'true' ||
+           needs.impact.outputs.browserWorker == 'true' ||
+           needs.impact.outputs.rootBroad == 'true')
+        run: npm run typecheck`;
+  assert.ok(
+    workflow.replaceAll("\r\n", "\n").includes(expected),
+    "global typecheck must skip edge-gateway-only changes so Check Edge Gateway owns that scope",
+  );
+});
