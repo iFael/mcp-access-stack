@@ -162,9 +162,54 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.operationsTooling == 'true')
         run: npm run check:operations
 
-      - name: Validate Windows and release runtime assurance
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
-        run: npm run check:runtime-assurance
+      - name: Diagnose runtime assurance - Release snapshot
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-ReleaseSnapshot.ps1
+
+      - name: Diagnose runtime assurance - Release state
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-ReleaseState.ps1
+
+      - name: Diagnose runtime assurance - Native host launcher
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-NativeHostLauncher.ps1
+
+      - name: Diagnose runtime assurance - Node runtime manager
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-NodeRuntimeManager.ps1
+
+      - name: Diagnose runtime assurance - Native host launcher recovery
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-NativeHostLauncherRecovery.ps1
+
+      - name: Diagnose runtime assurance - Host runner lease resilience
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-HostRunnerLeaseResilience.ps1
+
+      - name: Diagnose runtime assurance - Windows distribution
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-WindowsDistribution.ps1
+
+      - name: Diagnose runtime assurance - Release launcher
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-ReleaseLauncher.ps1
+
+      - name: Diagnose runtime assurance - Production promotion
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/docker/scripts/Test-ProductionPromotion.ps1
+
+      - name: Diagnose runtime assurance - Browser Worker persistence
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpBrowserWorkerPersistence.ps1
+
+      - name: Diagnose runtime assurance - Edge Connector persistence
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpEdgeConnectorPersistence.ps1
+
+      - name: Diagnose runtime assurance - Materialization incident evidence
+        if: ${{ always() && github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true') }}
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpMaterializationIncidentEvidence.ps1
+
 
       - name: Main integration gate
         if: github.event_name == 'push'
