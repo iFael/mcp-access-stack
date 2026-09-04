@@ -133,3 +133,33 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
     "global typecheck must skip edge-gateway-only changes so Check Edge Gateway owns that scope",
   );
 });
+
+test("keeps main integration sharded instead of one monolithic timeout", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  assert.doesNotMatch(
+    normalized,
+    /^\s*run: npm run ci:main\s*$/mu,
+    "main push must not serialize the full integration graph behind one timeout",
+  );
+  const expectedMatrix = `    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - core
+          - workspace-agent
+          - gateway
+          - edge`;
+  assert.ok(
+    normalized.includes(expectedMatrix),
+    "main integration must keep independent core, workspace-agent, gateway and edge shards",
+  );
+  assert.match(
+    normalized,
+    /run: npm run ci:main:\$\{\{ matrix\.target \}\}/u,
+    "each main integration shard must execute its dedicated package script",
+  );
+});

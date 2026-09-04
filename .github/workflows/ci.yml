@@ -90,11 +90,11 @@ jobs:
         run: node tooling/structure/validate-repository-structure.test.mjs
 
       - name: Install dependencies
-        if: github.event_name == 'push' || needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true'
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
         run: npm ci
 
       - name: Install Playwright Chromium
-        if: needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
         run: npx playwright install --only-shell chromium
 
       - name: Validate cheap syntax contracts
@@ -174,12 +174,78 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
         run: npm run check:runtime-assurance
 
-      - name: Main integration gate
-        if: github.event_name == 'push'
-        run: npm run ci:main
+  main-integration:
+    name: main-${{ matrix.target }}
+    needs: impact
+    if: ${{ always() && github.event_name == 'push' }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - core
+          - workspace-agent
+          - gateway
+          - edge
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Main browser integration
-        if: github.event_name == 'push' && (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run main integration shard
+        run: npm run ci:main:${{ matrix.target }}
+
+  main-browser:
+    name: main-browser
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --only-shell chromium
+
+      - name: Run main browser integration
         run: npm run ci:main:browser
 
   release-images:
