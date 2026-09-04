@@ -152,7 +152,28 @@ while (!existsSync(process.env.MCP_TEST_STOP_PATH)) {
         }
     }
 
-    Start-Sleep -Milliseconds 2200
+    $failureDeadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+    $transientFailureObserved = $false
+    while (-not $transientFailureObserved) {
+        if ($runnerProcess.HasExited) {
+            $stderr = $runnerProcess.StandardError.ReadToEnd()
+            throw "Host runner exited before a heartbeat encountered the transient lease lock. stderr=$stderr"
+        }
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            $lockedLog = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+            $transientFailureObserved = (
+                $lockedLog -match 'host_runner_lease_write_failed' -and
+                $lockedLog -match '"source":"heartbeat"'
+            )
+        }
+        if (-not $transientFailureObserved) {
+            if ([DateTimeOffset]::UtcNow -ge $failureDeadline) {
+                throw 'Timed out waiting for a heartbeat to encounter the transient runner lease lock.'
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
     $leaseLock.Dispose()
     $leaseLock = $null
 
