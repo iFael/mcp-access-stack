@@ -143,7 +143,15 @@ jobs:
         run: npm run test:browser-worker
 
       - name: Typecheck affected graph
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        if: >-
+          github.event_name == 'pull_request' &&
+          (needs.impact.result != 'success' ||
+           needs.impact.outputs.shared == 'true' ||
+           needs.impact.outputs.edgeProtocol == 'true' ||
+           needs.impact.outputs.workspaceAgent == 'true' ||
+           needs.impact.outputs.mcpGateway == 'true' ||
+           needs.impact.outputs.browserWorker == 'true' ||
+           needs.impact.outputs.rootBroad == 'true')
         run: npm run typecheck
 
       - name: Build MCP Gateway

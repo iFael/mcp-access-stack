@@ -13,6 +13,12 @@
     "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS": "2592000",
     "MCP_OWNER_RESOURCE_NAME": "MCP Access Stack"
   },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
   "durable_objects": {
     "bindings": [
       {
