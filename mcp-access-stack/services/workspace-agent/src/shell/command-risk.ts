@@ -156,17 +156,18 @@ const RISK_PATTERNS: RiskPattern[] = [
 ];
 
 const FILE_REDIRECTION_PATTERN = /(?:^|\s)(?:\d?>{1,2})\s*(?!&\d)(?=\S)/i;
-const POWERSHELL_NULL_REDIRECTION_PATTERN = /(?:^|\s)\d?>{1,2}\s*\$null(?=\s|$)/giu;
+const POWERSHELL_NULL_REDIRECTION_PATTERN = /(?:^|\s)\d?>{1,2}\s*\$null(?=\s|$|[;&|])/giu;
 const GIT_PUSH_SEGMENT_PATTERN =
   /(?:^|(?:&&|\|\||[;|])\s*)(?:&\s*)?git(?:\.exe)?\b[^;&|\r\n]{0,1000}?\bpush\b[^;&|\r\n]*/i;
 const MAIN_REF_PATTERN = /(?:^|[\s:+])(?:refs\/heads\/)?main(?=$|[\s:])/i;
 
 export function classifyCommandRisk(shell: ShellName, command: string): CommandRisk {
   const normalized = normalizeForRisk(shell, command);
+  const lexicalRiskText = normalizeForRisk(shell, maskPowerShellInertQuotedLiterals(shell, command));
   const executionAwareReasons = classifySimplePowerShellRisk(shell, command);
   const reasons =
     executionAwareReasons ??
-    RISK_PATTERNS.filter((entry) => entry.pattern.test(normalized)).map(
+    RISK_PATTERNS.filter((entry) => entry.pattern.test(lexicalRiskText)).map(
       (entry) => entry.reason,
     );
 
@@ -174,7 +175,7 @@ export function classifyCommandRisk(shell: ShellName, command: string): CommandR
     reasons.push(DISK_BOOT_VOLUME_REASON);
   }
 
-  if (containsFileRedirection(shell, normalized)) {
+  if (containsFileRedirection(shell, lexicalRiskText)) {
     reasons.push("move, overwrite or direct file write operation");
   }
 
@@ -291,6 +292,71 @@ function classifySimplePowerShellRisk(
   }
 
   return reasons;
+}
+
+function maskPowerShellInertQuotedLiterals(shell: ShellName, value: string): string {
+  if (shell !== "powershell" && shell !== "pwsh") return value;
+
+  let masked = "";
+  for (let index = 0; index < value.length;) {
+    const character = value[index]!;
+
+    if (character === "'") {
+      const start = index;
+      index += 1;
+      let closed = false;
+      while (index < value.length) {
+        if (value[index] !== "'") {
+          index += 1;
+          continue;
+        }
+        if (value[index + 1] === "'") {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        closed = true;
+        break;
+      }
+      const literal = value.slice(start, index);
+      masked += closed ? " ".repeat(literal.length) : literal;
+      continue;
+    }
+
+    if (character === '"') {
+      const start = index;
+      index += 1;
+      let closed = false;
+      let inert = true;
+      while (index < value.length) {
+        const current = value[index]!;
+        if (current === "`") {
+          inert = false;
+          index = Math.min(index + 2, value.length);
+          continue;
+        }
+        if (current === "$") {
+          inert = false;
+          index += 1;
+          continue;
+        }
+        if (current === '"') {
+          index += 1;
+          closed = true;
+          break;
+        }
+        index += 1;
+      }
+      const literal = value.slice(start, index);
+      masked += closed && inert ? " ".repeat(literal.length) : literal;
+      continue;
+    }
+
+    masked += character;
+    index += 1;
+  }
+
+  return masked;
 }
 
 function containsFileRedirection(shell: ShellName, normalized: string): boolean {
