@@ -185,6 +185,7 @@ jobs:
       matrix:
         target:
           - core
+          - node
           - workspace-agent
           - gateway
           - edge

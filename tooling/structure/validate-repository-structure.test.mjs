@@ -150,12 +150,13 @@ test("keeps main integration sharded instead of one monolithic timeout", async (
       matrix:
         target:
           - core
+          - node
           - workspace-agent
           - gateway
           - edge`;
   assert.ok(
     normalized.includes(expectedMatrix),
-    "main integration must keep independent core, workspace-agent, gateway and edge shards",
+    "main integration must keep independent core, node, workspace-agent, gateway and edge shards",
   );
   assert.match(
     normalized,
