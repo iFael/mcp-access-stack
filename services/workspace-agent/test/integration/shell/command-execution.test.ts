@@ -54,6 +54,28 @@ describe("command risk classifier", () => {
     }
   });
 
+  test("ignores risk-like literals and stderr-to-null redirection in read-only compound PowerShell", () => {
+    for (const command of [
+      "Select-String -Path deploy/docker/gateway.Dockerfile -Pattern 'COPY'; Write-Output 'DONE'",
+      'Select-String -Path deploy/docker/gateway.Dockerfile -Pattern "COPY"; Write-Output "DONE"',
+      "Get-ChildItem missing -ErrorAction SilentlyContinue 2>$null; Write-Output 'OK'",
+    ]) {
+      expect(classifyCommandRisk("powershell", command)).toEqual({
+        destructive: false,
+        reasons: [],
+      });
+    }
+
+    expect(classifyCommandRisk("powershell", "Copy-Item source.txt destination.txt")).toMatchObject({
+      destructive: true,
+    });
+    expect(classifyCommandRisk("powershell", `Write-Output "'$(Copy-Item source.txt destination.txt)'"`)).toMatchObject({
+      destructive: true,
+    });
+    expect(classifyCommandRisk("powershell", "Get-Content source.txt > output.txt")).toMatchObject({
+      destructive: true,
+    });
+  });
   test("flags option-prefixed, aliased and indirect execution variants", () => {
     const riskyCommands = [
       ["powershell", "git -C repo reset --hard HEAD"],
