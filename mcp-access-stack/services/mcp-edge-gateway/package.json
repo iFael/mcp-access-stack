@@ -15,6 +15,6 @@
                         },
     "dependencies":  {
                          "@mcp-access-stack/edge-protocol":  "0.1.0",
-                         "jose":  "6.2.3"
+                         "jose":  "6.2.10"
                      }
 }
