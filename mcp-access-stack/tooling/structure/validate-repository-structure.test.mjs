@@ -164,3 +164,23 @@ test("keeps main integration sharded instead of one monolithic timeout", async (
     "each main integration shard must execute its dedicated package script",
   );
 });
+
+test("provisions Playwright Chromium for the main node shard", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  const mainIntegrationStart = normalized.indexOf("  main-integration:");
+  const mainBrowserStart = normalized.indexOf("\n  main-browser:", mainIntegrationStart);
+  assert.ok(
+    mainIntegrationStart >= 0 && mainBrowserStart > mainIntegrationStart,
+    "main integration job must be present before the browser job",
+  );
+  const mainIntegration = normalized.slice(mainIntegrationStart, mainBrowserStart);
+  assert.match(
+    mainIntegration,
+    /- name: Install Playwright Chromium for node shard\s+if: matrix\.target == 'node'\s+run: npx playwright install chromium/u,
+    "main-node runs Playwright-backed fixture tests and must provision Chromium",
+  );
+});
