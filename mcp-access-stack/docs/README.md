@@ -21,3 +21,5 @@ Comece por `architecture/ARCHITECTURE.md` e depois use o runbook correspondente 
 - Segurança: `security/SECURITY.md`.
 
 <!-- P1-B build-watch irrelevant probe 2026-09-08 -->
+
+<!-- P1-B build-watch irrelevant probe 2 2026-09-08 -->
