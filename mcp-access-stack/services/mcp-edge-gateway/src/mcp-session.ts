@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
+import { createAgentUnavailableMcpResponse, getMcpResponseDiagnostic } from "./control-plane/mcp-control-plane.js";
 import {
   ConnectorTelemetryStore,
   type ConnectorTelemetryEvent,
@@ -225,20 +226,19 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     pending.resolve(new Response(parsed.body, { status: parsed.status, headers }));
   }
 
-  override webSocketClose(webSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {
-    this.recordConnectorDisconnect(webSocket);
+  override webSocketClose(webSocket: WebSocket, code: number, _reason: string, wasClean: boolean): void {
+    this.recordConnectorDisconnect(webSocket, { source: "close", closeCode: code, wasClean });
     if (this.getReadyConnector() === null) {
       this.failPendingRequests("connector_disconnected");
     }
   }
 
   override webSocketError(webSocket: WebSocket, _error: unknown): void {
-    this.recordConnectorDisconnect(webSocket);
+    this.recordConnectorDisconnect(webSocket, { source: "error" });
     if (this.getReadyConnector() === null) {
       this.failPendingRequests("connector_error");
     }
   }
-
   private async handleAllowedRequest(request: Request): Promise<Response> {
     const legacyConnector = this.getReadyConnector(LEGACY_EDGE_PROTOCOL_VERSION);
     if (legacyConnector) return this.relayLegacyRequest(request, legacyConnector);
@@ -256,10 +256,13 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const diagnosticRequest = request.clone();
     const localResponse = await runtime.router.route(request);
     if (localResponse) {
-      await this.recordSessionDiagnostic(diagnosticRequest, localResponse.clone());
+      await this.recordSessionDiagnostic(
+        diagnosticRequest,
+        localResponse.clone(),
+        getMcpResponseDiagnostic(localResponse),
+      );
       return localResponse;
     }
-
     const url = new URL(request.url);
     if (url.pathname === "/mcp" && (request.method === "GET" || request.method === "DELETE")) {
       let principal: AuthenticatedEdgePrincipal;
@@ -285,9 +288,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private async recordSessionDiagnostic(
     request: Parameters<typeof classifySessionDiagnostic>[0],
     response: Parameters<typeof classifySessionDiagnostic>[1],
+    responseMetadata?: Parameters<typeof classifySessionDiagnostic>[3],
   ): Promise<void> {
     try {
-      const event = await classifySessionDiagnostic(request, response);
+      const event = await classifySessionDiagnostic(request, response, undefined, responseMetadata);
       if (!shouldPersistSessionDiagnostic(event)) return;
       await appendSessionDiagnostic(this.ctx.storage, event);
       console.log(JSON.stringify({ event: "mcp_session_diagnostic", ...event }));
@@ -295,7 +299,6 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       console.warn(JSON.stringify({ event: "mcp_session_diagnostic_failed" }));
     }
   }
-
   private getControlRuntime(): EdgeControlPlaneRuntime {
     this.controlRuntime ??= createEdgeControlPlaneRuntime(
       this.edgeEnv,
@@ -304,12 +307,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         isReady: () => this.getReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
         getGeneration: () => this.getReadyConnectorGeneration(),
         execute: async (body, principal, request) => {
-          if (!request) return agentUnavailableResponse(body);
+          if (!request) return createAgentUnavailableMcpResponse(body);
           return this.relayAuthenticatedRequest(
             request,
             JSON.stringify(body),
             principal,
-            () => agentUnavailableResponse(body),
+            () => createAgentUnavailableMcpResponse(body),
           );
         },
       },
@@ -555,9 +558,13 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     this.ctx.waitUntil(this.connectorTelemetry.record(event).then(() => undefined));
   }
 
-  private recordConnectorDisconnect(webSocket: WebSocket): void {
+  private recordConnectorDisconnect(
+    webSocket: WebSocket,
+    details: { source: "close" | "error"; closeCode?: number; wasClean?: boolean },
+  ): void {
     const attachment = this.readConnectorAttachment(webSocket);
     if (!attachment || attachment.disconnectRecorded === true) return;
+    const wasReady = attachment.ready;
     webSocket.serializeAttachment({
       ...attachment,
       ready: false,
@@ -566,9 +573,13 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     this.updateConnectorTelemetry({
       type: "disconnected",
       at: new Date().toISOString(),
+      ...(attachment.connectionGeneration === undefined ? {} : { connectionGeneration: attachment.connectionGeneration }),
+      wasReady,
+      source: details.source,
+      ...(details.closeCode === undefined ? {} : { closeCode: details.closeCode }),
+      ...(details.wasClean === undefined ? {} : { wasClean: details.wasClean }),
     });
   }
-
   private failPendingRequests(reason: string): void {
     for (const [requestId, pending] of this.pending) {
       clearTimeout(pending.timeout);
@@ -579,24 +590,6 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   }
 }
 
-function agentUnavailableResponse(body: unknown): Response {
-  const id = readJsonRpcId(body);
-  return jsonResponse({
-    jsonrpc: "2.0",
-    id,
-    error: {
-      code: -32001,
-      message: "Execution backend unavailable",
-      data: { code: "AGENT_UNAVAILABLE" },
-    },
-  });
-}
-
-function readJsonRpcId(body: unknown): string | number | null {
-  if (typeof body !== "object" || body === null || Array.isArray(body) || !("id" in body)) return null;
-  const id = (body as { id?: unknown }).id;
-  return typeof id === "string" || typeof id === "number" ? id : null;
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
