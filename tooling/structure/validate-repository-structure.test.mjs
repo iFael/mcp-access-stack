@@ -228,3 +228,43 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(check, /needs\.pr-workspace-agent\.result/u);
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
 });
+test("parallelizes independent ci release image builds behind the canonical result", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  const gatewayStart = normalized.indexOf("  release-image-gateway:");
+  const browserStart = normalized.indexOf("\n  release-image-browser:", gatewayStart);
+  const proxyStart = normalized.indexOf("\n  release-image-proxy:", browserStart);
+  const aggregateStart = normalized.indexOf("\n  release-images:", proxyStart);
+
+  assert.ok(
+    gatewayStart >= 0 && browserStart > gatewayStart && proxyStart > browserStart && aggregateStart > proxyStart,
+    "gateway, browser and proxy image builds must precede the canonical release-images aggregator",
+  );
+
+  const gateway = normalized.slice(gatewayStart, browserStart);
+  assert.match(gateway, /needs\.impact\.outputs\.dockerGateway/u);
+  assert.match(gateway, /deploy\/docker\/gateway\.Dockerfile/u);
+  assert.doesNotMatch(gateway, /browser-worker\.Dockerfile|proxy\.Dockerfile/u);
+
+  const browser = normalized.slice(browserStart, proxyStart);
+  assert.match(browser, /needs\.impact\.outputs\.dockerBrowser/u);
+  assert.match(browser, /deploy\/remote\/browser-worker\.Dockerfile/u);
+  assert.doesNotMatch(browser, /gateway\.Dockerfile|proxy\.Dockerfile/u);
+
+  const proxy = normalized.slice(proxyStart, aggregateStart);
+  assert.match(proxy, /needs\.impact\.outputs\.dockerProxy/u);
+  assert.match(proxy, /deploy\/docker\/proxy\.Dockerfile/u);
+  assert.doesNotMatch(proxy, /gateway\.Dockerfile|browser-worker\.Dockerfile/u);
+
+  const aggregate = normalized.slice(aggregateStart);
+  assert.match(aggregate, /- release-image-gateway/u);
+  assert.match(aggregate, /- release-image-browser/u);
+  assert.match(aggregate, /- release-image-proxy/u);
+  assert.match(aggregate, /needs\.release-image-gateway\.result/u);
+  assert.match(aggregate, /needs\.release-image-browser\.result/u);
+  assert.match(aggregate, /needs\.release-image-proxy\.result/u);
+  assert.doesNotMatch(aggregate, /docker\/build-push-action/u);
+});

@@ -350,17 +350,13 @@ jobs:
       - name: Run main browser integration
         run: npm run ci:main:browser
 
-  release-images:
-    name: release-images
+  release-image-gateway:
     needs: impact
     if: >-
       always() &&
-      (needs.impact.result != 'success' ||
-       needs.impact.outputs.dockerGateway == 'true' ||
-       needs.impact.outputs.dockerBrowser == 'true' ||
-       needs.impact.outputs.dockerProxy == 'true')
+      (needs.impact.result != 'success' || needs.impact.outputs.dockerGateway == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout exact source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -372,7 +368,6 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build gateway release image
-        if: needs.impact.result != 'success' || needs.impact.outputs.dockerGateway == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
@@ -382,8 +377,24 @@ jobs:
           cache-from: type=gha,scope=ci-gateway
           cache-to: type=gha,mode=max,scope=ci-gateway
 
+  release-image-browser:
+    needs: impact
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' || needs.impact.outputs.dockerBrowser == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Build browser worker release image
-        if: needs.impact.result != 'success' || needs.impact.outputs.dockerBrowser == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
@@ -393,8 +404,24 @@ jobs:
           cache-from: type=gha,scope=ci-browser-worker
           cache-to: type=gha,mode=max,scope=ci-browser-worker
 
+  release-image-proxy:
+    needs: impact
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' || needs.impact.outputs.dockerProxy == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Build proxy release image
-        if: needs.impact.result != 'success' || needs.impact.outputs.dockerProxy == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./mcp-access-stack
@@ -403,3 +430,48 @@ jobs:
           tags: mcp-access-stack-proxy:ci
           cache-from: type=gha,scope=ci-proxy
           cache-to: type=gha,mode=max,scope=ci-proxy
+
+  release-images:
+    needs:
+      - impact
+      - release-image-gateway
+      - release-image-browser
+      - release-image-proxy
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' ||
+       needs.impact.outputs.dockerGateway == 'true' ||
+       needs.impact.outputs.dockerBrowser == 'true' ||
+       needs.impact.outputs.dockerProxy == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful release image builds
+        shell: bash
+        env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          GATEWAY_IMPACT: ${{ needs.impact.outputs.dockerGateway }}
+          BROWSER_IMPACT: ${{ needs.impact.outputs.dockerBrowser }}
+          PROXY_IMPACT: ${{ needs.impact.outputs.dockerProxy }}
+          GATEWAY_RESULT: ${{ needs.release-image-gateway.result }}
+          BROWSER_RESULT: ${{ needs.release-image-browser.result }}
+          PROXY_RESULT: ${{ needs.release-image-proxy.result }}
+        run: |
+          set -euo pipefail
+          require_lane() {
+            local required="$1"
+            local result="$2"
+            local lane="$3"
+            if [[ "$IMPACT_RESULT" != "success" || "$required" == "true" ]]; then
+              if [[ "$result" != "success" ]]; then
+                echo "$lane image build was required but finished as $result" >&2
+                exit 1
+              fi
+            elif [[ "$result" != "skipped" ]]; then
+              echo "$lane image build was not required but finished as $result" >&2
+              exit 1
+            fi
+          }
+          require_lane "$GATEWAY_IMPACT" "$GATEWAY_RESULT" gateway
+          require_lane "$BROWSER_IMPACT" "$BROWSER_RESULT" browser
+          require_lane "$PROXY_IMPACT" "$PROXY_RESULT" proxy
