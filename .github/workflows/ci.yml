@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: echo "Impact resolution failed; CI expanded to broad coverage."
 
-  check:
+  pr-validation:
     needs: impact
     if: ${{ always() }}
     runs-on: windows-latest
@@ -130,10 +130,6 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.shared == 'true')
         run: npm run test:mcp-core
 
-      - name: Test Workspace Agent
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
-        run: npm run test:workspace-agent
-
       - name: Test MCP Gateway
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true')
         run: npm run test:mcp-gateway
@@ -170,10 +166,111 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.operationsTooling == 'true')
         run: npm run check:operations
 
+  pr-workspace-agent:
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared test dependency
+        run: npm run build --workspace @vs-code-gpt/shared
+
+      - name: Build Workspace Agent test dependency
+        run: npm run build --workspace @vs-code-gpt/local-agent
+
+      - name: Test Workspace Agent
+        run: npm run test:workspace-agent
+
+  pr-runtime-assurance:
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Validate Windows and release runtime assurance
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
         run: npm run check:runtime-assurance
 
+  check:
+    needs:
+      - impact
+      - pr-validation
+      - pr-workspace-agent
+      - pr-runtime-assurance
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful validation lanes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          WORKSPACE_AGENT_IMPACT: ${{ needs.impact.outputs.workspaceAgent }}
+          WINDOWS_RUNTIME_IMPACT: ${{ needs.impact.outputs.windowsRuntime }}
+          VALIDATION_RESULT: ${{ needs.pr-validation.result }}
+          WORKSPACE_AGENT_RESULT: ${{ needs.pr-workspace-agent.result }}
+          RUNTIME_ASSURANCE_RESULT: ${{ needs.pr-runtime-assurance.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATION_RESULT" = "success"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$IMPACT_RESULT" != "success" || "$WORKSPACE_AGENT_IMPACT" == "true" ]]; then
+              test "$WORKSPACE_AGENT_RESULT" = "success"
+            else
+              test "$WORKSPACE_AGENT_RESULT" = "skipped"
+            fi
+            if [[ "$IMPACT_RESULT" != "success" || "$WINDOWS_RUNTIME_IMPACT" == "true" ]]; then
+              test "$RUNTIME_ASSURANCE_RESULT" = "success"
+            else
+              test "$RUNTIME_ASSURANCE_RESULT" = "skipped"
+            fi
+          fi
   main-integration:
     name: main-${{ matrix.target }}
     needs: impact

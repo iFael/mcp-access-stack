@@ -184,3 +184,47 @@ test("provisions Playwright Chromium for the main node shard", async () => {
     "main-node runs Playwright-backed fixture tests and must provision Chromium",
   );
 });
+
+test("parallelizes expensive PR validation lanes behind the canonical check", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  const validationStart = normalized.indexOf("  pr-validation:");
+  const workspaceAgentStart = normalized.indexOf("\n  pr-workspace-agent:", validationStart);
+  const runtimeStart = normalized.indexOf("\n  pr-runtime-assurance:", workspaceAgentStart);
+  const checkStart = normalized.indexOf("\n  check:", runtimeStart);
+  const mainStart = normalized.indexOf("\n  main-integration:", checkStart);
+
+  assert.ok(
+    validationStart >= 0 &&
+      workspaceAgentStart > validationStart &&
+      runtimeStart > workspaceAgentStart &&
+      checkStart > runtimeStart &&
+      mainStart > checkStart,
+    "PR validation lanes must run before the canonical check aggregator and main integration",
+  );
+
+  const validation = normalized.slice(validationStart, workspaceAgentStart);
+  assert.doesNotMatch(validation, /- name: Test Workspace Agent/u);
+  assert.doesNotMatch(validation, /- name: Validate Windows and release runtime assurance/u);
+
+  const workspaceAgent = normalized.slice(workspaceAgentStart, runtimeStart);
+  assert.match(workspaceAgent, /needs: impact/u);
+  assert.match(workspaceAgent, /- name: Test Workspace Agent/u);
+  assert.match(workspaceAgent, /run: npm run test:workspace-agent/u);
+
+  const runtime = normalized.slice(runtimeStart, checkStart);
+  assert.match(runtime, /needs: impact/u);
+  assert.match(runtime, /- name: Validate Windows and release runtime assurance/u);
+  assert.match(runtime, /run: npm run check:runtime-assurance/u);
+
+  const check = normalized.slice(checkStart, mainStart);
+  assert.match(check, /- pr-validation/u);
+  assert.match(check, /- pr-workspace-agent/u);
+  assert.match(check, /- pr-runtime-assurance/u);
+  assert.match(check, /needs\.pr-validation\.result/u);
+  assert.match(check, /needs\.pr-workspace-agent\.result/u);
+  assert.match(check, /needs\.pr-runtime-assurance\.result/u);
+});
