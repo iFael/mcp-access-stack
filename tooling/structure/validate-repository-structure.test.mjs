@@ -268,3 +268,57 @@ test("parallelizes independent ci release image builds behind the canonical resu
   assert.match(aggregate, /needs\.release-image-proxy\.result/u);
   assert.doesNotMatch(aggregate, /docker\/build-push-action/u);
 });
+test("parallelizes public release image publishers behind the images digest aggregator", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  const gatewayStart = normalized.indexOf("  release-image-gateway:");
+  const browserStart = normalized.indexOf("\n  release-image-browser:", gatewayStart);
+  const proxyStart = normalized.indexOf("\n  release-image-proxy:", browserStart);
+  const imagesStart = normalized.indexOf("\n  images:", proxyStart);
+  const packageStart = normalized.indexOf("\n  package:", imagesStart);
+
+  assert.ok(
+    gatewayStart >= 0 && browserStart > gatewayStart && proxyStart > browserStart && imagesStart > proxyStart && packageStart > imagesStart,
+    "public release image publishers must run independently before the images digest aggregator and package job",
+  );
+
+  const gateway = normalized.slice(gatewayStart, browserStart);
+  assert.match(gateway, /needs: metadata/u);
+  assert.match(gateway, /packages: write/u);
+  assert.match(gateway, /digest: \$\{\{ steps\.gateway\.outputs\.digest \}\}/u);
+  assert.match(gateway, /deploy\/docker\/gateway\.Dockerfile/u);
+  assert.doesNotMatch(gateway, /browser-worker\.Dockerfile|proxy\.Dockerfile/u);
+
+  const browser = normalized.slice(browserStart, proxyStart);
+  assert.match(browser, /needs: metadata/u);
+  assert.match(browser, /packages: write/u);
+  assert.match(browser, /digest: \$\{\{ steps\.browser-worker\.outputs\.digest \}\}/u);
+  assert.match(browser, /deploy\/remote\/browser-worker\.Dockerfile/u);
+  assert.doesNotMatch(browser, /gateway\.Dockerfile|proxy\.Dockerfile/u);
+
+  const proxy = normalized.slice(proxyStart, imagesStart);
+  assert.match(proxy, /needs: metadata/u);
+  assert.match(proxy, /packages: write/u);
+  assert.match(proxy, /digest: \$\{\{ steps\.proxy\.outputs\.digest \}\}/u);
+  assert.match(proxy, /deploy\/docker\/proxy\.Dockerfile/u);
+  assert.doesNotMatch(proxy, /gateway\.Dockerfile|browser-worker\.Dockerfile/u);
+
+  const images = normalized.slice(imagesStart, packageStart);
+  assert.match(images, /- release-image-gateway/u);
+  assert.match(images, /- release-image-browser/u);
+  assert.match(images, /- release-image-proxy/u);
+  assert.match(images, /gateway-digest: \$\{\{ steps\.digests\.outputs\.gateway-digest \}\}/u);
+  assert.match(images, /browser-worker-digest: \$\{\{ steps\.digests\.outputs\.browser-worker-digest \}\}/u);
+  assert.match(images, /proxy-digest: \$\{\{ steps\.digests\.outputs\.proxy-digest \}\}/u);
+  assert.doesNotMatch(images, /docker\/build-push-action/u);
+
+  const packageJob = normalized.slice(packageStart + 1);
+  assert.match(packageJob, /^  package:\n    needs:/u);
+  assert.match(packageJob, /- metadata/u);
+  assert.match(packageJob, /- images/u);
+  assert.match(packageJob, /needs\.images\.outputs\.gateway-digest/u);
+  assert.match(packageJob, /needs\.images\.outputs\.proxy-digest/u);
+});
