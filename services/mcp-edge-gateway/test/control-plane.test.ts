@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@jest/globals";
 import {
+  createAgentUnavailableMcpResponse,
   createMcpControlPlane,
+  getMcpResponseDiagnostic,
   type EdgeExecutionTransport,
 } from "../src/control-plane/mcp-control-plane.js";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
@@ -69,6 +71,23 @@ class FakeExecutionTransport implements EdgeExecutionTransport {
 }
 
 describe("Edge MCP control plane availability", () => {
+  it("uses one diagnostic-aware AGENT_UNAVAILABLE response factory", async () => {
+    const response = createAgentUnavailableMcpResponse({ jsonrpc: "2.0", id: 77, method: "tools/call" });
+    expect(response.status).toBe(200);
+    expect(await response.clone().json()).toMatchObject({
+      jsonrpc: "2.0",
+      id: 77,
+      error: {
+        code: -32001,
+        data: { code: "AGENT_UNAVAILABLE" },
+      },
+    });
+    expect(getMcpResponseDiagnostic(response)).toEqual({
+      mcpErrorCode: -32001,
+      mcpErrorDataCode: "AGENT_UNAVAILABLE",
+    });
+  });
+
   it("keeps discovery stable while execution disconnects and reconnects", async () => {
     const execution = new FakeExecutionTransport();
     const controlPlane = createMcpControlPlane({
@@ -112,6 +131,10 @@ describe("Edge MCP control plane availability", () => {
         message: "Execution backend unavailable",
         data: { code: "AGENT_UNAVAILABLE" },
       },
+    });
+    expect(getMcpResponseDiagnostic(unavailable)).toEqual({
+      mcpErrorCode: -32001,
+      mcpErrorDataCode: "AGENT_UNAVAILABLE",
     });
     expect(execution.forwardedCalls).toHaveLength(0);
 
@@ -173,6 +196,7 @@ describe("Edge MCP control plane availability", () => {
       method: "notifications/initialized",
     }));
     expect(initializedNotification.status).toBe(204);
+
     expect(execution.forwardedCalls).toHaveLength(0);
   });
 });

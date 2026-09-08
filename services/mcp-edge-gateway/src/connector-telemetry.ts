@@ -15,6 +15,11 @@ export type EdgeRuntimeTelemetryV1 = {
   hostPid?: number;
   readySince?: string;
   lastDisconnectedAt?: string;
+  lastDisconnectedGeneration?: number;
+  lastDisconnectWasReady?: boolean;
+  lastDisconnectSource?: "close" | "error";
+  lastDisconnectCode?: number;
+  lastDisconnectWasClean?: boolean;
   lastRequestAt?: string;
   lastSuccessfulRequestAt?: string;
   lastRequestId?: string;
@@ -26,7 +31,7 @@ export type EdgeRuntimeTelemetryV1 = {
 
 export type ConnectorTelemetryEvent =
   | { type: "ready"; at: string; runtime?: ConnectorRuntimeIdentity }
-  | { type: "disconnected"; at: string }
+  | { type: "disconnected"; at: string; connectionGeneration?: number; wasReady?: boolean; source?: "close" | "error"; closeCode?: number; wasClean?: boolean }
   | { type: "request"; at: string; requestId: string }
   | { type: "response"; at: string; requestId: string };
 
@@ -48,10 +53,31 @@ export function applyConnectorTelemetryEvent(
     case "ready":
       return applyReady(current, event.at, event.runtime);
     case "disconnected": {
-      const { readySince: _readySince, ...rest } = current;
+      const {
+        readySince,
+        lastDisconnectedGeneration: _lastDisconnectedGeneration,
+        lastDisconnectWasReady: _lastDisconnectWasReady,
+        lastDisconnectSource: _lastDisconnectSource,
+        lastDisconnectCode: _lastDisconnectCode,
+        lastDisconnectWasClean: _lastDisconnectWasClean,
+        ...rest
+      } = current;
+      const isLegacyDisconnect = event.connectionGeneration === undefined &&
+        event.wasReady === undefined && event.source === undefined;
+      const disconnectsCurrentReady = readySince !== undefined && (
+        current.connectionGeneration === undefined ||
+        event.connectionGeneration === current.connectionGeneration ||
+        isLegacyDisconnect
+      );
       return {
         ...rest,
+        ...(!disconnectsCurrentReady && readySince !== undefined ? { readySince } : {}),
         lastDisconnectedAt: event.at,
+        ...(event.connectionGeneration === undefined ? {} : { lastDisconnectedGeneration: event.connectionGeneration }),
+        ...(event.wasReady === undefined ? {} : { lastDisconnectWasReady: event.wasReady }),
+        ...(event.source === undefined ? {} : { lastDisconnectSource: event.source }),
+        ...(event.closeCode === undefined ? {} : { lastDisconnectCode: event.closeCode }),
+        ...(event.wasClean === undefined ? {} : { lastDisconnectWasClean: event.wasClean }),
         disconnectCount: current.disconnectCount + 1,
       };
     }

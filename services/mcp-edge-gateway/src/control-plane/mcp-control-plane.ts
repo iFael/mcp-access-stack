@@ -4,6 +4,17 @@ import { EdgeAuthenticationError, type EdgeAuthenticator } from "./auth.js";
 const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 const AGENT_UNAVAILABLE_ERROR_CODE = -32001;
 
+type EdgeMcpResponseDiagnostic = {
+  mcpErrorCode: number;
+  mcpErrorDataCode?: string;
+};
+
+const responseDiagnostics = new WeakMap<Response, EdgeMcpResponseDiagnostic>();
+
+export function getMcpResponseDiagnostic(response: Response): EdgeMcpResponseDiagnostic | undefined {
+  return responseDiagnostics.get(response);
+}
+
 export interface EdgeExecutionTransport {
   isReady(): boolean;
   getGeneration(): number | null;
@@ -82,11 +93,8 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
       }
 
       if (!options.execution.isReady()) {
-        return jsonRpcError(parsed.id, AGENT_UNAVAILABLE_ERROR_CODE, "Execution backend unavailable", {
-          code: "AGENT_UNAVAILABLE",
-        });
+        return createAgentUnavailableMcpResponse(parsed.raw);
       }
-
       return options.execution.execute(parsed.raw, principal, request);
     },
   };
@@ -135,6 +143,11 @@ function readId(value: unknown): string | number | null {
   return typeof value.id === "string" || typeof value.id === "number" ? value.id : null;
 }
 
+export function createAgentUnavailableMcpResponse(body: unknown): Response {
+  return jsonRpcError(readId(body), AGENT_UNAVAILABLE_ERROR_CODE, "Execution backend unavailable", {
+    code: "AGENT_UNAVAILABLE",
+  });
+}
 function jsonRpcResult(id: string | number | null, result: unknown): Response {
   return jsonResponse({ jsonrpc: "2.0", id, result });
 }
@@ -145,13 +158,18 @@ function jsonRpcError(
   message: string,
   data?: unknown,
 ): Response {
-  return jsonResponse({
+  const response = jsonResponse({
     jsonrpc: "2.0",
     id,
     error: { code, message, ...(data === undefined ? {} : { data }) },
   });
+  const dataCode = isRecord(data) && typeof data.code === "string" ? data.code.slice(0, 64) : undefined;
+  responseDiagnostics.set(response, {
+    mcpErrorCode: code,
+    ...(dataCode === undefined ? {} : { mcpErrorDataCode: dataCode }),
+  });
+  return response;
 }
-
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,

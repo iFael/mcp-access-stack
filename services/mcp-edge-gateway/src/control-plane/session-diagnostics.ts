@@ -5,6 +5,8 @@ export type SessionDiagnosticEvent = {
   httpMethod: string;
   status: number;
   mcpMethod?: string;
+  mcpErrorCode?: number;
+  mcpErrorDataCode?: string;
   protocolVersion?: string;
   oauthGrantType?: string;
   oauthError?: string;
@@ -14,6 +16,10 @@ export type SessionDiagnosticEvent = {
   issuedCredentialFingerprint?: string;
 };
 
+export type SessionDiagnosticResponseMetadata = {
+  mcpErrorCode?: number;
+  mcpErrorDataCode?: string;
+};
 export interface SessionDiagnosticStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -40,6 +46,7 @@ export async function classifySessionDiagnostic(
   request: DiagnosticRequest,
   response: DiagnosticResponse,
   atMs = Date.now(),
+  responseMetadata?: SessionDiagnosticResponseMetadata,
 ): Promise<SessionDiagnosticEvent> {
   const url = new URL(request.url);
   const event: SessionDiagnosticEvent = {
@@ -61,6 +68,8 @@ export async function classifySessionDiagnostic(
         if (typeof params?.protocolVersion === "string") event.protocolVersion = params.protocolVersion.slice(0, 64);
       }
     }
+    if (responseMetadata?.mcpErrorCode !== undefined) event.mcpErrorCode = responseMetadata.mcpErrorCode;
+    if (responseMetadata?.mcpErrorDataCode !== undefined) event.mcpErrorDataCode = responseMetadata.mcpErrorDataCode;
     return event;
   }
 
@@ -96,6 +105,7 @@ export function shouldPersistSessionDiagnostic(event: SessionDiagnosticEvent): b
   }
   if (event.route !== "/mcp") return event.status >= 400;
   if (event.status >= 400 || event.httpMethod !== "POST") return true;
+  if (event.mcpErrorCode !== undefined) return true;
   return event.mcpMethod === "initialize" || event.mcpMethod === "tools/list" || event.mcpMethod === "notifications/initialized" || event.mcpMethod === "ping";
 }
 export async function appendSessionDiagnostic(

@@ -68,6 +68,64 @@ describe("connector telemetry reducer", () => {
     });
   });
 
+  it("keeps the current ready generation when an older connector closes late", () => {
+    const first = applyConnectorTelemetryEvent(createEmptyConnectorTelemetry(), {
+      type: "ready",
+      at: "2026-09-02T12:00:01.000Z",
+      runtime,
+    });
+    const current = applyConnectorTelemetryEvent(first, {
+      type: "ready",
+      at: "2026-09-02T12:00:03.000Z",
+      runtime: { ...runtime, connectionGeneration: 2 },
+    });
+
+    const staleDisconnect = applyConnectorTelemetryEvent(current, {
+      type: "disconnected",
+      at: "2026-09-02T12:00:05.000Z",
+      connectionGeneration: 1,
+      wasReady: true,
+      source: "close",
+      closeCode: 1006,
+      wasClean: false,
+    });
+
+    expect(staleDisconnect.readySince).toBe("2026-09-02T12:00:03.000Z");
+    expect(staleDisconnect.connectionGeneration).toBe(2);
+    expect(staleDisconnect).toMatchObject({
+      lastDisconnectedAt: "2026-09-02T12:00:05.000Z",
+      lastDisconnectedGeneration: 1,
+      lastDisconnectWasReady: true,
+      lastDisconnectSource: "close",
+      lastDisconnectCode: 1006,
+      lastDisconnectWasClean: false,
+      disconnectCount: 1,
+    });
+  });
+  it("keeps the current ready generation when a non-ready handshake socket closes", () => {
+    const current = applyConnectorTelemetryEvent(createEmptyConnectorTelemetry(), {
+      type: "ready",
+      at: "2026-09-02T12:00:03.000Z",
+      runtime: { ...runtime, connectionGeneration: 2 },
+    });
+
+    const handshakeDisconnect = applyConnectorTelemetryEvent(current, {
+      type: "disconnected",
+      at: "2026-09-02T12:00:04.000Z",
+      wasReady: false,
+      source: "error",
+    });
+
+    expect(handshakeDisconnect.readySince).toBe("2026-09-02T12:00:03.000Z");
+    expect(handshakeDisconnect.connectionGeneration).toBe(2);
+    expect(handshakeDisconnect).toMatchObject({
+      lastDisconnectedAt: "2026-09-02T12:00:04.000Z",
+      lastDisconnectWasReady: false,
+      lastDisconnectSource: "error",
+      disconnectCount: 1,
+    });
+    expect(handshakeDisconnect.lastDisconnectedGeneration).toBeUndefined();
+  });
   it("records disconnect, relayed request and successful response evidence", () => {
     const ready = applyConnectorTelemetryEvent(createEmptyConnectorTelemetry(), {
       type: "ready",
