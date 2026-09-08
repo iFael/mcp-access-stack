@@ -105,6 +105,41 @@ describe("session routing diagnostics", () => {
     }
   });
 
+  it("persists JSON-RPC tool failures even when HTTP status is 200", async () => {
+    const event = await classifySessionDiagnostic(
+      new Request("https://edge.example/mcp", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer diagnostic-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 9,
+          method: "tools/call",
+          params: { name: "list_workspaces", arguments: {} },
+        }),
+      }),
+      new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 9,
+        result: { content: [{ type: "text", text: "not inspected" }] },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+      1_788_150_000_003,
+      { mcpErrorCode: -32001, mcpErrorDataCode: "AGENT_UNAVAILABLE" },
+    );
+
+    expect(event).toMatchObject({
+      route: "/mcp",
+      httpMethod: "POST",
+      status: 200,
+      mcpMethod: "tools/call",
+      mcpErrorCode: -32001,
+      mcpErrorDataCode: "AGENT_UNAVAILABLE",
+    });
+    expect(shouldPersistSessionDiagnostic(event)).toBe(true);
+    expect(JSON.stringify(event)).not.toContain("Execution backend unavailable");
+  });
   it("keeps handshake, OAuth and failures but drops successful tool-call noise", () => {
     const base = { version: 1 as const, atMs: 1, route: "/mcp", httpMethod: "POST", status: 200 };
     expect(shouldPersistSessionDiagnostic({ ...base, mcpMethod: "initialize" })).toBe(true);
