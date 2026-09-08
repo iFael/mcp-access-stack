@@ -36,3 +36,5 @@ Non-production:        npx wrangler deploy --dry-run --config services/mcp-edge-
 The production trigger includes only `main`. The non-production trigger includes all other branches and excludes `main`.
 
 The `wrangler.jsonc` in this directory is the Worker source of truth. The Durable Object uses SQLite storage and WebSocket Hibernation.
+
+<!-- P1-B isolated edge probe v3 2026-09-08 -->
