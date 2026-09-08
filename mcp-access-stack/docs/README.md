@@ -19,3 +19,5 @@ Comece por `architecture/ARCHITECTURE.md` e depois use o runbook correspondente 
 - Timeouts e operações longas: `operations/TIMEOUT_POLICY.md`.
 - Rollout do command engine qualificado: `operations/QUALIFIED_COMMAND_ROLLOUT.md`.
 - Segurança: `security/SECURITY.md`.
+
+<!-- P1-B isolated irrelevant probe v3 2026-09-08 -->
