@@ -235,7 +235,7 @@ jobs:
       - name: Test Workspace Agent unit
         run: npm run test:workspace-agent:unit
 
-  pr-workspace-agent-integration-e2e:
+  pr-workspace-agent-integration-shard-1-e2e:
     needs: impact
     if: >-
       always() &&
@@ -270,17 +270,56 @@ jobs:
       - name: Build Workspace Agent test dependency
         run: npm run build --workspace @vs-code-gpt/local-agent
 
-      - name: Test Workspace Agent integration
-        run: npm run test:workspace-agent:integration
+      - name: Test Workspace Agent integration shard 1/2
+        run: npm run test:workspace-agent:integration -- --shard=1/2
 
       - name: Test Workspace Agent e2e
         run: npm run test:workspace-agent:e2e
+
+  pr-workspace-agent-integration-shard-2:
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: pwsh
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared test dependency
+        run: npm run build --workspace @vs-code-gpt/shared
+
+      - name: Build Workspace Agent test dependency
+        run: npm run build --workspace @vs-code-gpt/local-agent
+
+      - name: Test Workspace Agent integration shard 2/2
+        run: npm run test:workspace-agent:integration -- --shard=2/2
 
   pr-workspace-agent:
     needs:
       - impact
       - pr-workspace-agent-unit
-      - pr-workspace-agent-integration-e2e
+      - pr-workspace-agent-integration-shard-1-e2e
+      - pr-workspace-agent-integration-shard-2
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
@@ -292,11 +331,13 @@ jobs:
         shell: bash
         env:
           UNIT_RESULT: ${{ needs.pr-workspace-agent-unit.result }}
-          INTEGRATION_E2E_RESULT: ${{ needs.pr-workspace-agent-integration-e2e.result }}
+          INTEGRATION_SHARD_1_E2E_RESULT: ${{ needs.pr-workspace-agent-integration-shard-1-e2e.result }}
+          INTEGRATION_SHARD_2_RESULT: ${{ needs.pr-workspace-agent-integration-shard-2.result }}
         run: |
           set -euo pipefail
           test "$UNIT_RESULT" = "success"
-          test "$INTEGRATION_E2E_RESULT" = "success"
+          test "$INTEGRATION_SHARD_1_E2E_RESULT" = "success"
+          test "$INTEGRATION_SHARD_2_RESULT" = "success"
   pr-windows-distribution:
     needs: impact
     if: >-
