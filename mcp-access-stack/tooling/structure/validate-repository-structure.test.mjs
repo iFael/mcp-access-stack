@@ -196,8 +196,10 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   const workspaceUnitStart = normalized.indexOf("\n  pr-workspace-agent-unit:", browserStart);
   const workspaceIntegrationStart = normalized.indexOf("\n  pr-workspace-agent-integration-e2e:", workspaceUnitStart);
   const workspaceAggregateStart = normalized.indexOf("\n  pr-workspace-agent:", workspaceIntegrationStart);
-  const runtimeStart = normalized.indexOf("\n  pr-runtime-assurance:", workspaceAggregateStart);
-  const checkStart = normalized.indexOf("\n  check:", runtimeStart);
+  const windowsDistributionStart = normalized.indexOf("\n  pr-windows-distribution:", workspaceAggregateStart);
+  const runtimeCoreStart = normalized.indexOf("\n  pr-runtime-assurance-core:", windowsDistributionStart);
+  const runtimeAggregateStart = normalized.indexOf("\n  pr-runtime-assurance:", runtimeCoreStart);
+  const checkStart = normalized.indexOf("\n  check:", runtimeAggregateStart);
   const mainStart = normalized.indexOf("\n  main-integration:", checkStart);
 
   assert.ok(
@@ -206,8 +208,10 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
       workspaceUnitStart > browserStart &&
       workspaceIntegrationStart > workspaceUnitStart &&
       workspaceAggregateStart > workspaceIntegrationStart &&
-      runtimeStart > workspaceAggregateStart &&
-      checkStart > runtimeStart &&
+      windowsDistributionStart > workspaceAggregateStart &&
+      runtimeCoreStart > windowsDistributionStart &&
+      runtimeAggregateStart > runtimeCoreStart &&
+      checkStart > runtimeAggregateStart &&
       mainStart > checkStart,
     "PR validation lanes must run before the canonical check aggregator and main integration",
   );
@@ -240,17 +244,31 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(workspaceIntegration, /run: npm run test:workspace-agent:e2e/u);
   assert.doesNotMatch(workspaceIntegration, /test:workspace-agent:unit/u);
 
-  const workspaceAggregate = normalized.slice(workspaceAggregateStart, runtimeStart);
+  const workspaceAggregate = normalized.slice(workspaceAggregateStart, windowsDistributionStart);
   assert.match(workspaceAggregate, /- pr-workspace-agent-unit/u);
   assert.match(workspaceAggregate, /- pr-workspace-agent-integration-e2e/u);
   assert.match(workspaceAggregate, /needs\.pr-workspace-agent-unit\.result/u);
   assert.match(workspaceAggregate, /needs\.pr-workspace-agent-integration-e2e\.result/u);
   assert.doesNotMatch(workspaceAggregate, /actions\/checkout|setup-node|npm ci|test:workspace-agent/u);
 
-  const runtime = normalized.slice(runtimeStart, checkStart);
-  assert.match(runtime, /needs: impact/u);
-  assert.match(runtime, /- name: Validate Windows and release runtime assurance/u);
-  assert.match(runtime, /run: npm run check:runtime-assurance/u);
+  const windowsDistribution = normalized.slice(windowsDistributionStart, runtimeCoreStart);
+  assert.match(windowsDistribution, /needs: impact/u);
+  assert.match(windowsDistribution, /needs\.impact\.outputs\.windowsRuntime/u);
+  assert.match(windowsDistribution, /run: pwsh -NoLogo -NoProfile -File deploy\/windows\/Test-WindowsDistribution\.ps1/u);
+  assert.doesNotMatch(windowsDistribution, /check:release-runtime|check:persistence|check:materialization/u);
+
+  const runtimeCore = normalized.slice(runtimeCoreStart, runtimeAggregateStart);
+  assert.match(runtimeCore, /needs: impact/u);
+  assert.match(runtimeCore, /needs\.impact\.outputs\.windowsRuntime/u);
+  assert.match(runtimeCore, /run: npm run check:runtime-assurance:core/u);
+  assert.doesNotMatch(runtimeCore, /Test-WindowsDistribution\.ps1/u);
+
+  const runtimeAggregate = normalized.slice(runtimeAggregateStart, checkStart);
+  assert.match(runtimeAggregate, /- pr-windows-distribution/u);
+  assert.match(runtimeAggregate, /- pr-runtime-assurance-core/u);
+  assert.match(runtimeAggregate, /needs\.pr-windows-distribution\.result/u);
+  assert.match(runtimeAggregate, /needs\.pr-runtime-assurance-core\.result/u);
+  assert.doesNotMatch(runtimeAggregate, /actions\/checkout|setup-node|npm ci|check:runtime-assurance/u);
 
   const check = normalized.slice(checkStart, mainStart);
   assert.match(check, /- pr-validation/u);
@@ -261,8 +279,9 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(check, /needs\.pr-browser-worker\.result/u);
   assert.match(check, /needs\.pr-workspace-agent\.result/u);
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
-  assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-e2e/u);
-});test("parallelizes independent ci release image builds behind the canonical result", async () => {
+  assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-e2e|pr-windows-distribution|pr-runtime-assurance-core/u);
+});
+test("parallelizes independent ci release image builds behind the canonical result", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
