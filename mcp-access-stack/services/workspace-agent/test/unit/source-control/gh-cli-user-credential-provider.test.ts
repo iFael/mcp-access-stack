@@ -141,10 +141,12 @@ describe("GhCliUserCredentialProvider", () => {
       });
       return child as never;
     });
+    const terminateProcessTree = jest.fn(async () => {});
     const provider = new GhCliUserCredentialProvider({
       ghExecutable: absoluteGhForTest(),
       spawnProcess,
       maxOutputBytes: 8_192,
+      terminateProcessTree,
     });
 
     let captured: unknown;
@@ -159,5 +161,6 @@ describe("GhCliUserCredentialProvider", () => {
     expect(serialized).not.toContain("unit-test-token");
     expect(serialized).not.toContain("raw provider failure");
     expect((captured as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(terminateProcessTree).toHaveBeenCalledTimes(1);
   });
 });
