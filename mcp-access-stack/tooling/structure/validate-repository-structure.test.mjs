@@ -192,23 +192,38 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   );
   const normalized = workflow.replaceAll("\r\n", "\n");
   const validationStart = normalized.indexOf("  pr-validation:");
-  const workspaceAgentStart = normalized.indexOf("\n  pr-workspace-agent:", validationStart);
+  const browserStart = normalized.indexOf("\n  pr-browser-worker:", validationStart);
+  const workspaceAgentStart = normalized.indexOf("\n  pr-workspace-agent:", browserStart);
   const runtimeStart = normalized.indexOf("\n  pr-runtime-assurance:", workspaceAgentStart);
   const checkStart = normalized.indexOf("\n  check:", runtimeStart);
   const mainStart = normalized.indexOf("\n  main-integration:", checkStart);
 
   assert.ok(
     validationStart >= 0 &&
-      workspaceAgentStart > validationStart &&
+      browserStart > validationStart &&
+      workspaceAgentStart > browserStart &&
       runtimeStart > workspaceAgentStart &&
       checkStart > runtimeStart &&
       mainStart > checkStart,
     "PR validation lanes must run before the canonical check aggregator and main integration",
   );
 
-  const validation = normalized.slice(validationStart, workspaceAgentStart);
+  const validation = normalized.slice(validationStart, browserStart);
+  assert.doesNotMatch(validation, /- name: Install Playwright Chromium/u);
+  assert.doesNotMatch(validation, /- name: Test Browser Worker/u);
+  assert.doesNotMatch(validation, /- name: Build Browser Worker/u);
   assert.doesNotMatch(validation, /- name: Test Workspace Agent/u);
   assert.doesNotMatch(validation, /- name: Validate Windows and release runtime assurance/u);
+
+  const browser = normalized.slice(browserStart, workspaceAgentStart);
+  assert.match(browser, /needs: impact/u);
+  assert.match(browser, /needs\.impact\.outputs\.browserWorker/u);
+  assert.match(browser, /- name: Install Playwright Chromium/u);
+  assert.match(browser, /run: npx playwright install --only-shell chromium/u);
+  assert.match(browser, /- name: Test Browser Worker/u);
+  assert.match(browser, /run: npm run test:browser-worker/u);
+  assert.match(browser, /- name: Build Browser Worker/u);
+  assert.match(browser, /run: npm run build --workspace @vs-code-gpt\/browser-worker/u);
 
   const workspaceAgent = normalized.slice(workspaceAgentStart, runtimeStart);
   assert.match(workspaceAgent, /needs: impact/u);
@@ -222,9 +237,11 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
 
   const check = normalized.slice(checkStart, mainStart);
   assert.match(check, /- pr-validation/u);
+  assert.match(check, /- pr-browser-worker/u);
   assert.match(check, /- pr-workspace-agent/u);
   assert.match(check, /- pr-runtime-assurance/u);
   assert.match(check, /needs\.pr-validation\.result/u);
+  assert.match(check, /needs\.pr-browser-worker\.result/u);
   assert.match(check, /needs\.pr-workspace-agent\.result/u);
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
 });
