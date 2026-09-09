@@ -194,8 +194,9 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   const validationStart = normalized.indexOf("  pr-validation:");
   const browserStart = normalized.indexOf("\n  pr-browser-worker:", validationStart);
   const workspaceUnitStart = normalized.indexOf("\n  pr-workspace-agent-unit:", browserStart);
-  const workspaceIntegrationStart = normalized.indexOf("\n  pr-workspace-agent-integration-e2e:", workspaceUnitStart);
-  const workspaceAggregateStart = normalized.indexOf("\n  pr-workspace-agent:", workspaceIntegrationStart);
+  const workspaceIntegrationShard1Start = normalized.indexOf("\n  pr-workspace-agent-integration-shard-1-e2e:", workspaceUnitStart);
+  const workspaceIntegrationShard2Start = normalized.indexOf("\n  pr-workspace-agent-integration-shard-2:", workspaceIntegrationShard1Start);
+  const workspaceAggregateStart = normalized.indexOf("\n  pr-workspace-agent:", workspaceIntegrationShard2Start);
   const windowsDistributionStart = normalized.indexOf("\n  pr-windows-distribution:", workspaceAggregateStart);
   const runtimeCoreStart = normalized.indexOf("\n  pr-runtime-assurance-core:", windowsDistributionStart);
   const runtimeAggregateStart = normalized.indexOf("\n  pr-runtime-assurance:", runtimeCoreStart);
@@ -206,8 +207,9 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
     validationStart >= 0 &&
       browserStart > validationStart &&
       workspaceUnitStart > browserStart &&
-      workspaceIntegrationStart > workspaceUnitStart &&
-      workspaceAggregateStart > workspaceIntegrationStart &&
+      workspaceIntegrationShard1Start > workspaceUnitStart &&
+      workspaceIntegrationShard2Start > workspaceIntegrationShard1Start &&
+      workspaceAggregateStart > workspaceIntegrationShard2Start &&
       windowsDistributionStart > workspaceAggregateStart &&
       runtimeCoreStart > windowsDistributionStart &&
       runtimeAggregateStart > runtimeCoreStart &&
@@ -233,22 +235,31 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(browser, /- name: Build Browser Worker/u);
   assert.match(browser, /run: npm run build --workspace @vs-code-gpt\/browser-worker/u);
 
-  const workspaceUnit = normalized.slice(workspaceUnitStart, workspaceIntegrationStart);
+  const workspaceUnit = normalized.slice(workspaceUnitStart, workspaceIntegrationShard1Start);
   assert.match(workspaceUnit, /needs: impact/u);
   assert.match(workspaceUnit, /run: npm run test:workspace-agent:unit/u);
   assert.doesNotMatch(workspaceUnit, /test:workspace-agent:integration|test:workspace-agent:e2e/u);
 
-  const workspaceIntegration = normalized.slice(workspaceIntegrationStart, workspaceAggregateStart);
-  assert.match(workspaceIntegration, /needs: impact/u);
-  assert.match(workspaceIntegration, /run: npm run test:workspace-agent:integration/u);
-  assert.match(workspaceIntegration, /run: npm run test:workspace-agent:e2e/u);
-  assert.doesNotMatch(workspaceIntegration, /test:workspace-agent:unit/u);
+  const workspaceIntegrationShard1 = normalized.slice(workspaceIntegrationShard1Start, workspaceIntegrationShard2Start);
+  assert.match(workspaceIntegrationShard1, /needs: impact/u);
+  assert.match(workspaceIntegrationShard1, /needs\.impact\.outputs\.workspaceAgent/u);
+  assert.match(workspaceIntegrationShard1, /run: npm run test:workspace-agent:integration -- --shard=1\/2/u);
+  assert.match(workspaceIntegrationShard1, /run: npm run test:workspace-agent:e2e/u);
+  assert.doesNotMatch(workspaceIntegrationShard1, /test:workspace-agent:unit/u);
+
+  const workspaceIntegrationShard2 = normalized.slice(workspaceIntegrationShard2Start, workspaceAggregateStart);
+  assert.match(workspaceIntegrationShard2, /needs: impact/u);
+  assert.match(workspaceIntegrationShard2, /needs\.impact\.outputs\.workspaceAgent/u);
+  assert.match(workspaceIntegrationShard2, /run: npm run test:workspace-agent:integration -- --shard=2\/2/u);
+  assert.doesNotMatch(workspaceIntegrationShard2, /test:workspace-agent:unit|test:workspace-agent:e2e/u);
 
   const workspaceAggregate = normalized.slice(workspaceAggregateStart, windowsDistributionStart);
   assert.match(workspaceAggregate, /- pr-workspace-agent-unit/u);
-  assert.match(workspaceAggregate, /- pr-workspace-agent-integration-e2e/u);
+  assert.match(workspaceAggregate, /- pr-workspace-agent-integration-shard-1-e2e/u);
+  assert.match(workspaceAggregate, /- pr-workspace-agent-integration-shard-2/u);
   assert.match(workspaceAggregate, /needs\.pr-workspace-agent-unit\.result/u);
-  assert.match(workspaceAggregate, /needs\.pr-workspace-agent-integration-e2e\.result/u);
+  assert.match(workspaceAggregate, /needs\.pr-workspace-agent-integration-shard-1-e2e\.result/u);
+  assert.match(workspaceAggregate, /needs\.pr-workspace-agent-integration-shard-2\.result/u);
   assert.doesNotMatch(workspaceAggregate, /actions\/checkout|setup-node|npm ci|test:workspace-agent/u);
 
   const windowsDistribution = normalized.slice(windowsDistributionStart, runtimeCoreStart);
@@ -279,7 +290,7 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(check, /needs\.pr-browser-worker\.result/u);
   assert.match(check, /needs\.pr-workspace-agent\.result/u);
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
-  assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-e2e|pr-windows-distribution|pr-runtime-assurance-core/u);
+  assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-shard-1-e2e|pr-workspace-agent-integration-shard-2|pr-windows-distribution|pr-runtime-assurance-core/u);
 });
 test("parallelizes independent ci release image builds behind the canonical result", async () => {
   const workflow = await readFile(
