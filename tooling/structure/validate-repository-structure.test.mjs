@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -193,16 +193,20 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   const normalized = workflow.replaceAll("\r\n", "\n");
   const validationStart = normalized.indexOf("  pr-validation:");
   const browserStart = normalized.indexOf("\n  pr-browser-worker:", validationStart);
-  const workspaceAgentStart = normalized.indexOf("\n  pr-workspace-agent:", browserStart);
-  const runtimeStart = normalized.indexOf("\n  pr-runtime-assurance:", workspaceAgentStart);
+  const workspaceUnitStart = normalized.indexOf("\n  pr-workspace-agent-unit:", browserStart);
+  const workspaceIntegrationStart = normalized.indexOf("\n  pr-workspace-agent-integration-e2e:", workspaceUnitStart);
+  const workspaceAggregateStart = normalized.indexOf("\n  pr-workspace-agent:", workspaceIntegrationStart);
+  const runtimeStart = normalized.indexOf("\n  pr-runtime-assurance:", workspaceAggregateStart);
   const checkStart = normalized.indexOf("\n  check:", runtimeStart);
   const mainStart = normalized.indexOf("\n  main-integration:", checkStart);
 
   assert.ok(
     validationStart >= 0 &&
       browserStart > validationStart &&
-      workspaceAgentStart > browserStart &&
-      runtimeStart > workspaceAgentStart &&
+      workspaceUnitStart > browserStart &&
+      workspaceIntegrationStart > workspaceUnitStart &&
+      workspaceAggregateStart > workspaceIntegrationStart &&
+      runtimeStart > workspaceAggregateStart &&
       checkStart > runtimeStart &&
       mainStart > checkStart,
     "PR validation lanes must run before the canonical check aggregator and main integration",
@@ -215,7 +219,7 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.doesNotMatch(validation, /- name: Test Workspace Agent/u);
   assert.doesNotMatch(validation, /- name: Validate Windows and release runtime assurance/u);
 
-  const browser = normalized.slice(browserStart, workspaceAgentStart);
+  const browser = normalized.slice(browserStart, workspaceUnitStart);
   assert.match(browser, /needs: impact/u);
   assert.match(browser, /needs\.impact\.outputs\.browserWorker/u);
   assert.match(browser, /- name: Install Playwright Chromium/u);
@@ -225,10 +229,23 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(browser, /- name: Build Browser Worker/u);
   assert.match(browser, /run: npm run build --workspace @vs-code-gpt\/browser-worker/u);
 
-  const workspaceAgent = normalized.slice(workspaceAgentStart, runtimeStart);
-  assert.match(workspaceAgent, /needs: impact/u);
-  assert.match(workspaceAgent, /- name: Test Workspace Agent/u);
-  assert.match(workspaceAgent, /run: npm run test:workspace-agent/u);
+  const workspaceUnit = normalized.slice(workspaceUnitStart, workspaceIntegrationStart);
+  assert.match(workspaceUnit, /needs: impact/u);
+  assert.match(workspaceUnit, /run: npm run test:workspace-agent:unit/u);
+  assert.doesNotMatch(workspaceUnit, /test:workspace-agent:integration|test:workspace-agent:e2e/u);
+
+  const workspaceIntegration = normalized.slice(workspaceIntegrationStart, workspaceAggregateStart);
+  assert.match(workspaceIntegration, /needs: impact/u);
+  assert.match(workspaceIntegration, /run: npm run test:workspace-agent:integration/u);
+  assert.match(workspaceIntegration, /run: npm run test:workspace-agent:e2e/u);
+  assert.doesNotMatch(workspaceIntegration, /test:workspace-agent:unit/u);
+
+  const workspaceAggregate = normalized.slice(workspaceAggregateStart, runtimeStart);
+  assert.match(workspaceAggregate, /- pr-workspace-agent-unit/u);
+  assert.match(workspaceAggregate, /- pr-workspace-agent-integration-e2e/u);
+  assert.match(workspaceAggregate, /needs\.pr-workspace-agent-unit\.result/u);
+  assert.match(workspaceAggregate, /needs\.pr-workspace-agent-integration-e2e\.result/u);
+  assert.doesNotMatch(workspaceAggregate, /actions\/checkout|setup-node|npm ci|test:workspace-agent/u);
 
   const runtime = normalized.slice(runtimeStart, checkStart);
   assert.match(runtime, /needs: impact/u);
@@ -244,8 +261,8 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(check, /needs\.pr-browser-worker\.result/u);
   assert.match(check, /needs\.pr-workspace-agent\.result/u);
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
-});
-test("parallelizes independent ci release image builds behind the canonical result", async () => {
+  assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-e2e/u);
+});test("parallelizes independent ci release image builds behind the canonical result", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
