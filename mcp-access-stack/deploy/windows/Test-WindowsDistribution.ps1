@@ -177,6 +177,20 @@ Assert-ContainsNone -Label 'Windows installer' -Source $installer -Tokens @(
     'wsl.exe'
 )
 
+Assert-ContainsAll -Label 'Windows installer transactional task cutover' -Source $installer -Tokens @(
+    'Export-ScheduledTask',
+    'Stop-McpScheduledTaskForReplacement',
+    'Force = $true',
+    'Activate = $false',
+    'Restore-McpScheduledTaskSnapshot'
+)
+$edgeInstallIndex = $installer.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
+$cutoverIndex = $installer.IndexOf('$cutoverResult = & $cutoverScript @cutoverParameters | ConvertFrom-Json')
+$edgeStartIndex = $installer.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
+if ($edgeInstallIndex -lt 0 -or $cutoverIndex -lt 0 -or $edgeStartIndex -lt 0 -or
+    $edgeInstallIndex -ge $cutoverIndex -or $cutoverIndex -ge $edgeStartIndex) {
+    throw 'Windows installer must replace the stopped Edge task before state promotion and start it only after promotion.'
+}
 $updater = Read-ProjectFile 'deploy\windows\Update-McpAccessStack.ps1'
 Assert-ContainsAll -Label 'Windows updater' -Source $updater -Tokens @(
     'browser_download_url',
