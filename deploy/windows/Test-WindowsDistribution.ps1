@@ -204,6 +204,8 @@ Assert-ContainsNone -Label 'Windows updater' -Source $updater -Tokens @(
     'McpHost.exe'
 )
 
+& (Join-Path $PSScriptRoot 'Test-McpWindowsScheduledTaskSecurity.ps1')
+
 & (Join-Path $PSScriptRoot 'Test-McpWindowsExecutionNodeStaging.ps1')
 
 Write-Output 'Windows Edge distribution contract passed current build, staging and cutover gates.'

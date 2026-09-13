@@ -56,6 +56,93 @@ function Test-McpWindowsAccountIdentityEquivalent {
         -not [string]::IsNullOrWhiteSpace($rightSid) -and
         $leftSid.Equals($rightSid, [StringComparison]::OrdinalIgnoreCase)
 }
+function Get-McpWindowsScheduledTaskOwnerSddl {
+    param(
+        [Parameter(Mandatory = $true)][string]$CurrentSddl,
+        [Parameter(Mandatory = $true)][string]$UserId
+    )
+
+    $sidValue = Resolve-McpWindowsAccountSidValue -UserId $UserId
+    if ([string]::IsNullOrWhiteSpace($sidValue)) {
+        throw "Scheduled Task owner SID could not be resolved: $UserId"
+    }
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($CurrentSddl)
+    if ($null -eq $descriptor.DiscretionaryAcl) {
+        throw 'Scheduled Task security descriptor is missing a DACL.'
+    }
+
+    $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+    for ($index = $descriptor.DiscretionaryAcl.Count - 1; $index -ge 0; $index--) {
+        $ace = $descriptor.DiscretionaryAcl[$index]
+        if ($ace -is [Security.AccessControl.KnownAce] -and
+            [string]$ace.SecurityIdentifier.Value -eq $sidValue) {
+            $descriptor.DiscretionaryAcl.RemoveAce($index)
+        }
+    }
+
+    $ownerAce = [Security.AccessControl.CommonAce]::new(
+        [Security.AccessControl.AceFlags]::None,
+        [Security.AccessControl.AceQualifier]::AccessAllowed,
+        0x1f01ff,
+        $sid,
+        $false,
+        $null
+    )
+    $descriptor.DiscretionaryAcl.InsertAce($descriptor.DiscretionaryAcl.Count, $ownerAce)
+    $sections = [Security.AccessControl.AccessControlSections]::Owner -bor
+        [Security.AccessControl.AccessControlSections]::Group -bor
+        [Security.AccessControl.AccessControlSections]::Access
+    return $descriptor.GetSddlForm($sections)
+}
+
+function Set-McpWindowsScheduledTaskOwnerAccess {
+    param(
+        [Parameter(Mandatory = $true)][string]$TaskName,
+        [Parameter(Mandatory = $true)][string]$UserId
+    )
+
+    $service = New-Object -ComObject 'Schedule.Service'
+    $folder = $null
+    $registeredTask = $null
+    try {
+        $service.Connect()
+        $folder = $service.GetFolder('\')
+        $registeredTask = $folder.GetTask($TaskName)
+        $currentSddl = [string]$registeredTask.GetSecurityDescriptor(7)
+        $targetSddl = Get-McpWindowsScheduledTaskOwnerSddl `
+            -CurrentSddl $currentSddl `
+            -UserId $UserId
+        $changed = -not $currentSddl.Equals($targetSddl, [StringComparison]::Ordinal)
+        if ($changed) {
+            $registeredTask.SetSecurityDescriptor($targetSddl, 0x10)
+        }
+
+        $verifiedSddl = [string]$registeredTask.GetSecurityDescriptor(7)
+        $verified = [Security.AccessControl.RawSecurityDescriptor]::new($verifiedSddl)
+        $sidValue = Resolve-McpWindowsAccountSidValue -UserId $UserId
+        $fullAccess = $false
+        for ($index = 0; $index -lt $verified.DiscretionaryAcl.Count; $index++) {
+            $ace = $verified.DiscretionaryAcl[$index]
+            if ($ace -is [Security.AccessControl.KnownAce] -and
+                [string]$ace.SecurityIdentifier.Value -eq $sidValue -and
+                [int]$ace.AccessMask -eq 0x1f01ff) {
+                $fullAccess = $true
+                break
+            }
+        }
+        if (-not $fullAccess) {
+            throw "Scheduled Task owner access was not persisted: $TaskName"
+        }
+        return [pscustomobject]@{ changed = $changed; ownerSid = $sidValue }
+    }
+    finally {
+        foreach ($comObject in @($registeredTask, $folder, $service)) {
+            if ($null -ne $comObject -and [Runtime.InteropServices.Marshal]::IsComObject($comObject)) {
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject)
+            }
+        }
+    }
+}
 function Assert-McpWindowsExecutionNodeNoReparsePoints {
     param([Parameter(Mandatory = $true)][string]$Root)
 
