@@ -26,12 +26,12 @@ const staleConnectorMissingTools = [
 ] as const;
 
 describe("MCP tool catalog identity", () => {
-  it("identifies the complete 61-tool catalog", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(61);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(61);
+  it("identifies the complete 60-tool catalog", () => {
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(60);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(60);
     expect(MCP_TOOL_CATALOG_CONTRACT_REVISION).toMatch(/^[a-f0-9]{64}$/u);
     expect(MCP_FULL_TOOL_CATALOG_METADATA).toMatchObject({
-      toolCount: 61,
+      toolCount: 60,
       contractRevision: MCP_TOOL_CATALOG_CONTRACT_REVISION,
     });
     expect(MCP_FULL_TOOL_CATALOG_METADATA.serverVersion).toMatch(
@@ -39,14 +39,14 @@ describe("MCP tool catalog identity", () => {
     );
   });
 
-  it("reproduces the currently stale 38-tool connector catalog exactly", () => {
+  it("reproduces the currently stale 37-tool connector catalog exactly", () => {
     const missing = new Set<string>(staleConnectorMissingTools);
     const staleNames = MCP_FULL_TOOL_CATALOG_NAMES.filter(
       (name) => !missing.has(name),
     );
 
     expect(staleConnectorMissingTools).toHaveLength(23);
-    expect(staleNames).toHaveLength(38);
+    expect(staleNames).toHaveLength(37);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([...staleConnectorMissingTools]),
     );
@@ -60,12 +60,12 @@ describe("MCP tool catalog identity", () => {
     );
   });
 
-  it("identifies a 60-tool connector missing only list_workspace_roots as stale", () => {
+  it("identifies a 59-tool connector missing only list_workspace_roots as stale", () => {
     const staleNames = MCP_FULL_TOOL_CATALOG_NAMES.filter(
       (name) => name !== "list_workspace_roots",
     );
 
-    expect(staleNames).toHaveLength(60);
+    expect(staleNames).toHaveLength(59);
     const stale = createMcpToolCatalogMetadata(staleNames);
     expect(stale.toolSetRevision).not.toBe(
       MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,

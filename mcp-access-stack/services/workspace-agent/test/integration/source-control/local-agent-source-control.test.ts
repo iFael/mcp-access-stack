@@ -228,7 +228,7 @@ describe("LocalAgent typed source-control authorization", () => {
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
   });
 
-  it("blocks commit and merge on current main and push of main before backend mutation", async () => {
+  it("blocks commit/merge on current main while routing main push through confirmation", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.branch.write", "git.commit.write", "git.merge.write", "git.remote.push"],
       branch: "main",
@@ -250,17 +250,31 @@ describe("LocalAgent typed source-control authorization", () => {
         expectedSourceHeadSha: SHA_B,
       }),
     ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
+    const pendingMainPush = await (agent as any).gitPushBranch({
+      workspaceId: "test",
+      branch: "main",
+      expectedLocalSha: SHA_A,
+    }, { invocationId: "main-push" });
+    expect(pendingMainPush).toMatchObject({
+      status: "confirmation_required",
+      operation: "git_push_branch",
+    });
+    expect(gitExecutor.commit).not.toHaveBeenCalled();
+    expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
+    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
+
+    if (pendingMainPush.status !== "confirmation_required") {
+      throw new Error("Expected main push confirmation");
+    }
     await expect(
       (agent as any).gitPushBranch({
         workspaceId: "test",
         branch: "main",
         expectedLocalSha: SHA_A,
-      }),
-    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
-
-    expect(gitExecutor.commit).not.toHaveBeenCalled();
-    expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
-    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
+        confirmationId: pendingMainPush.confirmationId,
+      }, { invocationId: "main-push" }),
+    ).resolves.toMatchObject({ status: "completed", branch: "main", remoteSha: SHA_A });
+    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
 
     await expect(
       (agent as any).gitCreateBranch(
@@ -343,6 +357,21 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
       ),
     ).resolves.toMatchObject({ status: "completed", remoteSha: SHA_A });
     expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps main push confirmation-bound in trusted workspace", async () => {
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
+    });
+
+    await expect(
+      (agent as any).gitPushBranch(
+        { workspaceId: "test", branch: "main", expectedLocalSha: SHA_A, remote: "origin" },
+        { invocationId: "trusted-main-push" },
+      ),
+    ).resolves.toMatchObject({ status: "confirmation_required", operation: "git_push_branch" });
+    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
   });
 
   it("executes pull-request creation from a non-main head without confirmation", async () => {

@@ -27,7 +27,6 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "writeFile",
   "patchFile",
   "runCommand",
-  "runPowerShell",
   "startBackgroundTask",
   "cancelBackgroundTask",
   "gitCreateBranch",

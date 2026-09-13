@@ -195,7 +195,8 @@ function Assert-McpWindowsExecutionNodeRelease {
 
     $executionManifestPath = Join-Path $release 'execution-node-manifest.json'
     $executionManifest = Read-McpPublicJson -Path $executionManifestPath
-    if ([int]$executionManifest.version -ne 1 -or
+    $executionVersion = [int]$executionManifest.version
+    if ($executionVersion -notin @(1, 2) -or
         [string]$executionManifest.releaseId -ne $releaseId -or
         [string]$executionManifest.commit -ne $commit -or
         [string]$executionManifest.platform -ne 'win32-x64' -or
@@ -206,9 +207,9 @@ function Assert-McpWindowsExecutionNodeRelease {
 
     $executionIdentity = $releaseManifest.executionNode
     if ($null -eq $executionIdentity -or
-        [int]$executionIdentity.schemaVersion -ne 1 -or
+        [int]$executionIdentity.schemaVersion -ne $executionVersion -or
         [string]$executionIdentity.manifestPath -ne 'execution-node-manifest.json') {
-        throw 'Release manifest is missing execution-node identity.'
+        throw 'Release manifest is missing or mismatches execution-node identity.'
     }
     $expectedExecutionHash = ([string]$executionIdentity.manifestSha256).ToLowerInvariant()
     $actualExecutionHash = (Get-FileHash -LiteralPath $executionManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -216,103 +217,146 @@ function Assert-McpWindowsExecutionNodeRelease {
         throw 'Execution-node manifest hash is not bound to the release manifest.'
     }
 
-    $artifacts = @($executionManifest.artifacts)
-    $baseRoles = @('mcp-host', 'workspace-agent', 'browser-worker', 'node-runtime')
-    $edgeRoles = @('edge-connector', 'edge-connector-launcher')
-    $edgeHostRoles = @('edge-host')
-    $edgeNativeRoles = @('edge-native-launcher')
-    if ($artifacts.Count -eq 4) {
-        $expectedRoles = $baseRoles
-    }
-    elseif ($artifacts.Count -eq 6) {
-        $expectedRoles = @($baseRoles + $edgeRoles)
-    }
-    elseif ($artifacts.Count -eq 7) {
-        $expectedRoles = @($baseRoles + $edgeRoles + $edgeNativeRoles)
-    }
-    elseif ($artifacts.Count -eq 8) {
-        $expectedRoles = @($baseRoles + $edgeRoles + $edgeHostRoles + $edgeNativeRoles)
-    }
-    else {
-        throw 'Bundled-node execution manifest must contain four legacy, six Edge PowerShell, seven native-Edge legacy, or eight split-owner critical artifacts.'
-    }
-    foreach ($role in $expectedRoles) {
-        $records = @($artifacts | Where-Object { [string]$_.role -eq $role })
-        if ($records.Count -ne 1) {
-            throw "Execution-node manifest role is missing or duplicated: $role"
-        }
-        $record = $records[0]
-        $artifactPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$record.path)
+    function Assert-McpExecutionArtifactIntegrity {
+        param([Parameter(Mandatory = $true)][object]$Record)
+        $artifactPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$Record.path)
         if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-            throw "Execution-node artifact is missing: $($record.path)"
+            throw "Execution-node artifact is missing: $($Record.path)"
         }
         $item = Get-Item -LiteralPath $artifactPath
-        if ([long]$record.sizeBytes -ne [long]$item.Length) {
-            throw "Execution-node artifact size mismatch: $($record.path)"
+        if ([long]$Record.sizeBytes -ne [long]$item.Length) {
+            throw "Execution-node artifact size mismatch: $($Record.path)"
         }
         $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $expectedHash = ([string]$record.sha256).ToLowerInvariant()
+        $expectedHash = ([string]$Record.sha256).ToLowerInvariant()
         if ($expectedHash -notmatch '^[a-f0-9]{64}$' -or $actualHash -ne $expectedHash) {
-            throw "Execution-node artifact hash mismatch: $($record.path)"
+            throw "Execution-node artifact hash mismatch: $($Record.path)"
         }
-        if ($record.authenticodeRequired -eq $true) {
+        if ($Record.authenticodeRequired -eq $true) {
             Assert-McpWindowsExecutionNodeSignature `
                 -Path $artifactPath `
                 -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
         }
+        return $artifactPath
     }
 
-    $hostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
-    if ($hostRecord.authenticodeRequired -ne $true) {
-        throw 'McpHost must require Authenticode validation.'
+    $artifacts = @($executionManifest.artifacts)
+    $nodeRecord = $null
+    if ($executionVersion -eq 2) {
+        $services = @($executionManifest.services)
+        $requiredServices = @('edge-runtime', 'browser-worker')
+        foreach ($serviceId in $requiredServices) {
+            $records = @($services | Where-Object { [string]$_.id -eq $serviceId })
+            if ($records.Count -ne 1) {
+                throw "Execution-node service is missing or duplicated: $serviceId"
+            }
+        }
+        if ($services.Count -ne $requiredServices.Count) {
+            throw 'Execution-node manifest contains an unsupported logical service.'
+        }
+
+        $seenArtifactIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($record in $artifacts) {
+            $artifactId = [string]$record.id
+            $owner = [string]$record.owner
+            if ($artifactId -notmatch '^[a-z][a-z0-9-]{0,63}$' -or -not $seenArtifactIds.Add($artifactId)) {
+                throw "Execution-node artifact id is invalid or duplicated: $artifactId"
+            }
+            if ($owner -notin @('edge-runtime', 'browser-worker', 'shared')) {
+                throw "Execution-node artifact owner is invalid: $owner"
+            }
+            Assert-McpExecutionArtifactIntegrity -Record $record | Out-Null
+        }
+
+        foreach ($service in $services) {
+            $serviceId = [string]$service.id
+            $entryId = [string]$service.entryArtifactId
+            $entry = @($artifacts | Where-Object { [string]$_.id -eq $entryId })
+            if ($entry.Count -ne 1) {
+                throw "Execution-node service entry artifact is missing: $serviceId/$entryId"
+            }
+            if ([string]$entry[0].owner -ne $serviceId) {
+                throw "Execution-node service entry artifact must be owned by $serviceId"
+            }
+            if ($entry[0].authenticodeRequired -ne $true) {
+                throw "Execution-node service entry artifact must require Authenticode: $serviceId"
+            }
+        }
+
+        $requiredArtifacts = @{
+            'edge-host' = @('edge-runtime', 'native/McpEdgeHost.exe', $true)
+            'edge-connector' = @('edge-runtime', 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js', $false)
+            'edge-validation-launcher' = @('edge-runtime', 'deploy/windows/Start-McpEdgeConnector.ps1', $true)
+            'browser-worker-server' = @('browser-worker', 'services/browser-worker/dist/server.js', $false)
+            'browser-native-launcher' = @('browser-worker', 'compat/McpNodeHostLauncher.exe', $true)
+            'browser-credential-broker' = @('browser-worker', 'compat/McpCredentialBroker.exe', $true)
+            'node-runtime' = @('shared', 'runtime/node/node.exe', $false)
+        }
+        foreach ($artifactId in $requiredArtifacts.Keys) {
+            $record = @($artifacts | Where-Object { [string]$_.id -eq $artifactId })
+            if ($record.Count -ne 1) {
+                throw "Execution-node required artifact is missing or duplicated: $artifactId"
+            }
+            $expected = $requiredArtifacts[$artifactId]
+            if ([string]$record[0].owner -ne [string]$expected[0] -or
+                [string]$record[0].path -ne [string]$expected[1] -or
+                [bool]$record[0].authenticodeRequired -ne [bool]$expected[2]) {
+                throw "Execution-node required artifact contract mismatch: $artifactId"
+            }
+        }
+        $nodeRecord = @($artifacts | Where-Object { [string]$_.id -eq 'node-runtime' })[0]
     }
-    if ($artifacts.Count -eq 8) {
+    else {
+        $legacyRoles = @(
+            'mcp-host',
+            'workspace-agent',
+            'browser-worker',
+            'edge-connector',
+            'edge-connector-launcher',
+            'edge-host',
+            'edge-native-launcher',
+            'node-runtime'
+        )
+        if ($artifacts.Count -ne $legacyRoles.Count) {
+            throw 'Historical execution-node manifest must contain exactly the eight-role split-owner contract.'
+        }
+        foreach ($role in $legacyRoles) {
+            $records = @($artifacts | Where-Object { [string]$_.role -eq $role })
+            if ($records.Count -ne 1) {
+                throw "Historical execution-node manifest role is missing or duplicated: $role"
+            }
+            Assert-McpExecutionArtifactIntegrity -Record $records[0] | Out-Null
+        }
+        $hostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
+        if ($hostRecord.authenticodeRequired -ne $true) {
+            throw 'Historical McpHost must require Authenticode validation.'
+        }
         $edgeConnectorRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-connector' })[0]
         $edgeHostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-host' })[0]
         $edgeLauncherRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })[0]
-        if ([string]$edgeConnectorRecord.path -ne 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js') {
-            throw 'Split-owner Edge connector must use the canonical package CLI.'
+        if ([string]$edgeConnectorRecord.path -ne 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -or
+            [string]$edgeHostRecord.path -ne 'native/McpEdgeHost.exe' -or
+            [string]$edgeLauncherRecord.path -ne 'compat/McpNodeHostLauncher.exe') {
+            throw 'Historical execution-node artifact paths are invalid.'
         }
-        if ([string]$edgeHostRecord.path -ne 'native/McpEdgeHost.exe' -or $edgeHostRecord.authenticodeRequired -ne $true) {
-            throw 'Split-owner Edge host must be the signed native/McpEdgeHost.exe artifact.'
-        }
-        if ([string]$edgeLauncherRecord.path -ne 'compat/McpNodeHostLauncher.exe' -or $edgeLauncherRecord.authenticodeRequired -ne $true) {
-            throw 'Split-owner Browser Worker launcher must remain the signed compatibility launcher.'
-        }
-    }
+        $nodeRecord = @($artifacts | Where-Object { [string]$_.role -eq 'node-runtime' })[0]
 
-    foreach ($compatibilityExecutable in @(
-        'compat\McpNodeHostLauncher.exe',
-        'compat\McpCredentialBroker.exe'
-    )) {
-        $compatibilityPath = Join-Path $release $compatibilityExecutable
-        if (-not (Test-Path -LiteralPath $compatibilityPath -PathType Leaf)) {
-            throw "Signed compatibility artifact is missing: $compatibilityExecutable"
+        if ($RuntimeSmoke) {
+            $hostPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$hostRecord.path)
+            $hostVersion = @(& $hostPath --version)
+            if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
+                throw 'Historical signed McpHost failed its version smoke check.'
+            }
         }
-        Assert-McpWindowsExecutionNodeSignature `
-            -Path $compatibilityPath `
-            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     }
 
     if ($RuntimeSmoke) {
-        $hostPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$hostRecord.path)
-        $hostVersion = @(& $hostPath --version)
-        if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
-            throw 'Signed McpHost failed its version smoke check.'
-        }
-        $hostValidation = @(& $hostPath --validate-release-root $release)
-        if ($LASTEXITCODE -ne 0 -or $hostValidation.Count -ne 1 -or [string]$hostValidation[0] -ne 'release-root-valid') {
-            throw 'Signed McpHost failed its release-root validation smoke check.'
-        }
-
-        $nodeRecord = @($artifacts | Where-Object { [string]$_.role -eq 'node-runtime' })[0]
         $nodePath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$nodeRecord.path)
         $nodeVersion = @(& $nodePath --version)
         if ($LASTEXITCODE -ne 0 -or $nodeVersion.Count -ne 1 -or [string]$nodeVersion[0] -ne [string]$releaseManifest.nodeVersion) {
             throw 'Bundled Node.js runtime does not match the immutable release manifest.'
         }
     }
-
     return [pscustomobject]@{
         releaseId = $releaseId
         commit = $commit

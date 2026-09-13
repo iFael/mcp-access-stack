@@ -216,7 +216,7 @@ describe("connection request executor", () => {
     await started;
 
     const second = await executor.execute(
-      powerShellRequest("shell-request-2", "project-a"),
+      shellRequest("shell-request-2", "project-a"),
       1,
     );
     const read = await executor.execute(
@@ -439,17 +439,6 @@ function shellRequest(requestId: string, workspaceId: string): RelayRequest {
     ...createRequest("runCommand", {
       workspaceId,
       shell: "powershell",
-      command: "Write-Output fixture",
-      timeoutMs: 30_000,
-    }),
-    requestId,
-  };
-}
-
-function powerShellRequest(requestId: string, workspaceId: string): RelayRequest {
-  return {
-    ...createRequest("runPowerShell", {
-      workspaceId,
       command: "Write-Output fixture",
       timeoutMs: 30_000,
     }),

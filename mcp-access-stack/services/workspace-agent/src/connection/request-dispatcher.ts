@@ -28,8 +28,6 @@ export async function dispatchRelayRequest(
       return agent.runValidation(request.input, context);
     case "runCommand":
       return agent.runCommand(request.input, context);
-    case "runPowerShell":
-      return agent.runPowerShell(request.input, context);
     case "searchFiles":
       return agent.searchFiles(request.input, context);
     case "inspectGit":

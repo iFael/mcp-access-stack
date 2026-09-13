@@ -2,16 +2,6 @@ import { z } from "zod";
 import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
-  commandAttemptSchema,
-  commandAutoCorrectionModeSchema,
-  commandCorrectionSchema,
-  commandDiagnosisSchema,
-  commandExecutionModeSchema,
-  commandExpectedOutcomeSchema,
-  commandPostconditionResultSchema,
-  preferredCommandShellSchema,
-} from "./qualified-command-contracts.js";
-import {
   operationDeadlineSchema,
   operationLifecycleSchema,
   routableCommandTimeoutMsSchema,
@@ -40,12 +30,15 @@ import {
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
   githubRepositoryResultSchema,
-} from "./source-control-contracts.js";import {
+} from "./source-control-contracts.js";
+import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
   backgroundTaskWaitResultSchema,
   backgroundTaskRecordSchema,
   backgroundTaskResultSchema,
+  backgroundTaskStartedResultSchema,
+  startBackgroundTaskResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
   waitBackgroundTaskInputSchema,
@@ -53,6 +46,7 @@ import {
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
 } from "./background-task-contracts.js";
+import { commandConfirmationRequiredResultSchema } from "./command-confirmation-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const relativePathSchema = z.string().min(1);
@@ -265,7 +259,6 @@ export const directRunCommandInputSchema = commandExecutionCommonSchema
   .extend({
     command: z.string().min(1).max(32_000),
     shell: shellNameSchema,
-    executionMode: z.literal("direct").optional(),
   })
   .strict();
 
@@ -273,91 +266,12 @@ export type DirectRunCommandInput = z.infer<
   typeof directRunCommandInputSchema
 >;
 
-export const qualifiedRunCommandInputSchema = commandExecutionCommonSchema
-  .extend({
-    command: z.string().min(1).max(32_000).optional(),
-    objective: z.string().min(1).max(4_000).optional(),
-    executionMode: z.literal("qualified").optional(),
-    autoCorrection: commandAutoCorrectionModeSchema.optional(),
-    preferredShell: preferredCommandShellSchema.optional(),
-    shell: shellNameSchema.optional(),
-    expectedOutcome: z.array(commandExpectedOutcomeSchema).max(20).optional(),
-  })
-  .strict()
-  .superRefine((input, context) => {
-    if (input.executionMode !== "qualified" && input.objective === undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["executionMode"],
-        message:
-          "Qualified mode requires objective or executionMode=qualified.",
-      });
-    }
-    if (input.command === undefined && input.objective === undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["objective"],
-        message: "Qualified mode requires command or objective.",
-      });
-    }
-  });
-
-export type QualifiedRunCommandInput = z.infer<
-  typeof qualifiedRunCommandInputSchema
->;
-
-export const runCommandInputSchema = z.union([
-  directRunCommandInputSchema,
-  qualifiedRunCommandInputSchema,
-]);
+export const runCommandInputSchema = directRunCommandInputSchema;
 
 export type RunCommandInput = z.infer<typeof runCommandInputSchema>;
 
-/**
- * Object-shaped schema published through MCP tools/list. The SDK only emits
- * JSON Schema for top-level objects, so the canonical union is revalidated
- * through superRefine while all supported fields remain discoverable.
- */
-export const runCommandToolInputSchema = z
-  .object({
-    workspaceId: workspaceIdSchema,
-    cwd: relativePathSchema.optional(),
-    timeoutMs: routableCommandTimeoutMsSchema,
-    confirmationId: z.string().min(1).max(128).optional(),
-    command: z.string().min(1).max(32_000).optional(),
-    objective: z.string().min(1).max(4_000).optional(),
-    executionMode: commandExecutionModeSchema.optional(),
-    autoCorrection: commandAutoCorrectionModeSchema.optional(),
-    preferredShell: preferredCommandShellSchema.optional(),
-    shell: shellNameSchema.optional(),
-    expectedOutcome: z.array(commandExpectedOutcomeSchema).max(20).optional(),
-  })
-  .strict()
-  .superRefine((input, context) => {
-    if (runCommandInputSchema.safeParse(input).success) return;
-    context.addIssue({
-      code: "custom",
-      message: "run_command arguments must match direct or qualified execution mode.",
-    });
-  });
-
-export const runPowerShellInputSchema = commandExecutionCommonSchema
-  .extend({
-    command: z.string().min(1).max(32_000),
-  })
-  .strict();
-
-export type RunPowerShellInput = z.infer<typeof runPowerShellInputSchema>;
-
-const commandQualifiedResultFields = {
-  executionMode: commandExecutionModeSchema.optional(),
-  corrected: z.boolean().optional(),
-  attemptCount: z.number().int().min(1).max(2).optional(),
-  diagnosis: commandDiagnosisSchema.optional(),
-  correction: commandCorrectionSchema.optional(),
-  postcondition: commandPostconditionResultSchema.optional(),
-  attempts: z.array(commandAttemptSchema).max(2).optional(),
-};
+/** Canonical object-shaped schema published through MCP tools/list. */
+export const runCommandToolInputSchema = runCommandInputSchema;
 
 export const commandExecutedResultSchema = z
   .object({
@@ -369,29 +283,10 @@ export const commandExecutedResultSchema = z
     stderr: z.string(),
     timedOut: z.boolean(),
     lifecycle: operationLifecycleSchema.optional(),
-    ...commandQualifiedResultFields,
   })
   .strict();
 
-export const commandConfirmationRequiredResultSchema = z
-  .object({
-    status: z.literal("confirmation_required"),
-    shell: shellNameSchema,
-    cwd: z.string(),
-    confirmationId: z.string(),
-    expiresAt: z.iso.datetime(),
-    reasons: z.array(z.string().min(1)).min(1),
-    ...commandQualifiedResultFields,
-  })
-  .strict();
-
-export const commandBackgroundTaskResultSchema = z
-  .object({
-    status: z.literal("background_task_started"),
-    task: backgroundTaskRecordSchema,
-    ...commandQualifiedResultFields,
-  })
-  .strict();
+export const commandBackgroundTaskResultSchema = backgroundTaskStartedResultSchema;
 
 export const runCommandResultSchema = z.discriminatedUnion("status", [
   commandExecutedResultSchema,
@@ -400,10 +295,6 @@ export const runCommandResultSchema = z.discriminatedUnion("status", [
 ]);
 
 export type RunCommandResult = z.infer<typeof runCommandResultSchema>;
-
-export const runPowerShellResultSchema = runCommandResultSchema;
-
-export type RunPowerShellResult = z.infer<typeof runPowerShellResultSchema>;
 
 export const commandMcpOutputSchema = z
   .object({
@@ -423,13 +314,10 @@ export const commandMcpOutputSchema = z
     expiresAt: z.iso.datetime().optional(),
     reasons: z.array(z.string().min(1)).optional(),
     task: backgroundTaskRecordSchema.optional(),
-    ...commandQualifiedResultFields,
   })
   .strict();
 
 export const runCommandMcpResultSchema = commandMcpOutputSchema;
-
-export const runPowerShellMcpResultSchema = commandMcpOutputSchema;
 
 export const searchFilesInputSchema = z
   .object({
@@ -668,7 +556,6 @@ export const relayOperations = [
   "patchFile",
   "runValidation",
   "runCommand",
-  "runPowerShell",
   "searchFiles",
   "inspectGit",
   "getWorkspaceContext",
@@ -738,11 +625,6 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     ...relayRequestBase,
     operation: z.literal("runCommand"),
     input: runCommandInputSchema,
-  }).strict(),
-  z.object({
-    ...relayRequestBase,
-    operation: z.literal("runPowerShell"),
-    input: runPowerShellInputSchema,
   }).strict(),
   z.object({
     ...relayRequestBase,
@@ -874,11 +756,10 @@ export const relayResultSchemas = {
   patchFile: patchFileResultSchema,
   runValidation: runWorkspaceValidationResultSchema,
   runCommand: runCommandResultSchema,
-  runPowerShell: runPowerShellResultSchema,
   searchFiles: searchFilesResultSchema,
   inspectGit: inspectGitResultSchema,
   getWorkspaceContext: getWorkspaceContextResultSchema,
-  startBackgroundTask: backgroundTaskResultSchema,
+  startBackgroundTask: startBackgroundTaskResultSchema,
   getBackgroundTask: backgroundTaskResultSchema,
   waitBackgroundTask: backgroundTaskWaitResultSchema,
   listBackgroundTasks: backgroundTaskListResultSchema,

@@ -5,7 +5,7 @@ import {
   getMcpResponseDiagnostic,
   type EdgeExecutionTransport,
 } from "../src/control-plane/mcp-control-plane.js";
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",

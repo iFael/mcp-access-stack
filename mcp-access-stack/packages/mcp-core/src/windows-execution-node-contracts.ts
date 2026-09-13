@@ -6,6 +6,10 @@ const releaseIdSchema = z
   .trim()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u);
 const commitSchema = z.string().regex(/^[a-f0-9]{40}$/u);
+const artifactIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z][a-z0-9-]{0,63}$/u);
 const relativeArtifactPathSchema = z
   .string()
   .trim()
@@ -23,35 +27,44 @@ const relativeArtifactPathSchema = z
     { message: "artifact path must not contain traversal or empty segments." },
   );
 
-export const WINDOWS_EXECUTION_ARTIFACT_ROLES = [
-  "mcp-host",
-  "workspace-agent",
+export const WINDOWS_EXECUTION_SERVICE_IDS = [
+  "edge-runtime",
   "browser-worker",
-  "node-runtime",
 ] as const;
 
-export const windowsExecutionArtifactRoleSchema = z.enum(
-  WINDOWS_EXECUTION_ARTIFACT_ROLES,
+export const windowsExecutionServiceIdSchema = z.enum(
+  WINDOWS_EXECUTION_SERVICE_IDS,
 );
-export type WindowsExecutionArtifactRole = z.infer<
-  typeof windowsExecutionArtifactRoleSchema
+export type WindowsExecutionServiceId = z.infer<
+  typeof windowsExecutionServiceIdSchema
 >;
 
-export const WINDOWS_EXECUTION_RUNTIME_MODES = [
-  "bundled-node",
-  "self-contained",
+export const WINDOWS_EXECUTION_ARTIFACT_OWNERS = [
+  ...WINDOWS_EXECUTION_SERVICE_IDS,
+  "shared",
 ] as const;
 
-export const windowsExecutionRuntimeModeSchema = z.enum(
-  WINDOWS_EXECUTION_RUNTIME_MODES,
+export const windowsExecutionArtifactOwnerSchema = z.enum(
+  WINDOWS_EXECUTION_ARTIFACT_OWNERS,
 );
-export type WindowsExecutionRuntimeMode = z.infer<
-  typeof windowsExecutionRuntimeModeSchema
+export type WindowsExecutionArtifactOwner = z.infer<
+  typeof windowsExecutionArtifactOwnerSchema
+>;
+
+export const windowsExecutionServiceSchema = z
+  .object({
+    id: windowsExecutionServiceIdSchema,
+    entryArtifactId: artifactIdSchema,
+  })
+  .strict();
+export type WindowsExecutionService = z.infer<
+  typeof windowsExecutionServiceSchema
 >;
 
 export const windowsExecutionArtifactSchema = z
   .object({
-    role: windowsExecutionArtifactRoleSchema,
+    id: artifactIdSchema,
+    owner: windowsExecutionArtifactOwnerSchema,
     path: relativeArtifactPathSchema,
     sha256: sha256Schema,
     sizeBytes: z.number().int().positive(),
@@ -64,64 +77,89 @@ export type WindowsExecutionArtifact = z.infer<
 
 export const windowsExecutionReleaseManifestSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     releaseId: releaseIdSchema,
     commit: commitSchema,
     platform: z.literal("win32-x64"),
     createdAt: z.iso.datetime(),
-    runtimeMode: windowsExecutionRuntimeModeSchema,
+    runtimeMode: z.literal("bundled-node"),
     integrityRoot: z.literal("signed-distribution-manifest"),
-    artifacts: z.array(windowsExecutionArtifactSchema).min(3).max(4),
+    services: z.array(windowsExecutionServiceSchema),
+    artifacts: z.array(windowsExecutionArtifactSchema),
   })
   .strict()
   .superRefine((manifest, context) => {
-    const byRole = new Map<WindowsExecutionArtifactRole, WindowsExecutionArtifact>();
+    const services = new Map<WindowsExecutionServiceId, WindowsExecutionService>();
+    for (const service of manifest.services) {
+      if (services.has(service.id)) {
+        context.addIssue({
+          code: "custom",
+          message: `duplicate service id: ${service.id}`,
+          path: ["services"],
+        });
+      }
+      services.set(service.id, service);
+    }
+
+    for (const requiredService of WINDOWS_EXECUTION_SERVICE_IDS) {
+      if (!services.has(requiredService)) {
+        context.addIssue({
+          code: "custom",
+          message: `missing required service: ${requiredService}`,
+          path: ["services"],
+        });
+      }
+    }
+
+    const artifacts = new Map<string, WindowsExecutionArtifact>();
     for (const artifact of manifest.artifacts) {
-      if (byRole.has(artifact.role)) {
+      if (artifacts.has(artifact.id)) {
         context.addIssue({
           code: "custom",
-          message: `duplicate artifact role: ${artifact.role}`,
+          message: `duplicate artifact id: ${artifact.id}`,
           path: ["artifacts"],
         });
       }
-      byRole.set(artifact.role, artifact);
+      artifacts.set(artifact.id, artifact);
     }
 
-    for (const requiredRole of [
-      "mcp-host",
-      "workspace-agent",
-      "browser-worker",
-    ] as const) {
-      if (!byRole.has(requiredRole)) {
+    for (const service of services.values()) {
+      const entry = artifacts.get(service.entryArtifactId);
+      if (!entry) {
         context.addIssue({
           code: "custom",
-          message: `missing required artifact role: ${requiredRole}`,
-          path: ["artifacts"],
+          message: `service ${service.id} entry artifact is missing: ${service.entryArtifactId}`,
+          path: ["services"],
+        });
+        continue;
+      }
+      if (entry.owner !== service.id) {
+        context.addIssue({
+          code: "custom",
+          message: `service ${service.id} entry artifact must be owned by ${service.id}`,
+          path: ["services"],
+        });
+      }
+      if (!entry.authenticodeRequired) {
+        context.addIssue({
+          code: "custom",
+          message: `service ${service.id} entry artifact must require Authenticode validation`,
+          path: ["services"],
         });
       }
     }
 
-    const mcpHost = byRole.get("mcp-host");
-    if (mcpHost && !mcpHost.authenticodeRequired) {
+    const nodeRuntime = artifacts.get("node-runtime");
+    if (!nodeRuntime) {
       context.addIssue({
         code: "custom",
-        message: "mcp-host must require Authenticode validation",
+        message: "bundled-node runtime requires the node-runtime artifact",
         path: ["artifacts"],
       });
-    }
-
-    const nodeRuntime = byRole.get("node-runtime");
-    if (manifest.runtimeMode === "bundled-node" && !nodeRuntime) {
+    } else if (nodeRuntime.owner !== "shared") {
       context.addIssue({
         code: "custom",
-        message: "bundled-node releases must include a node-runtime artifact",
-        path: ["artifacts"],
-      });
-    }
-    if (manifest.runtimeMode === "self-contained" && nodeRuntime) {
-      context.addIssue({
-        code: "custom",
-        message: "self-contained releases must not include a node-runtime artifact",
+        message: "node-runtime artifact must be shared",
         path: ["artifacts"],
       });
     }

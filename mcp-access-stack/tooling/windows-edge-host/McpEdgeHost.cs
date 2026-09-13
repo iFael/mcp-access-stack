@@ -14,7 +14,7 @@ internal static class Program
 {
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectExtendedLimitInformationClass = 9;
-    private const string ContractVersion = "mcp-edge-host-contract-v1";
+    private const string ContractVersion = "mcp-edge-host-contract-v2";
     private static readonly object LogGate = new object();
 
     [StructLayout(LayoutKind.Sequential)]
@@ -357,7 +357,7 @@ internal static class Program
         {
             throw new InvalidDataException("Release manifest identity is invalid.");
         }
-        if (RequireJsonInteger(executionManifest, "version") != 1 ||
+        if (RequireJsonInteger(executionManifest, "version") != 2 ||
             !string.Equals(RequireJsonString(executionManifest, "releaseId"), releaseId, StringComparison.Ordinal) ||
             !string.Equals(RequireJsonString(executionManifest, "commit"), commit, StringComparison.Ordinal) ||
             !string.Equals(RequireJsonString(executionManifest, "platform"), "win32-x64", StringComparison.Ordinal) ||
@@ -367,24 +367,35 @@ internal static class Program
             throw new InvalidDataException("Execution-node manifest identity is invalid.");
         }
 
+        IList services = RequireJsonList(executionManifest, "services");
+        ValidateService(services, "edge-runtime", "edge-host");
+        ValidateService(services, "browser-worker", "browser-native-launcher");
+        if (services.Count != 2)
+        {
+            throw new InvalidDataException("Execution-node manifest contains an unsupported logical service.");
+        }
+
         IList artifacts = RequireJsonList(executionManifest, "artifacts");
-        string nodePath = ValidateArtifact(artifacts, root, "node-runtime", "runtime/node/node.exe", false);
+        string nodePath = ValidateArtifact(artifacts, root, "node-runtime", "shared", "runtime/node/node.exe", false);
         string edgeCliPath = ValidateArtifact(
             artifacts,
             root,
             "edge-connector",
+            "edge-runtime",
             "node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js",
             false);
         string validationLauncherPath = ValidateArtifact(
             artifacts,
             root,
-            "edge-connector-launcher",
+            "edge-validation-launcher",
+            "edge-runtime",
             "deploy/windows/Start-McpEdgeConnector.ps1",
             true);
         string edgeHostPath = ValidateArtifact(
             artifacts,
             root,
             "edge-host",
+            "edge-runtime",
             "native/McpEdgeHost.exe",
             true);
 
@@ -398,10 +409,39 @@ internal static class Program
         return result;
     }
 
+    private static void ValidateService(IList services, string serviceId, string entryArtifactId)
+    {
+        Dictionary<string, object> match = null;
+        int count = 0;
+        foreach (object item in services)
+        {
+            Dictionary<string, object> service = item as Dictionary<string, object>;
+            if (service == null)
+            {
+                throw new InvalidDataException("Execution-node service must be an object.");
+            }
+            string currentId = RequireJsonString(service, "id");
+            if (string.Equals(currentId, serviceId, StringComparison.Ordinal))
+            {
+                match = service;
+                count++;
+            }
+        }
+        if (count != 1 || match == null)
+        {
+            throw new InvalidDataException("Execution-node service is missing or duplicated: " + serviceId);
+        }
+        if (!string.Equals(RequireJsonString(match, "entryArtifactId"), entryArtifactId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Execution-node service entry artifact is invalid: " + serviceId);
+        }
+    }
+
     private static string ValidateArtifact(
         IList artifacts,
         string root,
-        string role,
+        string id,
+        string owner,
         string expectedRelativePath,
         bool authenticodeRequired)
     {
@@ -414,8 +454,8 @@ internal static class Program
             {
                 throw new InvalidDataException("Execution-node artifact must be an object.");
             }
-            string currentRole = RequireJsonString(artifact, "role");
-            if (string.Equals(currentRole, role, StringComparison.Ordinal))
+            string currentId = RequireJsonString(artifact, "id");
+            if (string.Equals(currentId, id, StringComparison.Ordinal))
             {
                 match = artifact;
                 count++;
@@ -423,33 +463,37 @@ internal static class Program
         }
         if (count != 1 || match == null)
         {
-            throw new InvalidDataException("Execution-node artifact role is missing or duplicated: " + role);
+            throw new InvalidDataException("Execution-node artifact id is missing or duplicated: " + id);
+        }
+        if (!string.Equals(RequireJsonString(match, "owner"), owner, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Execution-node artifact owner is invalid: " + id);
         }
 
         string relativePath = RequireJsonString(match, "path").Replace('\\', '/');
         if (!string.Equals(relativePath, expectedRelativePath, StringComparison.Ordinal))
         {
-            throw new InvalidDataException("Execution-node artifact path is invalid: " + role);
+            throw new InvalidDataException("Execution-node artifact path is invalid: " + id);
         }
         string artifactPath = ResolveReleaseFile(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         long expectedSize = RequireJsonLong(match, "sizeBytes");
         string expectedHash = RequireJsonString(match, "sha256").ToLowerInvariant();
         if (expectedSize < 0 || !IsSha256(expectedHash))
         {
-            throw new InvalidDataException("Execution-node artifact integrity metadata is invalid: " + role);
+            throw new InvalidDataException("Execution-node artifact integrity metadata is invalid: " + id);
         }
         FileInfo info = new FileInfo(artifactPath);
         if (info.Length != expectedSize)
         {
-            throw new InvalidDataException("Execution-node artifact size mismatch: " + role);
+            throw new InvalidDataException("Execution-node artifact size mismatch: " + id);
         }
         if (!string.Equals(Sha256File(artifactPath), expectedHash, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("Execution-node artifact hash mismatch: " + role);
+            throw new InvalidDataException("Execution-node artifact hash mismatch: " + id);
         }
         if (authenticodeRequired && !OptionalJsonBoolean(match, "authenticodeRequired", false))
         {
-            throw new InvalidDataException("Execution-node native Edge artifact must require Authenticode: " + role);
+            throw new InvalidDataException("Execution-node native artifact must require Authenticode: " + id);
         }
         return artifactPath;
     }

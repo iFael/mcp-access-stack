@@ -45,15 +45,5 @@
     ],
     "allowWrite": false,
     "allowShell": false
-  },
-  "tunnel": {
-    "enabled": true,
-    "executable": "C:\\absolute\\path\\to\\ngrok.exe",
-    "url": "https://replace-with-your-tunnel.example",
-    "args": [
-      "http",
-      "3300",
-      "--url=https://replace-with-your-tunnel.example"
-    ]
   }
 }

@@ -36,7 +36,7 @@ $connectorToken = 'connector-super-secret-' + ('x' * 48)
 $edgeBaseUrl = 'https://edge.example'
 $taskName = 'MCP Access Stack production edge-connector'
 $edgeHostPath = Join-Path $releaseRoot 'native\McpEdgeHost.exe'
-$nodePath = Join-Path $releaseRoot 'runtime\node\node.exe'
+$nodePath = Join-Path $releaseRoot 'runtime\embedded-node\node.exe'
 $ownerTokenPath = Join-Path $fixtureRoot 'owner-token.txt'
 $policyPath = Join-Path $fixtureRoot 'policy.json'
 $healthFixture = [pscustomobject]@{
@@ -89,7 +89,7 @@ try {
     [IO.File]::WriteAllText($policyPath, "{}`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText(
         (Join-Path $releaseRoot 'execution-node-manifest.json'),
-        (([ordered]@{ version = 1; releaseId = 'release-fixture'; platform = 'win32-x64'; runtimeMode = 'bundled-node' } | ConvertTo-Json) + [Environment]::NewLine),
+        (([ordered]@{ version = 2; releaseId = 'release-fixture'; platform = 'win32-x64'; runtimeMode = 'bundled-node'; artifacts = @([ordered]@{ id = 'node-runtime'; owner = 'shared'; path = 'runtime/embedded-node/node.exe' }) } | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
         [Text.UTF8Encoding]::new($false)
     )
 

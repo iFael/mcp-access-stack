@@ -4,7 +4,7 @@ import {
   type JWTVerifyGetKey,
   type JWTPayload,
 } from "jose";
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 
 export interface EdgeAuthenticator {
   authenticate(request: Request): Promise<AuthenticatedEdgePrincipal>;

@@ -1,20 +1,48 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^https://')]
-    [string]$PublicBaseUrl,
+    [string]$InstallationRoot,
 
     [Parameter(Mandatory = $true)]
-    [Security.SecureString]$NgrokAuthtoken,
+    [string]$ProjectRoot,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^https://')]
+    [string]$EdgeBaseUrl,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ConnectorTokenFile,
+
+    [Parameter(Mandatory = $true)]
+    [string]$OwnerTokenFile,
 
     [Parameter(Mandatory = $true)]
     [string]$PolicyPath,
+
+    [string]$EdgeRuntimeRoot,
+    [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
+    [string]$OwnerOAuthScopes = 'workspaces:read',
+
+    [switch]$EnableBrowserWorker,
+    [string]$BrowserWorkerTokenFile,
+    [string]$BrowserPrivateDirectory,
+    [string]$BrowserUserDataDirectory,
+    [string]$BrowserSitePoliciesPath,
+    [string]$BrowserRuntimeRoot,
+    [ValidateRange(1, 65535)]
+    [int]$BrowserPort = 3350,
 
     [switch]$Execute,
     [switch]$AllowUnsignedDevelopment
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
+if (-not (Test-Path -LiteralPath $publicCommonPath -PathType Leaf)) {
+    throw "Public distribution helper was not found: $publicCommonPath"
+}
 $publicCommonSignature = Get-AuthenticodeSignature -LiteralPath $publicCommonPath
 if (
     $publicCommonSignature.Status -ne 'Valid' -and
@@ -29,150 +57,169 @@ if (-not $Execute) {
 }
 
 Assert-McpPublicWindowsX64
-Assert-McpPublicAdministrator
-foreach ($command in @('docker', 'wsl.exe')) {
-    Assert-McpPublicCommand -Name $command
+
+$distributionRoot = Get-McpPublicProjectRoot
+$installation = [IO.Path]::GetFullPath($InstallationRoot)
+$project = [IO.Path]::GetFullPath($ProjectRoot)
+if (-not (Test-Path -LiteralPath $project -PathType Container)) {
+    throw "Project root was not found: $project"
+}
+foreach ($requiredFile in @(
+    [pscustomobject]@{ Name = 'Connector token'; Path = $ConnectorTokenFile },
+    [pscustomobject]@{ Name = 'Owner token'; Path = $OwnerTokenFile },
+    [pscustomobject]@{ Name = 'Workspace policy'; Path = $PolicyPath }
+)) {
+    $resolved = [IO.Path]::GetFullPath([string]$requiredFile.Path)
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "$($requiredFile.Name) file was not found: $resolved"
+    }
+}
+if ($EnableBrowserWorker) {
+    foreach ($entry in @(
+        [pscustomobject]@{ Name = 'Browser Worker token'; Path = $BrowserWorkerTokenFile; Kind = 'Leaf' },
+        [pscustomobject]@{ Name = 'Browser private directory'; Path = $BrowserPrivateDirectory; Kind = 'Container' },
+        [pscustomobject]@{ Name = 'Browser user-data directory'; Path = $BrowserUserDataDirectory; Kind = 'Container' },
+        [pscustomobject]@{ Name = 'Browser site policies'; Path = $BrowserSitePoliciesPath; Kind = 'Leaf' }
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$entry.Path)) {
+            throw "EnableBrowserWorker requires $($entry.Name)."
+        }
+        $resolved = [IO.Path]::GetFullPath([string]$entry.Path)
+        if (-not (Test-Path -LiteralPath $resolved -PathType ([string]$entry.Kind))) {
+            throw "$($entry.Name) was not found: $resolved"
+        }
+    }
 }
 
-$root = Get-McpPublicProjectRoot
-$policy = [System.IO.Path]::GetFullPath($PolicyPath)
-if (-not (Test-Path -LiteralPath $policy -PathType Leaf)) {
-    throw "Workspace policy was not found: $policy"
-}
-
-Assert-McpPublicSignature `
-    -Path $PSCommandPath `
-    -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicSignature -Path $PSCommandPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 Assert-McpPublicSignature `
     -Path (Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1') `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 $distribution = Assert-McpPublicDistribution `
-    -Root $root `
+    -Root $distributionRoot `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+if ([int]$distribution.schemaVersion -ne 2) {
+    throw 'Current installation requires distribution manifest v2.'
+}
 $releaseId = [string]$distribution.releaseId
-$releaseRoot = Join-Path $root "releases\$releaseId"
-$releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $releaseRoot
-if ([string]$releaseManifest.releaseId -ne $releaseId) {
-    throw 'Distribution and immutable release IDs do not match.'
-}
+$sourceRelease = Resolve-McpPublicChildPath `
+    -Root $distributionRoot `
+    -RelativePath ("releases/{0}" -f $releaseId)
+$releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $sourceRelease
 $releaseAttestation = Assert-McpPublicReleaseAttestation `
-    -ReleaseRoot $releaseRoot `
+    -ReleaseRoot $sourceRelease `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-if ([string]$releaseAttestation.releaseId -ne $releaseId) {
-    throw 'Signed release attestation does not match the distribution release ID.'
-}
-. (Join-Path $root 'deploy\docker\scripts\Common.ps1')
-$nodeState = Initialize-McpReleaseNodeRuntimeState `
-    -ReleaseRoot $releaseRoot `
-    -ProjectRoot $root `
-    -InstallMissing
-$managedNode = Assert-McpManagedNodeRecord `
-    -Record $nodeState.knownGood `
-    -ProjectRoot $root
-Write-McpReleasePointer -Name 'candidate' -Root $root -Value ([ordered]@{
-    version = 1
-    releaseId = $releaseId
-    path = $releaseRoot
-    commit = [string]$releaseManifest.commit
-    builtAt = [string]$releaseManifest.builtAt
-})
-
-& wsl.exe --status *> $null
-if ($LASTEXITCODE -ne 0) {
-    throw 'WSL2 is unavailable. Install or repair WSL2 before continuing.'
-}
-& docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    throw 'Docker Desktop is not running or its Linux engine is unavailable.'
+if (
+    [int]$releaseAttestation.schemaVersion -ne 2 -or
+    [string]$releaseManifest.releaseId -ne $releaseId -or
+    [string]$releaseAttestation.releaseId -ne $releaseId
+) {
+    throw 'Current installation requires matching release and attestation v2 identities.'
 }
 
-Import-McpPublicDockerImages -Manifest $distribution -ReleaseId $releaseId
-
-$playwrightCli = Join-Path $releaseRoot 'node_modules\playwright\cli.js'
-if (-not (Test-Path -LiteralPath $playwrightCli -PathType Leaf)) {
-    throw "The fixed Playwright runtime is missing from the release: $playwrightCli"
-}
-& $managedNode $playwrightCli install chromium
-if ($LASTEXITCODE -ne 0) {
-    throw 'Managed Chromium installation failed.'
-}
-
-$validationInitializer = Join-Path $root 'operations\validation\Initialize-ValidationTools.ps1'
-& $validationInitializer
-if ($LASTEXITCODE -ne 0) {
-    throw 'Validation tool installation failed.'
-}
-
-$plainNgrokToken = ConvertFrom-McpPublicSecureString -Value $NgrokAuthtoken
-try {
-    $productionInitializer = Join-Path $root 'operations\runtime\Initialize-GptOnlyProduction.ps1'
-    & $productionInitializer `
-        -PublicBaseUrl $PublicBaseUrl `
-        -PolicyPath $policy `
-        -AuthMode owner `
-        -DockerTunnel
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Private production configuration failed.'
+$stageScript = Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1'
+$cutoverScript = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
+$edgeTaskInstaller = Join-Path $PSScriptRoot 'Install-McpEdgeConnectorTask.ps1'
+$browserTaskInstaller = Join-Path $PSScriptRoot 'Install-McpBrowserWorkerTask.ps1'
+foreach ($scriptPath in @($stageScript, $cutoverScript, $edgeTaskInstaller, $browserTaskInstaller)) {
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw "Required Windows runtime script was not found: $scriptPath"
     }
+    Assert-McpPublicSignature -Path $scriptPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+}
 
-    $dockerInitializer = Join-Path $root 'deploy\docker\scripts\Initialize-DockerProduction.ps1'
-    & $dockerInitializer `
-        -ImageTag $releaseId `
-        -NgrokAuthtoken $plainNgrokToken
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker production configuration failed.'
+$stageParameters = @{
+    DistributionRoot = $distributionRoot
+    InstallationRoot = $installation
+    ExpectedReleaseId = $releaseId
+    Execute = $true
+    AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
+}
+$stageResult = & $stageScript @stageParameters | ConvertFrom-Json
+if ([string]$stageResult.status -ne 'ready') {
+    throw 'Execution-node candidate staging did not reach ready.'
+}
+
+$cutoverParameters = @{
+    InstallationRoot = $installation
+    Operation = 'Promote'
+    Execute = $true
+    AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
+}
+$cutoverResult = & $cutoverScript @cutoverParameters | ConvertFrom-Json
+if (
+    [string]$cutoverResult.status -ne 'cutover-ready' -or
+    [string]$cutoverResult.ownershipMode -ne 'edge-only' -or
+    [string]$cutoverResult.activeReleaseId -ne $releaseId
+) {
+    throw 'Execution-node Edge-only cutover returned unexpected evidence.'
+}
+$edgeRuntime = if ([string]::IsNullOrWhiteSpace($EdgeRuntimeRoot)) {
+    Join-Path $installation 'runtime\edge-connector'
+}
+else {
+    [IO.Path]::GetFullPath($EdgeRuntimeRoot)
+}
+New-Item -ItemType Directory -Force -Path $edgeRuntime | Out-Null
+
+$browserTaskName = 'MCP Access Stack production browser-worker'
+if ($EnableBrowserWorker) {
+    $browserRuntime = if ([string]::IsNullOrWhiteSpace($BrowserRuntimeRoot)) {
+        Join-Path $installation 'runtime\browser-worker'
     }
-}
-finally {
-    $plainNgrokToken = $null
-}
+    else {
+        [IO.Path]::GetFullPath($BrowserRuntimeRoot)
+    }
+    New-Item -ItemType Directory -Force -Path $browserRuntime | Out-Null
 
-$taskInstaller = Join-Path $root 'deploy\docker\scripts\Install-McpHostTasks.ps1'
-& $taskInstaller `
-    -Environment production `
-    -ReleaseRoot $releaseRoot `
-    -Activate
-if ($LASTEXITCODE -ne 0) {
-    throw 'Windows host task installation failed.'
-}
-
-$promotionTaskInstaller = Join-Path $root 'deploy\docker\scripts\Install-McpProductionPromotionTask.ps1'
-& $promotionTaskInstaller -Execute -Force
-if ($LASTEXITCODE -ne 0) {
-    throw 'Production promotion task installation failed.'
-}
-
-$composeEnv = Join-Path $root '.runtime-private\docker\production\compose.env'
-$composeFile = Join-Path $root 'deploy\docker\compose.production.yml'
-& docker compose `
-    --env-file $composeEnv `
-    -f $composeFile `
-    up -d --no-build
-if ($LASTEXITCODE -ne 0) {
-    throw 'Docker production startup failed.'
+    $browserParameters = @{
+        InstallationRoot = $installation
+        ReleaseId = $releaseId
+        RuntimeRoot = $browserRuntime
+        BrowserTokenFile = [IO.Path]::GetFullPath($BrowserWorkerTokenFile)
+        PrivateDirectory = [IO.Path]::GetFullPath($BrowserPrivateDirectory)
+        UserDataDirectory = [IO.Path]::GetFullPath($BrowserUserDataDirectory)
+        SitePoliciesPath = [IO.Path]::GetFullPath($BrowserSitePoliciesPath)
+        Port = $BrowserPort
+        TaskName = $browserTaskName
+        Execute = $true
+        Activate = $true
+        AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
+    }
+    $null = & $browserTaskInstaller @browserParameters | ConvertFrom-Json
+    Start-ScheduledTask -TaskName $browserTaskName
 }
 
-$agentTask = 'MCP Access Stack Docker production agent'
-$browserTask = 'MCP Access Stack Docker production browser-worker'
-Start-ScheduledTask -TaskName $agentTask
-Start-ScheduledTask -TaskName $browserTask
-
-Wait-McpHttpEndpoint -Uri 'http://127.0.0.1:3310/health/ready' -TimeoutSeconds 180 | Out-Null
-Wait-McpHttpEndpoint -Uri 'http://127.0.0.1:3300/health/live' -TimeoutSeconds 180 | Out-Null
-Wait-McpHttpEndpoint -Uri 'http://127.0.0.1:3350/health/live' -TimeoutSeconds 180 | Out-Null
-
-$activation = Join-Path $root 'deploy\docker\scripts\Activate-McpCandidateRelease.ps1'
-& $activation -Execute -ExpectedReleaseId $releaseId
-if ($LASTEXITCODE -ne 0) {
-    throw 'Candidate activation failed after health checks.'
+$edgeTaskName = 'MCP Access Stack production edge-connector'
+$edgeParameters = @{
+    InstallationRoot = $installation
+    ReleaseId = $releaseId
+    RuntimeRoot = $edgeRuntime
+    EdgeBaseUrl = $EdgeBaseUrl
+    ConnectorTokenFile = [IO.Path]::GetFullPath($ConnectorTokenFile)
+    OwnerTokenFile = [IO.Path]::GetFullPath($OwnerTokenFile)
+    PolicyPath = [IO.Path]::GetFullPath($PolicyPath)
+    AllowedOrigins = $AllowedOrigins
+    OwnerOAuthScopes = $OwnerOAuthScopes
+    TaskName = $edgeTaskName
+    EnableBrowserWorker = [bool]$EnableBrowserWorker
+    BrowserWorkerUrl = "http://127.0.0.1:$BrowserPort"
+    Execute = $true
+    Activate = $true
+    AllowUnsignedDevelopment = [bool]$AllowUnsignedDevelopment
 }
+if ($EnableBrowserWorker) {
+    $edgeParameters.BrowserWorkerTokenFile = [IO.Path]::GetFullPath($BrowserWorkerTokenFile)
+}
+$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json
+Start-ScheduledTask -TaskName $edgeTaskName
 
-$privateConfig = Read-McpPublicJson -Path (Join-Path $root '.runtime-private\gpt-only-production.json')
 [pscustomobject]@{
     installed = $true
     releaseId = $releaseId
-    connectorUrl = ([string]$privateConfig.publicBaseUrl + [string]$privateConfig.mcpPath)
-    ownerTokenPath = (Join-Path $root '.runtime-private\owner-token.txt')
-    browserEngine = 'playwright-direct'
-    chromiumRevision = [string]$releaseManifest.chromium.revision
+    ownershipMode = 'edge-only'
+    edgeTask = [string]$edgeTaskResult.taskName
+    browserTask = if ($EnableBrowserWorker) { $browserTaskName } else { $null }
+    installationRoot = $installation
+    projectRoot = $project
 } | ConvertTo-Json -Compress

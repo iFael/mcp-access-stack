@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import {
   abortSignalError,
   AppError,
@@ -7,11 +6,10 @@ import {
   MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
   remainingOperationTimeMs,
   type OperationContext,
-  type CommandPlan,
+  type CommandConfirmationRequiredResult,
   type DirectRunCommandInput,
+  type ParsedStartBackgroundTaskInput,
   type RunCommandResult,
-  type RunPowerShellInput,
-  type RunPowerShellResult,
   type ShellName,
 } from "@vs-code-gpt/shared";
 import { CommandConfirmationRegistry } from "./confirmation.js";
@@ -22,10 +20,6 @@ import {
 } from "./command-risk.js";
 import { decideCommandAuthorization } from "./confirmation-policy.js";
 import type { ResolvedWorkspace } from "../internal-types.js";
-import {
-  commandPlanExecutionToRiskCommand,
-  commandPlanExecutionToShellCommand,
-} from "./qualified/plan-execution.js";
 import { normalizeRelativePath, PathSecurity } from "../path-security.js";
 import {
   runShellCommand,
@@ -33,14 +27,14 @@ import {
   type ShellFileExecutionOptions,
 } from "./process-runner.js";
 
-interface PreparedCommand {
+export interface AuthorizedCommandExecution {
   logicalCwd: string;
   absoluteCwd: string;
 }
 
-export interface PreparedQualifiedCommand extends PreparedCommand {
-  command: string;
-  planFingerprint: string;
+interface CommandAuthorizationScope {
+  executionContext: "foreground" | "background";
+  operation: string;
 }
 
 export class ShellService {
@@ -52,7 +46,12 @@ export class ShellService {
     context: OperationContext = {},
   ): Promise<RunCommandResult> {
     const deadline = synchronousCommandDeadline(input.timeoutMs, context);
-    const prepared = await this.prepareCommand(workspace, input, context.signal);
+    const prepared = await this.prepareCommand(
+      workspace,
+      input,
+      context.signal,
+      { executionContext: "foreground", operation: "run_command" },
+    );
     if ("status" in prepared) return prepared;
     return runShellCommand(
       input.shell,
@@ -65,191 +64,55 @@ export class ShellService {
     );
   }
 
-  async runCommandToFiles(
+  async runAuthorizedCommandToFiles(
     workspace: ResolvedWorkspace,
     input: DirectRunCommandInput,
     output: ShellFileExecutionOptions,
     signal?: AbortSignal,
   ): Promise<RunCommandResult> {
-    const prepared = await this.prepareCommand(workspace, input, signal);
-    if ("status" in prepared) return prepared;
+    await assertShellAllowed(workspace, input.shell);
+    if (signal?.aborted) {
+      throw abortSignalError(signal, "Command operation was cancelled.");
+    }
+    const cwd = await resolveShellCwd(workspace, input.cwd);
+    enforceGitPushPolicy(input.shell, input.command);
     return runShellCommandToFiles(
       input.shell,
       input.command,
-      prepared.absoluteCwd,
-      prepared.logicalCwd,
+      cwd.absolutePath,
+      cwd.logicalPath,
       input.timeoutMs,
       output,
       signal,
     );
   }
 
-  async prepareQualifiedCommand(
+  async authorizeBackgroundCommand(
     workspace: ResolvedWorkspace,
-    plan: CommandPlan,
-    confirmationId?: string,
+    input: ParsedStartBackgroundTaskInput,
     signal?: AbortSignal,
-  ): Promise<
-    | PreparedQualifiedCommand
-    | Extract<RunCommandResult, { status: "confirmation_required" }>
-  > {
-    await assertShellAllowed(workspace, plan.shell);
-    if (signal?.aborted) {
-      throw abortSignalError(signal, "Qualified command operation was cancelled.");
-    }
-
-    const cwd = await resolveShellCwd(workspace, plan.cwd);
-    const command = commandPlanExecutionToShellCommand(plan.shell, plan.execution);
-    const riskCommand = commandPlanExecutionToRiskCommand(plan.execution);
-    await enforceGitPushPolicy(plan.shell, riskCommand, cwd.absolutePath);
-    if (plan.riskClass === "forbidden") {
-      throw new AppError(
-        "PERMISSION_DENIED",
-        "Qualified command plan is permanently forbidden by policy.",
-      );
-    }
-
-    const directRisk = classifyCommandRisk(plan.shell, riskCommand);
-    if (plan.riskClass === "safe" && directRisk.destructive) {
-      throw new AppError(
-        "PERMISSION_DENIED",
-        "Qualified command risk classification diverged from the execution policy.",
-      );
-    }
-    const fallbackReasons =
-      directRisk.reasons.length > 0
-        ? directRisk.reasons
-        : ["qualified command plan requires explicit confirmation"];
-    const authorization = await decideCommandAuthorization({
+  ): Promise<AuthorizedCommandExecution | CommandConfirmationRequiredResult> {
+    return this.prepareCommand(
       workspace,
-      shell: plan.shell,
-      command: riskCommand,
-      logicalCwd: cwd.logicalPath,
-      absoluteCwd: cwd.absolutePath,
-      directRisk,
-      currentRequiresConfirmation:
-        plan.riskClass === "confirmation_required" || directRisk.destructive,
-      fallbackReasons,
-    });
-    if (authorization.disposition === "blocked") {
-      throw new AppError(authorization.code, authorization.reason);
-    }
-    const binding = {
-      workspaceId: workspace.id,
-      shell: plan.shell,
-      cwd: cwd.logicalPath,
-      command: `qualified:${plan.fingerprint}`,
-    };
-    if (authorization.disposition === "confirmation_required") {
-      if (!confirmationId) {
-        const confirmation = this.confirmations.create(binding);
-        return {
-          status: "confirmation_required",
-          shell: plan.shell,
-          cwd: cwd.logicalPath,
-          confirmationId: confirmation.confirmationId,
-          expiresAt: confirmation.expiresAt,
-          reasons: authorization.reasons,
-        };
-      }
-      this.confirmations.consume(confirmationId, binding);
-    }
-
-    return {
-      logicalCwd: cwd.logicalPath,
-      absoluteCwd: cwd.absolutePath,
-      command,
-      planFingerprint: plan.fingerprint,
-    };
-  }
-
-  async executeQualifiedCommand(
-    plan: CommandPlan,
-    prepared: PreparedQualifiedCommand,
-    context: OperationContext = {},
-  ): Promise<Extract<RunCommandResult, { status: "executed" }>> {
-    if (prepared.planFingerprint !== plan.fingerprint) {
-      throw new AppError(
-        "EXECUTION_STATE_INVALID",
-        "Prepared command does not match the qualified plan fingerprint.",
-      );
-    }
-    const now = Date.now();
-    const deadlineAt = Date.parse(plan.absoluteDeadline);
-    const upstreamDeadline = {
-      requestedTimeoutMs: plan.timeoutMs,
-      effectiveTimeoutMs: Math.max(0, deadlineAt - now),
-      deadlineAt: plan.absoluteDeadline,
-    };
-    const deadline = createOperationDeadline(
-      plan.timeoutMs,
-      context.deadline ?? upstreamDeadline,
-      now,
+      input,
+      signal,
+      { executionContext: "background", operation: input.operation },
     );
-    const remaining = remainingOperationTimeMs(deadline, now);
-    if (remaining <= 0) {
-      throw new AppError("AGENT_TIMEOUT", "Qualified command deadline has expired.", {
-        lifecycle: createOperationLifecycle(deadline, now, {
-          layer: "executor",
-          reason: "timeout",
-          diagnostic: "The qualified executor received an expired deadline.",
-        }),
-      });
-    }
-    const result = await runShellCommand(
-      plan.shell,
-      prepared.command,
-      prepared.absoluteCwd,
-      prepared.logicalCwd,
-      remaining,
-      context.signal,
-      deadline,
-    );
-    if (result.status !== "executed") {
-      throw new AppError(
-        "INTERNAL_ERROR",
-        "Qualified command execution returned an unexpected interactive result.",
-      );
-    }
-    return result;
-  }
-
-  async assertBackgroundCommandAllowed(
-    workspace: ResolvedWorkspace,
-    input: DirectRunCommandInput,
-  ): Promise<void> {
-    await assertShellAllowed(workspace, input.shell);
-    const cwd = await resolveShellCwd(workspace, input.cwd);
-    await enforceGitPushPolicy(input.shell, input.command, cwd.absolutePath);
-    const risk = classifyCommandRisk(input.shell, input.command);
-    if (risk.destructive) {
-      throw new AppError(
-        "PERMISSION_DENIED",
-        "Potentially destructive commands cannot be started as background tasks.",
-      );
-    }
-  }
-
-  async runPowerShell(
-    workspace: ResolvedWorkspace,
-    input: RunPowerShellInput,
-    context: OperationContext = {},
-  ): Promise<RunPowerShellResult> {
-    return this.runCommand(workspace, { ...input, shell: "powershell" }, context);
   }
 
   private async prepareCommand(
     workspace: ResolvedWorkspace,
     input: DirectRunCommandInput,
-    signal?: AbortSignal,
-  ): Promise<PreparedCommand | RunCommandResult> {
+    signal: AbortSignal | undefined,
+    scope: CommandAuthorizationScope,
+  ): Promise<AuthorizedCommandExecution | CommandConfirmationRequiredResult> {
     await assertShellAllowed(workspace, input.shell);
     if (signal?.aborted) {
       throw abortSignalError(signal, "Command operation was cancelled.");
     }
 
     const cwd = await resolveShellCwd(workspace, input.cwd);
-    await enforceGitPushPolicy(input.shell, input.command, cwd.absolutePath);
+    enforceGitPushPolicy(input.shell, input.command);
     const risk = classifyCommandRisk(input.shell, input.command);
     const authorization = await decideCommandAuthorization({
       workspace,
@@ -269,6 +132,8 @@ export class ShellService {
       shell: input.shell,
       cwd: cwd.logicalPath,
       command: input.command,
+      executionContext: scope.executionContext,
+      operation: scope.operation,
     };
 
     if (authorization.disposition === "confirmation_required") {
@@ -311,46 +176,17 @@ async function assertShellAllowed(
   }
 }
 
-async function enforceGitPushPolicy(
+function enforceGitPushPolicy(
   shell: ShellName,
   command: string,
-  cwd: string,
-): Promise<void> {
+): void {
   const intent = classifyGitPushIntent(shell, command);
   if (!intent.isPush) return;
 
-  const currentBranch = intent.usesGitC ? undefined : await readCurrentGitBranch(cwd);
-  const blockedReason = protectedGitPushReason(intent, currentBranch);
+  const blockedReason = protectedGitPushReason(intent);
   if (blockedReason) {
     throw new AppError("PERMISSION_DENIED", blockedReason);
   }
-}
-
-async function readCurrentGitBranch(cwd: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const child = spawn("git", ["branch", "--show-current"], {
-      cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let output = "";
-    let settled = false;
-
-    const finish = (branch: string | undefined): void => {
-      if (settled) return;
-      settled = true;
-      resolve(branch);
-    };
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-    });
-    child.once("error", () => finish(undefined));
-    child.once("close", (exitCode) => {
-      finish(exitCode === 0 ? output.trim() || undefined : undefined);
-    });
-  });
 }
 
 async function resolveShellCwd(

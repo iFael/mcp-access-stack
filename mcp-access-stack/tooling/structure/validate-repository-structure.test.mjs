@@ -69,7 +69,7 @@ test("isolates TypeScript test workspaces and serializes Browser Worker", async 
 
   assert.equal(
     rootPackage.scripts["test:typescript"],
-    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent",
+    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent && npm run test:mcp-edge-gateway",
   );
   assert.match(browserPackage.scripts.test, /(?:^|\s)--runInBand(?:\s|$)/u);
   assert.doesNotMatch(
@@ -95,21 +95,6 @@ test("keeps authoritative development and build surfaces on Node 26", async () =
     assert.deepEqual([...new Set(majors)], ["26"]);
   }
 
-  const expectedDockerBase =
-    "26.8.1-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e";
-  for (const dockerfilePath of [
-    "../../deploy/docker/gateway.Dockerfile",
-    "../../deploy/docker/proxy.Dockerfile",
-    "../../deploy/remote/browser-worker.Dockerfile",
-  ]) {
-    const dockerfile = await readFile(new URL(dockerfilePath, import.meta.url), "utf8");
-    const bases = [...dockerfile.matchAll(/^FROM node:(\S+)/gmu)].map((match) => match[1]);
-    assert.ok(bases.length > 0, `${dockerfilePath} must use an official Node.js base image`);
-    assert.deepEqual([...new Set(bases)], [expectedDockerBase]);
-  }
-
-  const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8");
-  assert.match(readme, /Node\.js 26 ou superior/u);
 });
 
 test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
@@ -292,97 +277,18 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
   assert.match(check, /needs\.pr-runtime-assurance\.result/u);
   assert.doesNotMatch(check, /pr-workspace-agent-unit|pr-workspace-agent-integration-shard-1-e2e|pr-workspace-agent-integration-shard-2|pr-windows-distribution|pr-runtime-assurance-core/u);
 });
-test("parallelizes independent ci release image builds behind the canonical result", async () => {
+test("keeps canonical CI free of Docker image lanes", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
-  const normalized = workflow.replaceAll("\r\n", "\n");
-  const gatewayStart = normalized.indexOf("  release-image-gateway:");
-  const browserStart = normalized.indexOf("\n  release-image-browser:", gatewayStart);
-  const proxyStart = normalized.indexOf("\n  release-image-proxy:", browserStart);
-  const aggregateStart = normalized.indexOf("\n  release-images:", proxyStart);
-
-  assert.ok(
-    gatewayStart >= 0 && browserStart > gatewayStart && proxyStart > browserStart && aggregateStart > proxyStart,
-    "gateway, browser and proxy image builds must precede the canonical release-images aggregator",
-  );
-
-  const gateway = normalized.slice(gatewayStart, browserStart);
-  assert.match(gateway, /needs\.impact\.outputs\.dockerGateway/u);
-  assert.match(gateway, /deploy\/docker\/gateway\.Dockerfile/u);
-  assert.doesNotMatch(gateway, /browser-worker\.Dockerfile|proxy\.Dockerfile/u);
-
-  const browser = normalized.slice(browserStart, proxyStart);
-  assert.match(browser, /needs\.impact\.outputs\.dockerBrowser/u);
-  assert.match(browser, /deploy\/remote\/browser-worker\.Dockerfile/u);
-  assert.doesNotMatch(browser, /gateway\.Dockerfile|proxy\.Dockerfile/u);
-
-  const proxy = normalized.slice(proxyStart, aggregateStart);
-  assert.match(proxy, /needs\.impact\.outputs\.dockerProxy/u);
-  assert.match(proxy, /deploy\/docker\/proxy\.Dockerfile/u);
-  assert.doesNotMatch(proxy, /gateway\.Dockerfile|browser-worker\.Dockerfile/u);
-
-  const aggregate = normalized.slice(aggregateStart);
-  assert.match(aggregate, /- release-image-gateway/u);
-  assert.match(aggregate, /- release-image-browser/u);
-  assert.match(aggregate, /- release-image-proxy/u);
-  assert.match(aggregate, /needs\.release-image-gateway\.result/u);
-  assert.match(aggregate, /needs\.release-image-browser\.result/u);
-  assert.match(aggregate, /needs\.release-image-proxy\.result/u);
-  assert.doesNotMatch(aggregate, /docker\/build-push-action/u);
+  assert.doesNotMatch(workflow, /dockerGateway|dockerBrowser|dockerProxy|release-image-|docker\/build-push-action|deploy\/docker|deploy\/remote/u);
 });
-test("parallelizes public release image publishers behind the images digest aggregator", async () => {
+
+test("keeps public release workflow free of Docker and GHCR image publication", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
-  const normalized = workflow.replaceAll("\r\n", "\n");
-  const gatewayStart = normalized.indexOf("  release-image-gateway:");
-  const browserStart = normalized.indexOf("\n  release-image-browser:", gatewayStart);
-  const proxyStart = normalized.indexOf("\n  release-image-proxy:", browserStart);
-  const imagesStart = normalized.indexOf("\n  images:", proxyStart);
-  const packageStart = normalized.indexOf("\n  package:", imagesStart);
-
-  assert.ok(
-    gatewayStart >= 0 && browserStart > gatewayStart && proxyStart > browserStart && imagesStart > proxyStart && packageStart > imagesStart,
-    "public release image publishers must run independently before the images digest aggregator and package job",
-  );
-
-  const gateway = normalized.slice(gatewayStart, browserStart);
-  assert.match(gateway, /needs: metadata/u);
-  assert.match(gateway, /packages: write/u);
-  assert.match(gateway, /digest: \$\{\{ steps\.gateway\.outputs\.digest \}\}/u);
-  assert.match(gateway, /deploy\/docker\/gateway\.Dockerfile/u);
-  assert.doesNotMatch(gateway, /browser-worker\.Dockerfile|proxy\.Dockerfile/u);
-
-  const browser = normalized.slice(browserStart, proxyStart);
-  assert.match(browser, /needs: metadata/u);
-  assert.match(browser, /packages: write/u);
-  assert.match(browser, /digest: \$\{\{ steps\.browser-worker\.outputs\.digest \}\}/u);
-  assert.match(browser, /deploy\/remote\/browser-worker\.Dockerfile/u);
-  assert.doesNotMatch(browser, /gateway\.Dockerfile|proxy\.Dockerfile/u);
-
-  const proxy = normalized.slice(proxyStart, imagesStart);
-  assert.match(proxy, /needs: metadata/u);
-  assert.match(proxy, /packages: write/u);
-  assert.match(proxy, /digest: \$\{\{ steps\.proxy\.outputs\.digest \}\}/u);
-  assert.match(proxy, /deploy\/docker\/proxy\.Dockerfile/u);
-  assert.doesNotMatch(proxy, /gateway\.Dockerfile|browser-worker\.Dockerfile/u);
-
-  const images = normalized.slice(imagesStart, packageStart);
-  assert.match(images, /- release-image-gateway/u);
-  assert.match(images, /- release-image-browser/u);
-  assert.match(images, /- release-image-proxy/u);
-  assert.match(images, /gateway-digest: \$\{\{ steps\.digests\.outputs\.gateway-digest \}\}/u);
-  assert.match(images, /browser-worker-digest: \$\{\{ steps\.digests\.outputs\.browser-worker-digest \}\}/u);
-  assert.match(images, /proxy-digest: \$\{\{ steps\.digests\.outputs\.proxy-digest \}\}/u);
-  assert.doesNotMatch(images, /docker\/build-push-action/u);
-
-  const packageJob = normalized.slice(packageStart + 1);
-  assert.match(packageJob, /^  package:\n    needs:/u);
-  assert.match(packageJob, /- metadata/u);
-  assert.match(packageJob, /- images/u);
-  assert.match(packageJob, /needs\.images\.outputs\.gateway-digest/u);
-  assert.match(packageJob, /needs\.images\.outputs\.proxy-digest/u);
+  assert.doesNotMatch(workflow, /release-image-|docker\/build-push-action|docker\/login-action|deploy\/docker|deploy\/remote|gateway-digest|proxy-digest|browser-worker-digest/u);
 });

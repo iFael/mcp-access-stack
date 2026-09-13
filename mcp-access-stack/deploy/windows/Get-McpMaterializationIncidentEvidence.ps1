@@ -131,8 +131,18 @@ if (Test-Path -LiteralPath $releaseManifestPath -PathType Leaf) {
     try {
         $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
         $releaseId = Get-McpEvidenceOptionalProperty -InputObject $releaseManifest -Name 'releaseId'
+        $manifestVersion = [int](Get-McpEvidenceOptionalProperty -InputObject $releaseManifest -Name 'version')
+        if ($manifestVersion -eq 2) {
+            $artifactIdentityProperty = 'id'
+        }
+        elseif ($manifestVersion -eq 1) {
+            $artifactIdentityProperty = 'role'
+        }
+        else {
+            throw "Unsupported execution-node manifest version for incident evidence: $manifestVersion"
+        }
         $nodeRecords = @(@(Get-McpEvidenceOptionalProperty -InputObject $releaseManifest -Name 'artifacts') | Where-Object {
-            [string](Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'role') -eq 'node-runtime'
+            [string](Get-McpEvidenceOptionalProperty -InputObject $_ -Name $artifactIdentityProperty) -eq 'node-runtime'
         })
         if ($nodeRecords.Count -eq 1) {
             $relativeNodePath = [string](Get-McpEvidenceOptionalProperty -InputObject $nodeRecords[0] -Name 'path')

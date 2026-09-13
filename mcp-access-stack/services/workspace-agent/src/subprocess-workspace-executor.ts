@@ -61,10 +61,6 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("runCommand"));
   }
 
-  runPowerShell(...args: Parameters<WorkspaceExecutor["runPowerShell"]>) {
-    return this.fallback?.runPowerShell(...args) ??
-      Promise.reject(this.notImplemented("runPowerShell"));
-  }
 
   searchFiles(...args: Parameters<WorkspaceExecutor["searchFiles"]>) {
     return this.fallback?.searchFiles(...args) ??

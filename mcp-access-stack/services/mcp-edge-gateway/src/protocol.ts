@@ -12,7 +12,7 @@ import {
   type EdgeHttpCancelMessage,
   type EdgeHttpRequestMessage,
   type EdgeHttpResponseMessage,
-} from "@mcp-access-stack/edge-protocol/source";
+} from "@mcp-access-stack/edge-protocol";
 
 export {
   EDGE_PROTOCOL_VERSION,

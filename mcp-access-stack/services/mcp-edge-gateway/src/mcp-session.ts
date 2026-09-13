@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
 import { createAgentUnavailableMcpResponse, getMcpResponseDiagnostic } from "./control-plane/mcp-control-plane.js";

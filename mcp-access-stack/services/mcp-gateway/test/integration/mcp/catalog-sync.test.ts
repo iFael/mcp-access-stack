@@ -57,7 +57,7 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(61);
+      expect(listed.tools).toHaveLength(60);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -69,7 +69,6 @@ describe("MCP connector catalog synchronization", () => {
       expect(descriptions.list_files).toContain("never call without a concrete root");
       expect(descriptions.list_files).toContain("full logical path relative to the workspace root");
       expect(descriptions.run_command).toContain("Preferred general command runner");
-      expect(descriptions.run_powershell).toContain("Compatibility shortcut");
       expect(descriptions.search_files).toContain("file contents");
       expect(descriptions.inspect_workspace_git).toContain("exact branch, status");
       expect(descriptions.get_workspace_context).toContain("project instruction files");
@@ -115,11 +114,11 @@ describe("MCP connector catalog synchronization", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(28);
+      expect(listed.tools).toHaveLength(27);
       expect(client.getServerVersion()?.version).not.toBe(
         MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
       );
-      expect(catalogMeta).toMatchObject({ toolCount: 28 });
+      expect(catalogMeta).toMatchObject({ toolCount: 27 });
     } finally {
       await client.close().catch(() => undefined);
       await server.close().catch(() => undefined);
@@ -235,8 +234,8 @@ describe("MCP server instance catalog continuity", () => {
       );
       expect(secondServerVersion).toEqual(firstServerVersion);
       expect(secondCapabilities).toEqual(firstCapabilities);
-      expect(names).toHaveLength(61);
-      expect(new Set(names).size).toBe(61);
+      expect(names).toHaveLength(60);
+      expect(new Set(names).size).toBe(60);
       expect(createMcpToolDescriptorRevision(secondList.tools)).toBe(
         MCP_TOOL_CATALOG_CONTRACT_REVISION,
       );

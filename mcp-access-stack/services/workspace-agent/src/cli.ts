@@ -7,7 +7,6 @@ import {
   QUICK_OPERATION_TIMEOUT_MS,
 } from "@vs-code-gpt/shared";
 import { LocalAgent } from "./local-agent.js";
-import { createQualifiedCommandRuntimeOptions } from "./qualified-command-runtime-config.js";
 import { AgentConnection } from "./connection/service.js";
 import { applyPolicyFile, validatePolicyFile } from "./policy-deployment.js";
 
@@ -40,12 +39,7 @@ async function main(): Promise<void> {
       process.stdout.write(JSON.stringify(result) + "\n");
       return;
     }
-    const agent = await LocalAgent.create(
-      args.policyPath,
-      createQualifiedCommandRuntimeOptions(process.env, (event) =>
-        writeDiagnostic(event),
-      ),
-    );
+    const agent = await LocalAgent.create(args.policyPath);
     if (args.command === "connect") {
       await connectAgent(agent, args.options);
       return;
@@ -151,8 +145,6 @@ function parseArguments(argv: string[]): ParsedArguments {
 async function executeCommand(agent: LocalAgent, args: ParsedArguments): Promise<unknown> {
   const workspaceId = getString(args.options, "workspace");
   switch (args.command) {
-    case "qualified-command-status":
-      return agent.qualifiedCommandObservability();
     case "list-workspaces":
       return agent.listWorkspaces();
     case "list-files":
@@ -183,15 +175,7 @@ async function executeCommand(agent: LocalAgent, args: ParsedArguments): Promise
         ...optionalString(args.options, "cwd"),
         ...optionalString(args.options, "confirmation-id"),
       });
-    case "run-powershell":
-      return agent.runPowerShell({
-        workspaceId: requireValue(workspaceId, "--workspace"),
-        command: requireValue(getString(args.options, "command"), "--command"),
-        timeoutMs: readCommandTimeout(args.options),
-        ...optionalString(args.options, "cwd"),
-        ...optionalString(args.options, "confirmation-id"),
-      });
-    case "search-files":
+case "search-files":
       return agent.searchFiles({
         workspaceId: requireValue(workspaceId, "--workspace"),
         query: requireValue(getString(args.options, "query"), "--query"),

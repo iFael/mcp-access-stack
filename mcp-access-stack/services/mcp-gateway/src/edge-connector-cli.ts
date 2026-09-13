@@ -7,7 +7,6 @@ import type { Express } from "express";
 import {
   InProcessWorkspaceExecutor,
   LocalAgent,
-  createQualifiedCommandRuntimeOptions,
 } from "@vs-code-gpt/local-agent";
 import { AppError, MCP_FULL_TOOL_CATALOG_METADATA, asAppError } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
@@ -42,10 +41,7 @@ async function main(): Promise<void> {
   };
   const internalAssertion = randomBytes(32).toString("base64url");
 
-  const agent = await LocalAgent.create(
-    runtime.policyPath,
-    createQualifiedCommandRuntimeOptions(process.env, (event) => writeLog(event)),
-  );
+  const agent = await LocalAgent.create(runtime.policyPath);
   const workspaceExecutor = new InProcessWorkspaceExecutor(agent);
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor,

@@ -7,10 +7,10 @@
       "@vs-code-gpt/shared": [
         "./packages/mcp-core/src/index.ts"
       ],
-      "@mcp-access-stack/edge-protocol": [
-        "./packages/edge-protocol/src/index.ts"
+      "@vs-code-gpt/local-agent": [
+        "./services/workspace-agent/src/index.ts"
       ],
-      "@mcp-access-stack/edge-protocol/source": [
+      "@mcp-access-stack/edge-protocol": [
         "./packages/edge-protocol/src/index.ts"
       ]
     }

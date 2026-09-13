@@ -81,7 +81,6 @@ describe("gateway HTTP surface", () => {
         "write_file",
         "run_workspace_validation",
         "run_command",
-        "run_powershell",
         "start_background_task",
         "get_background_task",
         "wait_background_task",
@@ -115,7 +114,6 @@ describe("gateway HTTP surface", () => {
           ![
             "write_file",
             "run_command",
-            "run_powershell",
             "start_background_task",
             "cancel_background_task",
             "git_create_branch",
@@ -207,7 +205,7 @@ describe("gateway personal mode without oauth", () => {
       };
 
       expect(response.status).toBe(200);
-      expect(body.result.tools).toHaveLength(28);
+      expect(body.result.tools).toHaveLength(27);
       for (const tool of body.result.tools) {
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });

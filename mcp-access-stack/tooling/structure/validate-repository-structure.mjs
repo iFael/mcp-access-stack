@@ -37,33 +37,20 @@ const REQUIRED_DIRECTORIES = [
   "services/workspace-agent/test/e2e",
   "services/workspace-agent/test/support",
   "packages/mcp-core",
-  "operations/runtime",
   "operations/browser",
   "operations/gpt-actions",
   "operations/inspector",
   "operations/validation",
-  "deploy/docker",
   "deploy/windows",
   "tooling/benchmarks/browser",
   "tooling/benchmarks/mcp",
   "tooling/smoke/browser",
   "docs/architecture",
-  "docs/integrations",
-  "docs/operations",
-  "docs/security",
 ];
 
 const REQUIRED_FILES = [
-  "docs/architecture/REPOSITORY_STRUCTURE.md",
+  "docs/architecture/EDGE_MCP_RUNTIME.md",
   "config/gpt-only-production.example.json",
-  "operations/runtime/Initialize-GptOnlyProduction.ps1",
-  "docs/integrations/CHATGPT_INTEGRATION.md",
-  "services/README.md",
-  "packages/README.md",
-  "operations/README.md",
-  "deploy/README.md",
-  "tooling/README.md",
-  "tooling/smoke/README.md",
   "deploy/windows/Install-McpAccessStack.ps1",
   "deploy/windows/Update-McpAccessStack.ps1",
   "services/browser-worker/server.ts",
@@ -73,10 +60,7 @@ const REQUIRED_FILES = [
   "packages/mcp-core/jest.config.ts",
   "services/browser-worker/jest.config.ts",
   "services/mcp-gateway/jest.config.ts",
-  "services/mcp-gateway/test/README.md",
   "services/workspace-agent/jest.config.ts",
-  "services/workspace-agent/test/README.md",
-  "services/browser-worker/test/README.md",
 ];
 
 const FORBIDDEN_ROOT_DIRECTORIES = [
@@ -157,7 +141,6 @@ const LEGACY_PATHS = [
   "integrations/vscode-extension",
   "packages/shared",
   "scripts/gpt-only-supervisor.mjs",
-  "scripts/gpt-mcp-proxy.mjs",
   "refactor/gpt-only/start-production.mjs",
   "docker-config/",
 ];
@@ -243,8 +226,6 @@ export function validateRepositoryStructure(root = process.cwd()) {
   }
 
   validateServiceBoundaries(root, issues);
-  validateDockerCopies(root, "deploy/docker/gateway.Dockerfile", issues);
-  validateDockerCopies(root, "deploy/docker/proxy.Dockerfile", issues);
   validateLegacyReferences(root, issues);
 
   return {
@@ -278,22 +259,6 @@ export function validateServiceBoundaries(root, issues) {
             `${path.relative(root, file).replaceAll("\\", "/")} imports another service internal: ${specifier}`,
           );
         }
-      }
-    }
-  }
-}
-
-function validateDockerCopies(root, dockerfilePath, issues) {
-  const content = readFileSync(path.join(root, dockerfilePath), "utf8");
-  for (const line of content.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("COPY ") || trimmed.includes("--from=")) continue;
-    const tokens = trimmed.split(/\s+/u).slice(1);
-    for (const source of tokens.slice(0, -1)) {
-      if (source.startsWith("--")) continue;
-      const normalized = source.replace(/\/$/u, "");
-      if (!existsSync(path.join(root, normalized))) {
-        issues.push(`${dockerfilePath} references missing COPY source: ${source}`);
       }
     }
   }

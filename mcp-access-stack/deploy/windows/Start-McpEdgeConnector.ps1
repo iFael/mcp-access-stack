@@ -55,13 +55,13 @@ function Resolve-McpEdgeReleaseChild {
 function Assert-McpEdgeArtifact {
     param(
         [Parameter(Mandatory = $true)][object]$Manifest,
-        [Parameter(Mandatory = $true)][string]$Role,
+        [Parameter(Mandatory = $true)][string]$Id,
         [Parameter(Mandatory = $true)][string]$Root
     )
 
-    $records = @($Manifest.artifacts | Where-Object { [string]$_.role -eq $Role })
+    $records = @($Manifest.artifacts | Where-Object { [string]$_.id -eq $Id })
     if ($records.Count -ne 1) {
-        throw "Edge Connector manifest role is missing or duplicated: $Role"
+        throw "Edge Connector manifest artifact id is missing or duplicated: $Id"
     }
     $record = $records[0]
     $artifactPath = Resolve-McpEdgeReleaseChild -Root $Root -RelativePath ([string]$record.path)
@@ -130,15 +130,15 @@ if ($actualManifestSha256 -ne $ExpectedManifestSha256.ToLowerInvariant()) {
     throw 'Edge Connector execution manifest changed after task installation.'
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([int]$manifest.version -ne 1 -or
+if ([int]$manifest.version -ne 2 -or
     [string]$manifest.platform -ne 'win32-x64' -or
     [string]$manifest.runtimeMode -ne 'bundled-node') {
     throw 'Edge Connector execution manifest identity is invalid.'
 }
 
-$nodePath = Assert-McpEdgeArtifact -Manifest $manifest -Role 'node-runtime' -Root $release
-$edgeCliPath = Assert-McpEdgeArtifact -Manifest $manifest -Role 'edge-connector' -Root $release
-$launcherPath = Assert-McpEdgeArtifact -Manifest $manifest -Role 'edge-connector-launcher' -Root $release
+$nodePath = Assert-McpEdgeArtifact -Manifest $manifest -Id 'node-runtime' -Root $release
+$edgeCliPath = Assert-McpEdgeArtifact -Manifest $manifest -Id 'edge-connector' -Root $release
+$launcherPath = Assert-McpEdgeArtifact -Manifest $manifest -Id 'edge-validation-launcher' -Root $release
 if ([string]::IsNullOrWhiteSpace([string]$PSCommandPath) -or
     [IO.Path]::GetFullPath([string]$PSCommandPath) -ne [IO.Path]::GetFullPath($launcherPath)) {
     throw 'Edge Connector launcher must execute from the immutable release artifact.'

@@ -12,9 +12,10 @@ import {
   normalizeRelativePath,
   PathSecurity,
 } from "../path-security.js";
-import { QualifiedShellAdapterRegistry } from "./qualified/shell-adapters.js";
-import { analyzeSimplePowerShellCommand } from "./qualified/powershell-lexical.js";
-import type { ShellCommandAnalysis } from "./qualified/types.js";
+import {
+  analyzeSimpleShellCommand,
+  type ShellCommandAnalysis,
+} from "./command-analysis.js";
 
 export type TrustedWorkspaceAuthorizationDecision =
   | { disposition: "execute"; authorization: "trusted-workspace" }
@@ -36,7 +37,6 @@ interface MutablePath {
   canonicalPath?: string;
 }
 
-const shellAdapters = new QualifiedShellAdapterRegistry();
 const MAX_GIT_PREFLIGHT_BYTES = 1_000_000;
 const GIT_PREFLIGHT_TIMEOUT_MS = 10_000;
 const TRUSTED_FALLBACK_REASON =
@@ -49,10 +49,8 @@ async function analyzeTrustedCommand(
   command: string,
   absoluteCwd: string,
 ): Promise<ShellCommandAnalysis | undefined> {
-  if (shell === "powershell" || shell === "pwsh") {
-    return analyzeSimplePowerShellCommand(shell, command);
-  }
-  return shellAdapters.analyze(shell, command, absoluteCwd);
+  void absoluteCwd;
+  return analyzeSimpleShellCommand(shell, command);
 }
 export async function trustedWorkspaceCriticalReason(
   shell: ShellName,

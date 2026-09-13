@@ -17,7 +17,6 @@ const operations: RelayOperation[] = [
   "patchFile",
   "runValidation",
   "runCommand",
-  "runPowerShell",
   "searchFiles",
   "inspectGit",
   "getWorkspaceContext",

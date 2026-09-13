@@ -1,4 +1,4 @@
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import {
   EdgeAuthenticationError,
   createBearerChallenge,

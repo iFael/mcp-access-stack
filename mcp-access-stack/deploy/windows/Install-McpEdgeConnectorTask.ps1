@@ -190,7 +190,7 @@ $executionManifest = Read-McpPublicJson -Path $executionManifestPath
 $releaseCommit = [string]$releaseManifest.commit
 if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
     $releaseCommit -notmatch '^[a-f0-9]{40}$' -or
-    [int]$executionManifest.version -ne 1 -or
+    [int]$executionManifest.version -ne 2 -or
     [string]$executionManifest.releaseId -ne $ReleaseId -or
     [string]$executionManifest.commit -ne $releaseCommit -or
     [string]$executionManifest.platform -ne 'win32-x64' -or
@@ -200,7 +200,7 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
 }
 $executionIdentity = $releaseManifest.executionNode
 if ($null -eq $executionIdentity -or
-    [int]$executionIdentity.schemaVersion -ne 1 -or
+    [int]$executionIdentity.schemaVersion -ne 2 -or
     [string]$executionIdentity.manifestPath -ne 'execution-node-manifest.json') {
     throw 'Edge Connector release manifest is missing execution-node identity.'
 }
@@ -220,11 +220,11 @@ if (-not (Test-Path -LiteralPath $edgeHostPath -PathType Leaf)) {
 }
 Assert-McpPublicSignature -Path $validationLauncherPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 Assert-McpPublicSignature -Path $edgeHostPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-$validationLauncherRecord = @($executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-connector-launcher' })
+$validationLauncherRecord = @($executionManifest.artifacts | Where-Object { [string]$_.id -eq 'edge-validation-launcher' })
 if ($validationLauncherRecord.Count -ne 1 -or $validationLauncherRecord[0].authenticodeRequired -ne $true) {
     throw 'Edge Connector validation launcher must be a signed critical release artifact.'
 }
-$edgeHostRecord = @($executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-host' })
+$edgeHostRecord = @($executionManifest.artifacts | Where-Object { [string]$_.id -eq 'edge-host' })
 if ($edgeHostRecord.Count -ne 1 -or
     [string]$edgeHostRecord[0].path -ne 'native/McpEdgeHost.exe' -or
     $edgeHostRecord[0].authenticodeRequired -ne $true) {
@@ -290,7 +290,7 @@ $edgeHostValidation = Invoke-McpEdgeTaskExecutable `
     -Executable $edgeHostPath `
     -Arguments (@($hostArguments) + '--validate-only')
 if ($edgeHostValidation.exitCode -ne 0 -or
-    [string]$edgeHostValidation.stdout -ne 'mcp-edge-host-contract-v1') {
+    [string]$edgeHostValidation.stdout -ne 'mcp-edge-host-contract-v2') {
     throw 'McpEdgeHost fixed-contract validation failed before task installation.'
 }
 $hostValues = [System.Collections.Generic.List[string]]::new()

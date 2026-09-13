@@ -1,5 +1,8 @@
 import type { ShellName } from "@vs-code-gpt/shared";
-import { analyzeSimplePowerShellCommand } from "./qualified/powershell-lexical.js";
+import {
+  analyzeSimplePowerShellCommand,
+  analyzeSimpleShellCommand,
+} from "./command-analysis.js";
 
 export interface CommandRisk {
   destructive: boolean;
@@ -10,6 +13,7 @@ export interface GitPushIntent {
   isPush: boolean;
   targetsMain: boolean;
   usesGitC: boolean;
+  usesMirror: boolean;
 }
 
 interface RiskPattern {
@@ -18,6 +22,8 @@ interface RiskPattern {
 }
 
 const DISK_BOOT_VOLUME_REASON = "disk, boot or volume operation";
+const EXTERNAL_PACKAGE_EXECUTION_REASON = "external package execution";
+const EXTERNAL_DEPLOYMENT_REASON = "external deployment operation";
 const FORMAT_COMMAND_TEXT_PATTERN = /\bformat-volume\b|\bformat(?:\.com|\.exe)?(?=\s|$)/iu;
 const POWERSHELL_FORMAT_SEGMENT_PATTERN =
   /(?:^|[\r\n]|(?:&&|\|\||[;|])\s*)(?:&\s*)?(?:format-volume|format(?:\.com|\.exe)?)(?=\s|$)/iu;
@@ -156,7 +162,8 @@ const RISK_PATTERNS: RiskPattern[] = [
 ];
 
 const FILE_REDIRECTION_PATTERN = /(?:^|\s)(?:\d?>{1,2})\s*(?!&\d)(?=\S)/i;
-const POWERSHELL_NULL_REDIRECTION_PATTERN = /(?:^|\s)\d?>{1,2}\s*\$null(?=\s|$|[;&|])/giu;
+const NULL_DEVICE_REDIRECTION_PATTERN =
+  /(?:^|\s)\d?>{1,2}\s*(?:\$null|nul|\/dev\/null)(?=\s|$|[;&|])/giu;
 const GIT_PUSH_SEGMENT_PATTERN =
   /(?:^|(?:&&|\|\||[;|])\s*)(?:&\s*)?git(?:\.exe)?\b[^;&|\r\n]{0,1000}?\bpush\b[^;&|\r\n]*/i;
 const MAIN_REF_PATTERN = /(?:^|[\s:+])(?:refs\/heads\/)?main(?=$|[\s:])/i;
@@ -171,11 +178,13 @@ export function classifyCommandRisk(shell: ShellName, command: string): CommandR
       (entry) => entry.reason,
     );
 
+  reasons.push(...classifyExternalExecutionRisk(shell, command));
+
   if (containsDiskFormatCommand(shell, command, normalized)) {
     reasons.push(DISK_BOOT_VOLUME_REASON);
   }
 
-  if (containsFileRedirection(shell, lexicalRiskText)) {
+  if (containsFileRedirection(lexicalRiskText)) {
     reasons.push("move, overwrite or direct file write operation");
   }
 
@@ -189,7 +198,7 @@ export function classifyGitPushIntent(shell: ShellName, command: string): GitPus
   const normalized = normalizeForRisk(shell, command);
   const match = normalized.match(GIT_PUSH_SEGMENT_PATTERN);
   if (!match) {
-    return { isPush: false, targetsMain: false, usesGitC: false };
+    return { isPush: false, targetsMain: false, usesGitC: false, usesMirror: false };
   }
 
   const segment = match[0];
@@ -200,22 +209,20 @@ export function classifyGitPushIntent(shell: ShellName, command: string): GitPus
   return {
     isPush: true,
     targetsMain:
-      /(?:^|\s)--(?:all|mirror)(?=$|\s)/i.test(pushArgs) ||
+      /(?:^|\s)--all(?=$|\s)/i.test(pushArgs) ||
       MAIN_REF_PATTERN.test(pushArgs),
     usesGitC: /(?:^|\s)-C(?:=|\s)/.test(beforePush),
+    usesMirror: /(?:^|\s)--mirror(?=$|\s)/i.test(pushArgs),
   };
 }
 
-export function protectedGitPushReason(
-  intent: GitPushIntent,
-  currentBranch: string | undefined,
-): string | undefined {
+export function protectedGitPushReason(intent: GitPushIntent): string | undefined {
   if (!intent.isPush) return undefined;
   if (intent.usesGitC) {
     return "git push with -C is blocked; use the command cwd so protected-branch policy can be enforced.";
   }
-  if (intent.targetsMain || currentBranch?.toLocaleLowerCase("en-US") === "main") {
-    return "Pushing to or from the main branch is permanently blocked.";
+  if (intent.usesMirror) {
+    return "git push --mirror is blocked because it can mutate multiple remote refs outside the explicit branch contract.";
   }
   return undefined;
 }
@@ -294,6 +301,267 @@ function classifySimplePowerShellRisk(
   return reasons;
 }
 
+
+interface ExternalCommandInvocation {
+  executable: string;
+  argv: string[];
+}
+
+interface PackageRunnerAnalysis {
+  hasPackageTarget: boolean;
+  invocation?: ExternalCommandInvocation;
+}
+
+const PACKAGE_RUNNER_OPTIONS_WITH_VALUE = new Set([
+  "--cache",
+  "--call",
+  "--node-options",
+  "--registry",
+  "--shell",
+  "--userconfig",
+  "-c",
+]);
+
+function classifyExternalExecutionRisk(shell: ShellName, command: string): string[] {
+  const analysis = analyzeSimpleShellCommand(shell, command);
+  if (analysis?.valid && analysis.execution?.kind === "argv") {
+    return classifyExternalExecutionArgv(
+      analysis.execution.executable,
+      analysis.execution.argv,
+    );
+  }
+
+  const reasons: string[] = [];
+  for (const segment of splitCommandSegments(shell, command)) {
+    const segmentAnalysis = analyzeSimpleShellCommand(shell, segment);
+    if (segmentAnalysis?.valid && segmentAnalysis.execution?.kind === "argv") {
+      reasons.push(
+        ...classifyExternalExecutionArgv(
+          segmentAnalysis.execution.executable,
+          segmentAnalysis.execution.argv,
+        ),
+      );
+      continue;
+    }
+
+    const tokens = segment.trim().split(/\s+/u).filter(Boolean);
+    const [executable, ...argv] = tokens;
+    if (executable !== undefined) {
+      reasons.push(...classifyExternalExecutionArgv(executable, argv));
+    }
+  }
+  return reasons;
+}
+
+function classifyExternalExecutionArgv(
+  rawExecutable: string,
+  argv: string[],
+): string[] {
+  if (NESTED_SHELL_EXECUTABLES.has(normalizeRiskExecutable(rawExecutable))) {
+    return [];
+  }
+
+  const executable = normalizeExternalExecutable(rawExecutable);
+  const reasons: string[] = [];
+  const runner = analyzePackageRunner(executable, argv);
+  if (runner !== undefined) {
+    if (runner.hasPackageTarget) {
+      reasons.push(EXTERNAL_PACKAGE_EXECUTION_REASON);
+    }
+    if (
+      runner.invocation !== undefined &&
+      isExternalDeploymentMutation(runner.invocation.executable, runner.invocation.argv)
+    ) {
+      reasons.push(EXTERNAL_DEPLOYMENT_REASON);
+    }
+    return reasons;
+  }
+
+  if (isExternalDeploymentMutation(executable, argv)) {
+    reasons.push(EXTERNAL_DEPLOYMENT_REASON);
+  }
+  return reasons;
+}
+
+function analyzePackageRunner(
+  executable: string,
+  argv: string[],
+): PackageRunnerAnalysis | undefined {
+  if (["npx", "pnpx", "bunx"].includes(executable)) {
+    return analyzePackageRunnerTail(argv);
+  }
+
+  if (executable === "npm") {
+    const execIndex = findRunnerVerb(argv, "exec");
+    return execIndex < 0 ? undefined : analyzePackageRunnerTail(argv.slice(execIndex + 1));
+  }
+
+  if (executable === "pnpm" || executable === "yarn") {
+    const dlxIndex = findRunnerVerb(argv, "dlx");
+    return dlxIndex < 0 ? undefined : analyzePackageRunnerTail(argv.slice(dlxIndex + 1));
+  }
+
+  return undefined;
+}
+
+function findRunnerVerb(argv: string[], verb: string): number {
+  return argv.findIndex(
+    (value) => value.toLocaleLowerCase("en-US") === verb,
+  );
+}
+
+function analyzePackageRunnerTail(argv: string[]): PackageRunnerAnalysis {
+  let hasExplicitPackageTarget = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!;
+    const lower = token.toLocaleLowerCase("en-US");
+
+    if (token === "--") continue;
+
+    if (lower === "--package" || lower === "-p") {
+      if (index + 1 < argv.length) {
+        hasExplicitPackageTarget = true;
+        index += 1;
+      }
+      continue;
+    }
+    if (lower.startsWith("--package=") || lower.startsWith("-p=")) {
+      hasExplicitPackageTarget = true;
+      continue;
+    }
+    if (PACKAGE_RUNNER_OPTIONS_WITH_VALUE.has(lower)) {
+      if (index + 1 < argv.length) index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+
+    return {
+      hasPackageTarget: true,
+      invocation: {
+        executable: token,
+        argv: stripArgumentSeparator(argv.slice(index + 1)),
+      },
+    };
+  }
+
+  return { hasPackageTarget: hasExplicitPackageTarget };
+}
+
+function stripArgumentSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
+function isExternalDeploymentMutation(
+  rawExecutable: string,
+  argv: string[],
+): boolean {
+  const executable = normalizeExternalExecutable(rawExecutable);
+  const lowerArgs = argv.map((value) => value.toLocaleLowerCase("en-US"));
+  const positionals = lowerArgs.filter(
+    (value) => value !== "--" && !value.startsWith("-"),
+  );
+
+  if (executable === "vercel") {
+    return (
+      argv.length === 0 ||
+      lowerArgs.includes("--prod") ||
+      positionals.includes("deploy")
+    );
+  }
+  if (executable === "wrangler") {
+    return positionals.includes("deploy") || positionals.includes("publish");
+  }
+  if (["netlify", "firebase", "fly"].includes(executable)) {
+    return positionals.includes("deploy");
+  }
+  if (executable === "railway") {
+    return positionals.includes("up") || positionals.includes("deploy");
+  }
+  if (executable === "supabase") {
+    const functionsIndex = positionals.indexOf("functions");
+    const deployIndex = positionals.indexOf("deploy");
+    return functionsIndex >= 0 && deployIndex > functionsIndex;
+  }
+  return false;
+}
+
+function normalizeExternalExecutable(value: string): string {
+  return normalizeRiskExecutable(value).replace(/\.(?:cmd|bat|exe)$/iu, "");
+}
+
+function splitCommandSegments(shell: ShellName, command: string): string[] {
+  const segments: string[] = [];
+  let segment = "";
+  let quote: "single" | "double" | undefined;
+  let escaped = false;
+
+  const flush = (): void => {
+    const value = segment.trim();
+    if (value.length > 0) segments.push(value);
+    segment = "";
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    const next = command[index + 1];
+
+    if (escaped) {
+      segment += character;
+      escaped = false;
+      continue;
+    }
+
+    const escapeCharacter =
+      shell === "powershell" || shell === "pwsh"
+        ? String.fromCharCode(96)
+        : shell === "cmd"
+          ? "^"
+          : "\\";
+    if (character === escapeCharacter && quote !== "single") {
+      segment += character;
+      escaped = true;
+      continue;
+    }
+
+    if (character === '"' && quote !== "single") {
+      quote = quote === "double" ? undefined : "double";
+      segment += character;
+      continue;
+    }
+    if (character === "'" && shell !== "cmd" && quote !== "double") {
+      quote = quote === "single" ? undefined : "single";
+      segment += character;
+      continue;
+    }
+
+    if (quote === undefined) {
+      if (character === "\r" || character === "\n") {
+        flush();
+        continue;
+      }
+      if ((character === "&" || character === "|") && next === character) {
+        flush();
+        index += 1;
+        continue;
+      }
+      if (character === "|" || character === "&") {
+        flush();
+        continue;
+      }
+      if (character === ";" && shell !== "cmd") {
+        flush();
+        continue;
+      }
+    }
+
+    segment += character;
+  }
+
+  flush();
+  return segments;
+}
+
 function maskPowerShellInertQuotedLiterals(shell: ShellName, value: string): string {
   if (shell !== "powershell" && shell !== "pwsh") return value;
 
@@ -359,11 +627,8 @@ function maskPowerShellInertQuotedLiterals(shell: ShellName, value: string): str
   return masked;
 }
 
-function containsFileRedirection(shell: ShellName, normalized: string): boolean {
-  const candidate =
-    shell === "powershell" || shell === "pwsh"
-      ? normalized.replace(POWERSHELL_NULL_REDIRECTION_PATTERN, " ")
-      : normalized;
+function containsFileRedirection(normalized: string): boolean {
+  const candidate = normalized.replace(NULL_DEVICE_REDIRECTION_PATTERN, " ");
   return FILE_REDIRECTION_PATTERN.test(candidate);
 }
 

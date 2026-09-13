@@ -2,7 +2,6 @@ import { describe, expect, test } from "@jest/globals";
 import {
   readFileActionInputSchema,
   runCommandActionInputSchema,
-  runPowerShellActionInputSchema,
   runWorkspaceValidationActionInputSchema,
   startConsoleRunInputSchema,
   updateConsoleRunInputSchema,
@@ -53,9 +52,26 @@ describe("GPT Actions schemas", () => {
     expect(result.success).toBe(false);
   });
 
-  test("accepts the additive qualified command contract", () => {
+  test("accepts the canonical command contract", () => {
     expect(
       runCommandActionInputSchema.parse({
+        workspaceId: "project",
+        command: "npm test",
+        shell: "pwsh",
+        cwd: ".",
+        timeoutMs: 120_000,
+      }),
+    ).toMatchObject({
+      workspaceId: "project",
+      command: "npm test",
+      shell: "pwsh",
+      cwd: ".",
+    });
+  });
+
+  test("rejects the legacy qualified command contract", () => {
+    expect(
+      runCommandActionInputSchema.safeParse({
         workspaceId: "project",
         objective: "Executar os testes",
         executionMode: "qualified",
@@ -63,15 +79,11 @@ describe("GPT Actions schemas", () => {
         preferredShell: "auto",
         expectedOutcome: [{ kind: "exit_code", value: 0 }],
         timeoutMs: 120_000,
-      }),
-    ).toMatchObject({
-      workspaceId: "project",
-      objective: "Executar os testes",
-      executionMode: "qualified",
-    });
+      }).success,
+    ).toBe(false);
   });
 
-  test("rejects qualified-only fields on an implicit direct command", () => {
+  test("rejects qualified-only fields on a direct command", () => {
     expect(
       runCommandActionInputSchema.safeParse({
         workspaceId: "project",
@@ -90,14 +102,8 @@ describe("GPT Actions schemas", () => {
       shell: "pwsh",
       timeoutMs: 300_001,
     });
-    const powershell = runPowerShellActionInputSchema.safeParse({
-      workspaceId: "project",
-      command: "npm run check",
-      timeoutMs: 300_001,
-    });
 
     expect(command.success).toBe(false);
-    expect(powershell.success).toBe(false);
     if (!command.success) {
       expect(command.error.issues[0]?.message).toContain(
         "BackgroundTaskManager",
