@@ -89,9 +89,7 @@ function Get-McpWindowsScheduledTaskOwnerSddl {
         $null
     )
     $descriptor.DiscretionaryAcl.InsertAce($descriptor.DiscretionaryAcl.Count, $ownerAce)
-    $sections = [Security.AccessControl.AccessControlSections]::Owner -bor
-        [Security.AccessControl.AccessControlSections]::Group -bor
-        [Security.AccessControl.AccessControlSections]::Access
+    $sections = [Security.AccessControl.AccessControlSections]::Access
     return $descriptor.GetSddlForm($sections)
 }
 
