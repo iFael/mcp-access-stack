@@ -180,15 +180,15 @@ $nodeVersion = [string]$releaseManifest.nodeVersion
 if ($nodeVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
     throw 'Immutable release contains an invalid Node.js version.'
 }
-$nodeRuntimeSource = Join-Path $root ".runtime-tools\mcp-node-runtime\$nodeVersion"
-$nodeExecutableSource = Join-Path $nodeRuntimeSource 'node.exe'
-if (-not (Test-Path -LiteralPath $nodeExecutableSource -PathType Leaf)) {
-    throw "Managed Node.js runtime required by the release is missing: $nodeVersion"
+$nodeRuntimeTarget = Join-Path $releaseTarget 'runtime\node'
+$nodeExecutableTarget = Join-Path $nodeRuntimeTarget 'node.exe'
+if (-not (Test-Path -LiteralPath $nodeExecutableTarget -PathType Leaf)) {
+    throw "Immutable release is missing bundled Node.js runtime: $nodeVersion"
 }
-$runtimeTargetParent = Join-Path $releaseTarget 'runtime'
-$nodeRuntimeTarget = Join-Path $runtimeTargetParent 'node'
-New-Item -ItemType Directory -Force -Path $runtimeTargetParent | Out-Null
-Copy-Item -LiteralPath $nodeRuntimeSource -Destination $nodeRuntimeTarget -Recurse
+$observedNodeVersion = @(& $nodeExecutableTarget --version)
+if ($LASTEXITCODE -ne 0 -or $observedNodeVersion.Count -ne 1 -or [string]$observedNodeVersion[0] -ne $nodeVersion) {
+    throw 'Bundled Node.js runtime does not match immutable release metadata.'
+}
 
 if ($BuildRunId -gt 0) {
     $publicBuild = [ordered]@{

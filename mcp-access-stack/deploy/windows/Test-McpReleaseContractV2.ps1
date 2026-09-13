@@ -86,9 +86,37 @@ try {
     if ($distributionBuilder -notmatch 'schemaVersion = 2') {
         throw 'Public distribution builder does not emit schemaVersion 2.'
     }
+    if ($distributionBuilder -match '\.runtime-tools[\\/]mcp-node-runtime') {
+        throw 'Public distribution still depends on an out-of-release managed Node runtime.'
+    }
 
+    $releaseBuilderPath = Join-Path $PSScriptRoot 'New-McpRelease.ps1'
+    if (-not (Test-Path -LiteralPath $releaseBuilderPath -PathType Leaf)) {
+        throw 'Docker-free immutable release builder is missing.'
+    }
+    $releaseBuilderSource = Get-Content -Raw -LiteralPath $releaseBuilderPath
+    foreach ($legacyToken in @('SkipDockerImages', 'GatewayRepository', 'ProxyRepository', 'dockerImages')) {
+        if ($releaseBuilderSource -match [regex]::Escape($legacyToken)) {
+            throw "Immutable release builder contains legacy token: $legacyToken"
+        }
+    }
+    if ($releaseBuilderSource -notmatch 'runtime[\\\\/]node' -or
+        $releaseBuilderSource -notmatch 'node\.exe') {
+        throw 'Immutable release builder does not bundle the Windows Node runtime inside the release.'
+    }
 
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free and v1 remains historical read compatibility.'
+    $repositoryRoot = [IO.Path]::GetFullPath((Join-Path (Join-Path $PSScriptRoot '..\..') '..'))
+    $releaseWorkflowPath = Join-Path $repositoryRoot '.github\workflows\release.yml'
+    $releaseWorkflow = Get-Content -Raw -LiteralPath $releaseWorkflowPath
+    $releaseStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpRelease.ps1', [StringComparison]::Ordinal)
+    $nativeStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpWindowsExecutionNodeArtifacts.ps1', [StringComparison]::Ordinal)
+    $distributionStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpPublicDistribution.ps1', [StringComparison]::Ordinal)
+    if ($releaseStepIndex -lt 0 -or $nativeStepIndex -lt 0 -or $distributionStepIndex -lt 0 -or
+        $releaseStepIndex -ge $nativeStepIndex -or $nativeStepIndex -ge $distributionStepIndex) {
+        throw 'Public release workflow must build immutable release, native artifacts, then signed distribution in order.'
+    }
+
+    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, and v1 remains historical read compatibility.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

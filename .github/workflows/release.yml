@@ -131,6 +131,18 @@ jobs:
       - name: Build Windows runtime
         run: npm run build
 
+      - name: Build immutable Windows release
+        env:
+          RELEASE_ID: ${{ needs.metadata.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.commit }}
+          CI_RUN_ID: ${{ needs.metadata.outputs.ci-run-id }}
+        run: |
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpRelease.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -BuildRunId ([long]$env:CI_RUN_ID) `
+            -OutputDirectory (Join-Path $PWD "releases\$env:RELEASE_ID")
+
       - name: Build Windows execution-node native artifacts
         env:
           RELEASE_ID: ${{ needs.metadata.outputs.version }}
