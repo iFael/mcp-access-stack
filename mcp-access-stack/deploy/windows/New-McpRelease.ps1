@@ -167,7 +167,7 @@ try {
 
     Push-Location $staging
     try {
-        & $npmExecutable ci --omit=dev --ignore-scripts --workspaces --include-workspace-root
+        $null = & $npmExecutable ci --omit=dev --ignore-scripts --workspaces --include-workspace-root
         if ($LASTEXITCODE -ne 0) {
             throw 'Production dependency installation failed for immutable release.'
         }
