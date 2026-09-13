@@ -83,7 +83,7 @@ jobs:
           SOURCE_COMMIT: ${{ steps.meta.outputs.commit }}
         run: |
           set -euo pipefail
-          mapfile -t run_ids < <(
+          run_id="$(
             gh run list \
               --repo "$REPOSITORY" \
               --workflow CI \
@@ -93,10 +93,10 @@ jobs:
               --status success \
               --limit 10 \
               --json databaseId \
-              --jq '.[].databaseId'
-          )
-          test "${#run_ids[@]}" -eq 1
-          echo "run-id=${run_ids[0]}" >> "$GITHUB_OUTPUT"
+              --jq 'sort_by(.databaseId) | last | .databaseId // empty'
+          )"
+          test -n "$run_id"
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
 
   package:
     needs: metadata

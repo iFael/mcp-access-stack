@@ -115,8 +115,14 @@ try {
         $releaseStepIndex -ge $nativeStepIndex -or $nativeStepIndex -ge $distributionStepIndex) {
         throw 'Public release workflow must build immutable release, native artifacts, then signed distribution in order.'
     }
+    if ($releaseWorkflow -match 'test\s+"\$\{#run_ids\[@\]\}"\s+-eq\s+1') {
+        throw 'Public release workflow rejects valid duplicate successful CI evidence for the same immutable commit.'
+    }
+    if ($releaseWorkflow -notmatch 'sort_by\(\.databaseId\)\s*\|\s*last\s*\|\s*\.databaseId\s*//\s*empty') {
+        throw 'Public release workflow does not deterministically select the newest successful CI run.'
+    }
 
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, and v1 remains historical read compatibility.'
+    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, and v1 remains historical read compatibility.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
