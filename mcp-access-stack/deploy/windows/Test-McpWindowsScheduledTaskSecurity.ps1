@@ -13,6 +13,12 @@ $updatedSddl = Get-McpWindowsScheduledTaskOwnerSddl `
     -CurrentSddl $currentSddl `
     -UserId $userSid
 
+if (-not $updatedSddl.StartsWith('D:', [StringComparison]::Ordinal) -or
+    $updatedSddl.Contains('O:', [StringComparison]::Ordinal) -or
+    $updatedSddl.Contains('G:', [StringComparison]::Ordinal)) {
+    throw "Task owner ACL normalization must return DACL-only SDDL so a non-elevated owner can persist it. sddl=$updatedSddl"
+}
+
 $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($updatedSddl)
 $userAces = [System.Collections.Generic.List[object]]::new()
 for ($index = 0; $index -lt $descriptor.DiscretionaryAcl.Count; $index++) {
