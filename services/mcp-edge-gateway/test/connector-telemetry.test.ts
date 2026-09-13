@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol/source";
+import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol";
 import {
   CONNECTOR_TELEMETRY_STORAGE_KEY,
   applyConnectorTelemetryEvent,

@@ -114,6 +114,8 @@ describe("command confirmations", () => {
       shell: "powershell" as const,
       cwd: ".",
       command: "Remove-Item file.txt",
+      executionContext: "foreground" as const,
+      operation: "run_command",
     };
     const confirmation = registry.create(binding);
 
@@ -130,6 +132,8 @@ describe("command confirmations", () => {
       shell: "powershell" as const,
       cwd: ".",
       command: "Remove-Item file.txt",
+      executionContext: "foreground" as const,
+      operation: "run_command",
     };
     const confirmation = registry.create(binding);
 
@@ -142,6 +146,35 @@ describe("command confirmations", () => {
     expect(() => registry.consume(confirmation.confirmationId, binding)).not.toThrow();
   });
 
+  test("binds confirmations to execution context and background operation", () => {
+    const registry = new CommandConfirmationRegistry(60_000);
+    const backgroundBinding = {
+      workspaceId: "test",
+      shell: "powershell" as const,
+      cwd: ".",
+      command: "Remove-Item file.txt",
+      executionContext: "background",
+      operation: "cleanup",
+    } as const;
+    const confirmation = registry.create(backgroundBinding);
+
+    expect(() =>
+      registry.consume(confirmation.confirmationId, {
+        ...backgroundBinding,
+        executionContext: "foreground",
+        operation: "run_command",
+      }),
+    ).toThrow(/does not match/);
+    expect(() =>
+      registry.consume(confirmation.confirmationId, {
+        ...backgroundBinding,
+        operation: "different-operation",
+      }),
+    ).toThrow(/does not match/);
+    expect(() =>
+      registry.consume(confirmation.confirmationId, backgroundBinding),
+    ).not.toThrow();
+  });
   test("expires confirmations", () => {
     jest.useFakeTimers();
     try {
@@ -151,6 +184,8 @@ describe("command confirmations", () => {
         shell: "powershell" as const,
         cwd: ".",
         command: "Remove-Item file.txt",
+      executionContext: "foreground" as const,
+      operation: "run_command",
       };
       const confirmation = registry.create(binding);
       jest.advanceTimersByTime(1_001);
@@ -241,7 +276,7 @@ describe("run command", () => {
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
   });
 
-  test("permanently blocks pushes involving main", async () => {
+  test("requires confirmation for main push and hard-blocks -C/mirror forms", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);
 
@@ -252,7 +287,16 @@ describe("run command", () => {
         command: "git push origin main",
         timeoutMs: 30_000,
       }),
-    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    ).resolves.toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining(["git push requires explicit user confirmation"]),
+    });
+
+    for (const command of ["git -C . push origin feature/safe", "git push --mirror origin"]) {
+      await expect(
+        agent.runCommand({ workspaceId: "test", shell: "powershell", command, timeoutMs: 30_000 }),
+      ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    }
   });
 
   test("requires confirmation before pushing any non-main branch", async () => {
@@ -272,27 +316,7 @@ describe("run command", () => {
     });
   });
 
-  test("keeps explicit direct mode on the existing execution path", async () => {
-    fixture = await createWritableShellFixture();
-    const agent = await LocalAgent.create(fixture.policyPath);
-
-    await expect(
-      agent.runCommand({
-        workspaceId: "test",
-        shell: "powershell",
-        command: "Write-Output 'direct-mode-ok'",
-        executionMode: "direct",
-        timeoutMs: 30_000,
-      }),
-    ).resolves.toMatchObject({
-      status: "executed",
-      shell: "powershell",
-      exitCode: 0,
-      stdout: expect.stringContaining("direct-mode-ok"),
-    });
-  });
-
-  test("rejects qualified mode before starting a process", async () => {
+  test("rejects legacy qualified payloads before starting a process", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);
 
@@ -301,17 +325,11 @@ describe("run command", () => {
         workspaceId: "test",
         objective: "Executar um comando que n├úo deve iniciar",
         timeoutMs: 30_000,
-      }),
+      } as never),
     ).rejects.toMatchObject({
-      code: "CAPABILITY_UNSUPPORTED",
-      message: "Qualified command execution is disabled.",
+      code: "INVALID_ARGUMENT",
+      message: "Input does not match the operation schema.",
     });
-  });
-
-  test("keeps the run_powershell alias on the same confirmation path", async () => {
-    fixture = await createWritableShellFixture();
-    const agent = await LocalAgent.create(fixture.policyPath);
-    await expect(agent.runPowerShell({ workspaceId: "test", command: "Remove-Item 'missing.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required", shell: "powershell" });
   });
 
   test("executes bounded local mutations without confirmation in trusted workspace", async () => {
@@ -350,6 +368,22 @@ describe("run command", () => {
     await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git clean -f -- untracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
     await expect(access(`${fixture.workspacePath}/untracked.txt`)).rejects.toMatchObject({ code: "ENOENT" });
   }, 45_000);
+
+  test("keeps external package execution and deploys behind confirmation in trusted workspace", async () => {
+    fixture = await createWritableShellFixture("trusted-workspace");
+    const agent = await LocalAgent.create(fixture.policyPath);
+
+    for (const command of ["npx vercel --version", "wrangler deploy"]) {
+      await expect(
+        agent.runCommand({
+          workspaceId: "test",
+          shell: "powershell",
+          command,
+          timeoutMs: 30_000,
+        }),
+      ).resolves.toMatchObject({ status: "confirmation_required" });
+    }
+  });
 
   test("blocks protected paths and keeps ambiguous traversal on confirmation in trusted workspace", async () => {
     fixture = await createWritableShellFixture("trusted-workspace");

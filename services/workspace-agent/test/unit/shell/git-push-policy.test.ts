@@ -33,6 +33,7 @@ describe("Git push policy", () => {
         isPush: false,
         targetsMain: false,
         usesGitC: false,
+        usesMirror: false,
       });
       expect(classifyCommandRisk("powershell", command)).toEqual({
         destructive: false,
@@ -41,15 +42,18 @@ describe("Git push policy", () => {
     }
   });
 
-  test("blocks main permanently and requires cwd-based inspection", () => {
+  test("lets main reach confirmation while keeping unsafe push forms hard-blocked", () => {
     const explicitMain = classifyGitPushIntent("powershell", "git push origin HEAD:main");
-    expect(protectedGitPushReason(explicitMain, "dev")).toMatch(/permanently blocked/i);
+    expect(protectedGitPushReason(explicitMain)).toBeUndefined();
 
     const implicit = classifyGitPushIntent("powershell", "git push origin");
-    expect(protectedGitPushReason(implicit, "main")).toMatch(/permanently blocked/i);
-    expect(protectedGitPushReason(implicit, "dev")).toBeUndefined();
+    expect(protectedGitPushReason(implicit)).toBeUndefined();
+    expect(protectedGitPushReason(implicit)).toBeUndefined();
 
     const gitC = classifyGitPushIntent("powershell", "git -C repo push origin feature/safe");
-    expect(protectedGitPushReason(gitC, "dev")).toMatch(/use the command cwd/i);
+    expect(protectedGitPushReason(gitC)).toMatch(/use the command cwd/i);
+
+    const mirror = classifyGitPushIntent("powershell", "git push --mirror origin");
+    expect(protectedGitPushReason(mirror)).toMatch(/mirror/i);
   });
 });

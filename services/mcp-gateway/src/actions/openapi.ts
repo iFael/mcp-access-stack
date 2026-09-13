@@ -178,15 +178,6 @@ export function createGptActionsOpenApi(
         refResponse("CommandResult"),
       ),
     };
-    paths["/shell/powershell"] = {
-      post: operation(
-        "executarPowerShellNoEspacoDeTrabalho",
-        "Executa um comando PowerShell dentro de um espaço de trabalho autorizado. Pushes envolvendo main são bloqueados permanentemente; pushes para outras branches exigem confirmação explícita do usuário.",
-        true,
-        "RunPowerShellInput",
-        refResponse("CommandResult"),
-      ),
-    };
   }
 
   return {
@@ -1140,10 +1131,6 @@ function openApiSchemas(workspaceIds: readonly string[]): Record<string, unknown
         enum: ["powershell", "pwsh", "cmd", "wsl", "git-bash"],
       },
     }),
-    RunPowerShellInput: objectSchema(
-      ["workspaceId", "command"],
-      commandProperties,
-    ),
     CommandResult: {
       oneOf: [
         objectSchema(

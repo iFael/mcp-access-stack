@@ -8,7 +8,6 @@ import {
   readFileInputSchema,
   runWorkspaceValidationInputSchema,
   runCommandInputSchema,
-  runPowerShellInputSchema,
   searchFilesInputSchema,
   writeFileInputSchema,
   type WorkspaceExecutor,
@@ -45,7 +44,6 @@ import {
   readFileActionInputSchema,
   readFilesActionInputSchema,
   runCommandActionInputSchema,
-  runPowerShellActionInputSchema,
   runWorkspaceValidationActionInputSchema,
   searchFilesActionInputSchema,
   startConsoleRunInputSchema,
@@ -306,17 +304,6 @@ export function mountGptActions(
         logger,
         (input, context) => executor.runCommand(input, context),
         trackConsole(consoleRegistry, "executarComandoNoEspacoDeTrabalho"),
-      ),
-    );
-    router.post(
-      "/shell/powershell",
-      createWorkspacePostHandler(
-        runPowerShellActionInputSchema,
-        runPowerShellInputSchema,
-        actions,
-        logger,
-        (input, context) => executor.runPowerShell(input, context),
-        trackConsole(consoleRegistry, "executarPowerShellNoEspacoDeTrabalho"),
       ),
     );
   }

@@ -16,9 +16,9 @@ $launcherContent = Get-Content -LiteralPath $launcherSource -Raw
 $installerContent = Get-Content -LiteralPath $installer -Raw
 foreach ($required in @(
     'ExpectedManifestSha256',
-    "Role 'edge-connector'",
-    "Role 'edge-connector-launcher'",
-    "Role 'node-runtime'",
+    "'edge-connector'",
+    "'edge-validation-launcher'",
+    "'node-runtime'",
     "BROWSER_WORKER_ENABLED = 'false'",
     'EnableBrowserWorker',
     'BrowserWorkerTokenFile',
@@ -72,6 +72,10 @@ $runtimeRoot = Join-Path $fixtureRoot 'private-runtime'
 $launcher = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
 $edgeCli = Join-Path $releaseRoot 'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js'
 $nodePath = Join-Path $releaseRoot 'runtime\node\node.exe'
+$edgeHost = Join-Path $releaseRoot 'native\McpEdgeHost.exe'
+$browserServer = Join-Path $releaseRoot 'services\browser-worker\dist\server.js'
+$browserLauncher = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
+$browserBroker = Join-Path $releaseRoot 'compat\McpCredentialBroker.exe'
 $connectorTokenFile = Join-Path $runtimeRoot 'connector-token.txt'
 $ownerTokenFile = Join-Path $runtimeRoot 'owner-token.txt'
 $browserTokenFile = Join-Path $runtimeRoot 'browser-token.txt'
@@ -85,20 +89,28 @@ try {
         (Split-Path -Parent $launcher), `
         (Split-Path -Parent $edgeCli), `
         (Split-Path -Parent $nodePath), `
+        (Split-Path -Parent $edgeHost), `
+        (Split-Path -Parent $browserServer), `
+        (Split-Path -Parent $browserLauncher), `
         $runtimeRoot | Out-Null
     Copy-Item -LiteralPath $launcherSource -Destination $launcher
     [IO.File]::WriteAllText($edgeCli, "console.log('edge-fixture');`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($nodePath, 'node-fixture', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($edgeHost, 'edge-host-fixture', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($browserServer, 'browser-fixture', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($browserLauncher, 'browser-launcher-fixture', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($browserBroker, 'browser-broker-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($connectorTokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($ownerTokenFile, $ownerToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($browserTokenFile, $browserToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($policyPath, "{}`n", [Text.UTF8Encoding]::new($false))
 
     function New-FixtureArtifact {
-        param([string]$Role, [string]$Path, [string]$RelativePath, [bool]$AuthenticodeRequired)
+        param([string]$Id, [string]$Owner, [string]$Path, [string]$RelativePath, [bool]$AuthenticodeRequired)
         $item = Get-Item -LiteralPath $Path
         return [ordered]@{
-            role = $Role
+            id = $Id
+            owner = $Owner
             path = $RelativePath
             sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
             sizeBytes = [long]$item.Length
@@ -107,17 +119,25 @@ try {
     }
 
     $manifest = [ordered]@{
-        version = 1
+        version = 2
         releaseId = 'edge-fixture'
         commit = ('a' * 40)
         platform = 'win32-x64'
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         runtimeMode = 'bundled-node'
         integrityRoot = 'signed-distribution-manifest'
+        services = @(
+            [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+        )
         artifacts = @(
-            (New-FixtureArtifact -Role 'edge-connector' -Path $edgeCli -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
-            (New-FixtureArtifact -Role 'edge-connector-launcher' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
-            (New-FixtureArtifact -Role 'node-runtime' -Path $nodePath -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
+            (New-FixtureArtifact -Id 'edge-host' -Owner 'edge-runtime' -Path $edgeHost -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'edge-connector' -Owner 'edge-runtime' -Path $edgeCli -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+            (New-FixtureArtifact -Id 'edge-validation-launcher' -Owner 'edge-runtime' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'browser-worker-server' -Owner 'browser-worker' -Path $browserServer -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
+            (New-FixtureArtifact -Id 'browser-native-launcher' -Owner 'browser-worker' -Path $browserLauncher -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'browser-credential-broker' -Owner 'browser-worker' -Path $browserBroker -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'node-runtime' -Owner 'shared' -Path $nodePath -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }
     $manifestPath = Join-Path $releaseRoot 'execution-node-manifest.json'

@@ -28,12 +28,11 @@ import type {
   SearchFilesInput,
   SearchFilesResult,
   StartBackgroundTaskInput,
+  StartBackgroundTaskResult,
   WriteFileInput,
   WriteFileResult,
   RunCommandInput,
   RunCommandResult,
-  RunPowerShellInput,
-  RunPowerShellResult,
   WorkspaceExecutor,
   GitRepositoryExecutor,
   GitHubExecutor,
@@ -90,10 +89,6 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.runCommand(input, context);
   }
 
-  runPowerShell(input: RunPowerShellInput, context?: OperationContext): Promise<RunPowerShellResult> {
-    return this.agent.runPowerShell(input, context);
-  }
-
   searchFiles(input: SearchFilesInput, context?: OperationContext): Promise<SearchFilesResult> {
     return this.agent.searchFiles(input, context);
   }
@@ -112,7 +107,7 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   startBackgroundTask(
     input: StartBackgroundTaskInput,
     context?: OperationContext,
-  ): Promise<BackgroundTaskResult> {
+  ): Promise<StartBackgroundTaskResult> {
     return this.agent.startBackgroundTask(input, context);
   }
 

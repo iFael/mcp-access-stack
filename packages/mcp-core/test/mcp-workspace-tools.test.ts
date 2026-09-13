@@ -12,9 +12,9 @@ import type {
   ReadFileResult,
   RunWorkspaceValidationResult,
   RunCommandResult,
-  RunPowerShellResult,
   SearchFilesResult,
   StartBackgroundTaskInput,
+  StartBackgroundTaskResult,
   WorkspaceExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
@@ -137,19 +137,6 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
-  async runPowerShell(): Promise<RunPowerShellResult> {
-    this.calls.push("runPowerShell");
-    return {
-      status: "executed",
-      shell: "powershell",
-      cwd: ".",
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-    };
-  }
-
   async runCommand(): Promise<RunCommandResult> {
     this.calls.push("runCommand");
     return {
@@ -196,10 +183,17 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
 
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
-  ): Promise<BackgroundTaskResult> {
+  ): Promise<StartBackgroundTaskResult> {
     this.calls.push("startBackgroundTask");
     this.backgroundInputs.push(input);
-    return { task: { ...backgroundTask, command: input.command, timeoutMs: input.timeoutMs ?? 60_000 } };
+    return {
+      status: "background_task_started",
+      task: {
+        ...backgroundTask,
+        command: input.command,
+        timeoutMs: input.timeoutMs ?? 60_000,
+      },
+    };
   }
 
   async getBackgroundTask(): Promise<BackgroundTaskResult> {
@@ -310,7 +304,8 @@ describe("registerWorkspaceTools", () => {
     });
     expect(executor.calls).toEqual(["listWorkspaceRoots"]);
   });
-  it("keeps qualified payloads out of the legacy background-task router", async () => {
+
+  it("rejects legacy qualified payloads before the executor", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -330,12 +325,12 @@ describe("registerWorkspaceTools", () => {
       { signal: new AbortController().signal },
     );
 
-    expect(result.structuredContent).toMatchObject({ status: "executed" });
-    expect(executor.calls).toEqual(["runCommand"]);
+    expect(result.isError).toBe(true);
+    expect(executor.calls).toEqual([]);
     expect(executor.backgroundInputs).toEqual([]);
   });
 
-  it("keeps canonical direct or qualified validation behind the published object schema", async () => {
+  it("requires the canonical command and shell fields", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -377,6 +372,7 @@ describe("registerWorkspaceTools", () => {
         shell: "git-bash",
         command,
         timeoutMs: 300_001,
+        confirmationId: "long-command-confirmation",
       },
       { signal: new AbortController().signal },
     );
@@ -391,10 +387,80 @@ describe("registerWorkspaceTools", () => {
         operation: "run_command",
         command,
         timeoutMs: 300_001,
+        confirmationId: "long-command-confirmation",
       }),
     ]);
   });
 
+  it("preserves confirmationId when a long run_command routes to background", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_command"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    await registeredTools(server)["run_command"]!.handler(
+      {
+        workspaceId: "ws",
+        shell: "powershell",
+        command: "Remove-Item stale.txt -Force",
+        timeoutMs: 300_001,
+        confirmationId: "background-confirmation",
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(executor.backgroundInputs).toEqual([
+      expect.objectContaining({
+        operation: "run_command",
+        confirmationId: "background-confirmation",
+      }),
+    ]);
+  });
+
+  it("returns background confirmation_required through long run_command routing", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.startBackgroundTask = (async (input: StartBackgroundTaskInput) => {
+      executor.calls.push("startBackgroundTask");
+      executor.backgroundInputs.push(input);
+      return {
+        status: "confirmation_required",
+        shell: input.shell,
+        cwd: input.cwd ?? ".",
+        confirmationId: "confirm-long-command",
+        expiresAt: "2026-09-13T06:00:00.000Z",
+        reasons: ["move, overwrite or direct file write operation"],
+      } as any;
+    }) as any;
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_command"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["run_command"]!.handler(
+      {
+        workspaceId: "ws",
+        shell: "powershell",
+        command: "Remove-Item stale.txt -Force",
+        timeoutMs: 300_001,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.structuredContent).toMatchObject({
+      status: "confirmation_required",
+      confirmationId: "confirm-long-command",
+    });
+    expect(result.isError).not.toBe(true);
+  });
   it("publishes wait_background_task as a workspace tool", () => {
     expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
       "wait_background_task",
@@ -526,11 +592,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 28-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 27-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(28);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(28);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(27);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(27);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {

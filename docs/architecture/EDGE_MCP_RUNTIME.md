@@ -2,103 +2,89 @@
 
 ## Status
 
-The Cloudflare edge is the active V3 steady-state architecture. Workspace/Git/shell traffic is already qualified through the outbound Edge Connector. Browser automation remains Windows-local and is attached to the embedded Gateway through a dedicated loopback Browser Worker task.
-
-## Target topology
+Esta é a arquitetura de produção vigente do MCP Access Stack.
 
 ```text
 ChatGPT
   -> Cloudflare Worker
   -> Durable Object session
-  <-> authenticated outbound WebSocket
-  -> Windows Edge Connector
-       |- embedded MCP Gateway on ephemeral 127.0.0.1 only
-       `- LocalAgent / workspace policy in-process
-            |- local workspaces
-            `-> loopback Browser Worker task on 127.0.0.1:3350
-                 `-> dedicated persistent Chromium profile
+  <-> WebSocket autenticado iniciado pelo Windows
+  -> Edge Connector
+       |- MCP Gateway embutido em loopback
+       `- LocalAgent / InProcessWorkspaceExecutor
+            |- filesystem, Git, shell, validações e background tasks
+            `-> Browser Worker em loopback
+                 `-> Chromium com perfil MCP dedicado
 ```
 
-GitHub remains authoritative for source and CI. Cloudflare provides the public serverless edge and connection coordination.
+GitHub é autoritativo para source, CI, build e publicação de artefatos Windows. Cloudflare fornece a borda pública e coordena a sessão. O Windows mantém somente capacidades que exigem presença local.
 
-## Windows boundary
+Docker/V2, Compose, runtime GHCR, ngrok, proxy container, remote-compose e o antigo proxy local foram aposentados.
 
-The Edge Connector is the only Internet-facing MCP ownership process on Windows. It opens no public listener and requires no inbound SSH. Its embedded Gateway binds an ephemeral port on `127.0.0.1` only; all Internet-facing traffic arrives over the connector-initiated `wss://.../connector` session. The first-party Browser Worker remains a separate local Windows process because it owns Chromium and its persistent MCP-only profile; it listens only on loopback.
+## Edge
 
-The connector reuses the existing `LocalAgent`, `InProcessWorkspaceExecutor` and MCP Gateway instead of duplicating their behavior. Therefore workspace permission profiles, destructive-command confirmation, audit logging, cancellation, background tasks, OAuth and MCP tool behavior remain implemented by the already-tested components.
+`services/mcp-edge-gateway` fornece a borda Cloudflare:
 
-The legacy Docker/V2 resident runtime is retired. Browser automation remains local through the first-party Windows Browser Worker task, not through a legacy fallback runtime.
+- health/readiness;
+- sessão Durable Object;
+- autenticação do conector;
+- relay das rotas MCP e Owner OAuth explicitamente permitidas;
+- cancelamento, limites de payload, concorrência e deadline;
+- telemetria do conector.
 
-## Edge gateway
+O protocolo Edge↔Connector fica em `packages/edge-protocol` e é versionado. Incompatibilidade falha fechada.
 
-`services/mcp-edge-gateway` provides:
+## Edge Connector
 
-- `GET /health` for edge/connector readiness;
-- `/connector` as the Bearer-authenticated WebSocket boundary;
-- a singleton Durable Object coordinating the connector;
-- WebSocket Hibernation-compatible state;
-- a strict HTTP relay allowlist for `/mcp` and the Owner OAuth endpoints only;
-- explicit relay cancellation propagated to the connector;
-- header allowlists, size limits, concurrency limits and relay deadline;
-- an explicit `MCP_EDGE_ENABLED` activation gate; production is enabled only after connector qualification.
+O entrypoint Windows fica em `services/mcp-gateway/src/edge-connector-cli.ts`. Ele inicia a sessão outbound para o Worker e reutiliza o MCP Gateway e o `LocalAgent` existentes. Não existe um segundo engine de autorização ou execução.
 
-The shared protocol is versioned in `packages/edge-protocol`. Protocol mismatch fails closed during the WebSocket handshake.
+A tarefa persistente canônica é `MCP Access Stack production edge-connector`, instalada por `deploy/windows/Install-McpEdgeConnectorTask.ps1`.
 
-## Owner OAuth preservation
+O conector não abre listener público. O Gateway embutido é somente loopback.
 
-Production currently uses the Gateway's Owner OAuth flow. The Edge therefore does not implement a second authentication system. It relays only the exact Gateway paths required by the existing flow:
+## Browser Worker
 
-- `/mcp`;
-- `/authorize`;
-- `/token`;
-- `/register`;
-- `/revoke`;
-- `/.well-known/oauth-authorization-server`;
-- `/.well-known/oauth-protected-resource`;
-- `/.well-known/oauth-protected-resource/mcp`.
+O Browser Worker permanece como processo Windows separado porque controla Chromium em sessão gráfica local. A tarefa canônica é `MCP Access Stack production browser-worker`, instalada por `deploy/windows/Install-McpBrowserWorkerTask.ps1`.
 
-The `Origin` header is preserved so the Gateway's existing origin policy remains authoritative. Hop-by-hop, forwarding and arbitrary application headers are not relayed.
+O Worker usa perfil Chromium dedicado ao MCP, listener loopback e token privado. Não reutiliza perfil pessoal e não possui fallback Docker.
 
-## Connector configuration
+## Autenticação e segredos
 
-The connector is started only after its artifacts and secrets have been qualified. Required connector-specific settings are documented in `config/edge-connector.env.example`.
+Owner OAuth continua sendo implementado pelo MCP Gateway. O Edge apenas relaya as rotas necessárias; não cria uma autenticação paralela.
 
-`MCP_CONNECTOR_TOKEN` exists only as a Cloudflare secret. The Windows side reads the same value from a bounded local secret file via `MCP_CONNECTOR_TOKEN_FILE`; the token is never accepted as a command-line argument and is never logged.
+Segredos não entram no Git, em argumentos de Scheduled Task ou em logs. O conector usa arquivo apontado por `MCP_CONNECTOR_TOKEN_FILE`; Owner e Browser Worker usam arquivos privados delimitados pelos scripts Windows.
 
-The embedded Gateway continues to consume its normal authentication and Browser settings from the process environment. `AUTH_MODE=none` is rejected by the connector.
+## Workspace execution
 
-## Persistent Windows ownership
+`LocalAgent` e `InProcessWorkspaceExecutor` permanecem autoritativos para filesystem, Git, shell, validações e background tasks.
 
-The production connector is owned by a dedicated Scheduled Task instead of a terminal session or an FNM-managed shell. The task is installed by `deploy/windows/Install-McpEdgeConnectorTask.ps1`. PowerShell remains an installation-time validation surface only; the persistent task action executes the signed `compat/McpNodeHostLauncher.exe` Windows-GUI-subsystem launcher directly from the immutable release.
+O fluxo de autorização é único:
 
-The persistence contract is deliberately bounded:
+```text
+command -> classification -> authorization -> confirmation -> execution
+```
 
-- the task runs as the current interactive user with `Limited` run level, while the persistent owner is a signed `winexe` launcher that starts bundled Node.js with `CreateNoWindow=true`; no PowerShell process or console window owns the steady-state runtime;
-- it starts at logon, uses `MultipleInstances=IgnoreNew`, has no execution time limit and uses the Task Scheduler restart policy;
-- the task pins the SHA-256 of `execution-node-manifest.json` and refuses a release whose critical artifacts changed after installation;
-- the connector CLI, PowerShell validation launcher and native GUI launcher are explicit critical artifacts in native-Edge execution-node manifests; four-artifact legacy and six-artifact PowerShell-Edge manifests remain valid only for historical rollback compatibility;
-- Node.js is the bundled runtime from the immutable release; the task never depends on FNM, `PATH` resolution or a developer shell;
-- `MCP_CONNECTOR_TOKEN` remains a file path in the child environment and the embedded Gateway Owner token is injected by the native launcher from a bounded private file. The Owner token plaintext is never placed in Scheduled Task arguments, source, manifests or logs;
-- Owner OAuth registration and session state is durable under the same private runtime root. Registered public clients and SHA-256 hashes of access/refresh tokens are persisted atomically; Owner, access and refresh token plaintext values are never written to the state file;
-- Browser Worker ownership is separate from the Edge process: `deploy/windows/Install-McpBrowserWorkerTask.ps1` owns `services/browser-worker/dist/server.js` through the same signed native launcher and bundled Node runtime;
-- the Edge task enables Browser integration only when explicitly configured with a loopback `BROWSER_WORKER_URL` and a file-backed `BROWSER_WORKER_TOKEN`; Browser token plaintext is not stored in task arguments;
-- installation runs the signed `Start-McpEdgeConnector.ps1 -ValidateOnly` preflight before task registration; PowerShell is not the persistent runtime owner;
-- `deploy/windows/Test-McpEdgeConnectorTerminalIndependence.ps1` is the mandatory persistence gate. It identifies any console/terminal window associated with the Edge launcher, closes the real terminal window when one exists, records the original launcher and Node PIDs, and rejects a result where Task Scheduler merely restarts the connector after the original process tree dies;
-- terminal independence passes only when no Edge terminal is present, the original native launcher PID and original Node PID remain alive, the task remains `Running`, Worker health remains `connectorReady=true`, and a real V3 operation succeeds afterward;
-- Edge production cutovers use the existing lifecycle broker in `EdgeOnly` mode: lifecycle pointers still promote/rollback atomically, but the redundant `McpHost` Scheduled Task is retired instead of recreated.
+Foreground e background usam a mesma policy. Confirmações são one-shot e vinculadas a workspace, shell, cwd, comando, contexto e operação.
 
-The persistent task may be installed and qualified while `MCP_EDGE_ENABLED=false`. Enabling the public Edge relay remains a separate explicit gate after startup, restart and reconnect behavior are proven.
+Package runners e deploy CLIs mutantes exigem confirmação. Push para `main` é confirmation-bound. `git push -C` e `git push --mirror` permanecem hard-blocked; commit/merge local em `main` continuam protegidos.
 
-## Migration boundaries
+## Release e distribuição
 
-1. deploy and validate the disabled Edge gateway;
-2. implement and qualify the outbound connector in Git/CI;
-3. materialize the connector secret in Cloudflare and Windows outside Git;
-4. run the connector and prove `/health` reports `connectorReady=true` while `MCP_EDGE_ENABLED=false`;
-5. explicitly enable the Edge relay and validate Owner OAuth plus MCP filesystem/Git/shell/background operations;
-6. install the native Windows Browser Worker task, enable the Edge loopback Browser client and qualify live/ready plus a real V3 browser operation;
-7. keep Docker/V2/ngrok retired after Browser qualification; the native Browser Worker is the only remaining local Browser runtime.
+O fluxo público vigente está em `.github/workflows/release.yml` e `deploy/windows/`.
 
-## SSH fallback
+O pipeline valida o commit exato, constrói os artefatos Windows, assina a distribuição, executa os gates aplicáveis e publica assets imutáveis no GitHub Release. O PC de produção não compila source nem executa Docker build durante atualização/promoção.
 
-The previously implemented `SshWorkspaceExecutor`, remote compose and OpenSSH bootstrap remain valid fallback code. They are not required by the Edge steady state.
+O contrato v2 não contém `dockerImages`. Leitura de `dockerImages` v1 permanece somente onde necessária para compatibilidade histórica de releases antigas; isso não reintroduz Docker no runtime atual.
+
+## Gates
+
+Os gates executáveis são a fonte operacional de verdade:
+
+- `npm run check`;
+- `npm run check:release-runtime`;
+- `npm run check:persistence`;
+- `npm run check:materialization`;
+- testes específicos de Edge/Windows afetados pela alteração;
+- diff-check e secret scan antes de integrar uma mudança ampla.
+
+Não existem runbooks operacionais paralelos; comandos e invariantes vivem nos scripts, manifests, package scripts e testes do próprio repositório.

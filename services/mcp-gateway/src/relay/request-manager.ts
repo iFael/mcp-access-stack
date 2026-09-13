@@ -317,7 +317,7 @@ export class AgentRelayRequestManager {
 }
 
 function operationCompletionGraceMs(operation: RelayOperation): number {
-  if (operation === "runCommand" || operation === "runPowerShell") {
+  if (operation === "runCommand") {
     return COMMAND_TERMINATION_GRACE_MS;
   }
   return operation === "waitBackgroundTask"

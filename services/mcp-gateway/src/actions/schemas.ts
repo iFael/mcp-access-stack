@@ -1,7 +1,4 @@
 import {
-  commandAutoCorrectionModeSchema,
-  commandExecutionModeSchema,
-  commandExpectedOutcomeSchema,
   getWorkspaceContextInputSchema,
   inspectGitInputSchema,
   inspectGitResultSchema,
@@ -10,8 +7,6 @@ import {
   readFileInputSchema,
   runWorkspaceValidationInputSchema,
   runCommandInputSchema,
-  runPowerShellInputSchema,
-  preferredCommandShellSchema,
   shellNameSchema,
   MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
   QUICK_OPERATION_TIMEOUT_MS,
@@ -271,38 +266,11 @@ export const runCommandActionInputSchema = z
   .object({
     ...consoleRunReferenceShape,
     workspaceId: actionWorkspaceIdSchema,
-    command: z.string().min(1).max(32_000).optional(),
-    objective: z.string().min(1).max(4_000).optional(),
-    executionMode: commandExecutionModeSchema.optional(),
-    autoCorrection: commandAutoCorrectionModeSchema.optional(),
-    preferredShell: preferredCommandShellSchema.optional(),
-    expectedOutcome: z.array(commandExpectedOutcomeSchema).max(20).optional(),
-    cwd: z.string().min(1).optional(),
+    command: runCommandInputSchema.shape.command,
+    shell: shellNameSchema,
+    cwd: runCommandInputSchema.shape.cwd,
     timeoutMs: actionSynchronousTimeoutMsSchema,
-    confirmationId: z.string().min(1).max(128).optional(),
-    shell: shellNameSchema.optional(),
-  })
-  .strict()
-  .superRefine((input, context) => {
-    const { runId: _runId, ...operationInput } = input;
-    const parsed = runCommandInputSchema.safeParse(operationInput);
-    if (parsed.success) return;
-    for (const issue of parsed.error.issues) {
-      context.addIssue({
-        code: "custom",
-        path: issue.path,
-        message: issue.message,
-      });
-    }
-  });
-export const runPowerShellActionInputSchema = z
-  .object({
-    ...consoleRunReferenceShape,
-    workspaceId: actionWorkspaceIdSchema,
-    command: runPowerShellInputSchema.shape.command,
-    cwd: runPowerShellInputSchema.shape.cwd,
-    timeoutMs: actionSynchronousTimeoutMsSchema,
-    confirmationId: runPowerShellInputSchema.shape.confirmationId,
+    confirmationId: runCommandInputSchema.shape.confirmationId,
   })
   .strict();
 export const workspaceGitInputSchema = inspectGitInputSchema

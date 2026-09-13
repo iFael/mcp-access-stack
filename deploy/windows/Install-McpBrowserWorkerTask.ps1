@@ -104,13 +104,13 @@ function Test-McpBrowserPathContains {
 function Get-McpBrowserReleaseArtifact {
     param(
         [Parameter(Mandatory = $true)][object]$Manifest,
-        [Parameter(Mandatory = $true)][string]$Role,
+        [Parameter(Mandatory = $true)][string]$Id,
         [Parameter(Mandatory = $true)][string]$ReleaseRoot
     )
 
-    $records = @($Manifest.artifacts | Where-Object { [string]$_.role -eq $Role })
+    $records = @($Manifest.artifacts | Where-Object { [string]$_.id -eq $Id })
     if ($records.Count -ne 1) {
-        throw "Browser Worker execution manifest role is missing or duplicated: $Role"
+        throw "Browser Worker execution manifest artifact id is missing or duplicated: $Id"
     }
     $relative = ([string]$records[0].path).Replace('/', '\')
     return [IO.Path]::GetFullPath((Join-Path $ReleaseRoot $relative))
@@ -201,14 +201,14 @@ $release = Assert-McpWindowsExecutionNodeRelease `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
     -RuntimeSmoke
 $manifestSha256 = [string]$release.executionManifestSha256
-$nodePath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Role 'node-runtime' -ReleaseRoot $releaseRoot
-$browserWorkerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Role 'browser-worker' -ReleaseRoot $releaseRoot
-$nativeLauncherPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Role 'edge-native-launcher' -ReleaseRoot $releaseRoot
-$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })
+$nodePath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'node-runtime' -ReleaseRoot $releaseRoot
+$browserWorkerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-worker-server' -ReleaseRoot $releaseRoot
+$nativeLauncherPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-native-launcher' -ReleaseRoot $releaseRoot
+$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'browser-native-launcher' })
 if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $true) {
     throw 'Browser Worker native launcher must be a signed critical release artifact.'
 }
-$credentialBrokerPath = Join-Path $releaseRoot 'compat\McpCredentialBroker.exe'
+$credentialBrokerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-credential-broker' -ReleaseRoot $releaseRoot
 if (-not (Test-Path -LiteralPath $credentialBrokerPath -PathType Leaf)) {
     throw 'Browser Worker credential broker is missing from the release.'
 }

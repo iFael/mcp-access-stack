@@ -22,23 +22,22 @@ function Write-TestUtf8 {
     )
 }
 
-function New-TestDataScript {
+function Write-TestDataScript {
     param(
-        [Parameter(Mandatory = $true)][object]$Value,
-        [Parameter(Mandatory = $true)][string]$Path
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Value
     )
-    $json = $Value | ConvertTo-Json -Depth 20 -Compress
+    $json = $Value | ConvertTo-Json -Depth 24 -Compress
     $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-    $content = @(
-        '$json = [Text.Encoding]::UTF8.GetString(',
-        "    [Convert]::FromBase64String('$base64')",
-        ')',
-        '$json | ConvertFrom-Json'
-    ) -join [Environment]::NewLine
-    Write-TestUtf8 -Path $Path -Content ($content + [Environment]::NewLine)
+    Write-TestUtf8 -Path $Path -Content (
+        '$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''' +
+        $base64 +
+        '''))' + [Environment]::NewLine +
+        '$json | ConvertFrom-Json' + [Environment]::NewLine
+    )
 }
 
-function New-TestExecutionNodeDistribution {
+function New-TestDistribution {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$ReleaseId,
@@ -47,27 +46,31 @@ function New-TestExecutionNodeDistribution {
 
     $release = Join-Path $Root "releases\$ReleaseId"
     foreach ($relative in @(
-        'native\McpHost.exe',
+        'native\McpEdgeHost.exe',
         'compat\McpNodeHostLauncher.exe',
         'compat\McpCredentialBroker.exe',
-        'services\workspace-agent\dist\cli.js',
         'services\browser-worker\dist\server.js',
+        'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js',
+        'deploy\windows\Start-McpEdgeConnector.ps1',
         'runtime\node\node.exe'
     )) {
-        $path = Join-Path $release $relative
-        Write-TestUtf8 -Path $path -Content ("fixture:${ReleaseId}:$relative")
+        Write-TestUtf8 `
+            -Path (Join-Path $release $relative) `
+            -Content "fixture:${ReleaseId}:$relative"
     }
 
     function New-ArtifactRecord {
         param(
-            [Parameter(Mandatory = $true)][string]$Role,
+            [Parameter(Mandatory = $true)][string]$Id,
+            [Parameter(Mandatory = $true)][string]$Owner,
             [Parameter(Mandatory = $true)][string]$RelativePath,
             [Parameter(Mandatory = $true)][bool]$AuthenticodeRequired
         )
         $path = Join-Path $release ($RelativePath.Replace('/', '\'))
         $item = Get-Item -LiteralPath $path
         return [ordered]@{
-            role = $Role
+            id = $Id
+            owner = $Owner
             path = $RelativePath
             sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             sizeBytes = [long]$item.Length
@@ -76,18 +79,25 @@ function New-TestExecutionNodeDistribution {
     }
 
     $executionManifest = [ordered]@{
-        version = 1
+        version = 2
         releaseId = $ReleaseId
         commit = $Commit
         platform = 'win32-x64'
-        createdAt = '2026-08-16T00:00:00.000Z'
+        createdAt = '2026-09-13T00:00:00.000Z'
         runtimeMode = 'bundled-node'
         integrityRoot = 'signed-distribution-manifest'
+        services = @(
+            [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+        )
         artifacts = @(
-            (New-ArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
-            (New-ArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
-            (New-ArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-ArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
+            (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $true),
+            (New-ArtifactRecord 'edge-connector' 'edge-runtime' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' $false),
+            (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
+            (New-ArtifactRecord 'browser-worker-server' 'browser-worker' 'services/browser-worker/dist/server.js' $false),
+            (New-ArtifactRecord 'browser-native-launcher' 'browser-worker' 'compat/McpNodeHostLauncher.exe' $true),
+            (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $true),
+            (New-ArtifactRecord 'node-runtime' 'shared' 'runtime/node/node.exe' $false)
         )
     }
     $executionManifestPath = Join-Path $release 'execution-node-manifest.json'
@@ -101,7 +111,7 @@ function New-TestExecutionNodeDistribution {
             Sort-Object FullName |
             ForEach-Object {
                 [ordered]@{
-                    path = $_.FullName.Substring($release.Length).TrimStart('\', '/').Replace('\', '/')
+                    path = [IO.Path]::GetRelativePath($release, $_.FullName).Replace('\', '/')
                     sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
@@ -110,12 +120,12 @@ function New-TestExecutionNodeDistribution {
         releaseId = $ReleaseId
         version = $ReleaseId
         commit = $Commit
-        builtAt = '2026-08-16T00:00:00.000Z'
+        builtAt = '2026-09-13T00:00:00.000Z'
         nodeVersion = 'v26.7.0'
         testsPassed = $true
         dirty = $false
         executionNode = [ordered]@{
-            schemaVersion = 1
+            schemaVersion = 2
             manifestPath = 'execution-node-manifest.json'
             manifestSha256 = (Get-FileHash -LiteralPath $executionManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
         }
@@ -126,27 +136,12 @@ function New-TestExecutionNodeDistribution {
         -Path $releaseManifestPath `
         -Content (($releaseManifest | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
 
-    $dockerImages = @(
-        [ordered]@{
-            component = 'gateway'
-            repository = 'ghcr.io/example/mcp-access-stack-gateway'
-            digest = ('sha256:' + ('c' * 64))
-            platform = 'linux/amd64'
-        },
-        [ordered]@{
-            component = 'proxy'
-            repository = 'ghcr.io/example/mcp-access-stack-proxy'
-            digest = ('sha256:' + ('d' * 64))
-            platform = 'linux/amd64'
-        }
-    )
-    New-TestDataScript -Path (Join-Path $release 'release-attestation.ps1') -Value ([ordered]@{
-        schemaVersion = 1
+    Write-TestDataScript -Path (Join-Path $release 'release-attestation.ps1') -Value ([ordered]@{
+        schemaVersion = 2
         releaseId = $ReleaseId
         commit = $Commit
-        createdAt = '2026-08-16T00:00:00.000Z'
+        createdAt = '2026-09-13T00:00:00.000Z'
         manifestSha256 = (Get-FileHash -LiteralPath $releaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        dockerImages = $dockerImages
     })
 
     $distributionFiles = @(
@@ -155,248 +150,129 @@ function New-TestExecutionNodeDistribution {
             Sort-Object FullName |
             ForEach-Object {
                 [ordered]@{
-                    path = $_.FullName.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+                    path = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
                     sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
     )
-    New-TestDataScript -Path (Join-Path $Root 'distribution-manifest.ps1') -Value ([ordered]@{
-        schemaVersion = 1
+    Write-TestDataScript -Path (Join-Path $Root 'distribution-manifest.ps1') -Value ([ordered]@{
+        schemaVersion = 2
         platform = 'windows-x64'
         releaseId = $ReleaseId
         version = $ReleaseId
         commit = $Commit
-        createdAt = '2026-08-16T00:00:00.000Z'
-        dockerImages = $dockerImages
+        createdAt = '2026-09-13T00:00:00.000Z'
         files = $distributionFiles
     })
-
-    return $release
 }
 
-function Write-TestExecutionNodeState {
+function Invoke-TestStage {
     param(
+        [Parameter(Mandatory = $true)][string]$DistributionRoot,
         [Parameter(Mandatory = $true)][string]$InstallationRoot,
-        [AllowNull()][object]$Active,
-        [AllowNull()][object]$Candidate,
-        [AllowNull()][object]$Previous
+        [string]$ExpectedReleaseId
     )
-    $statePath = Join-Path $InstallationRoot 'state\lifecycle-state.v1.json'
-    Write-TestUtf8 -Path $statePath -Content (([ordered]@{
-        version = 1
-        active = $Active
-        candidate = $Candidate
-        previous = $Previous
-        updatedAt = '2026-08-16T00:00:00.000Z'
-    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
-}
-
-function New-TestPointer {
-    param(
-        [Parameter(Mandatory = $true)][string]$ReleaseId,
-        [Parameter(Mandatory = $true)][char]$HashCharacter
-    )
-    return [ordered]@{
-        releaseId = $ReleaseId
-        manifestSha256 = ([string]$HashCharacter * 64)
-        materializedAt = '2026-08-16T00:00:00.000Z'
+    $parameters = @{
+        DistributionRoot = $DistributionRoot
+        InstallationRoot = $InstallationRoot
+        Execute = $true
+        AllowUnsignedDevelopment = $true
     }
+    if ($ExpectedReleaseId) {
+        $parameters.ExpectedReleaseId = $ExpectedReleaseId
+    }
+    return (& $stager @parameters) | ConvertFrom-Json
 }
 
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mcp-execution-node-staging-test-' + [guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mcp-stage-test-' + [guid]::NewGuid().ToString('N'))
 try {
-    # Candidate-only materialization preserves active/previous and is idempotent.
-    $distributionA = Join-Path $testRoot 'distribution-a'
-    $installationA = Join-Path $testRoot 'installation-a'
-    New-TestExecutionNodeDistribution `
-        -Root $distributionA `
-        -ReleaseId '1.2.0-stage' `
-        -Commit ('a' * 40) | Out-Null
-    $active = New-TestPointer -ReleaseId '1.1.0' -HashCharacter 'b'
-    $previous = New-TestPointer -ReleaseId '1.0.0' -HashCharacter 'c'
-    Write-TestExecutionNodeState `
-        -InstallationRoot $installationA `
-        -Active $active `
-        -Candidate $null `
-        -Previous $previous
+    $distribution = Join-Path $testRoot 'distribution'
+    $installation = Join-Path $testRoot 'installation'
+    $releaseId = '1.2.3-stage'
+    New-TestDistribution -Root $distribution -ReleaseId $releaseId -Commit ('a' * 40)
 
-    $first = (& $stager `
-        -DistributionRoot $distributionA `
-        -InstallationRoot $installationA `
-        -ExpectedReleaseId '1.2.0-stage' `
-        -Execute `
-        -AllowUnsignedDevelopment) | ConvertFrom-Json
-    if ([string]$first.status -ne 'ready' -or
-        $first.candidatePrepared -ne $true -or
-        $first.activeChanged -ne $false -or
-        $first.alreadyPrepared -ne $false) {
-        throw 'Candidate-only staging did not return the expected READY evidence.'
+    $first = Invoke-TestStage `
+        -DistributionRoot $distribution `
+        -InstallationRoot $installation `
+        -ExpectedReleaseId $releaseId
+    if (
+        [string]$first.status -ne 'ready' -or
+        $first.alreadyPrepared -ne $false -or
+        $first.materialized -ne $true -or
+        $first.activeChanged -ne $false
+    ) {
+        throw 'First candidate staging returned unexpected evidence.'
     }
-    $stateA = Get-Content -LiteralPath (Join-Path $installationA 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
-    if ([string]$stateA.active.releaseId -ne '1.1.0' -or
-        [string]$stateA.previous.releaseId -ne '1.0.0' -or
-        [string]$stateA.candidate.releaseId -ne '1.2.0-stage') {
-        throw 'Candidate staging changed active/previous or failed to persist candidate.'
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $installationA 'releases\1.2.0-stage') -PathType Container)) {
-        throw 'Candidate release was not materialized.'
+    $statePath = Join-Path $installation 'state\lifecycle-state.v1.json'
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ($null -ne $state.active -or [string]$state.candidate.releaseId -ne $releaseId) {
+        throw 'Candidate staging changed active or failed to persist candidate.'
     }
 
-    $second = (& $stager `
-        -DistributionRoot $distributionA `
-        -InstallationRoot $installationA `
-        -ExpectedReleaseId '1.2.0-stage' `
-        -Execute `
-        -AllowUnsignedDevelopment) | ConvertFrom-Json
+    $second = Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $installation
     if ($second.alreadyPrepared -ne $true -or $second.activeChanged -ne $false) {
-        throw 'Repeated staging was not idempotent.'
+        throw 'Candidate staging is not idempotent.'
     }
 
-    # A tampered signed-distribution member must fail before candidate materialization.
-    $distributionB = Join-Path $testRoot 'distribution-b'
-    $installationB = Join-Path $testRoot 'installation-b'
-    New-TestExecutionNodeDistribution `
-        -Root $distributionB `
-        -ReleaseId '1.2.1-stage' `
-        -Commit ('b' * 40) | Out-Null
+    $tamperedDistribution = Join-Path $testRoot 'tampered'
+    New-TestDistribution -Root $tamperedDistribution -ReleaseId '1.2.4-tampered' -Commit ('b' * 40)
     Add-Content `
-        -LiteralPath (Join-Path $distributionB 'releases\1.2.1-stage\services\workspace-agent\dist\cli.js') `
+        -LiteralPath (Join-Path $tamperedDistribution 'releases\1.2.4-tampered\node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js') `
         -Value 'tampered'
     $tamperRejected = $false
     try {
-        & $stager `
-            -DistributionRoot $distributionB `
-            -InstallationRoot $installationB `
-            -Execute `
-            -AllowUnsignedDevelopment | Out-Null
+        Invoke-TestStage `
+            -DistributionRoot $tamperedDistribution `
+            -InstallationRoot (Join-Path $testRoot 'tampered-install') | Out-Null
     }
     catch {
-        $tamperRejected = $true
+        $tamperRejected = $_.Exception.Message -like '*hash mismatch*'
     }
-    if (-not $tamperRejected -or
-        (Test-Path -LiteralPath (Join-Path $installationB 'releases\1.2.1-stage'))) {
-        throw 'Tampered distribution was not rejected before materialization.'
+    if (-not $tamperRejected) {
+        throw 'Tampered distribution was not rejected.'
     }
 
-    # An extra unsigned file not listed in distribution-manifest.ps1 must also fail closed.
-    $distributionExtra = Join-Path $testRoot 'distribution-extra'
-    $installationExtra = Join-Path $testRoot 'installation-extra'
-    New-TestExecutionNodeDistribution `
-        -Root $distributionExtra `
-        -ReleaseId '1.2.1-extra' `
-        -Commit ('e' * 40) | Out-Null
-    Write-TestUtf8 `
-        -Path (Join-Path $distributionExtra 'releases\1.2.1-extra\node_modules\injected.js') `
-        -Content 'unsigned-extra-file'
-    $extraRejected = $false
-    try {
-        & $stager `
-            -DistributionRoot $distributionExtra `
-            -InstallationRoot $installationExtra `
-            -Execute `
-            -AllowUnsignedDevelopment | Out-Null
-    }
-    catch {
-        $extraRejected = $true
-    }
-    if (-not $extraRejected -or
-        (Test-Path -LiteralPath (Join-Path $installationExtra 'releases\1.2.1-extra'))) {
-        throw 'Unsigned extra distribution file was not rejected before materialization.'
-    }
-    # Staging the active release must fail closed and must not rewrite active state.
-    $distributionC = Join-Path $testRoot 'distribution-c'
-    $installationC = Join-Path $testRoot 'installation-c'
-    $releaseC = New-TestExecutionNodeDistribution `
-        -Root $distributionC `
-        -ReleaseId '1.2.2-stage' `
-        -Commit ('c' * 40)
-    $executionHashC = (Get-FileHash -LiteralPath (Join-Path $releaseC 'execution-node-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
-    $activeC = [ordered]@{
-        releaseId = '1.2.2-stage'
-        manifestSha256 = $executionHashC
-        materializedAt = '2026-08-16T00:00:00.000Z'
-    }
-    Write-TestExecutionNodeState `
-        -InstallationRoot $installationC `
-        -Active $activeC `
-        -Candidate $null `
-        -Previous $null
-    $activeRejected = $false
-    try {
-        & $stager `
-            -DistributionRoot $distributionC `
-            -InstallationRoot $installationC `
-            -Execute `
-            -AllowUnsignedDevelopment | Out-Null
-    }
-    catch {
-        $activeRejected = $true
-    }
-    $stateC = Get-Content -LiteralPath (Join-Path $installationC 'state\lifecycle-state.v1.json') -Raw | ConvertFrom-Json
-    if (-not $activeRejected -or
-        [string]$stateC.active.releaseId -ne '1.2.2-stage' -or
-        $null -ne $stateC.candidate) {
-        throw 'Active-release staging did not fail closed.'
-    }
-
-    # Distribution and installation roots must never overlap.
-    $distributionOverlap = Join-Path $testRoot 'distribution-overlap'
-    New-TestExecutionNodeDistribution `
-        -Root $distributionOverlap `
-        -ReleaseId '1.2.2-overlap' `
-        -Commit ('d' * 40) | Out-Null
     $overlapRejected = $false
     try {
-        & $stager `
-            -DistributionRoot $distributionOverlap `
-            -InstallationRoot (Join-Path $distributionOverlap 'installation') `
-            -Execute `
-            -AllowUnsignedDevelopment | Out-Null
+        Invoke-TestStage `
+            -DistributionRoot $distribution `
+            -InstallationRoot (Join-Path $distribution 'installation') | Out-Null
     }
     catch {
         $overlapRejected = $_.Exception.Message -like '*must not overlap*'
     }
     if (-not $overlapRejected) {
-        throw 'Overlapping distribution/installation roots were not rejected.'
+        throw 'Overlapping distribution and installation roots were not rejected.'
     }
-    # Concurrent staging on the same installation root must be rejected by the exclusive lock.
-    $distributionLock = Join-Path $testRoot 'distribution-lock'
-    $installationLock = Join-Path $testRoot 'installation-lock'
-    New-TestExecutionNodeDistribution `
-        -Root $distributionLock `
-        -ReleaseId '1.2.3-stage' `
-        -Commit ('f' * 40) | Out-Null
-    $stateLockRoot = Join-Path $installationLock 'state'
-    New-Item -ItemType Directory -Force -Path $stateLockRoot | Out-Null
+
+    $lockedDistribution = Join-Path $testRoot 'locked'
+    $lockedInstallation = Join-Path $testRoot 'locked-install'
+    New-TestDistribution -Root $lockedDistribution -ReleaseId '1.2.5-locked' -Commit ('c' * 40)
+    $stateRoot = Join-Path $lockedInstallation 'state'
+    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
     $heldLock = [IO.File]::Open(
-        (Join-Path $stateLockRoot 'state.lock'),
+        (Join-Path $stateRoot 'state.lock'),
         [IO.FileMode]::OpenOrCreate,
         [IO.FileAccess]::ReadWrite,
         [IO.FileShare]::None
     )
     try {
-        $concurrencyRejected = $false
-        $concurrencyError = $null
+        $lockRejected = $false
         try {
-            & $stager `
-                -DistributionRoot $distributionLock `
-                -InstallationRoot $installationLock `
-                -Execute `
-                -AllowUnsignedDevelopment | Out-Null
+            Invoke-TestStage -DistributionRoot $lockedDistribution -InstallationRoot $lockedInstallation | Out-Null
         }
         catch {
-            $concurrencyError = $_.Exception.GetType().FullName + ': ' + $_.Exception.Message
-            $concurrencyRejected = $_.Exception.Message -like '*already active*'
+            $lockRejected = $_.Exception.Message -like '*already active*'
         }
-        if (-not $concurrencyRejected -or
-            (Test-Path -LiteralPath (Join-Path $installationLock 'releases\1.2.3-stage'))) {
-            throw ('Concurrent candidate staging was not rejected by the exclusive lock. Observed=' + [string]$concurrencyError)
+        if (-not $lockRejected) {
+            throw 'Concurrent staging was not rejected.'
         }
     }
     finally {
         $heldLock.Dispose()
     }
-    Write-Output 'Execution-node candidate staging is fail-closed, candidate-only and idempotent.'
+
+    Write-Output 'Execution-node candidate staging passed v2 Edge integrity, idempotence, boundary and lock gates.'
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {

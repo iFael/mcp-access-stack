@@ -70,7 +70,6 @@ describe("GPT Actions REST facade", () => {
         "/workspace/validation/run",
         "/git/diff",
         "/shell/run",
-        "/shell/powershell",
       ]);
       const operationIds = Object.values(schema.paths).flatMap((pathItem) =>
         Object.values(
@@ -96,7 +95,6 @@ describe("GPT Actions REST facade", () => {
         "executarValidacaoNoEspacoDeTrabalho",
         "inspecionarGitDoEspacoDeTrabalho",
         "executarComandoNoEspacoDeTrabalho",
-        "executarPowerShellNoEspacoDeTrabalho",
       ]);
       expect(schema.components.securitySchemes).toHaveProperty("actionBearer");
       expect(
@@ -444,7 +442,6 @@ describe("GPT Actions REST facade", () => {
       expect(schema.paths).not.toHaveProperty("/workspace/validation/run");
       expect(schema.paths).not.toHaveProperty("/git/diff");
       expect(schema.paths).not.toHaveProperty("/shell/run");
-      expect(schema.paths).not.toHaveProperty("/shell/powershell");
     } finally {
       await fixture.close();
     }

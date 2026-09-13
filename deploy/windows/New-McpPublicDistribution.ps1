@@ -13,22 +13,6 @@ param(
     [string]$ReleaseTag,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+$')]
-    [string]$GatewayRepository,
-
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^sha256:[a-f0-9]{64}$')]
-    [string]$GatewayDigest,
-
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+$')]
-    [string]$ProxyRepository,
-
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^sha256:[a-f0-9]{64}$')]
-    [string]$ProxyDigest,
-
-    [Parameter(Mandatory = $true)]
     [string]$OutputDirectory,
 
     [Parameter(Mandatory = $true)]
@@ -133,40 +117,20 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
-    'deploy\docker\compose.production.yml',
-    'deploy\docker\scripts\Activate-McpCandidateRelease.ps1',
-    'deploy\docker\scripts\Common.ps1',
-    'deploy\docker\scripts\Get-DockerProductionStatus.ps1',
-    'deploy\docker\scripts\Initialize-DockerProduction.ps1',
-    'deploy\docker\scripts\Install-McpHostTasks.ps1',
-    'deploy\docker\scripts\Install-McpProductionPromotionTask.ps1',
-    'deploy\docker\scripts\Invoke-McpProductionPromotionTask.ps1',
-    'deploy\docker\scripts\NodeRuntime.Common.ps1',
-    'deploy\docker\scripts\ProductionLifecycle.Common.ps1',
-    'deploy\docker\scripts\Promote-McpProduction.ps1',
-    'deploy\docker\scripts\Request-McpProductionPromotion.ps1',
-    'deploy\docker\scripts\Run-McpProductionPromotionDetached.ps1',
-    'deploy\docker\scripts\Update-McpNodeRuntime.ps1',
     'deploy\windows\Install-McpAccessStack.ps1',
-    'deploy\windows\Manage-McpCredential.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',
     'deploy\windows\WindowsExecutionNode.Common.ps1',
     'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
-    'deploy\windows\Invoke-McpWindowsExecutionNodeTransition.ps1',
-    'deploy\windows\Install-McpWindowsExecutionNodeHostTask.ps1',
     'deploy\windows\Install-McpEdgeConnectorTask.ps1',
     'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
     'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
     'deploy\windows\Test-McpEdgeConnectorTerminalIndependence.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',
-    'deploy\windows\Install-McpWindowsExecutionNodeCutoverTask.ps1',
-    'deploy\windows\Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
-    'deploy\windows\Request-McpWindowsExecutionNodeCutover.ps1',
     'deploy\windows\mcp-access-stack-code-signing.cer',
     'deploy\windows\Update-McpAccessStack.ps1',
-    'operations\runtime\Initialize-GptOnlyProduction.ps1',
     'operations\validation\Initialize-ValidationTools.ps1'
+
 )
 foreach ($relative in $runtimeFiles) {
     Copy-RelativeFile -RelativePath $relative
@@ -194,7 +158,6 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
 }
 
 $expectedNativeArtifacts = @(
-    'McpHost.exe',
     'McpEdgeHost.exe',
     'McpNodeHostLauncher.exe',
     'McpCredentialBroker.exe'
@@ -209,7 +172,6 @@ foreach ($name in $expectedNativeArtifacts) {
 $nativeTarget = Join-Path $releaseTarget 'native'
 $compatTarget = Join-Path $releaseTarget 'compat'
 New-Item -ItemType Directory -Force -Path $nativeTarget, $compatTarget | Out-Null
-Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpHost.exe') -Destination (Join-Path $nativeTarget 'McpHost.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpEdgeHost.exe') -Destination (Join-Path $nativeTarget 'McpEdgeHost.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpNodeHostLauncher.exe') -Destination (Join-Path $compatTarget 'McpNodeHostLauncher.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpCredentialBroker.exe') -Destination (Join-Path $compatTarget 'McpCredentialBroker.exe')
@@ -218,31 +180,16 @@ $nodeVersion = [string]$releaseManifest.nodeVersion
 if ($nodeVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
     throw 'Immutable release contains an invalid Node.js version.'
 }
-$nodeRuntimeSource = Join-Path $root ".runtime-tools\mcp-node-runtime\$nodeVersion"
-$nodeExecutableSource = Join-Path $nodeRuntimeSource 'node.exe'
-if (-not (Test-Path -LiteralPath $nodeExecutableSource -PathType Leaf)) {
-    throw "Managed Node.js runtime required by the release is missing: $nodeVersion"
+$nodeRuntimeTarget = Join-Path $releaseTarget 'runtime\node'
+$nodeExecutableTarget = Join-Path $nodeRuntimeTarget 'node.exe'
+if (-not (Test-Path -LiteralPath $nodeExecutableTarget -PathType Leaf)) {
+    throw "Immutable release is missing bundled Node.js runtime: $nodeVersion"
 }
-$runtimeTargetParent = Join-Path $releaseTarget 'runtime'
-$nodeRuntimeTarget = Join-Path $runtimeTargetParent 'node'
-New-Item -ItemType Directory -Force -Path $runtimeTargetParent | Out-Null
-Copy-Item -LiteralPath $nodeRuntimeSource -Destination $nodeRuntimeTarget -Recurse
+$observedNodeVersion = @(& $nodeExecutableTarget --version)
+if ($LASTEXITCODE -ne 0 -or $observedNodeVersion.Count -ne 1 -or [string]$observedNodeVersion[0] -ne $nodeVersion) {
+    throw 'Bundled Node.js runtime does not match immutable release metadata.'
+}
 
-$dockerImages = @(
-    [ordered]@{
-        component = 'gateway'
-        repository = $GatewayRepository
-        digest = $GatewayDigest
-        platform = 'linux/amd64'
-    },
-    [ordered]@{
-        component = 'proxy'
-        repository = $ProxyRepository
-        digest = $ProxyDigest
-        platform = 'linux/amd64'
-    }
-)
-$releaseManifest.dockerImages = $dockerImages
 if ($BuildRunId -gt 0) {
     $publicBuild = [ordered]@{
         provider = 'github-actions'
@@ -293,17 +240,17 @@ try {
         Sign-Script -Path $script.FullName -Certificate $certificate
     }
 
-    $hostExecutablePath = Join-Path $releaseTarget 'native\McpHost.exe'
     $edgeHostExecutablePath = Join-Path $releaseTarget 'native\McpEdgeHost.exe'
     $compatLauncherPath = Join-Path $releaseTarget 'compat\McpNodeHostLauncher.exe'
     $compatBrokerPath = Join-Path $releaseTarget 'compat\McpCredentialBroker.exe'
-    foreach ($nativeExecutable in @($hostExecutablePath, $edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
+    foreach ($nativeExecutable in @($edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
         Sign-Script -Path $nativeExecutable -Certificate $certificate
     }
 
     function New-ExecutionNodeArtifactRecord {
         param(
-            [Parameter(Mandatory = $true)][string]$Role,
+            [Parameter(Mandatory = $true)][string]$Id,
+            [Parameter(Mandatory = $true)][ValidateSet('edge-runtime', 'browser-worker', 'shared')][string]$Owner,
             [Parameter(Mandatory = $true)][string]$RelativePath,
             [Parameter(Mandatory = $true)][bool]$AuthenticodeRequired
         )
@@ -324,7 +271,8 @@ try {
         }
         $item = Get-Item -LiteralPath $absolutePath
         return [ordered]@{
-            role = $Role
+            id = $Id
+            owner = $Owner
             path = $RelativePath
             sha256 = (Get-FileHash -LiteralPath $absolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
             sizeBytes = [long]$item.Length
@@ -333,22 +281,25 @@ try {
     }
 
     $executionNodeManifest = [ordered]@{
-        version = 1
+        version = 2
         releaseId = $ReleaseId
         commit = $SourceCommit
         platform = 'win32-x64'
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         runtimeMode = 'bundled-node'
         integrityRoot = 'signed-distribution-manifest'
+        services = @(
+            [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+        )
         artifacts = @(
-            (New-ExecutionNodeArtifactRecord -Role 'mcp-host' -RelativePath 'native/McpHost.exe' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Role 'workspace-agent' -RelativePath 'services/workspace-agent/dist/cli.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Role 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Role 'edge-connector' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Role 'edge-connector-launcher' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Role 'edge-host' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Role 'edge-native-launcher' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Role 'node-runtime' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
+            (New-ExecutionNodeArtifactRecord -Id 'edge-host' -Owner 'edge-runtime' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'edge-connector' -Owner 'edge-runtime' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Id 'edge-validation-launcher' -Owner 'edge-runtime' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'browser-worker-server' -Owner 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Id 'browser-native-launcher' -Owner 'browser-worker' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'browser-credential-broker' -Owner 'browser-worker' -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'node-runtime' -Owner 'shared' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }
     $executionNodeManifestPath = Join-Path $releaseTarget 'execution-node-manifest.json'
@@ -356,7 +307,7 @@ try {
         -Path $executionNodeManifestPath `
         -Content (($executionNodeManifest | ConvertTo-Json -Depth 16) + [Environment]::NewLine)
     $executionNodeIdentity = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         manifestPath = 'execution-node-manifest.json'
         manifestSha256 = (Get-FileHash -LiteralPath $executionNodeManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
@@ -388,12 +339,11 @@ try {
         -Content (($releaseManifest | ConvertTo-Json -Depth 32) + [Environment]::NewLine)
 
     $releaseAttestation = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         releaseId = $ReleaseId
         commit = $SourceCommit
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         manifestSha256 = (Get-FileHash -LiteralPath $releaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        dockerImages = $dockerImages
     }
     $releaseAttestationPath = Join-Path $releaseTarget 'release-attestation.ps1'
     New-DataScript -Value $releaseAttestation -Path $releaseAttestationPath
@@ -411,13 +361,12 @@ try {
             }
     )
     $distributionManifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         platform = 'windows-x64'
         releaseId = $ReleaseId
         version = $ReleaseId
         commit = $SourceCommit
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
-        dockerImages = $dockerImages
         files = $distributionFiles
     }
     $distributionManifestPath = Join-Path $stage 'distribution-manifest.ps1'

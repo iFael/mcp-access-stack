@@ -107,7 +107,7 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(61);
+      expect(names).toHaveLength(60);
       expect(names).toEqual(expect.arrayContaining([
         "browser_open_authorized_site",
         "browser_profile_page",
@@ -221,10 +221,10 @@ describe("advanced browser tools list", () => {
 });
 
 describe("workspace command output schemas", () => {
-  it("publishes and validates command results as MCP object schemas", async () => {
+  it("publishes the canonical run_command schema and validates command results", async () => {
     const relay = {
       call: async (operation: string) => {
-        if (operation === "runCommand" || operation === "runPowerShell") {
+        if (operation === "runCommand") {
           return {
             status: "executed",
             shell: "powershell",
@@ -257,16 +257,24 @@ describe("workspace command output schemas", () => {
         "workspaceId",
         "command",
         "shell",
-        "objective",
-        "executionMode",
-        "autoCorrection",
-        "expectedOutcome",
+        "cwd",
+        "timeoutMs",
+        "confirmationId",
       ]) {
         expect(runCommandInputSchema).toContain(`"${field}"`);
       }
+      for (const legacyField of [
+        "objective",
+        "executionMode",
+        "autoCorrection",
+        "preferredShell",
+        "expectedOutcome",
+      ]) {
+        expect(runCommandInputSchema).not.toContain(`"${legacyField}"`);
+      }
       expect(runCommand?.inputSchema).toMatchObject({
         type: "object",
-        required: ["workspaceId"],
+        required: ["workspaceId", "command", "shell"],
       });
 
       const qualifiedResult = await client.callTool({
@@ -278,35 +286,27 @@ describe("workspace command output schemas", () => {
           autoCorrection: "off",
         },
       });
-      expect(qualifiedResult.isError).not.toBe(true);
+      expect(qualifiedResult.isError).toBe(true);
 
-      for (const name of ["run_command", "run_powershell"] as const) {
-        const tool = listed.tools.find((entry) => entry.name === name);
-        expect(tool?.outputSchema).toMatchObject({ type: "object" });
+      const tool = listed.tools.find((entry) => entry.name === "run_command");
+      expect(tool?.outputSchema).toMatchObject({ type: "object" });
 
-        const result = await client.callTool({
-          name,
-          arguments:
-            name === "run_command"
-              ? {
-                  workspaceId: "test",
-                  shell: "powershell",
-                  command: "Write-Output command-ok",
-                }
-              : {
-                  workspaceId: "test",
-                  command: "Write-Output command-ok",
-                },
-        });
-
-        expect(result.isError).not.toBe(true);
-        expect(result.structuredContent).toMatchObject({
-          status: "executed",
+      const result = await client.callTool({
+        name: "run_command",
+        arguments: {
+          workspaceId: "test",
           shell: "powershell",
-          exitCode: 0,
-          timedOut: false,
-        });
-      }
+          command: "Write-Output command-ok",
+        },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        status: "executed",
+        shell: "powershell",
+        exitCode: 0,
+        timedOut: false,
+      });
     } finally {
       await client.close().catch(() => undefined);
       await server.close().catch(() => undefined);

@@ -1,5 +1,6 @@
 export * from "./audit.js";
 export * from "./background-task-contracts.js";
+export * from "./command-confirmation-contracts.js";
 export * from "./browser-contracts.js";
 export * from "./browser-executor.js";
 export * from "./browser-idempotency.js";
@@ -15,8 +16,6 @@ export * from "./mutation-receipts.js";
 export * from "./policy.js";
 export * from "./policy-merge.js";
 export * from "./project-write-policy.js";
-export * from "./qualified-command-contracts.js";
-export * from "./qualified-command-invocation-contracts.js";
 export * from "./relay-retry-policy.js";
 export * from "./source-control-contracts.js";
 export * from "./source-control-executor.js";

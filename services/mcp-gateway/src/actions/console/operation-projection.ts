@@ -20,7 +20,6 @@ const OPERATION_LABELS: Record<string, string> = {
   executarValidacaoNoEspacoDeTrabalho: "Executar validação",
   inspecionarGitDoEspacoDeTrabalho: "Inspecionar Git",
   executarComandoNoEspacoDeTrabalho: "Executar comando",
-  executarPowerShellNoEspacoDeTrabalho: "Executar PowerShell",
 };
 
 export interface ConsoleOperationProjection {
@@ -125,10 +124,7 @@ export function projectConsoleOperation(
     projection.stage = "git";
   }
 
-  if (
-    operation === "executarComandoNoEspacoDeTrabalho" ||
-    operation === "executarPowerShellNoEspacoDeTrabalho"
-  ) {
+  if (operation === "executarComandoNoEspacoDeTrabalho") {
     const status = stringValue(data.status);
     if (status === "confirmation_required") {
       projection.status = "waiting_confirmation";
@@ -185,8 +181,7 @@ export function operationLabel(operation: string): string {
 export function operationCompletionLabel(operation: string, result: unknown): string {
   const data = asRecord(result);
   if (
-    (operation === "executarComandoNoEspacoDeTrabalho" ||
-      operation === "executarPowerShellNoEspacoDeTrabalho") &&
+    operation === "executarComandoNoEspacoDeTrabalho" &&
     stringValue(data?.status) === "confirmation_required"
   ) {
     return `${operationLabel(operation)} aguardando confirmação`;

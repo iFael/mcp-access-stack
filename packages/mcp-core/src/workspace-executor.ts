@@ -8,6 +8,7 @@ import type {
   ListBackgroundTasksInput,
   ReadBackgroundTaskLogsInput,
   StartBackgroundTaskInput,
+  StartBackgroundTaskResult,
   WaitBackgroundTaskInput,
 } from "./background-task-contracts.js";
 import type {
@@ -30,8 +31,6 @@ import type {
   ReadFileResult,
   RunCommandInput,
   RunCommandResult,
-  RunPowerShellInput,
-  RunPowerShellResult,
   SearchFilesInput,
   SearchFilesResult,
   WriteFileInput,
@@ -71,7 +70,6 @@ export interface WorkspaceExecutor {
     context?: OperationContext,
   ): Promise<RunWorkspaceValidationResult>;
   runCommand(input: RunCommandInput, context?: OperationContext): Promise<RunCommandResult>;
-  runPowerShell(input: RunPowerShellInput, context?: OperationContext): Promise<RunPowerShellResult>;
   searchFiles(input: SearchFilesInput, context?: OperationContext): Promise<SearchFilesResult>;
   inspectGit(input: InspectGitInput, context?: OperationContext): Promise<InspectGitResult>;
   getWorkspaceContext(
@@ -81,7 +79,7 @@ export interface WorkspaceExecutor {
   startBackgroundTask(
     input: StartBackgroundTaskInput,
     context?: OperationContext,
-  ): Promise<BackgroundTaskResult>;
+  ): Promise<StartBackgroundTaskResult>;
   getBackgroundTask(
     input: GetBackgroundTaskInput,
     context?: OperationContext,

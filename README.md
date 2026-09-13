@@ -1,41 +1,33 @@
-# MCP Access Stack — GPT-only
+# MCP Access Stack
 
-Pilha MCP dedicada ao ChatGPT, com acesso controlado a workspaces, Git, shell, validações e automação de navegador.
+Pilha MCP privada para ChatGPT com acesso controlado a workspaces, Git, shell, validações e automação de navegador.
 
-## Arquitetura
+## Arquitetura ativa
 
 ```text
 ChatGPT
-  -> túnel HTTPS (Docker)
-  -> proxy MCP :3300 (Docker)
-  -> gateway :3310 (Docker)
-     |-> Workspace Agent (Windows)
-     `-> Browser Worker :3350 (Windows)
+  -> Cloudflare Worker / Durable Object
+  <-> sessão WebSocket autenticada iniciada pelo Windows
+  -> Edge Connector
+       |- MCP Gateway embutido em loopback
+       `- LocalAgent / workspace policy
+            `-> Browser Worker em loopback
+                 `-> Chromium com perfil MCP dedicado
 ```
 
-Os hosts Windows executam por tarefas agendadas:
+Docker/V2, Compose, GHCR runtime, ngrok e o antigo proxy local foram aposentados.
 
-```text
-McpNodeHostLauncher.exe
-  -> node.exe
-    -> Run-DockerHostComponent.mjs --task-owned true
-      -> componente
-```
+A especificação arquitetural autoritativa está em `docs/architecture/EDGE_MCP_RUNTIME.md`.
 
-Não há Cursor, Codex, colaboração ou supervisor local na arquitetura ativa.
+## Desenvolvimento
 
-## Pré-requisitos
+Requisitos:
 
-- Windows 10 ou 11 x64;
-- Node.js 26 ou superior;
+- Windows 10/11 x64;
+- Node.js 26+;
 - npm compatível com o lockfile;
 - PowerShell 7;
-- Git;
-- Chromium gerenciado pelo Playwright;
-- Docker Desktop para a produção híbrida;
-- domínio e token ngrok para o túnel em Docker.
-
-## Instalação de desenvolvimento
+- Git.
 
 ```powershell
 git clone <REPOSITORY_URL>
@@ -45,101 +37,55 @@ npm run validation:tools:init
 npm run check
 ```
 
-`npm run check` executa validação estrutural, sintaxe, testes, typecheck e build.
+## Runtime Windows
 
-## Configuração privada
+As tarefas persistentes canônicas são:
 
-```powershell
-Copy-Item config\workspace-policy.example.json config\workspace-policy.local.json
+- `MCP Access Stack production edge-connector`;
+- `MCP Access Stack production browser-worker`.
 
-npm run production:init -- `
-  -PublicBaseUrl https://SEU_SUBDOMINIO.example `
-  -TunnelExecutable C:\caminho\para\ngrok.exe
-```
+Instalação, staging, assinatura, atualização, persistência e rollback ficam em `deploy/windows/`. O Edge Connector abre somente conexões outbound; o Gateway embutido e o Browser Worker não expõem listeners públicos no Windows.
 
-O inicializador gera tokens e configuração privada, mas não inicia processos. Segredos permanecem em `.runtime-private/`.
-### Confirmação de comandos por workspace
+Segredos e estado privado ficam fora do Git em `.runtime-private/`, `.runtime-tools/`, `runtime/` e `releases/` conforme o contrato aplicável.
 
-Cada workspace pode definir `confirmationMode`:
+## Autorização
 
-- `standard` é o default e preserva integralmente o comportamento de confirmação existente;
-- `trusted-workspace` só é válido com `permissionProfile: "full-repo-write"` e pode dispensar confirmação para mutações locais deterministicamente analisadas cujos alvos sejam comprovadamente contidos em `allowedRoots` e `allowWrites`.
+O Workspace Agent aplica allowlists, roots permitidos, paths bloqueados e classificação de risco. Foreground e background usam a mesma policy de confirmação. Autorizações são one-shot e vinculadas ao contexto/operação.
 
-`trusted-workspace` não desabilita o classificador de risco. Comandos ambíguos continuam exigindo confirmação, e `blockedGlobs`/`mandatoryBlockedGlobs`, proteção de Git remoto, caminhos externos, Docker destrutivo, Registry, serviços, Scheduled Tasks, UAC, discos, credenciais e demais operações de sistema continuam protegidos independentemente do modo. Background tasks destrutivas permanecem bloqueadas.
+Package runners e deploy CLIs mutantes exigem confirmação. Push para `main` é confirmation-bound; formas ambíguas como `git push -C` e `git push --mirror` permanecem bloqueadas. Commit/merge local diretamente em `main` continuam protegidos.
 
-## Isolamento do navegador
+## Browser Worker
 
-O Browser Worker v1.1 usa somente o engine Playwright direto. Um Chromium gerenciado é iniciado na sessão gráfica do Windows com diretório dedicado dentro de `browser.privateDirectory`, sem reutilizar cookies, contas, histórico ou abas do perfil pessoal.
-
-Para restaurar explicitamente esse modo na configuração privada:
-
-```powershell
-npm run browser:profile:persistent
-```
-
-O modo de extensão e os drivers MCP/CLI foram removidos. Quando a configuração Docker de produção existe, `browser:profile:persistent` também migra `docker/production/browser.json` para o formato v2 e remove campos antigos de extensão/CLI. O Browser Worker precisa ser reiniciado separadamente em uma janela operacional autorizada.
-
-## Produção Docker
-
-```powershell
-npm run docker:production:init
-npm run docker:release:state:init -- -Execute
-npm run docker:production:status
-```
-
-A implantação e o lifecycle dos hosts estão documentados em:
-
-- `deploy/docker/README.md`;
-- `docs/operations/HOST_RELEASE_LIFECYCLE.md`;
-- `docs/operations/RUNBOOK.md`.
-
-Tags SemVer publicam imagens GHCR por digest e um pacote Windows x64 assinado.
-O instalador e o atualizador candidate-first estão em `deploy/windows/`; o
-contrato completo está em `docs/operations/HOST_RELEASE_LIFECYCLE.md`.
-
-As releases Windows usam um certificado Authenticode self-signed exclusivo do
-projeto. A chave privada não é versionada. O certificado público fica em
-`deploy/windows/mcp-access-stack-code-signing.cer` e o verificador exige o
-thumbprint canônico `EC1DACA3C03E386BAB8E95B6E7929A4CA8342672`. Em um Windows
-que ainda não confia nesse certificado, a confiança é uma decisão local do
-usuário; o projeto não depende de uma CA comercial.
-
-Os testes de resistência do ambiente de desenvolvimento são separados em
-`docker:development:gate:quick`, `docker:development:gate:candidate` e
-`docker:development:gate:stability`. A política é adaptativa: `quick` cobre
-mudanças localizadas, `candidate` usa uma execução curta com reinícios
-controlados e `stability` mantém duas execuções mais longas para alterações de
-alto risco. Não existe soak prolongado de oito horas.
+O Browser Worker usa Playwright direto em uma sessão Windows local e perfil Chromium dedicado ao MCP. Não reutiliza o perfil pessoal do usuário e não possui fallback Docker.
 
 ## Estrutura
 
 ```text
-services/       Gateway, Workspace Agent e Browser Worker
-packages/       contratos, schemas e políticas compartilhadas
-operations/     configuração, proxy e ferramentas operacionais
-deploy/         Docker, releases e tarefas Windows
-tooling/        benchmarks, smoke tests e validação estrutural
-docs/           arquitetura, integração, operação e segurança
-config/         políticas e exemplos sanitizados
+services/       Edge Gateway, MCP Gateway, Workspace Agent e Browser Worker
+packages/       contratos, schemas, policies e protocolo compartilhado
+operations/     ferramentas one-shot ainda ativas
+deploy/windows/ distribuição e lifecycle Windows atual
+tooling/        CI, benchmarks, qualificações e validações
+docs/           arquitetura Edge vigente
+config/         policies e exemplos sanitizados
 ```
 
-## Testes
+## Gates principais
 
 ```powershell
+npm run check
 npm run test:typescript
-npm run test:mcp-core
-npm run test:browser-worker
-npm run test:workspace-agent
-npm run test:mcp-gateway
+npm run check:release-runtime
+npm run check:persistence
+npm run check:materialization
 ```
 
-Testes `.mjs` usam `node:test`; serviços TypeScript usam Jest.
+Testes `.mjs` usam `node:test`; serviços TypeScript usam Jest pelo runner comum em `tooling/testing/run-jest.mjs`.
 
-## Regras de segurança
+## Regras
 
-- não versionar `.runtime-private/`, `.runtime-tools/`, `runtime/` ou `releases/`;
-- não expor tokens, URLs privadas, perfis ou caminhos pessoais;
-- não executar comandos destrutivos sem confirmação;
-- não manipular abas pessoais do Chrome;
+- não versionar estado privado, tokens ou perfis;
+- não expor segredos em logs, argumentos ou manifests;
+- não manipular abas pessoais do navegador;
 - não encerrar processos apenas pelo nome;
-- não fazer push, merge, rebase ou promoção de release sem autorização.
+- não fazer push, merge, promoção ou deploy fora dos gates de autorização aplicáveis.

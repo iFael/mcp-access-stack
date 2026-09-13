@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Config } from "jest";
-import { createDefaultEsmPreset } from "ts-jest";
+import { createDefaultEsmPreset, pathsToModuleNameMapper } from "ts-jest";
 
 export interface NodeJestProjectOptions {
   displayName: string;
@@ -9,8 +10,20 @@ export interface NodeJestProjectOptions {
   testMatch: string[];
   testTimeout?: number;
   detectOpenHandles?: boolean;
-  sharedSourceUrl?: URL;
 }
+
+const repositoryRootUrl = new URL("./", import.meta.url);
+const rootTsconfig = JSON.parse(
+  readFileSync(new URL("./tsconfig.json", import.meta.url), "utf8"),
+) as {
+  compilerOptions?: {
+    paths?: Record<string, string[]>;
+  };
+};
+const internalPackageModuleNameMapper = pathsToModuleNameMapper(
+  rootTsconfig.compilerOptions?.paths ?? {},
+  { prefix: fileURLToPath(repositoryRootUrl) },
+);
 
 export function createNodeJestProject(
   options: NodeJestProjectOptions,
@@ -18,13 +31,9 @@ export function createNodeJestProject(
   const preset = createDefaultEsmPreset({
     tsconfig: fileURLToPath(options.tsconfigUrl),
   });
-  const moduleNameMapper: Record<string, string> = {
+  const moduleNameMapper: Config["moduleNameMapper"] = {
     "^(\\.{1,2}/.*)\\.js$": "$1",
-    ...(options.sharedSourceUrl === undefined
-      ? {}
-      : {
-          "^@vs-code-gpt/shared$": fileURLToPath(options.sharedSourceUrl),
-        }),
+    ...internalPackageModuleNameMapper,
   };
 
   return {

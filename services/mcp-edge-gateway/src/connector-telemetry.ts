@@ -1,4 +1,4 @@
-import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol/source";
+import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol";
 
 export const CONNECTOR_TELEMETRY_STORAGE_KEY = "edge:connector-telemetry:v1";
 

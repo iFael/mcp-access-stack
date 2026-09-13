@@ -94,12 +94,10 @@ export function assertTypedGitBranchMutationAllowed(input: {
   branch?: string;
 }): void {
   const currentIsMain = isProtectedMain(input.currentBranch);
-  const explicitIsMain = isProtectedMain(input.branch);
 
   if (
     (input.operation === "git_commit" && currentIsMain) ||
-    (input.operation === "git_merge_branch" && currentIsMain) ||
-    (input.operation === "git_push_branch" && explicitIsMain)
+    (input.operation === "git_merge_branch" && currentIsMain)
   ) {
     throw new AppError(
       "GIT_PROTECTED_BRANCH",

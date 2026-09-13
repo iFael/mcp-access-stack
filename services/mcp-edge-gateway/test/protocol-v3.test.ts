@@ -2,7 +2,7 @@ import { describe, expect, it } from "@jest/globals";
 import {
   EDGE_PROTOCOL_VERSION,
   parseEdgeToConnectorMessage,
-} from "@mcp-access-stack/edge-protocol/source";
+} from "@mcp-access-stack/edge-protocol";
 import { collectAllowedRequestHeaders } from "../src/protocol.js";
 
 describe("Edge Protocol v3 authenticated execution envelope", () => {

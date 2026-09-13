@@ -4,11 +4,13 @@ import {
   AppError,
   mandatoryBlockedGlobs,
   policyFileSchema,
+  startBackgroundTaskInputSchema,
   type BackgroundTaskListResult,
   type BackgroundTaskLogsLookupResult,
   type BackgroundTaskResult,
   type BackgroundTaskWaitResult,
   type CancelBackgroundTaskInput,
+  type CommandConfirmationRequiredResult,
   type GetBackgroundTaskInput,
   type WaitBackgroundTaskInput,
   type GetWorkspaceContextInput,
@@ -30,14 +32,13 @@ import {
   type ReadFileResult,
   type RunCommandInput,
   type RunCommandResult,
-  type RunPowerShellInput,
-  type RunPowerShellResult,
   type RunWorkspaceValidationInput,
   type RunWorkspaceValidationResult,
   type SearchFilesInput,
   type SearchFilesResult,
   type ShellName,
   type StartBackgroundTaskInput,
+  type StartBackgroundTaskResult,
   type WorkspaceExecutor,
   type GitRepositoryExecutor,
   type GitHubExecutor,
@@ -561,36 +562,19 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     context: OperationContext = {},
   ): Promise<RunCommandResult> {
     const workspace = this.workspace(input.workspaceId);
-    if (!input.command) {
-      throw new AppError(
-        "INVALID_ARGUMENT",
-        "SSH workspace backend currently requires an explicit command.",
-      );
-    }
-    const preferredShell = "preferredShell" in input ? input.preferredShell : undefined;
-    const shell = resolveShell(input.shell, preferredShell, workspace.allowedShells);
+    const shell = resolveShell(input.shell, workspace.allowedShells);
     const cwd = this.authorizeShellCwd(workspace, input.cwd ?? ".");
-    const risk = classifyCommandRisk(shell, input.command);
-    await this.enforceGitPushPolicy(workspace, shell, input.command, cwd, input.timeoutMs, context.signal);
-    const binding = { workspaceId: workspace.id, shell, cwd, command: input.command };
-    if (risk.destructive) {
-      if (!input.confirmationId) {
-        const confirmation = this.confirmations.create(binding);
-        return {
-          status: "confirmation_required",
-          shell,
-          cwd,
-          confirmationId: confirmation.confirmationId,
-          expiresAt: confirmation.expiresAt,
-          reasons: risk.reasons.length > 0
-            ? risk.reasons
-            : ["Potentially destructive remote command requires explicit confirmation."],
-          ...(input.executionMode === undefined ? {} : { executionMode: input.executionMode }),
-        };
-      }
-      this.confirmations.consume(input.confirmationId, binding);
-    }
-    const result = await this.executeDirect(
+    const authorization = this.authorizeCommandExecution({
+      workspaceId: workspace.id,
+      shell,
+      cwd,
+      command: input.command,
+      ...(input.confirmationId === undefined ? {} : { confirmationId: input.confirmationId }),
+      executionContext: "foreground",
+      operation: "run_command",
+    });
+    if ("status" in authorization) return authorization;
+    return this.executeDirect(
       workspace,
       shell,
       input.command,
@@ -598,17 +582,6 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       input.timeoutMs,
       context.signal,
     );
-    return {
-      ...result,
-      ...(input.executionMode === undefined ? {} : { executionMode: input.executionMode }),
-    };
-  }
-
-  async runPowerShell(
-    input: RunPowerShellInput,
-    context: OperationContext = {},
-  ): Promise<RunPowerShellResult> {
-    return this.runCommand({ ...input, shell: "powershell", executionMode: "direct" }, context);
   }
 
   async runValidation(
@@ -674,18 +647,32 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     };
   }
 
-  async startBackgroundTask(input: StartBackgroundTaskInput): Promise<BackgroundTaskResult> {
-    const workspace = this.workspace(input.workspaceId);
-    this.authorizeShellCwd(workspace, input.cwd ?? ".");
-    const risk = classifyCommandRisk(input.shell, input.command);
-    if (risk.destructive) {
-      throw new AppError(
-        "PERMISSION_DENIED",
-        "Potentially destructive commands cannot be started as background tasks.",
-      );
-    }
-    const task = await this.background.start_background_task(input);
-    return { task };
+  async startBackgroundTask(
+    input: StartBackgroundTaskInput,
+  ): Promise<StartBackgroundTaskResult> {
+    const parsed = startBackgroundTaskInputSchema.parse(input);
+    const workspace = this.workspace(parsed.workspaceId);
+    const shell = resolveShell(parsed.shell, workspace.allowedShells);
+    const cwd = this.authorizeShellCwd(workspace, parsed.cwd ?? ".");
+    const authorization = this.authorizeCommandExecution({
+      workspaceId: workspace.id,
+      shell,
+      cwd,
+      command: parsed.command,
+      ...(parsed.confirmationId === undefined ? {} : { confirmationId: parsed.confirmationId }),
+      executionContext: "background",
+      operation: parsed.operation,
+    });
+    if ("status" in authorization) return authorization;
+    const task = await this.background.start_background_task({
+      workspaceId: parsed.workspaceId,
+      operation: parsed.operation,
+      command: parsed.command,
+      shell,
+      cwd,
+      timeoutMs: parsed.timeoutMs,
+    });
+    return { status: "background_task_started", task };
   }
 
   async getBackgroundTask(input: GetBackgroundTaskInput): Promise<BackgroundTaskResult> {
@@ -735,6 +722,43 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     };
   }
 
+  private authorizeCommandExecution(input: {
+    workspaceId: string;
+    shell: ShellName;
+    cwd: string;
+    command: string;
+    confirmationId?: string;
+    executionContext: "foreground" | "background";
+    operation: string;
+  }): { shell: ShellName; cwd: string } | CommandConfirmationRequiredResult {
+    this.enforceGitPushPolicy(input.shell, input.command);
+    const risk = classifyCommandRisk(input.shell, input.command);
+    const binding = {
+      workspaceId: input.workspaceId,
+      shell: input.shell,
+      cwd: input.cwd,
+      command: input.command,
+      executionContext: input.executionContext,
+      operation: input.operation,
+    };
+    if (risk.destructive) {
+      if (!input.confirmationId) {
+        const confirmation = this.confirmations.create(binding);
+        return {
+          status: "confirmation_required",
+          shell: input.shell,
+          cwd: input.cwd,
+          confirmationId: confirmation.confirmationId,
+          expiresAt: confirmation.expiresAt,
+          reasons: risk.reasons.length > 0
+            ? risk.reasons
+            : ["Potentially destructive remote command requires explicit confirmation."],
+        };
+      }
+      this.confirmations.consume(input.confirmationId, binding);
+    }
+    return { shell: input.shell, cwd: input.cwd };
+  }
   private async executeDirect(
     workspace: RemoteWorkspace,
     shell: ShellName,
@@ -762,29 +786,13 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     };
   }
 
-  private async enforceGitPushPolicy(
-    workspace: RemoteWorkspace,
+  private enforceGitPushPolicy(
     shell: ShellName,
     command: string,
-    cwd: string,
-    timeoutMs: number,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  ): void {
     const intent = classifyGitPushIntent(shell, command);
     if (!intent.isPush) return;
-    let currentBranch: string | undefined;
-    if (!intent.usesGitC) {
-      const result = await this.transport.exec(
-        workspace.rootPath,
-        cwd,
-        "git",
-        ["branch", "--show-current"],
-        Math.min(timeoutMs, 10_000),
-        signal,
-      );
-      currentBranch = result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
-    }
-    const blockedReason = protectedGitPushReason(intent, currentBranch);
+    const blockedReason = protectedGitPushReason(intent);
     if (blockedReason) throw new AppError("PERMISSION_DENIED", blockedReason);
   }
 
@@ -990,13 +998,11 @@ function parseGitStatus(value: string): InspectGitResult["status"] {
 }
 
 function resolveShell(
-  requested: ShellName | undefined,
-  preferred: string | undefined,
+  requested: ShellName,
   allowed: readonly ShellName[],
 ): ShellName {
-  const candidate = requested ?? (preferred && preferred !== "auto" ? preferred as ShellName : undefined) ?? allowed[0];
-  if (!candidate || !allowed.includes(candidate)) {
+  if (!allowed.includes(requested)) {
     throw new AppError("SHELL_NOT_ALLOWED", "Workspace policy does not allow the requested shell.");
   }
-  return candidate;
+  return requested;
 }

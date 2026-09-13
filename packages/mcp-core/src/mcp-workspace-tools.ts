@@ -13,6 +13,7 @@ import {
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
+  startBackgroundTaskResultSchema,
 } from "./background-task-contracts.js";
 import {
   directRunCommandInputSchema,
@@ -37,15 +38,11 @@ import {
   searchFilesResultSchema,
   writeFileInputSchema,
   writeFileResultSchema,
-  runPowerShellMcpResultSchema,
-  runPowerShellInputSchema,
-  runPowerShellResultSchema,
   type OperationContext,
   type RelayOperation,
   type SourceControlRelayOperation,
   type RunCommandInput,
   type RunCommandResult,
-  type RunPowerShellInput,
 } from "./contracts.js";
 import {
   gitCommitInputSchema,
@@ -115,7 +112,6 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "write_file",
   "run_workspace_validation",
   "run_command",
-  "run_powershell",
   "search_files",
   "inspect_workspace_git",
   "get_workspace_context",
@@ -205,6 +201,19 @@ function formatCommandText(result: z.infer<typeof runCommandResultSchema>): stri
   ].join("; ");
 }
 
+function formatBackgroundTaskStartText(
+  result: z.infer<typeof startBackgroundTaskResultSchema>,
+): string {
+  if (result.status === "confirmation_required") {
+    return [
+      "confirmation_required",
+      `confirmationId=${result.confirmationId}`,
+      `expiresAt=${result.expiresAt}`,
+      `reasons=${result.reasons.join("; ")}`,
+    ].join("; ");
+  }
+  return `background_task_started; taskId=${result.task.id}; state=${result.task.state}`;
+}
 function formatBackgroundTaskText(
   result: z.infer<typeof backgroundTaskResultSchema>,
   verb: string,
@@ -495,9 +504,8 @@ export function registerWorkspaceTools(
       {
         title: "Run command",
         description:
-          "Preferred general command runner for new routing decisions. Executes a command in an allowed shell with the workspace root as the default working directory. " +
-          "Use it when shell selection, qualified execution, safe autocorrection or expectedOutcome checks are useful; it can run PowerShell as well as pwsh, cmd, wsl and git-bash. " +
-          "Use run_powershell only when the task specifically requires the simpler compatibility PowerShell-only surface. " +
+          "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. " +
+          "Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. " +
           "Commands classified as potentially destructive return confirmation_required before execution.",
         inputSchema: runCommandToolInputSchema,
         outputSchema: runCommandMcpResultSchema,
@@ -535,61 +543,15 @@ export function registerWorkspaceTools(
     );
   }
 
-  if (shouldInclude("run_powershell", include)) {
-    server.registerTool(
-      "run_powershell",
-      {
-        title: "Run PowerShell",
-        description:
-          "Compatibility shortcut for direct PowerShell-only execution with the workspace root as working directory. " +
-          "For new routing decisions prefer run_command, including for PowerShell, when its shell selection, qualified execution, autocorrection or expectedOutcome features are useful. " +
-          "Use this tool when the caller specifically needs the simpler PowerShell-only contract. " +
-          "Requires allowShell in workspace policy.",
-        inputSchema: runPowerShellInputSchema,
-        outputSchema: runPowerShellMcpResultSchema,
-        annotations: {
-          readOnlyHint: false,
-          destructiveHint: true,
-          openWorldHint: false,
-          idempotentHint: false,
-        },
-        _meta: meta,
-      },
-      async (input, extra) => {
-        const authError = validateAuthentication(options, extra.authInfo);
-        if (authError) {
-          return authError;
-        }
-        try {
-          const structuredContent = runPowerShellResultSchema.parse(
-            await withToolOperationContext(
-              options.operationContextFactory,
-              extra,
-              input.timeoutMs,
-              (context) => executePowerShell(executor, input, context),
-            ),
-          );
-          return {
-            content: [{ type: "text", text: formatCommandText(structuredContent) }],
-            structuredContent,
-          };
-        } catch (error) {
-          return toolError(error);
-        }
-      },
-    );
-  }
-
-
   if (shouldInclude("start_background_task", include)) {
     server.registerTool(
       "start_background_task",
       {
         title: "Start background task",
         description:
-          "Starts a long-running command in an authorized workspace. Active duplicate commands are deduplicated and return the existing task.",
+          "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Active duplicate commands are deduplicated.",
         inputSchema: startBackgroundTaskInputSchema,
-        outputSchema: backgroundTaskResultSchema,
+        outputSchema: startBackgroundTaskResultSchema,
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
@@ -602,7 +564,7 @@ export function registerWorkspaceTools(
         const authError = validateAuthentication(options, extra.authInfo);
         if (authError) return authError;
         try {
-          const structuredContent = backgroundTaskResultSchema.parse(
+          const structuredContent = startBackgroundTaskResultSchema.parse(
             await withToolOperationContext(
               options.operationContextFactory,
               extra,
@@ -612,7 +574,7 @@ export function registerWorkspaceTools(
           );
           return {
             content: [
-              { type: "text", text: formatBackgroundTaskText(structuredContent, "Started") },
+              { type: "text", text: formatBackgroundTaskStartText(structuredContent) },
             ],
             structuredContent,
           };
@@ -1004,45 +966,14 @@ async function executeCommand(
       command: direct.data.command,
       shell: direct.data.shell,
       ...(direct.data.cwd === undefined ? {} : { cwd: direct.data.cwd }),
+      ...(direct.data.confirmationId === undefined
+        ? {}
+        : { confirmationId: direct.data.confirmationId }),
       timeoutMs: direct.data.timeoutMs,
     },
     backgroundStartContext(context),
   );
-  if (!result.task) {
-    throw new AppErrorClass(
-      "EXECUTION_STATE_INVALID",
-      "Background task creation did not return a persisted task.",
-    );
-  }
-  return { status: "background_task_started", task: result.task };
-}
-
-async function executePowerShell(
-  executor: WorkspaceExecutor,
-  input: RunPowerShellInput,
-  context: OperationContext,
-): Promise<RunCommandResult> {
-  if (input.timeoutMs <= MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS) {
-    return executor.runPowerShell(input, context);
-  }
-  const result = await executor.startBackgroundTask(
-    {
-      workspaceId: input.workspaceId,
-      operation: "run_powershell",
-      command: input.command,
-      shell: "powershell",
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-      timeoutMs: input.timeoutMs,
-    },
-    backgroundStartContext(context),
-  );
-  if (!result.task) {
-    throw new AppErrorClass(
-      "EXECUTION_STATE_INVALID",
-      "Background task creation did not return a persisted task.",
-    );
-  }
-  return { status: "background_task_started", task: result.task };
+  return result;
 }
 
 export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor;
@@ -1344,7 +1275,7 @@ export function registerSourceControlTools(
       "git_push_branch",
       {
         title: "Push Git branch",
-        description: "Pushes one explicit non-protected branch to a named remote after typed confirmation; ambiguous outcomes require reconciliation.",
+        description: "Pushes one explicit branch to a named remote after typed confirmation; main remains confirmation-bound, and ambiguous outcomes require reconciliation.",
         inputSchema: sourceControlMcpSchemas.git_push_branch.input,
         outputSchema: sourceControlMcpSchemas.git_push_branch.output,
         annotations: sourceControlAnnotations.git_push_branch,
@@ -1510,7 +1441,6 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   patchFile: "write_file",
   runValidation: "run_workspace_validation",
   runCommand: "run_command",
-  runPowerShell: "run_powershell",
   searchFiles: "search_files",
   inspectGit: "inspect_workspace_git",
   getWorkspaceContext: "get_workspace_context",
