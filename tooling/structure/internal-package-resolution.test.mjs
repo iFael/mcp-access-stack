@@ -71,6 +71,20 @@ test("removes edge-protocol source escape hatches and test prebuild coupling", a
   }
 });
 
+test("builds edge-protocol before compiling the main gateway shard", async () => {
+  const rootPackage = await readJson("package.json");
+  const script = rootPackage.scripts["ci:main:gateway"];
+  const edgeBuild = "npm run build --workspace @mcp-access-stack/edge-protocol";
+  const gatewayBuild = "npm run build --workspace @vs-code-gpt/remote-mcp-gateway";
+
+  assert.equal(typeof script, "string");
+  const edgeBuildIndex = script.indexOf(edgeBuild);
+  const gatewayBuildIndex = script.indexOf(gatewayBuild);
+  assert.notEqual(edgeBuildIndex, -1, "main gateway shard must materialize edge-protocol on a clean checkout");
+  assert.notEqual(gatewayBuildIndex, -1, "main gateway shard must compile the gateway workspace");
+  assert.ok(edgeBuildIndex < gatewayBuildIndex, "edge-protocol must be built before the gateway workspace");
+});
+
 test("keeps edge gateway tests in the official Jest and CI surfaces", async () => {
   const rootPackage = await readJson("package.json");
   const edgePackage = await readJson("services/mcp-edge-gateway/package.json");
