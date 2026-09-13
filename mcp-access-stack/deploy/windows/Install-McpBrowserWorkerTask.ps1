@@ -296,6 +296,8 @@ if (-not $alreadyInstalled) {
     Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 }
 
+$null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId
+
 if ($Activate) {
     Enable-ScheduledTask -TaskName $TaskName | Out-Null
 }
