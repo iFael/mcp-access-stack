@@ -13,7 +13,7 @@ import {
   readBinaryFileResultSchema,
   runWorkspaceValidationResultSchema,
   runCommandResultSchema,
-  runPowerShellResultSchema,
+  startBackgroundTaskResultSchema,
   searchFilesResultSchema,
   writeFileResultSchema,
   type CancelBackgroundTaskInput,
@@ -32,7 +32,6 @@ import {
   type RunWorkspaceValidationInput,
   type RunCommandInput,
   type SearchFilesInput,
-  type RunPowerShellInput,
   type StartBackgroundTaskInput,
   type WriteFileInput,
   type WorkspaceExecutor,
@@ -118,12 +117,6 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
     );
   }
 
-  async runPowerShell(input: RunPowerShellInput, context?: OperationContext) {
-    return runPowerShellResultSchema.parse(
-      await this.relay.call("runPowerShell", input, context),
-    );
-  }
-
   async searchFiles(input: SearchFilesInput, context?: OperationContext) {
     return searchFilesResultSchema.parse(
       await this.relay.call("searchFiles", input, context),
@@ -149,7 +142,7 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
     input: StartBackgroundTaskInput,
     context?: OperationContext,
   ) {
-    return backgroundTaskResultSchema.parse(
+    return startBackgroundTaskResultSchema.parse(
       await this.relay.call("startBackgroundTask", input, context),
     );
   }

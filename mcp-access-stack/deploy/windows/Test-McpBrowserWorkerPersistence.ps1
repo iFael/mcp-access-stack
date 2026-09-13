@@ -12,9 +12,10 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
 $content = Get-Content -LiteralPath $installer -Raw
 foreach ($required in @(
     'MCP Access Stack production browser-worker',
-    "Role 'browser-worker'",
-    "Role 'node-runtime'",
-    "Role 'edge-native-launcher'",
+    "'browser-worker-server'",
+    "'node-runtime'",
+    "'browser-native-launcher'",
+    "'browser-credential-broker'",
 
     '--env-file',
     'BROWSER_WORKER_TOKEN=',

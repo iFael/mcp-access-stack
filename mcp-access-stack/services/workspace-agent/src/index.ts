@@ -20,4 +20,3 @@ export { SubprocessWorkspaceExecutor } from "./subprocess-workspace-executor.js"
 
 export { SshWorkspaceExecutor, type SshWorkspaceExecutorOptions } from "./remote/ssh-workspace-executor.js";
 export { SshWindowsTransport, type SshWindowsTransportConfig } from "./remote/ssh-windows-transport.js";
-export { createQualifiedCommandRuntimeOptions } from "./qualified-command-runtime-config.js";

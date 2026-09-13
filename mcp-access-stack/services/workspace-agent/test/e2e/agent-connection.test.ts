@@ -218,15 +218,6 @@ function createFakeAgent(overrides: Record<string, unknown>): LocalAgent {
       stderr: "",
       timedOut: false,
     }),
-    runPowerShell: async () => ({
-      status: "executed",
-      shell: "powershell",
-      cwd: ".",
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-    }),
     searchFiles: async () => ({ matches: [], truncated: false, skippedFiles: 0 }),
     inspectGit: async () => ({ status: [], staged: "", unstaged: "", truncated: false }),
     getWorkspaceContext: async () => ({
@@ -365,7 +356,6 @@ function standaloneAgentProcessScript(): string {
       readFile: async () => ({ path: "file.txt", content: "", startLine: 1, endLine: 0, totalLines: 0, sizeBytes: 0 }),
       writeFile: async () => ({ path: "file.txt", bytesWritten: 0, created: false }),
       runCommand: async () => ({ status: "executed", shell: "powershell", cwd: ".", exitCode: 0, stdout: "", stderr: "", timedOut: false }),
-      runPowerShell: async () => ({ status: "executed", shell: "powershell", cwd: ".", exitCode: 0, stdout: "", stderr: "", timedOut: false }),
       searchFiles: async () => ({ matches: [], truncated: false, skippedFiles: 0 }),
       inspectGit: async () => ({ status: [], staged: "", unstaged: "", truncated: false }),
       getWorkspaceContext: async () => ({ workspaceId: "workspace", rootPath: ".", instructionFiles: [], availableInstructionFiles: [], skills: [], git: { isGitRepository: false } }),

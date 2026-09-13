@@ -1,9 +1,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ReleaseRoot,
-
-    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')]
     [string]$ReleaseId,
 
@@ -23,17 +20,7 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 }
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$release = [System.IO.Path]::GetFullPath($ReleaseRoot)
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
-$manifestPath = Join-Path $release 'manifest.json'
-if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-    throw "Immutable release manifest was not found: $manifestPath"
-}
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([string]$manifest.releaseId -ne $ReleaseId -or [string]$manifest.commit -ne $SourceCommit) {
-    throw 'Execution-node native build identity does not match the immutable release.'
-}
-
 $compilerCandidates = @(
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
@@ -85,24 +72,14 @@ function Invoke-CSharpBuild {
     }
 }
 
-$hostSource = Join-Path $root 'tooling\windows-execution-node\McpHost.cs'
-$hostSupervisorSource = Join-Path $root 'tooling\windows-execution-node\McpHostSupervisor.cs'
-$hostPersistenceSource = Join-Path $root 'tooling\windows-execution-node\McpHostPersistence.cs'
 $edgeHostSource = Join-Path $root 'tooling\windows-edge-host\McpEdgeHost.cs'
-$launcherSource = Join-Path $release 'tooling\windows-host-launcher\McpNodeHostLauncher.cs'
-$brokerSource = Join-Path $release 'tooling\windows-credential-broker\McpCredentialBroker.cs'
+$launcherSource = Join-Path $root 'tooling\windows-host-launcher\McpNodeHostLauncher.cs'
+$brokerSource = Join-Path $root 'tooling\windows-credential-broker\McpCredentialBroker.cs'
 
-$hostPath = Join-Path $output 'McpHost.exe'
 $edgeHostPath = Join-Path $output 'McpEdgeHost.exe'
 $launcherPath = Join-Path $output 'McpNodeHostLauncher.exe'
 $brokerPath = Join-Path $output 'McpCredentialBroker.exe'
 
-Invoke-CSharpBuild `
-    -SourcePath $hostSource `
-    -AdditionalSourcePaths @($hostSupervisorSource, $hostPersistenceSource) `
-    -TargetPath $hostPath `
-    -TargetType exe `
-    -References @('System.Web.Extensions.dll')
 Invoke-CSharpBuild -SourcePath $edgeHostSource -TargetPath $edgeHostPath -TargetType winexe -References @('System.Web.Extensions.dll')
 Invoke-CSharpBuild -SourcePath $launcherSource -TargetPath $launcherPath -TargetType winexe
 Invoke-CSharpBuild `
@@ -111,12 +88,7 @@ Invoke-CSharpBuild `
     -TargetType winexe `
     -References @('System.Windows.Forms.dll', 'System.Drawing.dll')
 
-$hostVersion = @(& $hostPath --version)
-if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
-    throw 'Compiled McpHost failed its contract-version smoke check.'
-}
-
-$artifacts = foreach ($file in @($hostPath, $edgeHostPath, $launcherPath, $brokerPath)) {
+$artifacts = foreach ($file in @($edgeHostPath, $launcherPath, $brokerPath)) {
     $item = Get-Item -LiteralPath $file
     [ordered]@{
         name = $item.Name

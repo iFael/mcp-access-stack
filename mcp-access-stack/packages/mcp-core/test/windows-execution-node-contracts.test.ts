@@ -6,111 +6,153 @@ import {
 
 const sha256 = "a".repeat(64);
 const now = "2026-08-16T00:00:00.000Z";
+const CURRENT_SERVICES = ["edge-runtime", "browser-worker"] as const;
 
 function createBundledNodeManifest() {
   return {
-    version: 1 as const,
+    version: 2 as const,
     releaseId: "1.2.0",
     commit: "b".repeat(40),
     platform: "win32-x64" as const,
     createdAt: now,
     runtimeMode: "bundled-node" as const,
     integrityRoot: "signed-distribution-manifest" as const,
+    services: [
+      { id: "edge-runtime" as const, entryArtifactId: "edge-host" },
+      { id: "browser-worker" as const, entryArtifactId: "browser-native-launcher" },
+    ],
     artifacts: [
       {
-        role: "mcp-host" as const,
-        path: "native/McpHost.exe",
+        id: "edge-host",
+        owner: "edge-runtime" as const,
+        path: "native/McpEdgeHost.exe",
         sha256,
-        sizeBytes: 10,
+        sizeBytes: 50,
         authenticodeRequired: true,
       },
       {
-        role: "workspace-agent" as const,
-        path: "services/workspace-agent/dist/cli.js",
-        sha256,
-        sizeBytes: 20,
-        authenticodeRequired: false,
-      },
-      {
-        role: "browser-worker" as const,
-        path: "services/browser-worker/dist/server.js",
+        id: "edge-connector",
+        owner: "edge-runtime" as const,
+        path: "node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js",
         sha256,
         sizeBytes: 30,
         authenticodeRequired: false,
       },
       {
-        role: "node-runtime" as const,
-        path: "runtime/node/node.exe",
+        id: "edge-validation-launcher",
+        owner: "edge-runtime" as const,
+        path: "deploy/windows/Start-McpEdgeConnector.ps1",
         sha256,
         sizeBytes: 40,
+        authenticodeRequired: true,
+      },
+      {
+        id: "browser-worker-server",
+        owner: "browser-worker" as const,
+        path: "services/browser-worker/dist/server.js",
+        sha256,
+        sizeBytes: 20,
+        authenticodeRequired: false,
+      },
+      {
+        id: "browser-native-launcher",
+        owner: "browser-worker" as const,
+        path: "compat/McpNodeHostLauncher.exe",
+        sha256,
+        sizeBytes: 60,
+        authenticodeRequired: true,
+      },
+      {
+        id: "browser-credential-broker",
+        owner: "browser-worker" as const,
+        path: "compat/McpCredentialBroker.exe",
+        sha256,
+        sizeBytes: 65,
+        authenticodeRequired: true,
+      },
+      {
+        id: "node-runtime",
+        owner: "shared" as const,
+        path: "runtime/node/node.exe",
+        sha256,
+        sizeBytes: 70,
         authenticodeRequired: false,
       },
     ],
   };
 }
 
-describe("minimal Windows execution node contracts", () => {
-  it("accepts the transitional bundled-node release layout", () => {
-    expect(windowsExecutionReleaseManifestSchema.parse(createBundledNodeManifest())).toMatchObject({
-      releaseId: "1.2.0",
-      runtimeMode: "bundled-node",
-    });
+describe("Windows Edge execution contracts", () => {
+  it("models exactly the two logical runtime services", () => {
+    const parsed = windowsExecutionReleaseManifestSchema.parse(createBundledNodeManifest());
+    expect(parsed.services.map((service) => service.id).sort()).toEqual(
+      [...CURRENT_SERVICES].sort(),
+    );
   });
 
-  it("accepts a future self-contained layout without a Node runtime", () => {
+  it("accepts additional valid artifacts without changing the service contract", () => {
     const manifest = createBundledNodeManifest();
-    manifest.runtimeMode = "self-contained" as never;
-    manifest.artifacts = manifest.artifacts.filter(
-      (artifact) => artifact.role !== "node-runtime",
-    );
-
-    expect(windowsExecutionReleaseManifestSchema.parse(manifest)).toMatchObject({
-      runtimeMode: "self-contained",
+    const initialArtifactCount = manifest.artifacts.length;
+    manifest.artifacts.push({
+      id: "edge-runtime-metadata",
+      owner: "edge-runtime",
+      path: "metadata/edge-runtime.json",
+      sha256,
+      sizeBytes: 5,
+      authenticodeRequired: false,
     });
+
+    expect(windowsExecutionReleaseManifestSchema.parse(manifest).artifacts).toHaveLength(initialArtifactCount + 1);
+  });
+
+  it("requires every service entry artifact to exist, belong to that service and be signed", () => {
+    const missing = createBundledNodeManifest();
+    missing.services[0]!.entryArtifactId = "missing-entry";
+    expect(() => windowsExecutionReleaseManifestSchema.parse(missing)).toThrow(/entry artifact/u);
+
+    const wrongOwner = createBundledNodeManifest();
+    wrongOwner.artifacts[0]!.owner = "browser-worker";
+    expect(() => windowsExecutionReleaseManifestSchema.parse(wrongOwner)).toThrow(/owned by edge-runtime/u);
+
+    const unsigned = createBundledNodeManifest();
+    unsigned.artifacts[0]!.authenticodeRequired = false;
+    expect(() => windowsExecutionReleaseManifestSchema.parse(unsigned)).toThrow(/entry artifact.*Authenticode/u);
+  });
+
+  it("requires one shared bundled Node runtime artifact", () => {
+    const missing = createBundledNodeManifest();
+    missing.artifacts = missing.artifacts.filter((artifact) => artifact.id !== "node-runtime");
+    expect(() => windowsExecutionReleaseManifestSchema.parse(missing)).toThrow(/node-runtime/u);
+
+    const wrongOwner = createBundledNodeManifest();
+    wrongOwner.artifacts.find((artifact) => artifact.id === "node-runtime")!.owner = "edge-runtime";
+    expect(() => windowsExecutionReleaseManifestSchema.parse(wrongOwner)).toThrow(/node-runtime.*shared/u);
+  });
+
+  it("rejects duplicate service and artifact identities", () => {
+    const duplicateService = createBundledNodeManifest();
+    duplicateService.services[1] = { ...duplicateService.services[0]! };
+    expect(() => windowsExecutionReleaseManifestSchema.parse(duplicateService)).toThrow(/service/u);
+
+    const duplicateArtifact = createBundledNodeManifest();
+    duplicateArtifact.artifacts[1]!.id = duplicateArtifact.artifacts[0]!.id;
+    expect(() => windowsExecutionReleaseManifestSchema.parse(duplicateArtifact)).toThrow(/artifact id/u);
+  });
+
+  it("rejects speculative runtime modes", () => {
+    const manifest = createBundledNodeManifest();
+    (manifest as { runtimeMode: string }).runtimeMode = "self-contained";
+    expect(() => windowsExecutionReleaseManifestSchema.parse(manifest)).toThrow();
   });
 
   it("rejects path traversal and absolute artifact paths", () => {
     const traversal = createBundledNodeManifest();
-    traversal.artifacts[0]!.path = "../McpHost.exe";
+    traversal.artifacts[0]!.path = "../host.exe";
     expect(() => windowsExecutionReleaseManifestSchema.parse(traversal)).toThrow();
 
     const absolute = createBundledNodeManifest();
-    absolute.artifacts[0]!.path = "C:\\McpHost.exe";
+    absolute.artifacts[0]!.path = "C:\\host.exe";
     expect(() => windowsExecutionReleaseManifestSchema.parse(absolute)).toThrow();
-  });
-
-  it("requires Authenticode for McpHost while allowing manifest-bound JS payloads", () => {
-    const manifest = createBundledNodeManifest();
-    expect(windowsExecutionReleaseManifestSchema.parse(manifest)).toMatchObject({
-      artifacts: expect.arrayContaining([
-        expect.objectContaining({ role: "workspace-agent", authenticodeRequired: false }),
-        expect.objectContaining({ role: "browser-worker", authenticodeRequired: false }),
-      ]),
-    });
-
-    manifest.artifacts[0]!.authenticodeRequired = false;
-    expect(() => windowsExecutionReleaseManifestSchema.parse(manifest)).toThrow(
-      /mcp-host must require Authenticode validation/u,
-    );
-  });
-
-  it("rejects duplicate roles and missing runtime evidence", () => {
-    const duplicate = createBundledNodeManifest();
-    duplicate.artifacts[3] = {
-      ...duplicate.artifacts[0]!,
-      path: "native/duplicate.exe",
-    };
-    expect(() => windowsExecutionReleaseManifestSchema.parse(duplicate)).toThrow(
-      /duplicate artifact role/u,
-    );
-
-    const missingNode = createBundledNodeManifest();
-    missingNode.artifacts = missingNode.artifacts.filter(
-      (artifact) => artifact.role !== "node-runtime",
-    );
-    expect(() => windowsExecutionReleaseManifestSchema.parse(missingNode)).toThrow(
-      /bundled-node releases must include a node-runtime artifact/u,
-    );
   });
 
   it("keeps active, candidate and previous release pointers distinct", () => {
@@ -124,14 +166,8 @@ describe("minimal Windows execution node contracts", () => {
       windowsExecutionNodeStateSchema.parse({
         version: 1,
         active: pointer,
-        candidate: {
-          ...pointer,
-          releaseId: "1.2.1",
-        },
-        previous: {
-          ...pointer,
-          releaseId: "1.1.0",
-        },
+        candidate: { ...pointer, releaseId: "1.2.1" },
+        previous: { ...pointer, releaseId: "1.1.0" },
         updatedAt: now,
       }),
     ).toMatchObject({

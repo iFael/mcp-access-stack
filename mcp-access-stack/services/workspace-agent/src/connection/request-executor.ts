@@ -202,11 +202,11 @@ export class AgentRequestExecutor {
 }
 
 function isSynchronousShellOperation(operation: RelayOperation): boolean {
-  return operation === "runCommand" || operation === "runPowerShell";
+  return operation === "runCommand";
 }
 
 function operationCompletionGraceMs(operation: RelayOperation): number {
-  if (operation === "runCommand" || operation === "runPowerShell") {
+  if (operation === "runCommand") {
     return COMMAND_TERMINATION_GRACE_MS;
   }
   return operation === "waitBackgroundTask"

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { shellNameSchema } from "./policy.js";
+import { commandConfirmationRequiredResultSchema } from "./command-confirmation-contracts.js";
 import {
   MAX_BACKGROUND_OPERATION_TIMEOUT_MS,
   operationLifecycleSchema,
@@ -74,6 +75,7 @@ export const startBackgroundTaskInputSchema = z
       }),
     shell: shellNameSchema,
     cwd: z.string().trim().min(1).optional(),
+    confirmationId: z.string().trim().min(1).max(128).optional(),
     timeoutMs: z
       .number()
       .int()
@@ -89,6 +91,19 @@ export type StartBackgroundTaskInput = z.input<
 export type ParsedStartBackgroundTaskInput = z.output<
   typeof startBackgroundTaskInputSchema
 >;
+
+export const backgroundTaskStartedResultSchema = z
+  .object({
+    status: z.literal("background_task_started"),
+    task: backgroundTaskRecordSchema,
+  })
+  .strict();
+
+export const startBackgroundTaskResultSchema = z.discriminatedUnion("status", [
+  backgroundTaskStartedResultSchema,
+  commandConfirmationRequiredResultSchema,
+]);
+export type StartBackgroundTaskResult = z.infer<typeof startBackgroundTaskResultSchema>;
 
 export const getBackgroundTaskInputSchema = z
   .object({

@@ -696,7 +696,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Preferred general command runner for new routing decisions. Executes a command in an allowed shell with the workspace root as the default working directory. Use it when shell selection, qualified execution, safe autocorrection or expectedOutcome checks are useful; it can run PowerShell as well as pwsh, cmd, wsl and git-bash. Use run_powershell only when the task specifically requires the simpler compatibility PowerShell-only surface. Commands classified as potentially destructive return confirmation_required before execution.",
+    "description": "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. Commands classified as potentially destructive return confirmation_required before execution.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -704,13 +704,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "autoCorrection": {
-          "enum": [
-            "off",
-            "safe"
-          ],
-          "type": "string"
-        },
         "command": {
           "maxLength": 32000,
           "minLength": 1,
@@ -724,275 +717,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "cwd": {
           "minLength": 1,
           "type": "string"
-        },
-        "executionMode": {
-          "enum": [
-            "direct",
-            "qualified"
-          ],
-          "type": "string"
-        },
-        "expectedOutcome": {
-          "items": {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "exit_code",
-                    "type": "string"
-                  },
-                  "value": {
-                    "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "value"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "file_exists",
-                    "type": "string"
-                  },
-                  "path": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "path"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "file_absent",
-                    "type": "string"
-                  },
-                  "path": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "path"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "sha256",
-                    "type": "string"
-                  },
-                  "path": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "value": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "path",
-                  "value"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "text_contains",
-                    "type": "string"
-                  },
-                  "stream": {
-                    "enum": [
-                      "stdout",
-                      "stderr"
-                    ],
-                    "type": "string"
-                  },
-                  "value": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "stream",
-                  "value"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "json_field",
-                    "type": "string"
-                  },
-                  "path": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "pointer": {
-                    "maxLength": 1024,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "value": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "kind",
-                  "path",
-                  "pointer",
-                  "value"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "git_clean",
-                    "type": "string"
-                  },
-                  "root": {
-                    "default": ".",
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "process_exited",
-                    "type": "string"
-                  },
-                  "pid": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "pid"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "http_status",
-                    "type": "string"
-                  },
-                  "url": {
-                    "format": "uri",
-                    "type": "string"
-                  },
-                  "value": {
-                    "maximum": 599,
-                    "minimum": 100,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "url",
-                  "value"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "kind": {
-                    "const": "duration_lte",
-                    "type": "string"
-                  },
-                  "valueMs": {
-                    "maximum": 9007199254740991,
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "valueMs"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          "maxItems": 20,
-          "type": "array"
-        },
-        "objective": {
-          "maxLength": 4000,
-          "minLength": 1,
-          "type": "string"
-        },
-        "preferredShell": {
-          "anyOf": [
-            {
-              "enum": [
-                "powershell",
-                "pwsh",
-                "cmd",
-                "wsl",
-                "git-bash"
-              ],
-              "type": "string"
-            },
-            {
-              "const": "auto",
-              "type": "string"
-            }
-          ]
         },
         "shell": {
           "enum": [
@@ -1016,7 +740,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       },
       "required": [
-        "workspaceId"
+        "workspaceId",
+        "command",
+        "shell"
       ],
       "type": "object"
     },
@@ -1025,191 +751,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
-        "attemptCount": {
-          "maximum": 2,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "attempts": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "attempt": {
-                "maximum": 2,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "completedAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                "type": "string"
-              },
-              "cwd": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "exitCode": {
-                "anyOf": [
-                  {
-                    "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "planFingerprint": {
-                "pattern": "^[a-f0-9]{64}$",
-                "type": "string"
-              },
-              "shell": {
-                "enum": [
-                  "powershell",
-                  "pwsh",
-                  "cmd",
-                  "wsl",
-                  "git-bash"
-                ],
-                "type": "string"
-              },
-              "startedAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                "type": "string"
-              },
-              "timedOut": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "attempt",
-              "planFingerprint",
-              "shell",
-              "cwd",
-              "exitCode",
-              "timedOut",
-              "startedAt",
-              "completedAt"
-            ],
-            "type": "object"
-          },
-          "maxItems": 2,
-          "type": "array"
-        },
         "confirmationId": {
           "type": "string"
         },
-        "corrected": {
-          "type": "boolean"
-        },
-        "correction": {
-          "additionalProperties": false,
-          "properties": {
-            "applied": {
-              "type": "boolean"
-            },
-            "blockedReason": {
-              "maxLength": 1000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveCommand": {
-              "maxLength": 32000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveCwd": {
-              "maxLength": 4096,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveShell": {
-              "enum": [
-                "powershell",
-                "pwsh",
-                "cmd",
-                "wsl",
-                "git-bash"
-              ],
-              "type": "string"
-            },
-            "sanitized": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "applied",
-            "sanitized"
-          ],
-          "type": "object"
-        },
         "cwd": {
-          "type": "string"
-        },
-        "diagnosis": {
-          "additionalProperties": false,
-          "properties": {
-            "category": {
-              "enum": [
-                "syntax",
-                "quoting",
-                "shell_incompatible",
-                "executable_unavailable",
-                "wrong_working_directory",
-                "path_not_found",
-                "argument_incompatible",
-                "dependency_missing",
-                "configuration_missing",
-                "environment_invalid",
-                "permission_denied",
-                "confirmation_required",
-                "resource_locked",
-                "transient_failure",
-                "timeout",
-                "cancelled",
-                "build_failed",
-                "test_failed",
-                "application_failed",
-                "authentication_failed",
-                "authorization_failed",
-                "partial_completion_possible",
-                "outcome_unknown",
-                "unclassified"
-              ],
-              "type": "string"
-            },
-            "confidence": {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            "message": {
-              "maxLength": 1000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "source": {
-              "enum": [
-                "deterministic",
-                "provider"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "category",
-            "confidence",
-            "source"
-          ],
-          "type": "object"
-        },
-        "executionMode": {
-          "enum": [
-            "direct",
-            "qualified"
-          ],
           "type": "string"
         },
         "exitCode": {
@@ -1291,30 +836,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "effectiveTimeoutMs",
             "deadlineAt",
             "elapsedMs"
-          ],
-          "type": "object"
-        },
-        "postcondition": {
-          "additionalProperties": false,
-          "properties": {
-            "checked": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "failed": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "passed": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "passed",
-            "checked",
-            "failed"
           ],
           "type": "object"
         },
@@ -1658,7 +1179,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Compatibility shortcut for direct PowerShell-only execution with the workspace root as working directory. For new routing decisions prefer run_command, including for PowerShell, when its shell selection, qualified execution, autocorrection or expectedOutcome features are useful. Use this tool when the caller specifically needs the simpler PowerShell-only contract. Requires allowShell in workspace policy.",
+    "description": "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Active duplicate commands are deduplicated.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -1673,678 +1194,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "confirmationId": {
           "maxLength": 128,
-          "minLength": 1,
-          "type": "string"
-        },
-        "cwd": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "timeoutMs": {
-          "default": 60000,
-          "exclusiveMinimum": 0,
-          "maximum": 86400000,
-          "type": "integer"
-        },
-        "workspaceId": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspaceId",
-        "command"
-      ],
-      "type": "object"
-    },
-    "name": "run_powershell",
-    "outputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "attemptCount": {
-          "maximum": 2,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "attempts": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "attempt": {
-                "maximum": 2,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "completedAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                "type": "string"
-              },
-              "cwd": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "exitCode": {
-                "anyOf": [
-                  {
-                    "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "planFingerprint": {
-                "pattern": "^[a-f0-9]{64}$",
-                "type": "string"
-              },
-              "shell": {
-                "enum": [
-                  "powershell",
-                  "pwsh",
-                  "cmd",
-                  "wsl",
-                  "git-bash"
-                ],
-                "type": "string"
-              },
-              "startedAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                "type": "string"
-              },
-              "timedOut": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "attempt",
-              "planFingerprint",
-              "shell",
-              "cwd",
-              "exitCode",
-              "timedOut",
-              "startedAt",
-              "completedAt"
-            ],
-            "type": "object"
-          },
-          "maxItems": 2,
-          "type": "array"
-        },
-        "confirmationId": {
-          "type": "string"
-        },
-        "corrected": {
-          "type": "boolean"
-        },
-        "correction": {
-          "additionalProperties": false,
-          "properties": {
-            "applied": {
-              "type": "boolean"
-            },
-            "blockedReason": {
-              "maxLength": 1000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveCommand": {
-              "maxLength": 32000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveCwd": {
-              "maxLength": 4096,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveShell": {
-              "enum": [
-                "powershell",
-                "pwsh",
-                "cmd",
-                "wsl",
-                "git-bash"
-              ],
-              "type": "string"
-            },
-            "sanitized": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "applied",
-            "sanitized"
-          ],
-          "type": "object"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "diagnosis": {
-          "additionalProperties": false,
-          "properties": {
-            "category": {
-              "enum": [
-                "syntax",
-                "quoting",
-                "shell_incompatible",
-                "executable_unavailable",
-                "wrong_working_directory",
-                "path_not_found",
-                "argument_incompatible",
-                "dependency_missing",
-                "configuration_missing",
-                "environment_invalid",
-                "permission_denied",
-                "confirmation_required",
-                "resource_locked",
-                "transient_failure",
-                "timeout",
-                "cancelled",
-                "build_failed",
-                "test_failed",
-                "application_failed",
-                "authentication_failed",
-                "authorization_failed",
-                "partial_completion_possible",
-                "outcome_unknown",
-                "unclassified"
-              ],
-              "type": "string"
-            },
-            "confidence": {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            "message": {
-              "maxLength": 1000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "source": {
-              "enum": [
-                "deterministic",
-                "provider"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "category",
-            "confidence",
-            "source"
-          ],
-          "type": "object"
-        },
-        "executionMode": {
-          "enum": [
-            "direct",
-            "qualified"
-          ],
-          "type": "string"
-        },
-        "exitCode": {
-          "anyOf": [
-            {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "expiresAt": {
-          "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-          "type": "string"
-        },
-        "lifecycle": {
-          "additionalProperties": false,
-          "properties": {
-            "deadlineAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-              "type": "string"
-            },
-            "diagnostic": {
-              "maxLength": 500,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effectiveTimeoutMs": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "elapsedMs": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "reason": {
-              "enum": [
-                "timeout",
-                "cancelled",
-                "client_disconnected",
-                "upstream_timeout",
-                "process_failed"
-              ],
-              "type": "string"
-            },
-            "requestedTimeoutMs": {
-              "exclusiveMinimum": 0,
-              "maximum": 86400000,
-              "type": "integer"
-            },
-            "terminatedBy": {
-              "enum": [
-                "chatgpt_tool",
-                "mcp_server",
-                "gateway",
-                "relay",
-                "workspace_agent",
-                "executor",
-                "child_process",
-                "http_client",
-                "http_server",
-                "websocket",
-                "proxy",
-                "background_task_manager",
-                "external"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "requestedTimeoutMs",
-            "effectiveTimeoutMs",
-            "deadlineAt",
-            "elapsedMs"
-          ],
-          "type": "object"
-        },
-        "postcondition": {
-          "additionalProperties": false,
-          "properties": {
-            "checked": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "failed": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "passed": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "passed",
-            "checked",
-            "failed"
-          ],
-          "type": "object"
-        },
-        "reasons": {
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "shell": {
-          "enum": [
-            "powershell",
-            "pwsh",
-            "cmd",
-            "wsl",
-            "git-bash"
-          ],
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "executed",
-            "confirmation_required",
-            "background_task_started"
-          ],
-          "type": "string"
-        },
-        "stderr": {
-          "type": "string"
-        },
-        "stdout": {
-          "type": "string"
-        },
-        "task": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "maxLength": 32000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "commandHash": {
-              "pattern": "^[a-f0-9]{64}$",
-              "type": "string"
-            },
-            "completedAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-              "type": "string"
-            },
-            "createdAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-              "type": "string"
-            },
-            "cwd": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "error": {
-              "type": "string"
-            },
-            "id": {
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-              "type": "string"
-            },
-            "lifecycle": {
-              "additionalProperties": false,
-              "properties": {
-                "deadlineAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                  "type": "string"
-                },
-                "diagnostic": {
-                  "maxLength": 500,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "effectiveTimeoutMs": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "elapsedMs": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "reason": {
-                  "enum": [
-                    "timeout",
-                    "cancelled",
-                    "client_disconnected",
-                    "upstream_timeout",
-                    "process_failed"
-                  ],
-                  "type": "string"
-                },
-                "requestedTimeoutMs": {
-                  "exclusiveMinimum": 0,
-                  "maximum": 86400000,
-                  "type": "integer"
-                },
-                "terminatedBy": {
-                  "enum": [
-                    "chatgpt_tool",
-                    "mcp_server",
-                    "gateway",
-                    "relay",
-                    "workspace_agent",
-                    "executor",
-                    "child_process",
-                    "http_client",
-                    "http_server",
-                    "websocket",
-                    "proxy",
-                    "background_task_manager",
-                    "external"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "requestedTimeoutMs",
-                "effectiveTimeoutMs",
-                "deadlineAt",
-                "elapsedMs"
-              ],
-              "type": "object"
-            },
-            "operation": {
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            },
-            "pid": {
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            },
-            "result": {
-              "additionalProperties": false,
-              "properties": {
-                "cwd": {
-                  "type": "string"
-                },
-                "exitCode": {
-                  "anyOf": [
-                    {
-                      "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
-                      "type": "integer"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "lifecycle": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "deadlineAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                      "type": "string"
-                    },
-                    "diagnostic": {
-                      "maxLength": 500,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "effectiveTimeoutMs": {
-                      "maximum": 9007199254740991,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "elapsedMs": {
-                      "maximum": 9007199254740991,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "reason": {
-                      "enum": [
-                        "timeout",
-                        "cancelled",
-                        "client_disconnected",
-                        "upstream_timeout",
-                        "process_failed"
-                      ],
-                      "type": "string"
-                    },
-                    "requestedTimeoutMs": {
-                      "exclusiveMinimum": 0,
-                      "maximum": 86400000,
-                      "type": "integer"
-                    },
-                    "terminatedBy": {
-                      "enum": [
-                        "chatgpt_tool",
-                        "mcp_server",
-                        "gateway",
-                        "relay",
-                        "workspace_agent",
-                        "executor",
-                        "child_process",
-                        "http_client",
-                        "http_server",
-                        "websocket",
-                        "proxy",
-                        "background_task_manager",
-                        "external"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "requestedTimeoutMs",
-                    "effectiveTimeoutMs",
-                    "deadlineAt",
-                    "elapsedMs"
-                  ],
-                  "type": "object"
-                },
-                "shell": {
-                  "enum": [
-                    "powershell",
-                    "pwsh",
-                    "cmd",
-                    "wsl",
-                    "git-bash"
-                  ],
-                  "type": "string"
-                },
-                "status": {
-                  "const": "executed",
-                  "type": "string"
-                },
-                "stderr": {
-                  "type": "string"
-                },
-                "stdout": {
-                  "type": "string"
-                },
-                "timedOut": {
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "status",
-                "shell",
-                "cwd",
-                "exitCode",
-                "stdout",
-                "stderr",
-                "timedOut"
-              ],
-              "type": "object"
-            },
-            "shell": {
-              "enum": [
-                "powershell",
-                "pwsh",
-                "cmd",
-                "wsl",
-                "git-bash"
-              ],
-              "type": "string"
-            },
-            "startedAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-              "type": "string"
-            },
-            "state": {
-              "enum": [
-                "starting",
-                "running",
-                "succeeded",
-                "failed",
-                "cancelled"
-              ],
-              "type": "string"
-            },
-            "timeoutMs": {
-              "maximum": 86400000,
-              "minimum": 30000,
-              "type": "integer"
-            },
-            "version": {
-              "const": 1,
-              "type": "number"
-            },
-            "workspaceId": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "version",
-            "id",
-            "workspaceId",
-            "operation",
-            "commandHash",
-            "command",
-            "shell",
-            "cwd",
-            "state",
-            "createdAt",
-            "timeoutMs"
-          ],
-          "type": "object"
-        },
-        "timedOut": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "title": "Run PowerShell"
-  },
-  {
-    "_meta": {
-      "securitySchemes": [
-        {
-          "scopes": [
-            "workspaces:read"
-          ],
-          "type": "oauth2"
-        }
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": false,
-      "readOnlyHint": false
-    },
-    "description": "Starts a long-running command in an authorized workspace. Active duplicate commands are deduplicated and return the existing task.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
-    "inputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "maxLength": 32000,
           "minLength": 1,
           "type": "string"
         },
@@ -2387,304 +1236,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "start_background_task",
-    "outputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "task": {
-          "anyOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "command": {
-                  "maxLength": 32000,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "commandHash": {
-                  "pattern": "^[a-f0-9]{64}$",
-                  "type": "string"
-                },
-                "completedAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                  "type": "string"
-                },
-                "createdAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                  "type": "string"
-                },
-                "cwd": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "error": {
-                  "type": "string"
-                },
-                "id": {
-                  "format": "uuid",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-                  "type": "string"
-                },
-                "lifecycle": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "deadlineAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                      "type": "string"
-                    },
-                    "diagnostic": {
-                      "maxLength": 500,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "effectiveTimeoutMs": {
-                      "maximum": 9007199254740991,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "elapsedMs": {
-                      "maximum": 9007199254740991,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "reason": {
-                      "enum": [
-                        "timeout",
-                        "cancelled",
-                        "client_disconnected",
-                        "upstream_timeout",
-                        "process_failed"
-                      ],
-                      "type": "string"
-                    },
-                    "requestedTimeoutMs": {
-                      "exclusiveMinimum": 0,
-                      "maximum": 86400000,
-                      "type": "integer"
-                    },
-                    "terminatedBy": {
-                      "enum": [
-                        "chatgpt_tool",
-                        "mcp_server",
-                        "gateway",
-                        "relay",
-                        "workspace_agent",
-                        "executor",
-                        "child_process",
-                        "http_client",
-                        "http_server",
-                        "websocket",
-                        "proxy",
-                        "background_task_manager",
-                        "external"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "requestedTimeoutMs",
-                    "effectiveTimeoutMs",
-                    "deadlineAt",
-                    "elapsedMs"
-                  ],
-                  "type": "object"
-                },
-                "operation": {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "pid": {
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991,
-                  "type": "integer"
-                },
-                "result": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "cwd": {
-                      "type": "string"
-                    },
-                    "exitCode": {
-                      "anyOf": [
-                        {
-                          "maximum": 9007199254740991,
-                          "minimum": -9007199254740991,
-                          "type": "integer"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "lifecycle": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "deadlineAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                          "type": "string"
-                        },
-                        "diagnostic": {
-                          "maxLength": 500,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "effectiveTimeoutMs": {
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "elapsedMs": {
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "reason": {
-                          "enum": [
-                            "timeout",
-                            "cancelled",
-                            "client_disconnected",
-                            "upstream_timeout",
-                            "process_failed"
-                          ],
-                          "type": "string"
-                        },
-                        "requestedTimeoutMs": {
-                          "exclusiveMinimum": 0,
-                          "maximum": 86400000,
-                          "type": "integer"
-                        },
-                        "terminatedBy": {
-                          "enum": [
-                            "chatgpt_tool",
-                            "mcp_server",
-                            "gateway",
-                            "relay",
-                            "workspace_agent",
-                            "executor",
-                            "child_process",
-                            "http_client",
-                            "http_server",
-                            "websocket",
-                            "proxy",
-                            "background_task_manager",
-                            "external"
-                          ],
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "requestedTimeoutMs",
-                        "effectiveTimeoutMs",
-                        "deadlineAt",
-                        "elapsedMs"
-                      ],
-                      "type": "object"
-                    },
-                    "shell": {
-                      "enum": [
-                        "powershell",
-                        "pwsh",
-                        "cmd",
-                        "wsl",
-                        "git-bash"
-                      ],
-                      "type": "string"
-                    },
-                    "status": {
-                      "const": "executed",
-                      "type": "string"
-                    },
-                    "stderr": {
-                      "type": "string"
-                    },
-                    "stdout": {
-                      "type": "string"
-                    },
-                    "timedOut": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "status",
-                    "shell",
-                    "cwd",
-                    "exitCode",
-                    "stdout",
-                    "stderr",
-                    "timedOut"
-                  ],
-                  "type": "object"
-                },
-                "shell": {
-                  "enum": [
-                    "powershell",
-                    "pwsh",
-                    "cmd",
-                    "wsl",
-                    "git-bash"
-                  ],
-                  "type": "string"
-                },
-                "startedAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
-                  "type": "string"
-                },
-                "state": {
-                  "enum": [
-                    "starting",
-                    "running",
-                    "succeeded",
-                    "failed",
-                    "cancelled"
-                  ],
-                  "type": "string"
-                },
-                "timeoutMs": {
-                  "maximum": 86400000,
-                  "minimum": 30000,
-                  "type": "integer"
-                },
-                "version": {
-                  "const": 1,
-                  "type": "number"
-                },
-                "workspaceId": {
-                  "minLength": 1,
-                  "type": "string"
-                }
-              },
-              "required": [
-                "version",
-                "id",
-                "workspaceId",
-                "operation",
-                "commandHash",
-                "command",
-                "shell",
-                "cwd",
-                "state",
-                "createdAt",
-                "timeoutMs"
-              ],
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "task"
-      ],
-      "type": "object"
-    },
     "title": "Start background task"
   },
   {
@@ -5092,7 +3643,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Pushes one explicit non-protected branch to a named remote after typed confirmation; ambiguous outcomes require reconciliation.",
+    "description": "Pushes one explicit branch to a named remote after typed confirmation; main remains confirmation-bound, and ambiguous outcomes require reconciliation.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -5141,6 +3692,65 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "git_push_branch",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "localSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "operation": {
+          "const": "git_push_branch",
+          "type": "string"
+        },
+        "remote": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "remoteSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "title": "Push Git branch"
   },
   {
@@ -5311,6 +3921,74 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "github_create_repository",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "defaultBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "fullName": {
+          "maxLength": 201,
+          "minLength": 3,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "const": "github_create_repository",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "type": "string"
+        },
+        "visibility": {
+          "enum": [
+            "private",
+            "public",
+            "internal"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "title": "Create GitHub repository"
   },
   {
@@ -5505,6 +4183,74 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "github_create_pull_request",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "baseSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "merged": {
+          "type": "boolean"
+        },
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "const": "github_create_pull_request",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "title": "Create GitHub pull request"
   },
   {
@@ -5584,19 +4330,67 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "github_merge_pull_request",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "mergeSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "merged": {
+          "type": "boolean"
+        },
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "const": "github_merge_pull_request",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
     "title": "Merge GitHub pull request"
   }
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "27dd48bba413cd810f43840482b9f99b3da4e6aaa0a8d825ab9f1031498a46be",
-  "descriptorRevision": "fb7a5c628c5af2cc586988552c284c9feb337f09089d66f8ad7ac1211143492c",
-  "serverVersion": "0.4.0-catalog.c27dd48bba413.sed9448dace99",
-  "toolCount": 28,
-  "toolSetRevision": "ed9448dace99031ebb1c5105de027290fc6decbd4a8b00b9ff1711652493860f"
+  "contractRevision": "7cda1b4de414d8abb2073da552a663e689759b8dc8a56a7c51d1594b856d6a36",
+  "descriptorRevision": "8f14a1f62af7865c704a847001d4f15521e2daa5c27c72dc19bf614c5b16356d",
+  "serverVersion": "0.4.0-catalog.c7cda1b4de414.s4d42da028359",
+  "toolCount": 27,
+  "toolSetRevision": "4d42da0283590c8e72e956289e484ea29b9cc226be2f7d7286b4acdd44390321"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c27dd48bba413.sed9448dace99"
+  "version": "0.4.0-catalog.c7cda1b4de414.s4d42da028359"
 } as const;

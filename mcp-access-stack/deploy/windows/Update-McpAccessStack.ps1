@@ -4,12 +4,16 @@ param(
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string]$Repository,
 
-    [string]$Tag,
+    [Parameter(Mandatory = $true)]
     [string]$InstallationRoot,
-    [switch]$Promote,
+
+    [string]$Tag,
     [switch]$Execute,
     [switch]$AllowUnsignedDevelopment
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 $publicCommonSignature = Get-AuthenticodeSignature -LiteralPath $publicCommonPath
@@ -25,18 +29,10 @@ if (-not $Execute) {
     throw 'Update preparation is intentionally gated. Re-run with -Execute.'
 }
 Assert-McpPublicWindowsX64
-foreach ($command in @('docker')) {
-    Assert-McpPublicCommand -Name $command
-}
 
-$root = if ([string]::IsNullOrWhiteSpace($InstallationRoot)) {
-    Get-McpPublicProjectRoot
-}
-else {
-    [System.IO.Path]::GetFullPath($InstallationRoot)
-}
-if (-not (Test-Path -LiteralPath $root -PathType Container)) {
-    throw "Installation root was not found: $root"
+$installation = [IO.Path]::GetFullPath($InstallationRoot)
+if (-not (Test-Path -LiteralPath $installation -PathType Container)) {
+    throw "Installation root was not found: $installation"
 }
 
 $headers = @{
@@ -60,7 +56,7 @@ if (-not $asset -or -not $hashAsset) {
     throw "Release assets are incomplete: $assetName and $hashAssetName are required."
 }
 
-$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'mcp-public-update-' + [guid]::NewGuid().ToString('N')
 )
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
@@ -85,76 +81,58 @@ try {
         throw 'The release archive must contain exactly one distribution manifest.'
     }
     $packageRoot = Split-Path -Parent $manifestFiles[0].FullName
+    $packageCommonPath = Join-Path $packageRoot 'deploy\windows\PublicDistribution.Common.ps1'
     Assert-McpPublicSignature `
-        -Path (Join-Path $packageRoot 'deploy\windows\Install-McpAccessStack.ps1') `
+        -Path $packageCommonPath `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-    Assert-McpPublicSignature `
-        -Path (Join-Path $packageRoot 'deploy\windows\Update-McpAccessStack.ps1') `
-        -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    . $packageCommonPath
+
     $distribution = Assert-McpPublicDistribution `
         -Root $packageRoot `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    if ([int]$distribution.schemaVersion -ne 2) {
+        throw 'Current updater accepts only Docker-free distribution manifest v2.'
+    }
     $releaseId = [string]$distribution.releaseId
-    $sourceRelease = Join-Path $packageRoot "releases\$releaseId"
+    $sourceRelease = Resolve-McpPublicChildPath `
+        -Root $packageRoot `
+        -RelativePath ("releases/{0}" -f $releaseId)
     $releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $sourceRelease
     $releaseAttestation = Assert-McpPublicReleaseAttestation `
         -ReleaseRoot $sourceRelease `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-    if ([string]$releaseAttestation.releaseId -ne $releaseId) {
-        throw 'Signed release attestation does not match the downloaded distribution.'
+    if (
+        [int]$releaseAttestation.schemaVersion -ne 2 -or
+        [string]$releaseManifest.releaseId -ne $releaseId -or
+        [string]$releaseAttestation.releaseId -ne $releaseId
+    ) {
+        throw 'Downloaded release does not satisfy the current release contract v2.'
     }
 
-    $targetRelease = Join-Path $root "releases\$releaseId"
-    if (Test-Path -LiteralPath $targetRelease) {
-        throw "Release is already installed: $releaseId"
-    }
-    $resolvedReleasesRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'releases'))
-    $resolvedTarget = [System.IO.Path]::GetFullPath($targetRelease)
-    if (-not $resolvedTarget.StartsWith(
-        $resolvedReleasesRoot + [System.IO.Path]::DirectorySeparatorChar,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'Resolved release target escapes the installation releases directory.'
-    }
-
-    Import-McpPublicDockerImages -Manifest $distribution -ReleaseId $releaseId
-    Copy-Item -LiteralPath $sourceRelease -Destination $targetRelease -Recurse
-
-    . (Join-Path $root 'deploy\docker\scripts\Common.ps1')
-    Assert-McpReleasePointerEligible -Root $root -Pointer ([pscustomobject]@{
-        releaseId = $releaseId
-        path = $targetRelease
-        commit = [string]$releaseManifest.commit
-    }) | Out-Null
-    Write-McpReleasePointer -Name 'candidate' -Root $root -Value ([ordered]@{
-        version = 1
-        releaseId = $releaseId
-        path = $targetRelease
-        commit = [string]$releaseManifest.commit
-        builtAt = [string]$releaseManifest.builtAt
-    })
-
-    $promotionRequested = $false
-    if ($Promote) {
-        $promotionRequest = Join-Path $root 'deploy\docker\scripts\Request-McpProductionPromotion.ps1'
-        & $promotionRequest -Execute -ExpectedReleaseId $releaseId
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Candidate promotion request failed; the previous active release remains unchanged.'
-        }
-        $promotionRequested = $true
+    $stager = Join-Path $packageRoot 'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1'
+    Assert-McpPublicSignature -Path $stager -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    $stageResult = & $stager `
+        -DistributionRoot $packageRoot `
+        -InstallationRoot $installation `
+        -ExpectedReleaseId $releaseId `
+        -Execute `
+        -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+    if ([string]$stageResult.status -ne 'ready') {
+        throw 'Downloaded release did not reach candidate-ready state.'
     }
 
     [pscustomobject]@{
         downloaded = $true
         releaseId = $releaseId
         candidatePrepared = $true
-        promotionRequested = $promotionRequested
+        alreadyPrepared = [bool]$stageResult.alreadyPrepared
         promoted = $false
+        nextAction = 'Run Install-McpAccessStack.ps1 with the environment token/configuration files to perform the Edge-only cutover and refresh runtime tasks.'
     } | ConvertTo-Json -Compress
 }
 finally {
-    $resolvedTemporaryRoot = [System.IO.Path]::GetFullPath($temporaryRoot)
-    $systemTemporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
+    $systemTemporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if ($resolvedTemporaryRoot.StartsWith(
         $systemTemporaryRoot,
         [StringComparison]::OrdinalIgnoreCase

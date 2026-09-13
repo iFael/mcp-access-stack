@@ -1,4 +1,4 @@
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError, type EdgeAuthenticator } from "./auth.js";
 
 const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,6 @@ import {
 const SOURCE_HASH_PATHS = [
   "package.json",
   "package-lock.json",
-  "deploy/docker/gateway.Dockerfile",
   "packages/mcp-core",
   "services/browser-worker",
   "services/mcp-gateway",
@@ -23,8 +22,6 @@ const BUILD_HASH_PATHS = [
   "services/browser-worker/dist",
   "services/mcp-gateway/dist",
 ];
-const BENCHMARK_SOURCE_LABEL =
-  "com.openai.mcp.flow-benchmark.source-sha256";
 
 export class BrowserBenchmarkOperationError extends Error {
   constructor(operation, code, message, statusCode, benchmarkTransport = undefined) {
@@ -142,10 +139,9 @@ function shouldCopyBenchmarkProfileEntry(sourceDirectory, sourcePath) {
 }
 
 export async function startIsolatedGateway(options) {
-  const mode = options.mode ?? "docker";
-  if (mode === "process") return startIsolatedProcessGateway(options);
-  if (mode !== "docker") throw new Error(`Unsupported benchmark gateway mode: ${mode}.`);
-  return startIsolatedDockerGateway(options);
+  const mode = options.mode ?? "process";
+  if (mode !== "process") throw new Error(`Unsupported benchmark gateway mode: ${mode}.`);
+  return startIsolatedProcessGateway(options);
 }
 
 async function startIsolatedProcessGateway(options) {
@@ -199,137 +195,6 @@ async function startIsolatedProcessGateway(options) {
   });
 }
 
-async function startIsolatedDockerGateway(options) {
-  const root = path.resolve(options.root);
-  const port = await findAvailablePort();
-  const mcpPath = "/mcp-benchmark";
-  const relay = await startDockerHostRelay(options.worker.port);
-  const sourceHash = await hashSourceTree(root);
-  const image = `mcp-access-stack/gateway:flow-benchmark-${sourceHash.slice(0, 16)}`;
-  const containerName =
-    `mcp-browser-flow-${process.pid}-${randomBytes(5).toString("hex")}`;
-  const networkName =
-    `mcp-browser-flow-net-${process.pid}-${randomBytes(5).toString("hex")}`;
-  const privateDirectory = path.resolve(
-    options.scratchDirectory ??
-      path.join(options.worker.profileDirectory, "..", "gateway-private"),
-  );
-  const environmentPath = path.join(privateDirectory, "docker.env");
-  let managed;
-  let networkCreated = false;
-  try {
-    await mkdir(privateDirectory, { recursive: true });
-    await writeFile(environmentPath, [
-      "NODE_ENV=test",
-      "PORT=3310",
-      "PUBLIC_BASE_URL=http://127.0.0.1:3310",
-      "AUTH_MODE=none",
-      `MCP_PATH=${mcpPath}`,
-      "AGENT_ID=benchmark-isolated",
-      `AGENT_TOKEN_SHA256=${"0".repeat(64)}`,
-      "AGENT_REQUEST_TIMEOUT_MS=120000",
-      "AGENT_MAX_CONCURRENCY=4",
-      "RATE_LIMIT_MAX=100000",
-      "LOG_LEVEL=error",
-      "BROWSER_WORKER_ENABLED=true",
-      "BROWSER_WORKER_ALLOW_DOCKER_HOST=true",
-      `BROWSER_WORKER_URL=http://host.docker.internal:${relay.port}`,
-      `BROWSER_WORKER_TOKEN=${options.worker.token}`,
-      "BROWSER_WORKER_TIMEOUT_MS=120000",
-      `BROWSER_WORKER_MAX_PAYLOAD_BYTES=${16 * 1024 * 1024}`,
-      "",
-    ].join("\n"), { encoding: "utf8", mode: 0o600 });
-    let imageSummary = await inspectBenchmarkImage(image, root);
-    const imageReused = imageSummary?.sourceHash === sourceHash;
-    if (!imageReused) {
-      await runProcess("docker", [
-        "build",
-        "--file",
-        "deploy/docker/gateway.Dockerfile",
-        "--label",
-        `${BENCHMARK_SOURCE_LABEL}=${sourceHash}`,
-        "--tag",
-        image,
-        ".",
-      ], root);
-      imageSummary = await inspectBenchmarkImage(image, root);
-    }
-    if (!imageSummary || imageSummary.sourceHash !== sourceHash) {
-      throw new Error("Benchmark gateway image provenance does not match the source tree.");
-    }
-    const imageId = imageSummary.imageId;
-    await runProcess(
-      "docker",
-      ["network", "create", "--driver", "bridge", networkName],
-      root,
-    );
-    networkCreated = true;
-    managed = spawnManagedProcess({
-      label: "candidate Docker MCP gateway",
-      command: "docker",
-      args: [
-        "run",
-        "--rm",
-        "--name",
-        containerName,
-        "--network",
-        networkName,
-        "--read-only",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges:true",
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,size=64m",
-        "--add-host",
-        "host.docker.internal:host-gateway",
-        "--publish",
-        `127.0.0.1:${port}:3310`,
-        "--env-file",
-        environmentPath,
-        image,
-      ],
-      cwd: root,
-      env: process.env,
-    });
-    await waitForHealth(
-      `http://127.0.0.1:${port}/health/live`,
-      managed,
-      60_000,
-    );
-    await rm(environmentPath, { force: true });
-    return createGatewayClientHandle({
-      port,
-      mcpPath,
-      provenance: {
-        mode: "docker",
-        image,
-        imageId,
-        sourceTreeSha256: sourceHash,
-        imageReused,
-        mcpServerLifecycle: "per-request-stateless-fallback",
-        legacyBrowserFastPath: "json-rpc-v1",
-        benchmarkTiming: "opt-in-header",
-        containerName,
-        networkName,
-        workerRelayPort: relay.port,
-      },
-      closeRuntime: async () => {
-        await stopBenchmarkContainer(containerName, root);
-        await managed?.close();
-        await stopBenchmarkNetwork(networkName, root);
-        await relay.close();
-      },
-    });
-  } catch (error) {
-    await rm(environmentPath, { force: true });
-    if (managed) await stopBenchmarkContainer(containerName, root);
-    await managed?.close().catch(() => undefined);
-    if (networkCreated) await stopBenchmarkNetwork(networkName, root);
-    await relay.close();
-    throw error;
-  }
-}
 
 function createGatewayClientHandle({ port, mcpPath, provenance, closeRuntime }) {
   const client = new McpBenchmarkClient({
@@ -415,92 +280,6 @@ export function enrichGatewayTiming(value, clientElapsedMs, clientTiming) {
   };
 }
 
-async function startDockerHostRelay(targetPort) {
-  const sockets = new Set();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    const upstream = net.createConnection({
-      host: "127.0.0.1",
-      port: targetPort,
-    });
-    sockets.add(upstream);
-    socket.pipe(upstream);
-    upstream.pipe(socket);
-    const closePair = () => {
-      sockets.delete(socket);
-      sockets.delete(upstream);
-      socket.destroy();
-      upstream.destroy();
-    };
-    socket.once("error", closePair);
-    upstream.once("error", closePair);
-    socket.once("close", closePair);
-    upstream.once("close", closePair);
-  });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "0.0.0.0", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await closeNetServer(server);
-    throw new Error("Docker Browser Worker relay did not bind to a TCP port.");
-  }
-  return {
-    port: address.port,
-    close: async () => {
-      for (const socket of sockets) socket.destroy();
-      await closeNetServer(server);
-    },
-  };
-}
-
-async function inspectBenchmarkImage(image, root) {
-  try {
-    const raw = await runProcess(
-      "docker",
-      ["image", "inspect", image],
-      root,
-    );
-    const details = JSON.parse(raw)?.[0];
-    const imageId = details?.Id;
-    const sourceHash = details?.Config?.Labels?.[BENCHMARK_SOURCE_LABEL];
-    if (typeof imageId !== "string") return undefined;
-    return {
-      imageId,
-      sourceHash: typeof sourceHash === "string" ? sourceHash : undefined,
-    };
-  } catch {
-    return undefined;
-  }
-}
-async function stopBenchmarkContainer(containerName, root) {
-  if (!/^mcp-browser-flow-\d+-[a-f0-9]{10}$/u.test(containerName)) {
-    throw new Error("Refusing to stop a container outside the benchmark namespace.");
-  }
-  await runProcess("docker", ["stop", "--time", "20", containerName], root)
-    .catch(() => undefined);
-  await runProcess("docker", ["rm", "--force", containerName], root)
-    .catch(() => undefined);
-}
-
-async function stopBenchmarkNetwork(networkName, root) {
-  if (!/^mcp-browser-flow-net-\d+-[a-f0-9]{10}$/u.test(networkName)) {
-    throw new Error("Refusing to remove a network outside the benchmark namespace.");
-  }
-  await runProcess("docker", ["network", "rm", networkName], root)
-    .catch(() => undefined);
-}
-
-function closeNetServer(server) {
-  return new Promise((resolve, reject) => {
-    if (!server.listening) {
-      resolve();
-      return;
-    }
-    server.close((error) => error ? reject(error) : resolve());
-  });
-}
 
 export function createDetailedBrowserWorkerClient({ port, token }) {
   return async (operation, input) => {

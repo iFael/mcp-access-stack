@@ -30,8 +30,10 @@ describe("background task integration", () => {
       timeoutMs: 30_000,
     });
 
-    expect(started.task?.state).toBe("starting");
-    const completed = await waitForTask(agent, started.task?.id, "succeeded");
+    expect(started.status).toBe("background_task_started");
+    if (started.status !== "background_task_started") throw new Error("expected background task");
+    expect(started.task.state).toBe("starting");
+    const completed = await waitForTask(agent, started.task.id, "succeeded");
     expect(completed?.result).toMatchObject({
       status: "executed",
       exitCode: 0,
@@ -63,11 +65,13 @@ describe("background task integration", () => {
     };
 
     const first = await agent.startBackgroundTask(input);
-    const running = await waitForRunningTask(agent, first.task?.id);
+    if (first.status !== "background_task_started") throw new Error("expected background task");
+    const running = await waitForRunningTask(agent, first.task.id);
     let cancelled;
     try {
       const duplicate = await agent.startBackgroundTask(input);
-      expect(duplicate.task?.id).toBe(first.task?.id);
+      if (duplicate.status !== "background_task_started") throw new Error("expected background task");
+      expect(duplicate.task.id).toBe(first.task.id);
     } finally {
       cancelled = await agent.cancelBackgroundTask({
         workspaceId: "test",
@@ -78,23 +82,60 @@ describe("background task integration", () => {
     await waitFor(() => !processExists(running.pid!), 10_000);
   });
 
-  test("rejects destructive background commands before creating a task", async () => {
+  test("requires confirmation before risky background execution and never persists the token", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);
+    const input = {
+      workspaceId: "test",
+      operation: "confirmed-background-write",
+      shell: "powershell" as const,
+      command: "Set-Content -LiteralPath 'confirmed-background.txt' -Value 'ok'",
+      timeoutMs: 30_000,
+    };
+
+    const pending = await agent.startBackgroundTask(input);
+    expect(pending).toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining(["move, overwrite or direct file write operation"]),
+    });
+    if (pending.status !== "confirmation_required") throw new Error("expected confirmation");
+    expect((await agent.listBackgroundTasks({ workspaceId: "test" })).tasks).toEqual([]);
+
+    await expect(
+      agent.startBackgroundTask({ ...input, confirmationId: "wrong" }),
+    ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
 
     await expect(
       agent.startBackgroundTask({
-        workspaceId: "test",
-        operation: "unsafe",
-        shell: "powershell",
-        command: "Remove-Item 'missing.txt' -Force",
-        timeoutMs: 30_000,
+        ...input,
+        operation: "different-background-operation",
+        confirmationId: pending.confirmationId,
       }),
-    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+    expect((await agent.listBackgroundTasks({ workspaceId: "test" })).tasks).toEqual([]);
+
+    const started = await agent.startBackgroundTask({
+      ...input,
+      confirmationId: pending.confirmationId,
+    });
+    expect(started).toMatchObject({
+      status: "background_task_started",
+      task: { operation: input.operation, command: input.command },
+    });
+    if (started.status !== "background_task_started") throw new Error("expected background task");
+    expect(JSON.stringify(started.task)).not.toContain("confirmationId");
+    expect(JSON.stringify(started.task)).not.toContain(pending.confirmationId);
+
+    const completed = await waitForTask(agent, started.task.id, "succeeded");
+    expect(JSON.stringify(completed)).not.toContain("confirmationId");
+    expect(JSON.stringify(completed)).not.toContain(pending.confirmationId);
 
     await expect(
-      agent.listBackgroundTasks({ workspaceId: "test" }),
-    ).resolves.toEqual({ tasks: [] });
+      agent.startBackgroundTask({
+        ...input,
+        confirmationId: pending.confirmationId,
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
   });
 });
 

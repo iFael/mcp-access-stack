@@ -10,9 +10,6 @@ const IMPACT_KEYS = [
   "edgeGateway",
   "browserWorker",
   "windowsRuntime",
-  "dockerGateway",
-  "dockerBrowser",
-  "dockerProxy",
   "operationsTooling",
   "rootBroad",
 ];
@@ -119,26 +116,6 @@ function classifyPath(repositoryPath, impact) {
     impact.operationsTooling = true;
     return;
   }
-  if (projectPath === "deploy/docker/gateway.Dockerfile") {
-    impact.dockerGateway = true;
-    impact.operationsTooling = true;
-    return;
-  }
-  if (projectPath === "deploy/remote/browser-worker.Dockerfile") {
-    impact.dockerBrowser = true;
-    impact.operationsTooling = true;
-    return;
-  }
-  if (projectPath === "deploy/docker/proxy.Dockerfile") {
-    impact.dockerProxy = true;
-    impact.operationsTooling = true;
-    return;
-  }
-  if (projectPath === "operations/runtime/gpt-mcp-proxy.mjs") {
-    impact.dockerProxy = true;
-    impact.operationsTooling = true;
-    return;
-  }
   if (
     projectPath.startsWith("deploy/") ||
     projectPath.startsWith("operations/") ||
@@ -160,26 +137,18 @@ function expandDependencies(impact) {
     impact.mcpGateway = true;
     impact.browserWorker = true;
     impact.windowsRuntime = true;
-    impact.dockerGateway = true;
-    impact.dockerBrowser = true;
   }
   if (impact.edgeProtocol) {
     impact.mcpGateway = true;
     impact.edgeGateway = true;
     impact.windowsRuntime = true;
-    impact.dockerGateway = true;
   }
   if (impact.workspaceAgent) {
     impact.mcpGateway = true;
     impact.windowsRuntime = true;
-    impact.dockerGateway = true;
   }
   if (impact.mcpGateway) {
     impact.windowsRuntime = true;
-    impact.dockerGateway = true;
-  }
-  if (impact.browserWorker) {
-    impact.dockerBrowser = true;
   }
 }
 

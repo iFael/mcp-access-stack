@@ -11,9 +11,6 @@ function pick(result) {
     edgeGateway: result.edgeGateway,
     browserWorker: result.browserWorker,
     windowsRuntime: result.windowsRuntime,
-    dockerGateway: result.dockerGateway,
-    dockerBrowser: result.dockerBrowser,
-    dockerProxy: result.dockerProxy,
     operationsTooling: result.operationsTooling,
     rootBroad: result.rootBroad,
     docsOnly: result.docsOnly,
@@ -23,7 +20,7 @@ function pick(result) {
 test("docs-only changes do not fan out into runtime validation", () => {
   const result = classifyChangedPaths([
     "README.md",
-    "mcp-access-stack/docs/operations/RUNBOOK.md",
+    "mcp-access-stack/docs/architecture/EDGE_MCP_RUNTIME.md",
   ]);
   assert.deepEqual(pick(result), {
     shared: false,
@@ -33,9 +30,6 @@ test("docs-only changes do not fan out into runtime validation", () => {
     edgeGateway: false,
     browserWorker: false,
     windowsRuntime: false,
-    dockerGateway: false,
-    dockerBrowser: false,
-    dockerProxy: false,
     operationsTooling: false,
     rootBroad: false,
     docsOnly: true,
@@ -49,8 +43,6 @@ test("shared mcp-core changes fan out to known consumers", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.browserWorker, true);
   assert.equal(result.windowsRuntime, true);
-  assert.equal(result.dockerGateway, true);
-  assert.equal(result.dockerBrowser, true);
   assert.equal(result.edgeGateway, false);
   assert.equal(result.rootBroad, false);
   assert.equal(result.docsOnly, false);
@@ -62,7 +54,6 @@ test("edge protocol changes fan out to both gateway consumers", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.edgeGateway, true);
   assert.equal(result.windowsRuntime, true);
-  assert.equal(result.dockerGateway, true);
   assert.equal(result.browserWorker, false);
 });
 
@@ -71,7 +62,6 @@ test("workspace-agent changes include the gateway that embeds it", () => {
   assert.equal(result.workspaceAgent, true);
   assert.equal(result.mcpGateway, true);
   assert.equal(result.windowsRuntime, true);
-  assert.equal(result.dockerGateway, true);
   assert.equal(result.browserWorker, false);
 });
 
@@ -94,8 +84,5 @@ test("unknown relevant source paths fail closed to broad coverage", () => {
   assert.equal(result.edgeGateway, true);
   assert.equal(result.browserWorker, true);
   assert.equal(result.windowsRuntime, true);
-  assert.equal(result.dockerGateway, true);
-  assert.equal(result.dockerBrowser, true);
-  assert.equal(result.dockerProxy, true);
   assert.equal(result.operationsTooling, true);
 });

@@ -8,6 +8,8 @@ export interface CommandConfirmationBinding {
   shell: ShellName;
   cwd: string;
   command: string;
+  executionContext: "foreground" | "background";
+  operation: string;
 }
 
 interface PendingConfirmation {
@@ -68,7 +70,9 @@ function sameBinding(
     safeEqual(left.workspaceId, right.workspaceId) &&
     left.shell === right.shell &&
     safeEqual(left.cwd, right.cwd) &&
-    safeEqual(left.command, right.command)
+    safeEqual(left.command, right.command) &&
+    left.executionContext === right.executionContext &&
+    safeEqual(left.operation, right.operation)
   );
 }
 

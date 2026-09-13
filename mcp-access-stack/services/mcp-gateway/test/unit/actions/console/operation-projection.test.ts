@@ -99,9 +99,9 @@ describe("GPT Action console operation projection", () => {
     expect(operationLabel("inspecionarGitDoEspacoDeTrabalho")).toBe("Inspecionar Git");
     expect(
       operationCompletionLabel(
-        "executarPowerShellNoEspacoDeTrabalho",
+        "executarComandoNoEspacoDeTrabalho",
         { status: "confirmation_required" },
       ),
-    ).toBe("Executar PowerShell aguardando confirmação");
+    ).toBe("Executar comando aguardando confirmação");
   });
 });

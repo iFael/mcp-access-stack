@@ -1,9 +1,11 @@
 import type { EdgeRuntimeTelemetryV1 } from "./connector-telemetry.js";
+import { EXPECTED_MCP_CONTRACT_REVISION } from "./contract-compatibility.js";
 
 export interface EdgeSessionHealth {
   controlPlaneReady: boolean;
   executionPlaneReady: boolean;
   connectorReady: boolean;
+  contractCompatible: boolean;
   runtimeTelemetry?: EdgeRuntimeTelemetryV1;
 }
 
@@ -33,6 +35,8 @@ export function createEdgeHealthStatus(
     controlPlaneReady: boolean;
     executionPlaneReady: boolean;
     connectorReady: boolean;
+    contractCompatible: boolean;
+    expectedContractRevision: string;
     runtime?: PublicEdgeRuntimeHealth;
   };
 } {
@@ -47,6 +51,8 @@ export function createEdgeHealthStatus(
       controlPlaneReady,
       executionPlaneReady,
       connectorReady: session.connectorReady,
+      contractCompatible: session.contractCompatible,
+      expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
       ...(session.runtimeTelemetry === undefined
         ? {}
         : { runtime: toPublicRuntimeHealth(session.runtimeTelemetry) }),

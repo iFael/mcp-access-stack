@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol/source";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import {
   createMcpControlPlane,
   type EdgeExecutionTransport,

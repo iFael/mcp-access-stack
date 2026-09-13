@@ -17,6 +17,7 @@ class FakeTransport {
     ["README.md", Buffer.from("line one\nline two\n", "utf8")],
   ]);
   commands: Array<{ shell: string; command: string; cwd: string }> = [];
+  execCommands: Array<{ executable: string; argv: string[]; cwd: string }> = [];
 
   async probeRoot() {
     return { fullPath: "C:\\workspace", kind: "directory" as const };
@@ -67,7 +68,8 @@ class FakeTransport {
     return { exitCode: 0, stdout: "ok\n", stderr: "", timedOut: false };
   }
 
-  async exec(): Promise<RemoteProcessResult> {
+  async exec(_root: string, cwd: string, executable: string, argv: string[]): Promise<RemoteProcessResult> {
+    this.execCommands.push({ executable, argv, cwd });
     return { exitCode: 0, stdout: "main\n", stderr: "", timedOut: false };
   }
 }
@@ -161,6 +163,58 @@ describe("SshWorkspaceExecutor", () => {
     expect(transport.commands).toHaveLength(1);
   });
 
+  it("routes main push to confirmation without probing the current branch", async () => {
+    const result = await executor.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command: "git push origin main",
+      timeoutMs: 30_000,
+    });
+
+    expect(result).toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining(["git push requires explicit user confirmation"]),
+    });
+    expect(transport.execCommands).toHaveLength(0);
+    expect(transport.commands).toHaveLength(0);
+  });
+
+  it("uses the same confirmation flow for risky remote background tasks", async () => {
+    const input = {
+      workspaceId: "test",
+      operation: "remote-cleanup",
+      shell: "powershell" as const,
+      command: "Remove-Item -LiteralPath .\\obsolete.txt -Force",
+      timeoutMs: 30_000,
+    };
+
+    const pending = await executor.startBackgroundTask(input);
+    expect(pending).toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining(["delete, remove or force-clean operation"]),
+    });
+    expect(transport.commands).toHaveLength(0);
+    if (pending.status !== "confirmation_required") throw new Error("expected confirmation");
+
+    const started = await executor.startBackgroundTask({
+      ...input,
+      confirmationId: pending.confirmationId,
+    });
+    expect(started).toMatchObject({
+      status: "background_task_started",
+      task: { operation: input.operation },
+    });
+    if (started.status !== "background_task_started") throw new Error("expected background task");
+    expect(JSON.stringify(started.task)).not.toContain("confirmationId");
+    expect(JSON.stringify(started.task)).not.toContain(pending.confirmationId);
+
+    await expect(
+      executor.startBackgroundTask({
+        ...input,
+        confirmationId: pending.confirmationId,
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+  });
   it("fails closed for every typed source-control port without touching the SSH transport", async () => {
     const methods = [
       "createBranch",
