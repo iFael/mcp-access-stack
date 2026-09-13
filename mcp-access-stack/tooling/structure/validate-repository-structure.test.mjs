@@ -386,3 +386,37 @@ test("parallelizes public release image publishers behind the images digest aggr
   assert.match(packageJob, /needs\.images\.outputs\.gateway-digest/u);
   assert.match(packageJob, /needs\.images\.outputs\.proxy-digest/u);
 });
+
+test("pins workflow actions to Node 24 compatible immutable SHAs", async () => {
+  const workflowUrls = [
+    "../../../.github/workflows/ci.yml",
+    "../../../.github/workflows/release.yml",
+    "../../../.github/workflows/windows-edge-candidate.yml",
+  ];
+  const workflows = await Promise.all(
+    workflowUrls.map((path) => readFile(new URL(path, import.meta.url), "utf8")),
+  );
+  const lines = workflows
+    .join("\n")
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .map((line) => line.trim());
+
+  const expectedPins = {
+    "docker/build-push-action": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7",
+    "docker/setup-buildx-action": "37fe631027851001ddb9b187196cc803df7f5f0e # v4",
+    "docker/login-action": "dbcb813823bdd20940b903addbd779551569679f # v4",
+    "actions/upload-artifact": "b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6",
+    "actions/download-artifact": "37930b1c2abaa49bbe596cd826c3c89aef350131 # v7",
+  };
+
+  for (const [action, pin] of Object.entries(expectedPins)) {
+    const uses = lines.filter((line) => line.startsWith(`uses: ${action}@`));
+    assert.ok(uses.length > 0, `${action} must be used by at least one workflow`);
+    assert.deepEqual(
+      [...new Set(uses)],
+      [`uses: ${action}@${pin}`],
+      `${action} must use only the Node 24 compatible immutable pin`,
+    );
+  }
+});
