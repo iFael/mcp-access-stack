@@ -108,11 +108,20 @@ test("uses one worktree-safe Jest runner instead of hardcoded node_modules paths
   assert.match(runner, /"bin", "jest\.js"/u);
 });
 
-test("makes Wrangler build edge-protocol before bundling the Edge Gateway", async () => {
+test("makes Wrangler build edge-protocol from the repository root", async () => {
   const wrangler = await readJson("services/mcp-edge-gateway/wrangler.jsonc");
+  const edgePackage = await readJson("services/mcp-edge-gateway/package.json");
   assert.equal(
     wrangler.build?.command,
     "npm run build --workspace @mcp-access-stack/edge-protocol",
   );
-  assert.equal(wrangler.build?.cwd, "../..");
+  assert.equal(wrangler.build?.cwd, undefined);
+  for (const scriptName of ["check", "deploy", "dev"]) {
+    assert.match(edgePackage.scripts[scriptName], /wrangler/u);
+    assert.match(edgePackage.scripts[scriptName], /--cwd \.\.\/\.\./u);
+    assert.match(
+      edgePackage.scripts[scriptName],
+      /--config services\/mcp-edge-gateway\/wrangler\.jsonc/u,
+    );
+  }
 });
