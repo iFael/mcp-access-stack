@@ -72,25 +72,55 @@ function Get-McpWindowsScheduledTaskOwnerSddl {
     }
 
     $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+    $fullAccessMask = 0x1f01ff
+    $inheritedFullAccess = $false
+    for ($index = 0; $index -lt $descriptor.DiscretionaryAcl.Count; $index++) {
+        $ace = $descriptor.DiscretionaryAcl[$index]
+        if ($ace -is [Security.AccessControl.QualifiedAce] -and
+            [string]$ace.SecurityIdentifier.Value -eq $sidValue -and
+            $ace.AceQualifier -eq [Security.AccessControl.AceQualifier]::AccessAllowed -and
+            0 -ne ([int]$ace.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited) -and
+            ([int]$ace.AccessMask -band $fullAccessMask) -eq $fullAccessMask) {
+            $inheritedFullAccess = $true
+            break
+        }
+    }
+
     for ($index = $descriptor.DiscretionaryAcl.Count - 1; $index -ge 0; $index--) {
         $ace = $descriptor.DiscretionaryAcl[$index]
-        if ($ace -is [Security.AccessControl.KnownAce] -and
-            [string]$ace.SecurityIdentifier.Value -eq $sidValue) {
+        if ($ace -isnot [Security.AccessControl.QualifiedAce] -or
+            [string]$ace.SecurityIdentifier.Value -ne $sidValue -or
+            $ace.AceQualifier -ne [Security.AccessControl.AceQualifier]::AccessAllowed -or
+            0 -ne ([int]$ace.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited)) {
+            continue
+        }
+
+        if (-not $inheritedFullAccess -or
+            (([int]$ace.AccessMask -band $fullAccessMask) -eq $fullAccessMask)) {
             $descriptor.DiscretionaryAcl.RemoveAce($index)
         }
     }
 
-    $ownerAce = [Security.AccessControl.CommonAce]::new(
-        [Security.AccessControl.AceFlags]::None,
-        [Security.AccessControl.AceQualifier]::AccessAllowed,
-        0x1f01ff,
-        $sid,
-        $false,
-        $null
-    )
-    $descriptor.DiscretionaryAcl.InsertAce($descriptor.DiscretionaryAcl.Count, $ownerAce)
-    $sections = [Security.AccessControl.AccessControlSections]::Access
-    return $descriptor.GetSddlForm($sections)
+    if (-not $inheritedFullAccess) {
+        $ownerAce = [Security.AccessControl.CommonAce]::new(
+            [Security.AccessControl.AceFlags]::None,
+            [Security.AccessControl.AceQualifier]::AccessAllowed,
+            $fullAccessMask,
+            $sid,
+            $false,
+            $null
+        )
+        $insertIndex = $descriptor.DiscretionaryAcl.Count
+        for ($index = 0; $index -lt $descriptor.DiscretionaryAcl.Count; $index++) {
+            if (0 -ne ([int]$descriptor.DiscretionaryAcl[$index].AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited)) {
+                $insertIndex = $index
+                break
+            }
+        }
+        $descriptor.DiscretionaryAcl.InsertAce($insertIndex, $ownerAce)
+    }
+
+    return $descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::Access)
 }
 
 function Set-McpWindowsScheduledTaskOwnerAccess {
@@ -107,10 +137,14 @@ function Set-McpWindowsScheduledTaskOwnerAccess {
         $folder = $service.GetFolder('\')
         $registeredTask = $folder.GetTask($TaskName)
         $currentSddl = [string]$registeredTask.GetSecurityDescriptor(7)
+        $currentDescriptor = [Security.AccessControl.RawSecurityDescriptor]::new($currentSddl)
+        $currentDaclSddl = $currentDescriptor.GetSddlForm(
+            [Security.AccessControl.AccessControlSections]::Access
+        )
         $targetSddl = Get-McpWindowsScheduledTaskOwnerSddl `
             -CurrentSddl $currentSddl `
             -UserId $UserId
-        $changed = -not $currentSddl.Equals($targetSddl, [StringComparison]::Ordinal)
+        $changed = -not $currentDaclSddl.Equals($targetSddl, [StringComparison]::Ordinal)
         if ($changed) {
             $registeredTask.SetSecurityDescriptor($targetSddl, 0x10)
         }
@@ -121,15 +155,26 @@ function Set-McpWindowsScheduledTaskOwnerAccess {
         $fullAccess = $false
         for ($index = 0; $index -lt $verified.DiscretionaryAcl.Count; $index++) {
             $ace = $verified.DiscretionaryAcl[$index]
-            if ($ace -is [Security.AccessControl.KnownAce] -and
+            if ($ace -is [Security.AccessControl.QualifiedAce] -and
                 [string]$ace.SecurityIdentifier.Value -eq $sidValue -and
-                [int]$ace.AccessMask -eq 0x1f01ff) {
+                $ace.AceQualifier -eq [Security.AccessControl.AceQualifier]::AccessAllowed -and
+                ([int]$ace.AccessMask -band 0x1f01ff) -eq 0x1f01ff) {
                 $fullAccess = $true
                 break
             }
         }
         if (-not $fullAccess) {
             throw "Scheduled Task owner access was not persisted: $TaskName"
+        }
+
+        $verifiedDaclSddl = $verified.GetSddlForm(
+            [Security.AccessControl.AccessControlSections]::Access
+        )
+        $verifiedTargetSddl = Get-McpWindowsScheduledTaskOwnerSddl `
+            -CurrentSddl $verifiedSddl `
+            -UserId $UserId
+        if (-not $verifiedDaclSddl.Equals($verifiedTargetSddl, [StringComparison]::Ordinal)) {
+            throw "Scheduled Task owner ACL is not canonical after persistence: $TaskName"
         }
         return [pscustomobject]@{ changed = $changed; ownerSid = $sidValue }
     }
