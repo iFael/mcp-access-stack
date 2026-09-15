@@ -2,11 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
 import {
-  MCP_FULL_TOOL_CATALOG_METADATA,
-  MCP_TOOL_CATALOG_CONTRACT_REVISION,
   MCP_TOOL_CATALOG_META_KEY,
-  createMcpToolDescriptorRevision,
-  type BrowserExecutor,
+  createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
 import type { AgentRelay } from "../../../src/relay/service.js";
 import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
@@ -39,7 +36,7 @@ const expectedLateTools = [
 ] as const;
 
 describe("MCP connector catalog synchronization", () => {
-  it("publishes one coherent versioned identity for initialize and tools/list", async () => {
+  it("publishes one descriptor-derived identity for initialize and tools/list", async () => {
     const server = createFullServer();
     const client = createClient("catalog-sync-test");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -56,6 +53,7 @@ describe("MCP connector catalog synchronization", () => {
       const catalogMeta = listed._meta?.[MCP_TOOL_CATALOG_META_KEY] as
         | Record<string, unknown>
         | undefined;
+      const contractRevision = createMcpToolContractRevision(listed.tools);
 
       expect(listed.tools).toHaveLength(60);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
@@ -65,30 +63,26 @@ describe("MCP connector catalog synchronization", () => {
         listed.tools.map((tool) => [tool.name, tool.description ?? ""]),
       );
       expect(descriptions.list_workspace_roots).toContain("workspaceKind=aggregate");
-      expect(descriptions.list_workspace_roots).toContain("root is already known");
       expect(descriptions.list_files).toContain("never call without a concrete root");
-      expect(descriptions.list_files).toContain("full logical path relative to the workspace root");
       expect(descriptions.run_command).toContain("Preferred general command runner");
       expect(descriptions.search_files).toContain("file contents");
       expect(descriptions.inspect_workspace_git).toContain("exact branch, status");
       expect(descriptions.get_workspace_context).toContain("project instruction files");
+      expect(catalogMeta).toMatchObject({
+        contractRevision,
+        toolCount: 60,
+      });
+      expect(catalogMeta).not.toHaveProperty("descriptorRevision");
       expect(serverVersion).toEqual({
         name: "vs-code-gpt",
-        version: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
+        version: catalogMeta?.serverVersion,
       });
       expect(capabilities).toMatchObject({
-        tools: { listChanged: false },
+        tools: { listChanged: true },
         experimental: {
-          [MCP_TOOL_CATALOG_META_KEY]: MCP_FULL_TOOL_CATALOG_METADATA,
+          [MCP_TOOL_CATALOG_META_KEY]: catalogMeta,
         },
       });
-      expect(catalogMeta).toMatchObject({
-        ...MCP_FULL_TOOL_CATALOG_METADATA,
-        descriptorRevision: MCP_TOOL_CATALOG_CONTRACT_REVISION,
-      });
-      expect(createMcpToolDescriptorRevision(listed.tools)).toBe(
-        MCP_TOOL_CATALOG_CONTRACT_REVISION,
-      );
       expect(listedAgain.tools).toEqual(listed.tools);
       expect(listedAgain._meta?.[MCP_TOOL_CATALOG_META_KEY]).toEqual(
         listed._meta?.[MCP_TOOL_CATALOG_META_KEY],
@@ -99,33 +93,7 @@ describe("MCP connector catalog synchronization", () => {
     }
   });
 
-  it("publishes a different server identity when the available tool set is reduced", async () => {
-    const server = createMcpServer({ workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay), sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay) });
-    const client = createClient("workspace-only-catalog-test");
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-    try {
-      await Promise.all([
-        server.connect(serverTransport),
-        client.connect(clientTransport),
-      ]);
-      const listed = await client.listTools();
-      const catalogMeta = listed._meta?.[MCP_TOOL_CATALOG_META_KEY] as
-        | Record<string, unknown>
-        | undefined;
-
-      expect(listed.tools).toHaveLength(27);
-      expect(client.getServerVersion()?.version).not.toBe(
-        MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
-      );
-      expect(catalogMeta).toMatchObject({ toolCount: 27 });
-    } finally {
-      await client.close().catch(() => undefined);
-      await server.close().catch(() => undefined);
-    }
-  });
-
-  it("fails closed when a registered tool disappears under the published identity", async () => {
+  it("fails closed when a registered tool disappears after server construction", async () => {
     const server = createFullServer();
     const internals = server as unknown as {
       _registeredTools: Record<string, unknown>;
@@ -140,7 +108,7 @@ describe("MCP connector catalog synchronization", () => {
         client.connect(clientTransport),
       ]);
       await expect(client.listTools()).rejects.toThrow(
-        /catalog diverged from the server initialization identity/u,
+        /descriptors diverged from the server construction identity/u,
       );
     } finally {
       await client.close().catch(() => undefined);
@@ -148,7 +116,7 @@ describe("MCP connector catalog synchronization", () => {
     }
   });
 
-  it("fails closed when a full-catalog descriptor changes without a new contract revision", async () => {
+  it("fails closed when a registered descriptor changes after server construction", async () => {
     const server = createFullServer();
     const internals = server as unknown as {
       _registeredTools: Record<string, { description?: string }>;
@@ -157,33 +125,6 @@ describe("MCP connector catalog synchronization", () => {
     if (!statusTool) throw new Error("Expected browser_status registration.");
     statusTool.description = `${statusTool.description ?? ""} drift`;
     const client = createClient("catalog-descriptor-drift-test");
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-    try {
-      await Promise.all([
-        server.connect(serverTransport),
-        client.connect(clientTransport),
-      ]);
-      await expect(client.listTools()).rejects.toThrow(
-        /descriptors changed without updating the catalog contract revision/u,
-      );
-    } finally {
-      await client.close().catch(() => undefined);
-      await server.close().catch(() => undefined);
-    }
-  });
-  it("fails closed when a reduced-catalog descriptor changes after server construction", async () => {
-    const server = createMcpServer({
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-    });
-    const internals = server as unknown as {
-      _registeredTools: Record<string, { description?: string }>;
-    };
-    const listWorkspaces = internals._registeredTools.list_workspaces;
-    if (!listWorkspaces) throw new Error("Expected list_workspaces registration.");
-    listWorkspaces.description = `${listWorkspaces.description ?? ""} drift`;
-    const client = createClient("reduced-catalog-descriptor-drift-test");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
     try {
@@ -227,6 +168,9 @@ describe("MCP server instance catalog continuity", () => {
       const secondServerVersion = secondClient.getServerVersion();
       const secondCapabilities = secondClient.getServerCapabilities();
       const names = secondList.tools.map((tool) => tool.name);
+      const metadata = secondList._meta?.[MCP_TOOL_CATALOG_META_KEY] as
+        | Record<string, unknown>
+        | undefined;
 
       expect(secondList.tools).toEqual(firstList.tools);
       expect(secondList._meta?.[MCP_TOOL_CATALOG_META_KEY]).toEqual(
@@ -236,8 +180,8 @@ describe("MCP server instance catalog continuity", () => {
       expect(secondCapabilities).toEqual(firstCapabilities);
       expect(names).toHaveLength(60);
       expect(new Set(names).size).toBe(60);
-      expect(createMcpToolDescriptorRevision(secondList.tools)).toBe(
-        MCP_TOOL_CATALOG_CONTRACT_REVISION,
+      expect(metadata?.contractRevision).toBe(
+        createMcpToolContractRevision(secondList.tools),
       );
     } finally {
       await secondClient.close().catch(() => undefined);
@@ -245,11 +189,12 @@ describe("MCP server instance catalog continuity", () => {
     }
   });
 });
+
 function createFullServer() {
+  const executor = new RelayWorkspaceExecutor({} as AgentRelay);
   return createMcpServer({
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-    browser: {} as BrowserExecutor,
+    workspaceExecutor: executor,
+    sourceControlExecutor: executor,
   });
 }
 

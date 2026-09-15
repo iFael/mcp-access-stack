@@ -1,8 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
-import type { SourceControlExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
-import { MCP_TOOL_CATALOG_CONTRACT_REVISION, MCP_TOOL_CATALOG_META_KEY } from "@vs-code-gpt/shared";
+import {
+  MCP_TOOL_CATALOG_META_KEY,
+  createMcpToolContractRevision,
+  type SourceControlExecutor,
+  type WorkspaceExecutor,
+} from "@vs-code-gpt/shared";
 import { loadGatewayConfig } from "../../mcp-gateway/src/config.js";
 import { createMcpServer } from "../../mcp-gateway/src/mcp/server.js";
 import {
@@ -48,7 +52,9 @@ describe("Edge MCP generated manifest parity", () => {
       expect(catalogMetadata).toBeDefined();
       expect(canonicalize(EDGE_MCP_TOOL_MANIFEST)).toEqual(canonicalize(listed.tools));
       expect(canonicalize(EDGE_MCP_CATALOG_METADATA)).toEqual(canonicalize(catalogMetadata));
-      expect(EDGE_MCP_CATALOG_METADATA.contractRevision).toBe(MCP_TOOL_CATALOG_CONTRACT_REVISION);
+      expect(EDGE_MCP_CATALOG_METADATA.contractRevision).toBe(
+        createMcpToolContractRevision(listed.tools),
+      );
       expect(EDGE_MCP_SERVER_IDENTITY).toEqual(identity);
 
       const scopes = new Set(

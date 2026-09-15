@@ -1,19 +1,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  BROWSER_TOOL_NAMES,
+  AppError,
+  MCP_SERVER_BASE_VERSION,
   MCP_SERVER_NAME,
   MCP_TOOL_CATALOG_META_KEY,
-  WORKSPACE_TOOL_NAMES,
-  createMcpToolCatalogMetadata,
   registerBrowserTools,
   registerSourceControlTools,
   registerWorkspaceTools,
   type BrowserExecutor,
+  type McpToolCatalogMetadata,
   type SourceControlExecutor,
   type WorkspaceExecutor,
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
+
+const catalogMetadataByServer = new WeakMap<McpServer, McpToolCatalogMetadata>();
 
 export interface McpServerAuthOptions {
   requiredScope: string;
@@ -29,12 +31,15 @@ export interface McpServerOptions {
 }
 
 export function createMcpServer(options: McpServerOptions): McpServer {
-  const catalogNames = options.browser === undefined
-    ? WORKSPACE_TOOL_NAMES
-    : [...WORKSPACE_TOOL_NAMES, ...BROWSER_TOOL_NAMES];
-  const catalog = createMcpToolCatalogMetadata(catalogNames);
+  const catalog: McpToolCatalogMetadata = {
+    contractRevision: "",
+    toolSetRevision: "",
+    toolCount: 0,
+    serverVersion: MCP_SERVER_BASE_VERSION,
+  };
+  const serverInfo = { name: MCP_SERVER_NAME, version: MCP_SERVER_BASE_VERSION };
   const server = new McpServer(
-    { name: MCP_SERVER_NAME, version: catalog.serverVersion },
+    serverInfo,
     {
       capabilities: {
         tools: {},
@@ -64,19 +69,36 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       : { operationContextFactory: options.operationContextFactory }),
   });
 
-  if (options.browser) {
-    registerBrowserTools(server, options.browser, {
-      ...(options.auth === undefined ? {} : { auth: options.auth }),
-      securitySchemes,
-      workspaceExecutor: options.workspaceExecutor,
-      ...(options.operationContextFactory === undefined
-        ? {}
-        : { operationContextFactory: options.operationContextFactory }),
-    });
-  }
+  registerBrowserTools(server, options.browser ?? unavailableBrowserExecutor(), {
+    ...(options.auth === undefined ? {} : { auth: options.auth }),
+    securitySchemes,
+    workspaceExecutor: options.workspaceExecutor,
+    ...(options.operationContextFactory === undefined
+      ? {}
+      : { operationContextFactory: options.operationContextFactory }),
+  });
 
-  server.server.registerCapabilities({ tools: { listChanged: false } });
-
-  installChatGptToolsListCompatibility(server, securitySchemes, catalog);
+  const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);
+  Object.assign(catalog, finalizedCatalog);
+  serverInfo.version = finalizedCatalog.serverVersion;
+  catalogMetadataByServer.set(server, Object.freeze({ ...finalizedCatalog }));
+  server.server.registerCapabilities({ tools: { listChanged: true } });
   return server;
+}
+
+export function getMcpServerCatalogMetadata(server: McpServer): McpToolCatalogMetadata {
+  const metadata = catalogMetadataByServer.get(server);
+  if (!metadata) {
+    throw new Error("MCP server catalog identity is unavailable.");
+  }
+  return metadata;
+}
+
+function unavailableBrowserExecutor(): BrowserExecutor {
+  const unavailable = async (): Promise<never> => {
+    throw new AppError("AGENT_UNAVAILABLE", "Browser worker unavailable.");
+  };
+  return new Proxy({} as BrowserExecutor, {
+    get: () => unavailable,
+  });
 }

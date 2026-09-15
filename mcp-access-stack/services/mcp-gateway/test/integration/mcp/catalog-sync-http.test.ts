@@ -1,8 +1,8 @@
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "@jest/globals";
 import {
-  MCP_FULL_TOOL_CATALOG_METADATA,
   MCP_TOOL_CATALOG_META_KEY,
+  createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "../../../src/app.js";
 import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
@@ -23,7 +23,7 @@ const lateToolNames = [
 ] as const;
 
 describe("stateless MCP catalog identity", () => {
-  it("keeps initialize and tools/list on the same catalog revision over separate requests", async () => {
+  it("keeps initialize and tools/list on the same descriptor-derived revision over separate requests", async () => {
     const gateway = createGatewayApplication(
       makeGatewayConfig({
         browserWorker: {
@@ -59,24 +59,28 @@ describe("stateless MCP catalog identity", () => {
       const serverInfo = initializeResult.serverInfo as Record<string, unknown>;
       const capabilities = initializeResult.capabilities as Record<string, unknown>;
       const experimental = capabilities.experimental as Record<string, unknown>;
-      const initializeCatalog = experimental[MCP_TOOL_CATALOG_META_KEY];
+      const initializeCatalog = experimental[MCP_TOOL_CATALOG_META_KEY] as Record<string, unknown>;
       const listResult = listed.result as Record<string, unknown>;
-      const tools = listResult.tools as Array<Record<string, unknown>>;
+      const tools = listResult.tools as Array<{ name: string }>;
       const listMeta = listResult._meta as Record<string, unknown>;
       const listCatalog = listMeta[MCP_TOOL_CATALOG_META_KEY] as Record<string, unknown>;
+      const contractRevision = createMcpToolContractRevision(tools);
 
-      expect(serverInfo).toEqual({
-        name: "vs-code-gpt",
-        version: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
-      });
-      expect(capabilities).toMatchObject({ tools: { listChanged: false } });
-      expect(initializeCatalog).toEqual(MCP_FULL_TOOL_CATALOG_METADATA);
+      expect(capabilities).toMatchObject({ tools: { listChanged: true } });
       expect(tools).toHaveLength(60);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );
-      expect(listCatalog).toMatchObject({ ...MCP_FULL_TOOL_CATALOG_METADATA });
-      expect(listCatalog.serverVersion).toBe(serverInfo.version);
+      expect(initializeCatalog).toEqual(listCatalog);
+      expect(listCatalog).toMatchObject({
+        contractRevision,
+        toolCount: 60,
+      });
+      expect(listCatalog).not.toHaveProperty("descriptorRevision");
+      expect(serverInfo).toEqual({
+        name: "vs-code-gpt",
+        version: listCatalog.serverVersion,
+      });
     } finally {
       gateway.relay!.close();
       await http.close();

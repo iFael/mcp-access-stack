@@ -3,11 +3,8 @@ import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-comp
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_FULL_TOOL_CATALOG_METADATA,
-  MCP_TOOL_CATALOG_CONTRACT_REVISION,
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolCatalogMetadata,
-  createMcpToolDescriptorRevision,
   type McpToolCatalogMetadata,
 } from "@vs-code-gpt/shared";
 
@@ -32,23 +29,18 @@ interface RegisteredTool {
   _meta?: Record<string, unknown>;
 }
 
-interface PublishedTool extends Record<string, unknown> {
+export interface PublishedTool extends Record<string, unknown> {
   name: string;
 }
 
-/**
- * ChatGPT Apps SDK reads securitySchemes from the root of each tool descriptor.
- * The MCP TypeScript SDK currently keeps that metadata only in _meta.
- */
-export function installChatGptToolsListCompatibility(
+export function buildPublishedTools(
   server: McpServer,
   securitySchemes: readonly ToolSecurityScheme[],
-  expectedCatalog: McpToolCatalogMetadata,
-): void {
+): PublishedTool[] {
   const internals = server as unknown as {
     _registeredTools: Record<string, RegisteredTool>;
   };
-  const buildPublishedTools = (): PublishedTool[] => Object.entries(internals._registeredTools)
+  return Object.entries(internals._registeredTools)
     .filter(([, tool]) => tool.enabled)
     .map(([name, tool]): PublishedTool => {
       const definition: PublishedTool = {
@@ -66,51 +58,47 @@ export function installChatGptToolsListCompatibility(
       }
       return definition;
     });
-  const expectedDescriptorRevision = createMcpToolDescriptorRevision(buildPublishedTools());
+}
 
+export function createRegisteredMcpCatalogMetadata(
+  server: McpServer,
+  securitySchemes: readonly ToolSecurityScheme[],
+): McpToolCatalogMetadata {
+  return createMcpToolCatalogMetadata(buildPublishedTools(server, securitySchemes));
+}
+
+/**
+ * ChatGPT Apps SDK reads securitySchemes from the root of each tool descriptor.
+ * The MCP TypeScript SDK currently keeps that metadata only in _meta.
+ */
+export function installChatGptToolsListCompatibility(
+  server: McpServer,
+  securitySchemes: readonly ToolSecurityScheme[],
+  expectedCatalog = createRegisteredMcpCatalogMetadata(server, securitySchemes),
+): McpToolCatalogMetadata {
   server.server.setRequestHandler(ListToolsRequestSchema, () => {
-    const tools = buildPublishedTools();
-
-    const actualCatalog = createMcpToolCatalogMetadata(
-      tools.map((tool) => tool.name),
-    );
+    const tools = buildPublishedTools(server, securitySchemes);
+    const actualCatalog = createMcpToolCatalogMetadata(tools);
     if (
+      actualCatalog.contractRevision !== expectedCatalog.contractRevision ||
+      actualCatalog.toolSetRevision !== expectedCatalog.toolSetRevision ||
       actualCatalog.toolCount !== expectedCatalog.toolCount ||
-      actualCatalog.toolSetRevision !== expectedCatalog.toolSetRevision
+      actualCatalog.serverVersion !== expectedCatalog.serverVersion
     ) {
       throw new Error(
-        "Registered MCP tool catalog diverged from the server initialization identity.",
-      );
-    }
-
-    const descriptorRevision = createMcpToolDescriptorRevision(tools);
-    const isFullCatalog =
-      actualCatalog.toolCount === MCP_FULL_TOOL_CATALOG_METADATA.toolCount &&
-      actualCatalog.toolSetRevision === MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision;
-    if (
-      isFullCatalog &&
-      descriptorRevision !== MCP_TOOL_CATALOG_CONTRACT_REVISION
-    ) {
-      throw new Error(
-        "MCP tool descriptors changed without updating the catalog contract revision.",
-      );
-    }
-    if (descriptorRevision !== expectedDescriptorRevision) {
-      throw new Error(
-        "MCP tool descriptors diverged from the server construction identity.",
+        "Registered MCP tool descriptors diverged from the server construction identity.",
       );
     }
 
     return {
       tools,
       _meta: {
-        [MCP_TOOL_CATALOG_META_KEY]: {
-          ...actualCatalog,
-          descriptorRevision,
-        },
+        [MCP_TOOL_CATALOG_META_KEY]: actualCatalog,
       },
     };
   });
+
+  return expectedCatalog;
 }
 
 function toInputJsonSchema(schema: unknown): unknown {

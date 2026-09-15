@@ -7,9 +7,6 @@ import {
 
 export const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 
-export const MCP_TOOL_CATALOG_CONTRACT_REVISION =
-  "7cda1b4de414d8abb2073da552a663e689759b8dc8a56a7c51d1594b856d6a36";
-
 export const MCP_FULL_TOOL_CATALOG_NAMES = [
   ...WORKSPACE_TOOL_NAMES,
   ...BROWSER_TOOL_NAMES,
@@ -40,7 +37,7 @@ export function createMcpToolSetRevision(names: readonly string[]): string {
     .digest("hex");
 }
 
-export function createMcpToolDescriptorRevision(
+export function createMcpToolContractRevision(
   tools: readonly McpToolDescriptorFingerprintInput[],
 ): string {
   const projected = tools
@@ -56,30 +53,31 @@ export function createMcpToolDescriptorRevision(
     .sort((left, right) => compareText(left.name, right.name));
   const canonical = JSON.stringify(canonicalize(projected));
   return createHash("sha256")
-    .update("mcp-tool-descriptor-v1\0", "utf8")
+    .update("mcp-tool-contract-v1\0", "utf8")
     .update(canonical, "utf8")
     .digest("hex");
 }
 
-export function createMcpServerVersion(names: readonly string[]): string {
-  const toolSetRevision = createMcpToolSetRevision(names);
-  return `${MCP_SERVER_BASE_VERSION}-catalog.c${MCP_TOOL_CATALOG_CONTRACT_REVISION.slice(0, 12)}.s${toolSetRevision.slice(0, 12)}`;
+export function createMcpServerVersion(
+  tools: readonly McpToolDescriptorFingerprintInput[],
+): string {
+  const contractRevision = createMcpToolContractRevision(tools);
+  const toolSetRevision = createMcpToolSetRevision(tools.map((tool) => tool.name));
+  return `${MCP_SERVER_BASE_VERSION}-catalog.c${contractRevision.slice(0, 12)}.s${toolSetRevision.slice(0, 12)}`;
 }
 
 export function createMcpToolCatalogMetadata(
-  names: readonly string[],
+  tools: readonly McpToolDescriptorFingerprintInput[],
 ): McpToolCatalogMetadata {
+  const contractRevision = createMcpToolContractRevision(tools);
+  const names = tools.map((tool) => tool.name);
   return {
-    contractRevision: MCP_TOOL_CATALOG_CONTRACT_REVISION,
+    contractRevision,
     toolSetRevision: createMcpToolSetRevision(names),
     toolCount: new Set(names).size,
-    serverVersion: createMcpServerVersion(names),
+    serverVersion: createMcpServerVersion(tools),
   };
 }
-
-export const MCP_FULL_TOOL_CATALOG_METADATA = createMcpToolCatalogMetadata(
-  MCP_FULL_TOOL_CATALOG_NAMES,
-);
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);

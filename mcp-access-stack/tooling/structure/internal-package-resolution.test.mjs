@@ -122,20 +122,21 @@ test("uses one worktree-safe Jest runner instead of hardcoded node_modules paths
   assert.match(runner, /"bin", "jest\.js"/u);
 });
 
-test("makes Wrangler build edge-protocol from the repository root", async () => {
+test("builds edge-protocol before invoking Wrangler without nested custom builds", async () => {
   const wrangler = await readJson("services/mcp-edge-gateway/wrangler.jsonc");
   const edgePackage = await readJson("services/mcp-edge-gateway/package.json");
-  assert.equal(
-    wrangler.build?.command,
-    "npm run build --workspace @mcp-access-stack/edge-protocol",
-  );
-  assert.equal(wrangler.build?.cwd, undefined);
+  const edgeBuild = "npm run build --workspace @mcp-access-stack/edge-protocol";
+
+  assert.equal(wrangler.build, undefined, "Wrangler must not launch nested npm builds");
   for (const scriptName of ["check", "deploy", "dev"]) {
-    assert.match(edgePackage.scripts[scriptName], /wrangler/u);
-    assert.match(edgePackage.scripts[scriptName], /--cwd \.\.\/\.\./u);
-    assert.match(
-      edgePackage.scripts[scriptName],
-      /--config services\/mcp-edge-gateway\/wrangler\.jsonc/u,
-    );
+    const script = edgePackage.scripts[scriptName];
+    assert.equal(typeof script, "string");
+    const edgeBuildIndex = script.indexOf(edgeBuild);
+    const wranglerIndex = script.indexOf("wrangler");
+    assert.notEqual(edgeBuildIndex, -1, `${scriptName} must build edge-protocol explicitly`);
+    assert.notEqual(wranglerIndex, -1, `${scriptName} must invoke Wrangler`);
+    assert.ok(edgeBuildIndex < wranglerIndex, `${scriptName} must build edge-protocol before Wrangler`);
+    assert.match(script, /--cwd \.\.\/\.\./u);
+    assert.match(script, /--config services\/mcp-edge-gateway\/wrangler\.jsonc/u);
   }
 });

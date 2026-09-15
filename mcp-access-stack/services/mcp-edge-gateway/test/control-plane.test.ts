@@ -36,7 +36,6 @@ const catalogMetadata = {
   toolSetRevision: "toolset-stable",
   toolCount: manifest.length,
   serverVersion: "0.0.0-control-plane-test",
-  descriptorRevision: "descriptor-test",
 } as const;
 
 const serverIdentity = {
@@ -103,7 +102,12 @@ describe("Edge MCP control plane availability", () => {
       capabilities: {},
       clientInfo: { name: "offline-client", version: "1.0.0" },
     })));
-    expect(initialized.status).toBe(200);
+    expect(initialized.status).toBe(200);    expect(getMcpResponseDiagnostic(initialized)).toEqual({
+      catalogContractRevision: catalogMetadata.contractRevision,
+      toolSetRevision: catalogMetadata.toolSetRevision,
+      toolCount: catalogMetadata.toolCount,
+      serverVersion: catalogMetadata.serverVersion,
+    });
     expect((await initialized.json()) as Record<string, unknown>).toMatchObject({
       jsonrpc: "2.0",
       id: 1,
@@ -116,7 +120,12 @@ describe("Edge MCP control plane availability", () => {
       result: { tools: Array<{ name: string }>; _meta?: Record<string, unknown> };
     };
     expect(beforeBody.result.tools.map((tool) => tool.name)).toEqual(manifest.map((tool) => tool.name));
-    expect(beforeBody.result._meta?.["io.github.ifael/mcp-tool-catalog"]).toEqual(catalogMetadata);
+    expect(beforeBody.result._meta?.["io.github.ifael/mcp-tool-catalog"]).toEqual(catalogMetadata);    expect(getMcpResponseDiagnostic(before)).toEqual({
+      catalogContractRevision: catalogMetadata.contractRevision,
+      toolSetRevision: catalogMetadata.toolSetRevision,
+      toolCount: catalogMetadata.toolCount,
+      serverVersion: catalogMetadata.serverVersion,
+    });
 
     const unavailable = await controlPlane.handle(mcpRequest(jsonRpc(3, "tools/call", {
       name: "list_workspaces",
@@ -166,7 +175,13 @@ describe("Edge MCP control plane availability", () => {
       result: { tools: Array<{ name: string }>; _meta?: Record<string, unknown> };
     };
     expect(afterBody.result.tools).toEqual(beforeBody.result.tools);
-    expect(afterBody.result._meta).toEqual(beforeBody.result._meta);
+    expect(afterBody.result._meta).toEqual(beforeBody.result._meta);    expect(getMcpResponseDiagnostic(after)).toEqual({
+      catalogContractRevision: catalogMetadata.contractRevision,
+      toolSetRevision: catalogMetadata.toolSetRevision,
+      toolCount: catalogMetadata.toolCount,
+      serverVersion: catalogMetadata.serverVersion,
+      connectionGeneration: 98,
+    });
 
     const executed = await controlPlane.handle(mcpRequest(jsonRpc(7, "tools/call", {
       name: "list_workspaces",

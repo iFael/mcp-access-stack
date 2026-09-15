@@ -2,9 +2,6 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "mcp-access-stack",
   "main": "src/index.ts",
-  "build": {
-    "command": "npm run build --workspace @mcp-access-stack/edge-protocol"
-  },
   "compatibility_date": "2026-08-17",
   "workers_dev": true,
   "vars": {

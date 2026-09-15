@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
-    "check": "tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc --dry-run --outdir services/mcp-edge-gateway/.wrangler/dry-run",
-    "deploy": "wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc",
-    "dev": "wrangler dev --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc"
+    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc --dry-run --outdir services/mcp-edge-gateway/.wrangler/dry-run",
+    "deploy": "npm run build --workspace @mcp-access-stack/edge-protocol && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc",
+    "dev": "npm run build --workspace @mcp-access-stack/edge-protocol && wrangler dev --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260817.1",
