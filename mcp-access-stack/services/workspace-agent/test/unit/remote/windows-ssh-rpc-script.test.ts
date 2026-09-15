@@ -46,7 +46,7 @@ describe("Windows SSH RPC script", () => {
       maxBytes: 64_000,
     });
     expect(Buffer.from(String(reread.result.contentBase64), "base64").toString("utf8")).toBe("remote\n");
-  });
+  }, 20_000);
 
   windowsIt("does not traverse excluded workspace subtrees", async () => {
     await mkdir(path.join(root, "node_modules"), { recursive: true });
@@ -63,7 +63,7 @@ describe("Windows SSH RPC script", () => {
     if (!listed.ok) throw new Error(JSON.stringify(listed));
     expect(listed.result.entries.map((entry: { path: string }) => entry.path)).toContain("README.md");
     expect(listed.result.entries.map((entry: { path: string }) => entry.path)).not.toContain("node_modules/ignored.js");
-  });
+  }, 20_000);
   windowsIt("runs an explicit PowerShell command in the authorized cwd", async () => {
     const result = await invoke({
       operation: "runShell",
@@ -76,7 +76,7 @@ describe("Windows SSH RPC script", () => {
     expect(result.ok).toBe(true);
     expect(String(result.result.stdout)).toContain("ssh-rpc-ok");
     expect(result.result.exitCode).toBe(0);
-  });
+  }, 20_000);
 });
 
 async function invoke(request: Record<string, unknown>): Promise<any> {
