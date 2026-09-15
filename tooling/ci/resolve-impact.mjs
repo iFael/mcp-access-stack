@@ -148,6 +148,7 @@ function expandDependencies(impact) {
     impact.windowsRuntime = true;
   }
   if (impact.mcpGateway) {
+    impact.edgeGateway = true;
     impact.windowsRuntime = true;
   }
 }
