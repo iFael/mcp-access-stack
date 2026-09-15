@@ -43,9 +43,18 @@ test("shared mcp-core changes fan out to known consumers", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.browserWorker, true);
   assert.equal(result.windowsRuntime, true);
-  assert.equal(result.edgeGateway, false);
+  assert.equal(result.edgeGateway, true);
   assert.equal(result.rootBroad, false);
   assert.equal(result.docsOnly, false);
+});
+
+test("mcp-gateway changes include the Edge parity consumer", () => {
+  const result = classifyChangedPaths([
+    "mcp-access-stack/services/mcp-gateway/src/mcp/server.ts",
+  ]);
+  assert.equal(result.mcpGateway, true);
+  assert.equal(result.edgeGateway, true);
+  assert.equal(result.windowsRuntime, true);
 });
 
 test("edge protocol changes fan out to both gateway consumers", () => {
