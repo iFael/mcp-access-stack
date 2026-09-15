@@ -11,6 +11,7 @@ export * from "./errors.js";
 export * from "./mcp-browser-tools.js";
 export * from "./mcp-operation-context.js";
 export * from "./mcp-tool-catalog.js";
+export * from "./mcp-tool-publication.js";
 export * from "./mcp-workspace-tools.js";
 export * from "./mutation-receipts.js";
 export * from "./policy.js";

@@ -3,6 +3,7 @@ import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-comp
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
+  getMcpPublishedInputSchema,
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolCatalogMetadata,
   type McpToolCatalogMetadata,
@@ -47,7 +48,9 @@ export function buildPublishedTools(
         name,
         title: tool.title,
         description: tool.description,
-        inputSchema: toInputJsonSchema(tool.inputSchema),
+        inputSchema: toInputJsonSchema(
+          getMcpPublishedInputSchema(tool, tool.inputSchema),
+        ),
         annotations: tool.annotations,
         execution: tool.execution,
         securitySchemes,
