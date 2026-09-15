@@ -1,5 +1,6 @@
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { describe, expect, it } from "@jest/globals";
+import { BROWSER_TOOL_NAMES, MCP_FULL_TOOL_CATALOG_NAMES } from "@vs-code-gpt/shared";
 import { AuthenticationError, type AccessTokenVerifier } from "../../../src/auth/jwt-verifier.js";
 import { createGatewayApplication } from "../../../src/app.js";
 import type { GatewayConfig } from "../../../src/config.js";
@@ -73,35 +74,7 @@ describe("gateway HTTP surface", () => {
       };
 
       expect(response.status).toBe(200);
-      expect(body.result.tools.map((tool) => tool.name)).toEqual([
-        "list_workspaces",
-        "list_workspace_roots",
-        "list_files",
-        "read_file",
-        "write_file",
-        "run_workspace_validation",
-        "run_command",
-        "start_background_task",
-        "get_background_task",
-        "wait_background_task",
-        "list_background_tasks",
-        "cancel_background_task",
-        "read_background_task_logs",
-        "search_files",
-        "inspect_workspace_git",
-        "get_workspace_context",
-        "git_create_branch",
-        "git_stage_paths",
-        "git_unstage_paths",
-        "git_commit",
-        "git_merge_branch",
-        "git_push_branch",
-        "github_get_repository",
-        "github_create_repository",
-        "github_get_pull_request",
-        "github_create_pull_request",
-        "github_merge_pull_request",
-      ]);
+      expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([...MCP_FULL_TOOL_CATALOG_NAMES].sort());
       const writeTool = body.result.tools.find((tool) => tool.name === "write_file");
       expect(writeTool?.annotations).toEqual({
         readOnlyHint: false,
@@ -111,6 +84,7 @@ describe("gateway HTTP surface", () => {
       });
       for (const tool of body.result.tools.filter(
         (entry) =>
+          !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
           ![
             "write_file",
             "run_command",
@@ -205,7 +179,7 @@ describe("gateway personal mode without oauth", () => {
       };
 
       expect(response.status).toBe(200);
-      expect(body.result.tools).toHaveLength(27);
+      expect(body.result.tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
       for (const tool of body.result.tools) {
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });

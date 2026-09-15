@@ -319,7 +319,7 @@ describe("registerWorkspaceTools", () => {
     const result = await registeredTools(server)["run_command"]!.handler(
       {
         workspaceId: "ws",
-        objective: "Executar uma operação qualificada",
+        objective: "Executar uma operaÃ§Ã£o qualificada",
         timeoutMs: 300_001,
       },
       { signal: new AbortController().signal },
@@ -330,6 +330,35 @@ describe("registerWorkspaceTools", () => {
     expect(executor.backgroundInputs).toEqual([]);
   });
 
+  it("accepts known stale optional fields when canonical command and shell are present", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_command"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["run_command"]!.handler(
+      {
+        workspaceId: "ws",
+        shell: "powershell",
+        command: "echo ok",
+        executionMode: "direct",
+        objective: "legacy helper text",
+        autoCorrection: "off",
+        preferredShell: "auto",
+        expectedOutcome: [{ kind: "exit_code", value: 0 }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ status: "executed" });
+    expect(executor.calls).toEqual(["runCommand"]);
+  });
   it("requires the canonical command and shell fields", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(

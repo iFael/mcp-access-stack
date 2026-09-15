@@ -5,9 +5,15 @@ export type SessionDiagnosticEvent = {
   httpMethod: string;
   status: number;
   mcpMethod?: string;
+  mcpRequestId?: string | number;
   mcpErrorCode?: number;
   mcpErrorDataCode?: string;
   protocolVersion?: string;
+  catalogContractRevision?: string;
+  toolSetRevision?: string;
+  toolCount?: number;
+  serverVersion?: string;
+  connectionGeneration?: number;
   oauthGrantType?: string;
   oauthError?: string;
   clientFingerprint?: string;
@@ -19,6 +25,11 @@ export type SessionDiagnosticEvent = {
 export type SessionDiagnosticResponseMetadata = {
   mcpErrorCode?: number;
   mcpErrorDataCode?: string;
+  catalogContractRevision?: string;
+  toolSetRevision?: string;
+  toolCount?: number;
+  serverVersion?: string;
+  connectionGeneration?: number;
 };
 export interface SessionDiagnosticStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -63,13 +74,15 @@ export async function classifySessionDiagnostic(
     if (request.method === "POST") {
       const body = await readJsonRecord(request);
       if (typeof body?.method === "string") event.mcpMethod = body.method;
+      if (typeof body?.id === "string" || typeof body?.id === "number") {
+        event.mcpRequestId = body.id;
+      }
       if (body?.method === "initialize") {
         const params = isRecord(body.params) ? body.params : undefined;
         if (typeof params?.protocolVersion === "string") event.protocolVersion = params.protocolVersion.slice(0, 64);
       }
     }
-    if (responseMetadata?.mcpErrorCode !== undefined) event.mcpErrorCode = responseMetadata.mcpErrorCode;
-    if (responseMetadata?.mcpErrorDataCode !== undefined) event.mcpErrorDataCode = responseMetadata.mcpErrorDataCode;
+    applyResponseMetadata(event, responseMetadata);
     return event;
   }
 
@@ -130,6 +143,24 @@ export async function readSessionDiagnostics(
   return current
     .filter((entry) => isDiagnosticEvent(entry) && entry.atMs >= nowMs - MAX_AGE_MS)
     .slice(-MAX_EVENTS);
+}
+
+function applyResponseMetadata(
+  event: SessionDiagnosticEvent,
+  metadata: SessionDiagnosticResponseMetadata | undefined,
+): void {
+  if (!metadata) return;
+  if (metadata.mcpErrorCode !== undefined) event.mcpErrorCode = metadata.mcpErrorCode;
+  if (metadata.mcpErrorDataCode !== undefined) event.mcpErrorDataCode = metadata.mcpErrorDataCode.slice(0, 64);
+  if (metadata.catalogContractRevision !== undefined) {
+    event.catalogContractRevision = metadata.catalogContractRevision.slice(0, 128);
+  }
+  if (metadata.toolSetRevision !== undefined) {
+    event.toolSetRevision = metadata.toolSetRevision.slice(0, 128);
+  }
+  if (metadata.toolCount !== undefined) event.toolCount = metadata.toolCount;
+  if (metadata.serverVersion !== undefined) event.serverVersion = metadata.serverVersion.slice(0, 200);
+  if (metadata.connectionGeneration !== undefined) event.connectionGeneration = metadata.connectionGeneration;
 }
 
 async function readJsonRecord(request: DiagnosticRequest): Promise<Record<string, unknown> | undefined> {

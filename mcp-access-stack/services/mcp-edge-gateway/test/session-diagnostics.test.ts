@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+﻿import { describe, expect, it } from "@jest/globals";
 import {
   appendSessionDiagnostic,
   classifySessionDiagnostic,
@@ -105,6 +105,37 @@ describe("session routing diagnostics", () => {
     }
   });
 
+  it("records catalog identity and connector generation for MCP discovery", async () => {
+    const event = await classifySessionDiagnostic(
+      new Request("https://edge.example/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "discover-42", method: "tools/list", params: {} }),
+      }),
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: "discover-42", result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      1_788_150_000_004,
+      {
+        catalogContractRevision: "a".repeat(64),
+        toolSetRevision: "b".repeat(64),
+        toolCount: 60,
+        serverVersion: "0.4.0-catalog.caaaaaaaaaaaa.sbbbbbbbbbbbb",
+        connectionGeneration: 24,
+      },
+    );
+
+    expect(event).toMatchObject({
+      mcpMethod: "tools/list",
+      mcpRequestId: "discover-42",
+      catalogContractRevision: "a".repeat(64),
+      toolSetRevision: "b".repeat(64),
+      toolCount: 60,
+      serverVersion: "0.4.0-catalog.caaaaaaaaaaaa.sbbbbbbbbbbbb",
+      connectionGeneration: 24,
+    });
+  });
   it("persists JSON-RPC tool failures even when HTTP status is 200", async () => {
     const event = await classifySessionDiagnostic(
       new Request("https://edge.example/mcp", {

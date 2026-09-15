@@ -231,6 +231,29 @@ if ($null -eq $runtimeTelemetry) {
     throw 'Authenticated session diagnostics response did not contain runtimeTelemetry.'
 }
 
+$sessionEvents = @(
+    @(Get-McpEvidenceOptionalProperty -InputObject $diagnostics -Name 'events') |
+        Select-Object -Last 32 |
+        ForEach-Object {
+            [ordered]@{
+                atMs = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'atMs'
+                route = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'route'
+                httpMethod = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'httpMethod'
+                status = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'status'
+                mcpMethod = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'mcpMethod'
+                mcpRequestId = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'mcpRequestId'
+                mcpErrorCode = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'mcpErrorCode'
+                mcpErrorDataCode = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'mcpErrorDataCode'
+                protocolVersion = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'protocolVersion'
+                catalogContractRevision = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'catalogContractRevision'
+                toolSetRevision = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'toolSetRevision'
+                toolCount = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'toolCount'
+                serverVersion = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'serverVersion'
+                connectionGeneration = Get-McpEvidenceOptionalProperty -InputObject $_ -Name 'connectionGeneration'
+            }
+        }
+)
+
 $now = [DateTimeOffset]::Now
 $argumentNames = @($taskArguments.Keys | Sort-Object)
 $evidence = [ordered]@{
@@ -278,6 +301,7 @@ $evidence = [ordered]@{
         connectorInstanceId = Get-McpEvidenceOptionalProperty -InputObject $runtimeTelemetry -Name 'connectorInstanceId'
         connectionGeneration = Get-McpEvidenceOptionalProperty -InputObject $runtimeTelemetry -Name 'connectionGeneration'
     }
+    sessionEvents = $sessionEvents
     catalog = [ordered]@{
         contractRevision = Get-McpEvidenceOptionalProperty -InputObject $runtimeTelemetry -Name 'catalogContractRevision'
         toolSetRevision = Get-McpEvidenceOptionalProperty -InputObject $runtimeTelemetry -Name 'toolSetRevision'
