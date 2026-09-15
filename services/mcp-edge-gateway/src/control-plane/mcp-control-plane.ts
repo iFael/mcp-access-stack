@@ -5,8 +5,13 @@ const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 const AGENT_UNAVAILABLE_ERROR_CODE = -32001;
 
 type EdgeMcpResponseDiagnostic = {
-  mcpErrorCode: number;
+  mcpErrorCode?: number;
   mcpErrorDataCode?: string;
+  catalogContractRevision?: string;
+  toolSetRevision?: string;
+  toolCount?: number;
+  serverVersion?: string;
+  connectionGeneration?: number;
 };
 
 const responseDiagnostics = new WeakMap<Response, EdgeMcpResponseDiagnostic>();
@@ -63,16 +68,18 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
 
       if (parsed.method === "initialize") {
         const requestedProtocolVersion = readProtocolVersion(parsed.params);
-        return jsonRpcResult(parsed.id, {
+        const response = jsonRpcResult(parsed.id, {
           protocolVersion: requestedProtocolVersion,
           capabilities: {
-            tools: { listChanged: false },
+            tools: { listChanged: true },
             experimental: {
               [MCP_TOOL_CATALOG_META_KEY]: options.catalogMetadata,
             },
           },
           serverInfo: options.serverIdentity,
         });
+        attachCatalogDiagnostic(response, options);
+        return response;
       }
 
       if (parsed.method === "ping") {
@@ -84,12 +91,14 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
       }
 
       if (parsed.method === "tools/list") {
-        return jsonRpcResult(parsed.id, {
+        const response = jsonRpcResult(parsed.id, {
           tools: options.manifest,
           _meta: {
             [MCP_TOOL_CATALOG_META_KEY]: options.catalogMetadata,
           },
         });
+        attachCatalogDiagnostic(response, options);
+        return response;
       }
 
       if (!options.execution.isReady()) {
@@ -148,6 +157,24 @@ export function createAgentUnavailableMcpResponse(body: unknown): Response {
     code: "AGENT_UNAVAILABLE",
   });
 }
+
+function attachCatalogDiagnostic(response: Response, options: EdgeMcpControlPlaneOptions): void {
+  const diagnostic: EdgeMcpResponseDiagnostic = {};
+  const contractRevision = options.catalogMetadata.contractRevision;
+  const toolSetRevision = options.catalogMetadata.toolSetRevision;
+  const toolCount = options.catalogMetadata.toolCount;
+  const serverVersion = options.catalogMetadata.serverVersion;
+  const connectionGeneration = options.execution.getGeneration();
+
+  if (typeof contractRevision === "string") diagnostic.catalogContractRevision = contractRevision;
+  if (typeof toolSetRevision === "string") diagnostic.toolSetRevision = toolSetRevision;
+  if (typeof toolCount === "number" && Number.isFinite(toolCount)) diagnostic.toolCount = toolCount;
+  if (typeof serverVersion === "string") diagnostic.serverVersion = serverVersion;
+  if (connectionGeneration !== null) diagnostic.connectionGeneration = connectionGeneration;
+
+  responseDiagnostics.set(response, diagnostic);
+}
+
 function jsonRpcResult(id: string | number | null, result: unknown): Response {
   return jsonResponse({ jsonrpc: "2.0", id, result });
 }
@@ -170,6 +197,7 @@ function jsonRpcError(
   });
   return response;
 }
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,

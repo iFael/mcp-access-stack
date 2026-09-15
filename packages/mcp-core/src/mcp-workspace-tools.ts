@@ -86,6 +86,20 @@ import {
 
 export const MCP_SERVER_NAME = "vs-code-gpt";
 export const MCP_SERVER_BASE_VERSION = "0.4.0";
+function normalizeRunCommandToolInput(input: unknown): unknown {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+  const value = input as Record<string, unknown>;
+  if (value.executionMode !== undefined && value.executionMode !== "direct") return input;
+  if (typeof value.command !== "string" || typeof value.shell !== "string") return input;
+
+  const normalized = { ...value };
+  delete normalized.executionMode;
+  delete normalized.objective;
+  delete normalized.autoCorrection;
+  delete normalized.preferredShell;
+  delete normalized.expectedOutcome;
+  return normalized;
+}
 
 const toolAnnotations = {
   readOnlyHint: true,
@@ -523,7 +537,7 @@ export function registerWorkspaceTools(
           return authError;
         }
         try {
-          const parsedInput = runCommandInputSchema.parse(input);
+          const parsedInput = runCommandInputSchema.parse(normalizeRunCommandToolInput(input));
           const structuredContent = runCommandResultSchema.parse(
             await withToolOperationContext(
               options.operationContextFactory,

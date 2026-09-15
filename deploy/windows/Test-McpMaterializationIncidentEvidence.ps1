@@ -82,6 +82,22 @@ $runtimeTelemetryFixture = [pscustomobject]@{
     successfulResponseCount = 11
 }
 
+$sessionEventsFixture = @(
+    [pscustomobject]@{
+        version = 1
+        atMs = 1788150000004
+        route = '/mcp'
+        httpMethod = 'POST'
+        status = 200
+        mcpMethod = 'tools/list'
+        mcpRequestId = 'discover-fixture'
+        catalogContractRevision = ('a' * 64)
+        toolSetRevision = ('b' * 64)
+        toolCount = 61
+        serverVersion = '1.1.0-beta.24-catalog.test'
+        connectionGeneration = 4
+    }
+)
 try {
     New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
     [IO.File]::WriteAllText($tokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
@@ -126,7 +142,7 @@ try {
             if ([string]$Headers.Authorization -ne "Bearer $connectorToken") {
                 throw 'Collector did not authenticate diagnostics from the connector token file.'
             }
-            return [pscustomobject]@{ version = 1; events = @(); runtimeTelemetry = $runtimeTelemetryFixture }
+            return [pscustomobject]@{ version = 1; events = $sessionEventsFixture; runtimeTelemetry = $runtimeTelemetryFixture }
         }
         throw "Unexpected URI: $Uri"
     }
@@ -158,6 +174,11 @@ try {
         requestCount = ([int]$evidence.runtimeTelemetry.relayedRequestCount -eq 12)
         successCount = ([int]$evidence.runtimeTelemetry.successfulResponseCount -eq 11)
         lastRequestId = ([string]$evidence.runtimeTelemetry.lastRequestId -eq 'request-fixture-id')
+        sessionEventCount = (@($evidence.sessionEvents).Count -eq 1)
+        sessionEventMethod = ([string]$evidence.sessionEvents[0].mcpMethod -eq 'tools/list')
+        sessionEventRequestId = ([string]$evidence.sessionEvents[0].mcpRequestId -eq 'discover-fixture')
+        sessionEventContract = ([string]$evidence.sessionEvents[0].catalogContractRevision -eq ('a' * 64))
+        sessionEventGeneration = ([int]$evidence.sessionEvents[0].connectionGeneration -eq 4)
     }
     $schemaFailures = @($checks.GetEnumerator() | Where-Object { -not [bool]$_.Value } | ForEach-Object { [string]$_.Key })
     if ($schemaFailures.Count -gt 0) {

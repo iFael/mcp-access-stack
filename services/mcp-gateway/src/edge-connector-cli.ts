@@ -8,10 +8,11 @@ import {
   InProcessWorkspaceExecutor,
   LocalAgent,
 } from "@vs-code-gpt/local-agent";
-import { AppError, MCP_FULL_TOOL_CATALOG_METADATA, asAppError } from "@vs-code-gpt/shared";
+import { AppError, asAppError } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { EdgeConnector } from "./edge/connector.js";
+import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
 
 interface ConnectorRuntimeConfig {
   edgeBaseUrl: URL;
@@ -43,6 +44,11 @@ async function main(): Promise<void> {
 
   const agent = await LocalAgent.create(runtime.policyPath);
   const workspaceExecutor = new InProcessWorkspaceExecutor(agent);
+  const identityServer = createMcpServer({
+    workspaceExecutor,
+    sourceControlExecutor: workspaceExecutor,
+  });
+  const catalogMetadata = getMcpServerCatalogMetadata(identityServer);
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor,
     sourceControlExecutor: workspaceExecutor,
@@ -64,10 +70,10 @@ async function main(): Promise<void> {
       version: 1,
       connectorInstanceId,
       processStartedAt,
-      catalogContractRevision: MCP_FULL_TOOL_CATALOG_METADATA.contractRevision,
-      toolSetRevision: MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,
-      toolCount: MCP_FULL_TOOL_CATALOG_METADATA.toolCount,
-      serverVersion: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
+      catalogContractRevision: catalogMetadata.contractRevision,
+      toolSetRevision: catalogMetadata.toolSetRevision,
+      toolCount: catalogMetadata.toolCount,
+      serverVersion: catalogMetadata.serverVersion,
       nodePid: process.pid,
       hostPid: process.ppid,
     },
@@ -90,10 +96,10 @@ async function main(): Promise<void> {
     event: "edge_connector_process_started",
     connectorInstanceId,
     processStartedAt,
-    catalogContractRevision: MCP_FULL_TOOL_CATALOG_METADATA.contractRevision,
-    toolSetRevision: MCP_FULL_TOOL_CATALOG_METADATA.toolSetRevision,
-    toolCount: MCP_FULL_TOOL_CATALOG_METADATA.toolCount,
-    serverVersion: MCP_FULL_TOOL_CATALOG_METADATA.serverVersion,
+    catalogContractRevision: catalogMetadata.contractRevision,
+    toolSetRevision: catalogMetadata.toolSetRevision,
+    toolCount: catalogMetadata.toolCount,
+    serverVersion: catalogMetadata.serverVersion,
     edgeOrigin: runtime.edgeBaseUrl.origin,
     authMode: gatewayConfig.authMode,
   });

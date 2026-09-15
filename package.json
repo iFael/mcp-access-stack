@@ -73,7 +73,7 @@
     "ci:main:node": "npm run test:node",
     "ci:main:workspace-agent": "npm run build --workspace @vs-code-gpt/shared && npm run build --workspace @vs-code-gpt/local-agent && npm run test:workspace-agent",
     "ci:main:gateway": "npm run build --workspace @vs-code-gpt/shared && npm run build --workspace @vs-code-gpt/local-agent && npm run build --workspace @mcp-access-stack/edge-protocol && npm run test:mcp-gateway && npm run typecheck && npm run build --workspace @vs-code-gpt/remote-mcp-gateway",
-    "ci:main:edge": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run test:mcp-edge-gateway && npm run check:edge",
+    "ci:main:edge": "npm run check:edge && npm run test:mcp-edge-gateway",
     "production:update": "pwsh -NoLogo -NoProfile -File deploy/windows/Update-McpAccessStack.ps1"
   },
   "engines": {
