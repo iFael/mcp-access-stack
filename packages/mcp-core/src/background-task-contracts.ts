@@ -105,6 +105,19 @@ export const startBackgroundTaskResultSchema = z.discriminatedUnion("status", [
 ]);
 export type StartBackgroundTaskResult = z.infer<typeof startBackgroundTaskResultSchema>;
 
+/** Object-shaped projection used only at the MCP SDK output-validation boundary. */
+export const startBackgroundTaskMcpResultSchema = z
+  .object({
+    status: z.enum(["background_task_started", "confirmation_required"]),
+    task: backgroundTaskRecordSchema.optional(),
+    shell: shellNameSchema.optional(),
+    cwd: z.string().optional(),
+    confirmationId: z.string().optional(),
+    expiresAt: z.iso.datetime().optional(),
+    reasons: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
 export const getBackgroundTaskInputSchema = z
   .object({
     workspaceId: workspaceIdSchema,
