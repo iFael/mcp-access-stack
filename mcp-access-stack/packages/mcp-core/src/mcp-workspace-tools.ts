@@ -13,6 +13,7 @@ import {
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   startBackgroundTaskInputSchema,
+  startBackgroundTaskMcpResultSchema,
   startBackgroundTaskResultSchema,
 } from "./background-task-contracts.js";
 import {
@@ -83,9 +84,23 @@ import {
   withToolOperationContext,
   type ToolOperationContextFactory,
 } from "./mcp-operation-context.js";
+import { setMcpPublishedInputSchema } from "./mcp-tool-publication.js";
 
 export const MCP_SERVER_NAME = "vs-code-gpt";
 export const MCP_SERVER_BASE_VERSION = "0.4.0";
+
+const runCommandTransportInputSchema = runCommandToolInputSchema
+  .extend({
+    objective: z.string().min(1).max(4_000).optional(),
+    executionMode: z.literal("direct").optional(),
+    autoCorrection: z.enum(["off", "safe"]).optional(),
+    preferredShell: z
+      .union([z.literal("auto"), directRunCommandInputSchema.shape.shell])
+      .optional(),
+    expectedOutcome: z.array(z.unknown()).max(20).optional(),
+  })
+  .strict();
+
 function normalizeRunCommandToolInput(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const value = input as Record<string, unknown>;
@@ -513,7 +528,7 @@ export function registerWorkspaceTools(
   }
 
   if (shouldInclude("run_command", include)) {
-    server.registerTool(
+    const registeredTool = server.registerTool(
       "run_command",
       {
         title: "Run command",
@@ -521,7 +536,7 @@ export function registerWorkspaceTools(
           "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. " +
           "Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. " +
           "Commands classified as potentially destructive return confirmation_required before execution.",
-        inputSchema: runCommandToolInputSchema,
+        inputSchema: runCommandTransportInputSchema,
         outputSchema: runCommandMcpResultSchema,
         annotations: {
           readOnlyHint: false,
@@ -555,6 +570,7 @@ export function registerWorkspaceTools(
         }
       },
     );
+    setMcpPublishedInputSchema(registeredTool, runCommandToolInputSchema);
   }
 
   if (shouldInclude("start_background_task", include)) {
@@ -565,7 +581,7 @@ export function registerWorkspaceTools(
         description:
           "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Active duplicate commands are deduplicated.",
         inputSchema: startBackgroundTaskInputSchema,
-        outputSchema: startBackgroundTaskResultSchema,
+        outputSchema: startBackgroundTaskMcpResultSchema,
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
