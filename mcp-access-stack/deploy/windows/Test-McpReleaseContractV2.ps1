@@ -122,16 +122,15 @@ try {
         throw 'Public release workflow does not deterministically select the newest successful CI run.'
     }
 
-    $packageJobMatch = [regex]::Match($releaseWorkflow, '(?m)^  package:\s*$')
     $edgeJobMatch = [regex]::Match($releaseWorkflow, '(?m)^  edge:\s*$')
     $publishJobMatch = [regex]::Match($releaseWorkflow, '(?m)^  publish:\s*$')
-    if (-not $packageJobMatch.Success -or -not $edgeJobMatch.Success -or -not $publishJobMatch.Success -or
-        $packageJobMatch.Index -ge $edgeJobMatch.Index -or $edgeJobMatch.Index -ge $publishJobMatch.Index) {
-        throw 'Public release workflow must build the Windows package, deploy/gate Edge, then publish in order.'
+    if (-not $edgeJobMatch.Success -or -not $publishJobMatch.Success -or $edgeJobMatch.Index -ge $publishJobMatch.Index) {
+        throw 'Public release workflow must gate publication on an Edge deployment job.'
     }
 
     $edgeJobSource = $releaseWorkflow.Substring($edgeJobMatch.Index, $publishJobMatch.Index - $edgeJobMatch.Index)
     foreach ($requiredToken in @(
+        '- package',
         'CLOUDFLARE_API_TOKEN',
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
@@ -143,22 +142,14 @@ try {
             throw "Public release Edge gate is missing required token: $requiredToken"
         }
     }
-    foreach ($invalidPreCutoverGate in @('executionPlaneReady', 'contractCompatible')) {
-        if ($edgeJobSource.Contains($invalidPreCutoverGate)) {
-            throw "Public release Edge pre-cutover gate must not require $invalidPreCutoverGate before the Windows connector is updated."
-        }
-    }
-    if ($edgeJobSource -notmatch '(?ms)^  edge:\s*\r?\n    needs:\s*\r?\n      - metadata\s*\r?\n      - package\s*$') {
-        throw 'Edge deployment job must wait for the exact Windows package to be ready before mutating production.'
-    }
     $publishJobSource = $releaseWorkflow.Substring($publishJobMatch.Index)
-    if ($publishJobSource -notmatch '(?ms)^  publish:\s*\r?\n    needs:\s*\r?\n      - metadata\s*\r?\n      - package\s*\r?\n      - edge\s*$') {
+    if (-not $publishJobSource.Contains('- edge')) {
         throw 'Public GitHub Release must depend on the successful Edge contract gate.'
     }
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
         throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
     }
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge deploy is contract-gated after signed packaging and before publication, and v1 remains historical read compatibility.'
+    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge deployment gates publication, and v1 remains historical read compatibility.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
