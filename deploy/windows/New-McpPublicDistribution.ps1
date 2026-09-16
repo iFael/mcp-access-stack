@@ -118,6 +118,8 @@ $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
     'deploy\windows\Install-McpAccessStack.ps1',
+    'deploy\windows\Start-McpAccessStackCutover.ps1',
+    'deploy\windows\Invoke-McpAccessStackCutoverBroker.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',
     'deploy\windows\WindowsExecutionNode.Common.ps1',
     'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
@@ -151,6 +153,9 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeOwnerOAuthBoo
 Copy-Item -LiteralPath $edgeOwnerOAuthBootstrapSource -Destination $edgeOwnerOAuthBootstrapTarget
 $edgeRecoveryReleaseFiles = @(
     'Repair-McpEdgeConnectorTask.ps1',
+    'Invoke-McpAccessStackCutoverBroker.ps1',
+    'Invoke-McpWindowsExecutionNodeCutover.ps1',
+    'Install-McpBrowserWorkerTask.ps1',
     'Install-McpEdgeConnectorTask.ps1',
     'PublicDistribution.Common.ps1',
     'WindowsExecutionNode.Common.ps1'

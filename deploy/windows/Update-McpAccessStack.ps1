@@ -127,7 +127,7 @@ try {
         candidatePrepared = $true
         alreadyPrepared = [bool]$stageResult.alreadyPrepared
         promoted = $false
-        nextAction = 'Run Install-McpAccessStack.ps1 with the environment token/configuration files to perform the Edge-only cutover and refresh runtime tasks.'
+        nextAction = 'Run Install-McpAccessStack.ps1 with the environment token/configuration files. It starts the detached Edge cutover broker and returns the resultPath used to observe completion.'
     } | ConvertTo-Json -Compress
 }
 finally {
