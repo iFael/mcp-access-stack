@@ -52,6 +52,8 @@ const REQUIRED_FILES = [
   "docs/architecture/EDGE_MCP_RUNTIME.md",
   "config/gpt-only-production.example.json",
   "deploy/windows/Install-McpAccessStack.ps1",
+  "deploy/windows/Start-McpAccessStackCutover.ps1",
+  "deploy/windows/Invoke-McpAccessStackCutoverBroker.ps1",
   "deploy/windows/Update-McpAccessStack.ps1",
   "services/browser-worker/server.ts",
   "jest.config.ts",

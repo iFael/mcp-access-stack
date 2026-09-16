@@ -103,6 +103,8 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'execution-node-manifest.json',
     'McpEdgeHost.exe',
     'Install-McpAccessStack.ps1',
+    'Start-McpAccessStackCutover.ps1',
+    'Invoke-McpAccessStackCutoverBroker.ps1',
     'Stage-McpWindowsExecutionNodeCandidate.ps1',
     'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Install-McpEdgeConnectorTask.ps1',
@@ -161,14 +163,19 @@ Assert-ContainsNone -Label 'Edge cutover' -Source $cutover -Tokens @(
 )
 
 $installer = Read-ProjectFile 'deploy\windows\Install-McpAccessStack.ps1'
-Assert-ContainsAll -Label 'Windows installer' -Source $installer -Tokens @(
+Assert-ContainsAll -Label 'Windows installer detached handover' -Source $installer -Tokens @(
     'Stage-McpWindowsExecutionNodeCandidate.ps1',
+    'Start-McpAccessStackCutover.ps1',
+    "status = 'handover-started'",
+    'handoverStarted = $true',
+    "ownershipMode = 'edge-only'"
+)
+Assert-ContainsNone -Label 'Windows installer detached handover' -Source $installer -Tokens @(
+    'Stop-McpScheduledTaskForReplacement',
+    'Stop-ScheduledTask -TaskName $edgeTaskName',
     'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Install-McpEdgeConnectorTask.ps1',
     'Install-McpBrowserWorkerTask.ps1',
-    "ownershipMode -ne 'edge-only'"
-)
-Assert-ContainsNone -Label 'Windows installer' -Source $installer -Tokens @(
     'Install-McpWindowsExecutionNodeCutoverTask.ps1',
     'Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
     'Request-McpWindowsExecutionNodeCutover.ps1',
@@ -177,19 +184,44 @@ Assert-ContainsNone -Label 'Windows installer' -Source $installer -Tokens @(
     'wsl.exe'
 )
 
-Assert-ContainsAll -Label 'Windows installer transactional task cutover' -Source $installer -Tokens @(
-    'Export-ScheduledTask',
+$handover = Read-ProjectFile 'deploy\windows\Start-McpAccessStackCutover.ps1'
+Assert-ContainsAll -Label 'Windows detached cutover handover' -Source $handover -Tokens @(
+    'Invoke-McpAccessStackCutoverBroker.ps1',
+    'access-stack-cutover-request.v1.json',
+    'Register-ScheduledTask',
+    'Start-ScheduledTask -TaskName $BrokerTaskName',
+    'ExpectedRequestSha256',
+    'handoverDelaySeconds = 3',
+    'Set-McpWindowsScheduledTaskOwnerAccess',
+    "'AllSigned'",
+    "status = 'started'",
+    'detached = $true'
+)
+Assert-ContainsNone -Label 'Windows detached cutover handover' -Source $handover -Tokens @(
+    'Stop-ScheduledTask -TaskName $EdgeTaskName',
+    'Invoke-McpWindowsExecutionNodeCutover.ps1'
+)
+
+$broker = Read-ProjectFile 'deploy\windows\Invoke-McpAccessStackCutoverBroker.ps1'
+Assert-ContainsAll -Label 'Windows detached cutover broker' -Source $broker -Tokens @(
     'Stop-McpScheduledTaskForReplacement',
+    'Restore-McpScheduledTaskSnapshot',
+    'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Force = $true',
     'Activate = $false',
-    'Restore-McpScheduledTaskSnapshot'
+    'access-stack-cutover-runs',
+    'Get-FileHash',
+    'failed SHA-256 validation',
+    'Start-Sleep -Seconds ([int]$request.handoverDelaySeconds)',
+    'Start-ScheduledTask -TaskName $edgeTaskName',
+    "status = 'passed'"
 )
-$edgeInstallIndex = $installer.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
-$cutoverIndex = $installer.IndexOf('$cutoverResult = & $cutoverScript @cutoverParameters | ConvertFrom-Json')
-$edgeStartIndex = $installer.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
+$edgeInstallIndex = $broker.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
+$cutoverIndex = $broker.IndexOf('$cutoverCommitted = $true')
+$edgeStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
 if ($edgeInstallIndex -lt 0 -or $cutoverIndex -lt 0 -or $edgeStartIndex -lt 0 -or
     $edgeInstallIndex -ge $cutoverIndex -or $cutoverIndex -ge $edgeStartIndex) {
-    throw 'Windows installer must replace the stopped Edge task before state promotion and start it only after promotion.'
+    throw 'Detached cutover broker must replace the stopped Edge task before state promotion and start it only after promotion.'
 }
 $updater = Read-ProjectFile 'deploy\windows\Update-McpAccessStack.ps1'
 Assert-ContainsAll -Label 'Windows updater' -Source $updater -Tokens @(
