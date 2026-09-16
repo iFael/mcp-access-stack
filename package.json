@@ -59,7 +59,7 @@
     "check:syntax:powershell": "pwsh -NoLogo -NoProfile -File operations/browser/Test-BrowserProfileConfiguration.ps1 && pwsh -NoLogo -NoProfile -File operations/validation/Test-ValidationToolScripts.ps1",
     "check:operations": "pwsh -NoLogo -NoProfile -File tooling/windows-credential-broker/Test-CredentialBroker.ps1",
     "check:release-runtime": "pwsh -NoLogo -NoProfile -File deploy/windows/Test-WindowsDistribution.ps1 && pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpReleaseContractV2.ps1",
-    "check:persistence": "pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpBrowserWorkerPersistence.ps1 && pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpEdgeConnectorPersistence.ps1",
+    "check:persistence": "pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpBrowserWorkerPersistence.ps1 && pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpEdgeConnectorPersistence.ps1 && pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpEdgeConnectorRecovery.ps1",
     "check:materialization": "pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpMaterializationIncidentEvidence.ps1",
     "check:runtime-assurance": "npm run check:release-runtime && npm run check:persistence && npm run check:materialization",
     "check:runtime-assurance:core": "npm run check:release-runtime && npm run check:persistence && npm run check:materialization",
