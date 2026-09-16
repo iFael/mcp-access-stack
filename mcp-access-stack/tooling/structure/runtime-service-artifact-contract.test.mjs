@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,4 +73,28 @@ test("native Edge host validates the current manifest by artifact id", () => {
   assert.match(source, /RequireJsonString\(artifact, "id"\)/u);
   assert.doesNotMatch(source, /RequireJsonString\(artifact, "role"\)/u);
   assert.match(source, /"edge-validation-launcher"/u);
+});
+
+test("edge task recovery is derivable from active lifecycle state and persisted configuration", () => {
+  const distribution = read("deploy/windows/New-McpPublicDistribution.ps1");
+  const installer = read("deploy/windows/Install-McpEdgeConnectorTask.ps1");
+  const accessInstaller = read("deploy/windows/Install-McpAccessStack.ps1");
+  assert.match(distribution, /Repair-McpEdgeConnectorTask\.ps1/u);
+  assert.match(distribution, /Install-McpEdgeConnectorTask\.ps1/u);
+  assert.match(accessInstaller, /edge-task-config\.v1\.json/u);
+  assert.match(accessInstaller, /Write-McpEdgeTaskRecoveryConfig/u);
+  assert.doesNotMatch(installer, /edge-task-config\.v1\.json/u);
+  const edgeStartIndex = accessInstaller.lastIndexOf("Start-ScheduledTask -TaskName $edgeTaskName");
+  const recoveryWriteIndex = accessInstaller.lastIndexOf("Write-McpEdgeTaskRecoveryConfig -Path $edgeRecoveryConfigPath");
+  const recoveryCatchIndex = accessInstaller.indexOf("\ncatch {", edgeStartIndex);
+  assert.ok(edgeStartIndex >= 0, "transactional installer must start the Edge task");
+  assert.ok(recoveryWriteIndex > edgeStartIndex, "recovery config must be persisted only after Edge task start");
+  assert.ok(recoveryCatchIndex > recoveryWriteIndex, "recovery config persistence must remain inside the transactional try block");
+  assert.equal(existsSync(path.join(root, "deploy/windows/Repair-McpEdgeConnectorTask.ps1")), true);
+  const repair = read("deploy/windows/Repair-McpEdgeConnectorTask.ps1");
+  assert.match(repair, /lifecycle-state\.v1\.json/u);
+  assert.match(repair, /edge-task-config\.v1\.json/u);
+  assert.match(repair, /Install-McpEdgeConnectorTask\.ps1/u);
+  assert.match(repair, /active\.releaseId/u);
+  assert.match(repair, /Start-ScheduledTask/u);
 });
