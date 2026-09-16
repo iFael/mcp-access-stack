@@ -116,6 +116,27 @@ function Restore-McpScheduledTaskSnapshot {
     }
 }
 
+function Write-McpEdgeTaskRecoveryConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Value
+    )
+
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        [IO.File]::WriteAllText(
+            $temporary,
+            (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false)
+        )
+        [IO.File]::Move($temporary, $Path, $true)
+    }
+    finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 if (-not (Test-Path -LiteralPath $publicCommonPath -PathType Leaf)) {
     throw "Public distribution helper was not found: $publicCommonPath"
@@ -137,6 +158,7 @@ Assert-McpPublicWindowsX64
 
 $distributionRoot = Get-McpPublicProjectRoot
 $installation = [IO.Path]::GetFullPath($InstallationRoot)
+$edgeRecoveryConfigPath = Join-Path $installation 'state\edge-task-config.v1.json'
 $project = [IO.Path]::GetFullPath($ProjectRoot)
 if (-not (Test-Path -LiteralPath $project -PathType Container)) {
     throw "Project root was not found: $project"
@@ -255,6 +277,8 @@ if ($EnableBrowserWorker) {
 }
 
 $edgeTaskName = 'MCP Access Stack production edge-connector'
+$edgeMaxConcurrentRequests = 8
+$edgeDelaySeconds = 15
 $edgeParameters = @{
     InstallationRoot = $installation
     ReleaseId = $releaseId
@@ -265,6 +289,8 @@ $edgeParameters = @{
     PolicyPath = [IO.Path]::GetFullPath($PolicyPath)
     AllowedOrigins = $AllowedOrigins
     OwnerOAuthScopes = $OwnerOAuthScopes
+    MaxConcurrentRequests = $edgeMaxConcurrentRequests
+    DelaySeconds = $edgeDelaySeconds
     TaskName = $edgeTaskName
     EnableBrowserWorker = [bool]$EnableBrowserWorker
     BrowserWorkerUrl = "http://127.0.0.1:$BrowserPort"
@@ -317,6 +343,24 @@ try {
     }
     Enable-ScheduledTask -TaskName $edgeTaskName | Out-Null
     Start-ScheduledTask -TaskName $edgeTaskName
+    $edgeRecoveryConfig = [ordered]@{
+        schemaVersion = 1
+        taskName = $edgeTaskName
+        runtimeRoot = $edgeRuntime
+        edgeBaseUrl = $EdgeBaseUrl
+        connectorTokenFile = [IO.Path]::GetFullPath($ConnectorTokenFile)
+        ownerTokenFile = [IO.Path]::GetFullPath($OwnerTokenFile)
+        policyPath = [IO.Path]::GetFullPath($PolicyPath)
+        allowedOrigins = $AllowedOrigins
+        ownerOAuthScopes = $OwnerOAuthScopes
+        maxConcurrentRequests = $edgeMaxConcurrentRequests
+        delaySeconds = $edgeDelaySeconds
+        browserEnabled = [bool]$EnableBrowserWorker
+        browserWorkerUrl = if ($EnableBrowserWorker) { "http://127.0.0.1:$BrowserPort" } else { $null }
+        browserWorkerTokenFile = if ($EnableBrowserWorker) { [IO.Path]::GetFullPath($BrowserWorkerTokenFile) } else { $null }
+        updatedAt = [DateTimeOffset]::UtcNow.ToString('O')
+    }
+    Write-McpEdgeTaskRecoveryConfig -Path $edgeRecoveryConfigPath -Value $edgeRecoveryConfig
 }
 catch {
     $installationError = $_
@@ -364,6 +408,7 @@ catch {
     releaseId = $releaseId
     ownershipMode = 'edge-only'
     edgeTask = [string]$edgeTaskResult.taskName
+    recoveryConfig = $edgeRecoveryConfigPath
     browserTask = if ($EnableBrowserWorker) { $browserTaskName } else { $null }
     installationRoot = $installation
     projectRoot = $project

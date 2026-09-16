@@ -122,6 +122,7 @@ $runtimeFiles = @(
     'deploy\windows\WindowsExecutionNode.Common.ps1',
     'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
     'deploy\windows\Install-McpEdgeConnectorTask.ps1',
+    'deploy\windows\Repair-McpEdgeConnectorTask.ps1',
     'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
     'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
@@ -148,6 +149,18 @@ $edgeOwnerOAuthBootstrapSource = Join-Path $stage 'deploy\windows\Invoke-McpEdge
 $edgeOwnerOAuthBootstrapTarget = Join-Path $releaseTarget 'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeOwnerOAuthBootstrapTarget) | Out-Null
 Copy-Item -LiteralPath $edgeOwnerOAuthBootstrapSource -Destination $edgeOwnerOAuthBootstrapTarget
+$edgeRecoveryReleaseFiles = @(
+    'Repair-McpEdgeConnectorTask.ps1',
+    'Install-McpEdgeConnectorTask.ps1',
+    'PublicDistribution.Common.ps1',
+    'WindowsExecutionNode.Common.ps1'
+)
+foreach ($name in $edgeRecoveryReleaseFiles) {
+    $source = Join-Path $stage ("deploy\windows\$name")
+    $target = Join-Path $releaseTarget ("deploy\windows\$name")
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $source -Destination $target -Force
+}
 $releaseManifestPath = Join-Path $releaseTarget 'manifest.json'
 $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
 if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
