@@ -122,7 +122,35 @@ try {
         throw 'Public release workflow does not deterministically select the newest successful CI run.'
     }
 
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, and v1 remains historical read compatibility.'
+    $edgeJobMatch = [regex]::Match($releaseWorkflow, '(?m)^  edge:\s*$')
+    $publishJobMatch = [regex]::Match($releaseWorkflow, '(?m)^  publish:\s*$')
+    if (-not $edgeJobMatch.Success -or -not $publishJobMatch.Success -or $edgeJobMatch.Index -ge $publishJobMatch.Index) {
+        throw 'Public release workflow must gate publication on an Edge deployment job.'
+    }
+
+    $edgeJobSource = $releaseWorkflow.Substring($edgeJobMatch.Index, $publishJobMatch.Index - $edgeJobMatch.Index)
+    foreach ($requiredToken in @(
+        '- package',
+        'CLOUDFLARE_API_TOKEN',
+        'CLOUDFLARE_ACCOUNT_ID',
+        'npm run deploy --workspace @mcp-access-stack/edge-gateway',
+        'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
+        'expectedContractRevision',
+        '/health',
+        'controlPlaneReady'
+    )) {
+        if (-not $edgeJobSource.Contains($requiredToken)) {
+            throw "Public release Edge gate is missing required token: $requiredToken"
+        }
+    }
+    $publishJobSource = $releaseWorkflow.Substring($publishJobMatch.Index)
+    if (-not $publishJobSource.Contains('- edge')) {
+        throw 'Public GitHub Release must depend on the successful Edge contract gate.'
+    }
+    if ($distributionStepIndex -ge $edgeJobMatch.Index) {
+        throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
+    }
+    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge deployment gates publication, and v1 remains historical read compatibility.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
