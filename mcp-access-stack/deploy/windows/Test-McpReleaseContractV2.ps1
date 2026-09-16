@@ -132,6 +132,7 @@ try {
     foreach ($requiredToken in @(
         '- package',
         'CLOUDFLARE_API_TOKEN',
+        'CLOUDFLARE_ACCOUNT_ID',
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
         'expectedContractRevision',
