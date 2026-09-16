@@ -23,15 +23,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: public-release
     steps:
-      - name: Require release signing secrets before publishing anything
+      - name: Require release secrets before publishing anything
         shell: bash
         env:
           SIGNING_PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$SIGNING_PFX"
           test -n "$SIGNING_PASSWORD"
+          test -n "$CLOUDFLARE_API_TOKEN"
 
   metadata:
     needs: signing-preflight
@@ -177,6 +179,7 @@ jobs:
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsExecutionNodePackage.ps1 `
             -ReleaseRoot (Join-Path $env:RUNNER_TEMP "public-distribution\stage\releases\$env:RELEASE_ID") `
             -OfflinePinnedAuthenticode
+
       - name: Upload signed release assets for publisher job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -187,10 +190,78 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  edge:
+    needs:
+      - metadata
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: public-release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: mcp-access-stack
+        shell: bash
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js bootstrap
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: mcp-access-stack/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve expected Edge contract revision
+        id: edge-contract
+        run: |
+          set -euo pipefail
+          expected="$(node -e 'const fs=require("node:fs"); const source=fs.readFileSync("services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts","utf8"); const match=source.match(/"contractRevision": "([0-9a-f]{64})"/); if(!match) process.exit(1); process.stdout.write(match[1]);')"
+          test -n "$expected"
+          echo "revision=$expected" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact Edge contract to production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy --workspace @mcp-access-stack/edge-gateway
+
+      - name: Verify deployed Edge contract before publication
+        env:
+          EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}
+          EDGE_HEALTH_URL: https://mcp-access-stack.rafaeldamasio77.workers.dev/health
+        run: |
+          set -euo pipefail
+          last_health=''
+          for attempt in $(seq 1 12); do
+            if last_health="$(curl --fail --silent --show-error "$EDGE_HEALTH_URL")"; then
+              actual_revision="$(jq -r '.expectedContractRevision // empty' <<<"$last_health")"
+              control_plane_ready="$(jq -r '.controlPlaneReady // false' <<<"$last_health")"
+              service="$(jq -r '.service // empty' <<<"$last_health")"
+              if [[ "$service" == "mcp-edge-gateway" && "$actual_revision" == "$EXPECTED_CONTRACT_REVISION" && "$control_plane_ready" == "true" ]]; then
+                echo "Edge contract verified: $actual_revision"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "Edge contract verification failed. Expected: $EXPECTED_CONTRACT_REVISION" >&2
+          echo "$last_health" >&2
+          exit 1
+
   publish:
     needs:
       - metadata
       - package
+      - edge
     runs-on: ubuntu-latest
     permissions:
       contents: write
