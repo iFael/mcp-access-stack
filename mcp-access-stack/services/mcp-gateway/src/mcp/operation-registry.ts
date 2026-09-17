@@ -213,7 +213,7 @@ export function createGatewayOperationContextFactory(
         signal: controller.signal,
         correlationId: String(extra.requestId),
         invocationId: randomUUID(),
-        ownerScope: options.principalKey,
+        ownerScope: options.cancellationScopeKey,
         deadline,
       },
       release: () => {

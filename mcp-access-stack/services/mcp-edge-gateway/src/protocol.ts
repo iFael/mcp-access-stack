@@ -38,6 +38,8 @@ const REQUEST_HEADER_ALLOWLIST = new Set([
   "mcp-protocol-version",
   "mcp-session-id",
   "origin",
+  "x-openai-session",
+  "x-openai-subject",
 ]);
 
 const LEGACY_REQUEST_HEADER_ALLOWLIST = new Set([

@@ -67,13 +67,15 @@ describe("Edge Protocol v3 authenticated execution envelope", () => {
     }
   });
 
-  it("strips public credentials and reserved internal assertions from execution headers", () => {
+  it("strips public credentials while preserving the opaque ChatGPT session identity", () => {
     const headers = new Headers({
       authorization: "Bearer public-token",
       "content-type": "application/json",
       "mcp-protocol-version": "2025-06-18",
       "mcp-session-id": "session-1",
       origin: "https://chatgpt.com",
+      "x-openai-session": "chat-session-1",
+      "x-openai-subject": "chat-subject-1",
       "x-mcp-edge-internal-assertion": "caller-controlled",
       "x-other-secret": "caller-controlled",
     });
@@ -83,5 +85,8 @@ describe("Edge Protocol v3 authenticated execution envelope", () => {
       "mcp-protocol-version": "2025-06-18",
       "mcp-session-id": "session-1",
       origin: "https://chatgpt.com",
+      "x-openai-session": "chat-session-1",
+      "x-openai-subject": "chat-subject-1",
     });
-  });});
+  });
+});

@@ -46,6 +46,8 @@ const serverIdentity = {
 class FakeExecutionTransport implements EdgeExecutionTransport {
   ready = false;
   generation: number | null = null;
+  recoverOnWait = false;
+  waitUntilReadyCalls = 0;
   forwardedCalls: Array<{ body: unknown; principal: AuthenticatedEdgePrincipal }> = [];
 
   isReady(): boolean {
@@ -54,6 +56,14 @@ class FakeExecutionTransport implements EdgeExecutionTransport {
 
   getGeneration(): number | null {
     return this.generation;
+  }
+
+  async waitUntilReady(): Promise<boolean> {
+    this.waitUntilReadyCalls += 1;
+    if (!this.recoverOnWait) return false;
+    this.ready = true;
+    this.generation = 99;
+    return true;
   }
 
   async execute(body: unknown, caller: AuthenticatedEdgePrincipal): Promise<Response> {
@@ -87,6 +97,31 @@ describe("Edge MCP control plane availability", () => {
     });
   });
 
+  it("uses a transport reconnect grace before returning AGENT_UNAVAILABLE", async () => {
+    const execution = new FakeExecutionTransport();
+    execution.recoverOnWait = true;
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest,
+      catalogMetadata,
+      serverIdentity,
+    });
+
+    const response = await controlPlane.handle(mcpRequest(jsonRpc(70, "tools/call", {
+      name: "list_workspaces",
+      arguments: {},
+    })));
+
+    expect(execution.waitUntilReadyCalls).toBe(1);
+    expect(execution.forwardedCalls).toHaveLength(1);
+    expect(await response.json()).toMatchObject({
+      jsonrpc: "2.0",
+      id: 70,
+      result: { content: [{ text: "executed" }] },
+    });
+  });
+
   it("keeps discovery stable while execution disconnects and reconnects", async () => {
     const execution = new FakeExecutionTransport();
     const controlPlane = createMcpControlPlane({
@@ -102,7 +137,8 @@ describe("Edge MCP control plane availability", () => {
       capabilities: {},
       clientInfo: { name: "offline-client", version: "1.0.0" },
     })));
-    expect(initialized.status).toBe(200);    expect(getMcpResponseDiagnostic(initialized)).toEqual({
+    expect(initialized.status).toBe(200);
+    expect(getMcpResponseDiagnostic(initialized)).toEqual({
       catalogContractRevision: catalogMetadata.contractRevision,
       toolSetRevision: catalogMetadata.toolSetRevision,
       toolCount: catalogMetadata.toolCount,
@@ -120,7 +156,8 @@ describe("Edge MCP control plane availability", () => {
       result: { tools: Array<{ name: string }>; _meta?: Record<string, unknown> };
     };
     expect(beforeBody.result.tools.map((tool) => tool.name)).toEqual(manifest.map((tool) => tool.name));
-    expect(beforeBody.result._meta?.["io.github.ifael/mcp-tool-catalog"]).toEqual(catalogMetadata);    expect(getMcpResponseDiagnostic(before)).toEqual({
+    expect(beforeBody.result._meta?.["io.github.ifael/mcp-tool-catalog"]).toEqual(catalogMetadata);
+    expect(getMcpResponseDiagnostic(before)).toEqual({
       catalogContractRevision: catalogMetadata.contractRevision,
       toolSetRevision: catalogMetadata.toolSetRevision,
       toolCount: catalogMetadata.toolCount,
@@ -145,6 +182,7 @@ describe("Edge MCP control plane availability", () => {
       mcpErrorCode: -32001,
       mcpErrorDataCode: "AGENT_UNAVAILABLE",
     });
+    expect(execution.waitUntilReadyCalls).toBe(1);
     expect(execution.forwardedCalls).toHaveLength(0);
 
     const secondClient = createMcpControlPlane({
@@ -175,7 +213,8 @@ describe("Edge MCP control plane availability", () => {
       result: { tools: Array<{ name: string }>; _meta?: Record<string, unknown> };
     };
     expect(afterBody.result.tools).toEqual(beforeBody.result.tools);
-    expect(afterBody.result._meta).toEqual(beforeBody.result._meta);    expect(getMcpResponseDiagnostic(after)).toEqual({
+    expect(afterBody.result._meta).toEqual(beforeBody.result._meta);
+    expect(getMcpResponseDiagnostic(after)).toEqual({
       catalogContractRevision: catalogMetadata.contractRevision,
       toolSetRevision: catalogMetadata.toolSetRevision,
       toolCount: catalogMetadata.toolCount,
@@ -212,6 +251,7 @@ describe("Edge MCP control plane availability", () => {
     }));
     expect(initializedNotification.status).toBe(204);
 
+    expect(execution.waitUntilReadyCalls).toBe(0);
     expect(execution.forwardedCalls).toHaveLength(0);
   });
 });
