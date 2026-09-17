@@ -114,10 +114,14 @@ describe("EdgeConnector", () => {
     let observedAuthorization: string | undefined;
     let observedSecretHeader: string | undefined;
     let observedOrigin: string | undefined;
+    let observedOpenAiSession: string | undefined;
+    let observedOpenAiSubject: string | undefined;
     const localServer = createServer((request, response) => {
       observedAuthorization = request.headers.authorization;
       observedSecretHeader = request.headers["x-edge-secret"] as string | undefined;
       observedOrigin = request.headers.origin;
+      observedOpenAiSession = request.headers["x-openai-session"] as string | undefined;
+      observedOpenAiSubject = request.headers["x-openai-subject"] as string | undefined;
       response.statusCode = 201;
       response.setHeader("content-type", "application/json");
       response.setHeader("www-authenticate", "Bearer test");
@@ -166,6 +170,8 @@ describe("EdgeConnector", () => {
         "content-type": "application/json",
         "x-edge-secret": "must-not-forward",
         origin: "https://chatgpt.com",
+        "x-openai-session": "chat-session-1",
+        "x-openai-subject": "chat-subject-1",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       principal: TEST_PRINCIPAL,
@@ -187,6 +193,8 @@ describe("EdgeConnector", () => {
     expect(observedAuthorization).toBeUndefined();
     expect(observedSecretHeader).toBeUndefined();
     expect(observedOrigin).toBe("https://chatgpt.com");
+    expect(observedOpenAiSession).toBe("chat-session-1");
+    expect(observedOpenAiSubject).toBe("chat-subject-1");
 
     controller.abort();
     await runPromise;

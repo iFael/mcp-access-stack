@@ -23,6 +23,7 @@ export function getMcpResponseDiagnostic(response: Response): EdgeMcpResponseDia
 export interface EdgeExecutionTransport {
   isReady(): boolean;
   getGeneration(): number | null;
+  waitUntilReady?(): Promise<boolean>;
   execute(
     body: unknown,
     principal: AuthenticatedEdgePrincipal,
@@ -102,7 +103,8 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
       }
 
       if (!options.execution.isReady()) {
-        return createAgentUnavailableMcpResponse(parsed.raw);
+        const recovered = await options.execution.waitUntilReady?.() ?? false;
+        if (!recovered) return createAgentUnavailableMcpResponse(parsed.raw);
       }
       return options.execution.execute(parsed.raw, principal, request);
     },

@@ -40,6 +40,9 @@ import {
   type EdgeHttpRequestMessage,
 } from "./protocol.js";
 
+const EDGE_CONNECTOR_RECONNECT_GRACE_MS = 3_000;
+const EDGE_CONNECTOR_RECONNECT_POLL_MS = 50;
+
 export type EdgeGatewayEnv = EdgeControlPlaneEnv & {
   MCP_SESSION: DurableObjectNamespace<McpSession>;
   MCP_EDGE_ENABLED?: string;
@@ -315,6 +318,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       {
         isReady: () => this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
         getGeneration: () => this.getExecutionReadyConnectorGeneration(),
+        waitUntilReady: () => this.waitForExecutionReconnect(),
         execute: async (body, principal, request) => {
           if (!request) return createAgentUnavailableMcpResponse(body);
           return this.relayAuthenticatedRequest(
@@ -327,6 +331,26 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       },
     );
     return this.controlRuntime;
+  }
+
+  private async waitForExecutionReconnect(): Promise<boolean> {
+    if (this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null) return true;
+
+    const telemetry = await this.connectorTelemetry.read();
+    if (telemetry.lastDisconnectWasReady !== true || telemetry.lastDisconnectedAt === undefined) {
+      return false;
+    }
+
+    const disconnectedAt = Date.parse(telemetry.lastDisconnectedAt);
+    if (!Number.isFinite(disconnectedAt)) return false;
+    const deadline = disconnectedAt + EDGE_CONNECTOR_RECONNECT_GRACE_MS;
+
+    while (Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      await delay(Math.max(1, Math.min(EDGE_CONNECTOR_RECONNECT_POLL_MS, remainingMs)));
+      if (this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null) return true;
+    }
+    return false;
   }
 
   private async handleConnectorUpgrade(request: Request): Promise<Response> {
@@ -618,6 +642,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.pending.delete(requestId);
     }
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
