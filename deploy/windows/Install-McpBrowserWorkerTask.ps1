@@ -263,8 +263,6 @@ if ($existing) {
         if ([string]$existing.State -eq 'Running') {
             throw "Scheduled Task is running and must be stopped before replacement: $TaskName"
         }
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        $existing = $null
     }
 }
 
@@ -293,7 +291,7 @@ if (-not $alreadyInstalled) {
         -Principal $principal `
         -Settings $settings `
         -Description 'Owns the native Windows MCP Browser Worker through the signed GUI-subsystem launcher.'
-    Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 
 $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId

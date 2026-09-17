@@ -320,8 +320,6 @@ if ($existing) {
         if ([string]$existing.State -eq 'Running') {
             throw "Scheduled Task is running and must be stopped before replacement: $TaskName"
         }
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        $existing = $null
     }
 }
 
@@ -350,7 +348,7 @@ if (-not $alreadyInstalled) {
         -Principal $principal `
         -Settings $settings `
         -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the signed fixed-contract McpEdgeHost.'
-    Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 
 $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId
