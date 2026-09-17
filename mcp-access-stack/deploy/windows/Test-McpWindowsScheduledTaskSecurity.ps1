@@ -101,6 +101,24 @@ foreach ($installerName in @('Install-McpEdgeConnectorTask.ps1', 'Install-McpBro
     if (-not $source.Contains('Set-McpWindowsScheduledTaskOwnerAccess')) {
         throw "$installerName must normalize Scheduled Task owner access after registration."
     }
+    if ($source.Contains('Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false')) {
+        throw "$installerName must replace an existing task in place instead of unregistering it."
+    }
+    if ($source -notmatch 'Register-ScheduledTask\s+-TaskName \$TaskName\s+-InputObject \$task\s+-Force') {
+        throw "$installerName must use Register-ScheduledTask -Force for in-place replacement."
+    }
 }
 
-Write-Output 'Windows Scheduled Task owner ACL contract passed inheritance and idempotence gates.'
+$brokerPath = Join-Path $PSScriptRoot 'Invoke-McpAccessStackCutoverBroker.ps1'
+$brokerSource = Get-Content -LiteralPath $brokerPath -Raw
+if ($brokerSource -notmatch 'userId\s*=\s*\[string\]\$task\.Principal\.UserId') {
+    throw 'Cutover rollback snapshot must retain the Scheduled Task owner identity.'
+}
+if ($brokerSource -notmatch 'Register-ScheduledTask\s+-TaskName \$TaskName\s+-Xml \(\[string\]\$Snapshot\.xml\)\s+-Force') {
+    throw 'Cutover rollback must restore an existing task in place with Register-ScheduledTask -Force.'
+}
+if ($brokerSource -notmatch 'Set-McpWindowsScheduledTaskOwnerAccess\s+-TaskName \$TaskName\s+-UserId \(\[string\]\$Snapshot\.userId\)') {
+    throw 'Cutover rollback must reapply the owner ACL after restoring the task snapshot.'
+}
+
+Write-Output 'Windows Scheduled Task owner ACL and in-place replacement contracts passed.'

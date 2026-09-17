@@ -17,6 +17,7 @@ function Get-McpScheduledTaskSnapshot {
     if (-not $task) { return $null }
     [pscustomobject]@{
         taskName = $TaskName
+        userId = [string]$task.Principal.UserId
         xml = Export-ScheduledTask -TaskName $TaskName
         wasRunning = [string]$task.State -eq 'Running'
         wasEnabled = [string]$task.State -ne 'Disabled'
@@ -45,9 +46,18 @@ function Restore-McpScheduledTaskSnapshot {
     )
 
     $current = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($null -ne $Snapshot -and $current) {
+    if ($null -eq $Snapshot) {
+        if ($current) {
+            Stop-McpScheduledTaskForReplacement -TaskName $TaskName
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+        }
+        return
+    }
+
+    if ($current) {
         $currentXml = Export-ScheduledTask -TaskName $TaskName
         if ([string]$currentXml -eq [string]$Snapshot.xml) {
+            $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId ([string]$Snapshot.userId)
             if ([bool]$Snapshot.wasEnabled -and [string]$current.State -eq 'Disabled') {
                 Enable-ScheduledTask -TaskName $TaskName | Out-Null
             }
@@ -59,15 +69,12 @@ function Restore-McpScheduledTaskSnapshot {
             }
             return
         }
-    }
 
-    if ($current) {
         Stop-McpScheduledTaskForReplacement -TaskName $TaskName
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
-    if ($null -eq $Snapshot) { return }
 
-    Register-ScheduledTask -TaskName $TaskName -Xml ([string]$Snapshot.xml) | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Xml ([string]$Snapshot.xml) -Force | Out-Null
+    $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId ([string]$Snapshot.userId)
     if ([bool]$Snapshot.wasEnabled) { Enable-ScheduledTask -TaskName $TaskName | Out-Null }
     else { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
     if ([bool]$Snapshot.wasRunning) { Start-ScheduledTask -TaskName $TaskName }
