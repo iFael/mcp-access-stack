@@ -78,6 +78,24 @@ describe("gateway MCP operation context", () => {
     second.release();
   });
 
+  it("uses the session cancellation scope as the downstream owner scope", () => {
+    const registry = new McpOperationRegistry();
+    const factory = createGatewayOperationContextFactory({
+      registry,
+      principalKey: "identity:shared-owner",
+      operationScopeKey: "openai-session:conversation-a",
+      cancellationScopeKey: "openai-session:conversation-a",
+      requestSignal: new AbortController().signal,
+    });
+    const lease = factory(
+      { signal: new AbortController().signal, requestId: "request-1" },
+      60_000,
+    );
+
+    expect(lease.context.ownerScope).toBe("openai-session:conversation-a");
+    lease.release();
+  });
+
   it("maps a matched cancellation to a structured cancelled lifecycle", () => {
     const registry = new McpOperationRegistry();
     const requestController = new AbortController();
