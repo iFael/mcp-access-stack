@@ -10,7 +10,7 @@
     "dev": "npm run build --workspace @mcp-access-stack/edge-protocol && wrangler dev --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260817.1",
+    "@cloudflare/workers-types": "5.20260911.1",
     "typescript": "6.0.3",
     "wrangler": "4.131.1"
   },
