@@ -105,6 +105,40 @@ describe("session routing diagnostics", () => {
     }
   });
 
+  it("fingerprints OpenAI subject and session without retaining raw identifiers", async () => {
+    const subject = "user-sensitive-subject";
+    const firstSession = "conversation-sensitive-a";
+    const secondSession = "conversation-sensitive-b";
+
+    const classify = (session: string) => classifySessionDiagnostic(
+      new Request("https://edge.example/mcp", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer diagnostic-token",
+          "content-type": "application/json",
+          "x-openai-subject": subject,
+          "x-openai-session": session,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
+      }),
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: 0, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const first = await classify(firstSession);
+    const second = await classify(secondSession);
+
+    expect(first.openAiSubjectFingerprint).toMatch(/^[a-f0-9]{16}$/u);
+    expect(first.openAiSessionFingerprint).toMatch(/^[a-f0-9]{16}$/u);
+    expect(second.openAiSubjectFingerprint).toBe(first.openAiSubjectFingerprint);
+    expect(second.openAiSessionFingerprint).not.toBe(first.openAiSessionFingerprint);
+    const serialized = JSON.stringify([first, second]);
+    expect(serialized).not.toContain(subject);
+    expect(serialized).not.toContain(firstSession);
+    expect(serialized).not.toContain(secondSession);
+  });
   it("records catalog identity and connector generation for MCP discovery", async () => {
     const event = await classifySessionDiagnostic(
       new Request("https://edge.example/mcp", {

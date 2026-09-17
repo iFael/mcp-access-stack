@@ -18,6 +18,8 @@ export type SessionDiagnosticEvent = {
   oauthError?: string;
   clientFingerprint?: string;
   credentialFingerprint?: string;
+  openAiSubjectFingerprint?: string;
+  openAiSessionFingerprint?: string;
   issuedAccessFingerprint?: string;
   issuedCredentialFingerprint?: string;
 };
@@ -71,6 +73,10 @@ export async function classifySessionDiagnostic(
   if (url.pathname === "/mcp") {
     const bearer = readBearer(request.headers.get("authorization"));
     if (bearer) event.credentialFingerprint = await fingerprint(bearer);
+    const openAiSubject = readOpaqueDiagnosticHeader(request.headers.get("x-openai-subject"));
+    const openAiSession = readOpaqueDiagnosticHeader(request.headers.get("x-openai-session"));
+    if (openAiSubject) event.openAiSubjectFingerprint = await fingerprint(openAiSubject);
+    if (openAiSession) event.openAiSessionFingerprint = await fingerprint(openAiSession);
     if (request.method === "POST") {
       const body = await readJsonRecord(request);
       if (typeof body?.method === "string") event.mcpMethod = body.method;
@@ -188,6 +194,16 @@ async function readTokenResult(response: DiagnosticResponse): Promise<{
   } catch {
     return {};
   }
+}
+
+function readOpaqueDiagnosticHeader(value: string | null): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized || normalized.length > 512) return undefined;
+  for (const character of normalized) {
+    const codePoint = character.charCodeAt(0);
+    if (codePoint < 0x21 || codePoint > 0x7e || character === ",") return undefined;
+  }
+  return normalized;
 }
 
 function readBearer(value: string | null): string | undefined {
