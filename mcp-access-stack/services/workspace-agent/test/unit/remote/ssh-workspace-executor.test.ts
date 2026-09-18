@@ -215,6 +215,49 @@ describe("SshWorkspaceExecutor", () => {
       }),
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
   });
+  it("isolates remote background task lookup and listing by owner scope", async () => {
+    const ownerA = { ownerScope: "openai-session:ssh-owner-a" };
+    const ownerB = { ownerScope: "openai-session:ssh-owner-b" };
+    const started = await executor.startBackgroundTask(
+      {
+        workspaceId: "test",
+        operation: "remote-owner-check",
+        shell: "powershell",
+        command: "Write-Output 'owned'",
+        timeoutMs: 30_000,
+      },
+      ownerA,
+    );
+    if (started.status !== "background_task_started") {
+      throw new Error("expected background task");
+    }
+
+    expect(
+      (
+        await executor.getBackgroundTask(
+          { workspaceId: "test", id: started.task.id },
+          ownerA,
+        )
+      ).task?.id,
+    ).toBe(started.task.id);
+    expect(
+      (
+        await executor.getBackgroundTask(
+          { workspaceId: "test", id: started.task.id },
+          ownerB,
+        )
+      ).task,
+    ).toBeNull();
+    expect(
+      (await executor.listBackgroundTasks({ workspaceId: "test" }, ownerA))
+        .tasks.map((task) => task.id),
+    ).toContain(started.task.id);
+    expect(
+      (await executor.listBackgroundTasks({ workspaceId: "test" }, ownerB))
+        .tasks.map((task) => task.id),
+    ).not.toContain(started.task.id);
+  });
+
   it("fails closed for every typed source-control port without touching the SSH transport", async () => {
     const methods = [
       "createBranch",

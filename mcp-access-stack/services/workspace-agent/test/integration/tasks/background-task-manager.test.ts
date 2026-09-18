@@ -82,6 +82,79 @@ describe("background task integration", () => {
     await waitFor(() => !processExists(running.pid!), 10_000);
   });
 
+  test("isolates background tasks between owner scopes end to end", async () => {
+    fixture = await createWritableShellFixture();
+    const agent = await LocalAgent.create(fixture.policyPath);
+    const input = {
+      workspaceId: "test",
+      operation: "owner-isolation",
+      shell: "powershell" as const,
+      command: "Start-Sleep -Seconds 30",
+      timeoutMs: 60_000,
+    };
+    const ownerA = { ownerScope: "openai-session:integration-owner-a" };
+    const ownerB = { ownerScope: "openai-session:integration-owner-b" };
+
+    const first = await agent.startBackgroundTask(input, ownerA);
+    const second = await agent.startBackgroundTask(input, ownerB);
+    if (
+      first.status !== "background_task_started" ||
+      second.status !== "background_task_started"
+    ) {
+      throw new Error("expected background tasks");
+    }
+
+    expect(second.task.id).not.toBe(first.task.id);
+    expect(
+      (
+        await agent.getBackgroundTask(
+          { workspaceId: "test", id: first.task.id },
+          ownerA,
+        )
+      ).task?.id,
+    ).toBe(first.task.id);
+    expect(
+      (
+        await agent.getBackgroundTask(
+          { workspaceId: "test", id: first.task.id },
+          ownerB,
+        )
+      ).task,
+    ).toBeNull();
+    expect(
+      (await agent.listBackgroundTasks({ workspaceId: "test" }, ownerA)).tasks
+        .map((task) => task.id),
+    ).toEqual([first.task.id]);
+    expect(
+      (await agent.listBackgroundTasks({ workspaceId: "test" }, ownerB)).tasks
+        .map((task) => task.id),
+    ).toEqual([second.task.id]);
+
+    expect(
+      (
+        await agent.cancelBackgroundTask(
+          { workspaceId: "test", id: first.task.id },
+          ownerB,
+        )
+      ).task,
+    ).toBeNull();
+    expect(
+      (
+        await agent.cancelBackgroundTask(
+          { workspaceId: "test", id: first.task.id },
+          ownerA,
+        )
+      ).task?.state,
+    ).toBe("cancelled");
+    expect(
+      (
+        await agent.cancelBackgroundTask(
+          { workspaceId: "test", id: second.task.id },
+          ownerB,
+        )
+      ).task?.state,
+    ).toBe("cancelled");
+  });
   test("requires confirmation before risky background execution and never persists the token", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);
