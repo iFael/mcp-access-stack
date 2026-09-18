@@ -256,6 +256,11 @@ describe("SshWorkspaceExecutor", () => {
       (await executor.listBackgroundTasks({ workspaceId: "test" }, ownerB))
         .tasks.map((task) => task.id),
     ).not.toContain(started.task.id);
+
+    await executor.cancelBackgroundTask(
+      { workspaceId: "test", id: started.task.id },
+      ownerA,
+    );
   });
 
   it("fails closed for every typed source-control port without touching the SSH transport", async () => {
