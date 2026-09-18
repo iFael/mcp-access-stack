@@ -8,8 +8,6 @@ import {
 } from "@vs-code-gpt/shared";
 import type { AuthenticatedRequest } from "../http/mcp-middleware.js";
 
-const CANCELLATION_TOMBSTONE_TTL_MS = 30_000;
-
 type McpRequestId = string | number;
 
 interface ActiveOperation {
@@ -17,9 +15,9 @@ interface ActiveOperation {
   controller: AbortController;
 }
 
-interface CancellationTombstone {
-  reason: string | undefined;
-  expiresAt: number;
+interface PendingOperation {
+  cancelled: boolean;
+  reason?: string;
 }
 
 export interface McpOperationRegistration {
@@ -27,21 +25,52 @@ export interface McpOperationRegistration {
   release(): void;
 }
 
+export interface McpPendingOperationRegistration {
+  release(): void;
+}
+
 export class McpOperationRegistry {
   private readonly active = new Map<string, ActiveOperation>();
   private readonly cancellationTargets = new Map<string, Map<string, AbortController>>();
-  private readonly cancellations = new Map<string, CancellationTombstone>();
+  private readonly pending = new Map<string, Map<string, PendingOperation>>();
 
   get size(): number {
     return this.active.size;
+  }
+
+  registerPending(
+    cancellationScopeKey: string,
+    requestId: McpRequestId,
+    requestLifecycleId: string,
+  ): McpPendingOperationRegistration {
+    const key = operationKey(cancellationScopeKey, requestId);
+    let pendingRequests = this.pending.get(key);
+    if (!pendingRequests) {
+      pendingRequests = new Map<string, PendingOperation>();
+      this.pending.set(key, pendingRequests);
+    }
+
+    const pending: PendingOperation = { cancelled: false };
+    pendingRequests.set(requestLifecycleId, pending);
+
+    return {
+      release: () => {
+        const currentPending = this.pending.get(key);
+        if (currentPending?.get(requestLifecycleId) !== pending) return;
+        currentPending.delete(requestLifecycleId);
+        if (currentPending.size === 0) {
+          this.pending.delete(key);
+        }
+      },
+    };
   }
 
   begin(
     operationScopeKey: string,
     requestId: McpRequestId,
     cancellationScopeKey = operationScopeKey,
+    requestLifecycleId?: string,
   ): McpOperationRegistration {
-    this.sweepExpiredCancellations();
     const key = operationKey(operationScopeKey, requestId);
     if (this.active.has(key)) {
       throw new AppError(
@@ -62,10 +91,18 @@ export class McpOperationRegistry {
     }
     targets.set(token, controller);
 
-    const pendingCancellation = this.cancellations.get(cancellationKey);
-    if (pendingCancellation) {
-      this.cancellations.delete(cancellationKey);
-      controller.abort(pendingCancellation.reason);
+    if (requestLifecycleId !== undefined) {
+      const pendingRequests = this.pending.get(cancellationKey);
+      const pending = pendingRequests?.get(requestLifecycleId);
+      if (pending) {
+        pendingRequests!.delete(requestLifecycleId);
+        if (pendingRequests!.size === 0) {
+          this.pending.delete(cancellationKey);
+        }
+        if (pending.cancelled) {
+          controller.abort(pending.reason);
+        }
+      }
     }
 
     return {
@@ -89,8 +126,9 @@ export class McpOperationRegistry {
     requestId: McpRequestId,
     reason?: string,
   ): boolean {
-    this.sweepExpiredCancellations();
     const key = operationKey(cancellationScopeKey, requestId);
+    let matched = false;
+
     const targets = this.cancellationTargets.get(key);
     if (targets && targets.size > 0) {
       for (const controller of targets.values()) {
@@ -98,13 +136,23 @@ export class McpOperationRegistry {
           controller.abort(reason);
         }
       }
-      return true;
+      matched = true;
     }
-    this.cancellations.set(key, {
-      reason,
-      expiresAt: Date.now() + CANCELLATION_TOMBSTONE_TTL_MS,
-    });
-    return false;
+
+    const pendingRequests = this.pending.get(key);
+    if (pendingRequests && pendingRequests.size > 0) {
+      for (const pending of pendingRequests.values()) {
+        pending.cancelled = true;
+        if (reason === undefined) {
+          delete pending.reason;
+        } else {
+          pending.reason = reason;
+        }
+      }
+      matched = true;
+    }
+
+    return matched;
   }
 
   clear(): void {
@@ -113,15 +161,7 @@ export class McpOperationRegistry {
     }
     this.active.clear();
     this.cancellationTargets.clear();
-    this.cancellations.clear();
-  }
-
-  private sweepExpiredCancellations(now = Date.now()): void {
-    for (const [key, cancellation] of this.cancellations) {
-      if (cancellation.expiresAt <= now) {
-        this.cancellations.delete(key);
-      }
-    }
+    this.pending.clear();
   }
 }
 
@@ -130,6 +170,7 @@ export interface GatewayOperationContextFactoryOptions {
   principalKey: string;
   operationScopeKey: string;
   cancellationScopeKey: string;
+  requestLifecycleId?: string;
   requestSignal: AbortSignal;
 }
 
@@ -147,6 +188,7 @@ export function createGatewayOperationContextFactory(
       options.operationScopeKey,
       extra.requestId,
       options.cancellationScopeKey,
+      options.requestLifecycleId,
     );
     const controller = new AbortController();
     const subscriptions: Array<{
@@ -260,8 +302,10 @@ export function createMcpOperationScopeKey(
   request: AuthenticatedRequest,
   principalKey = createMcpPrincipalKey(request),
 ): string {
-  const sessionScopeKey = createMcpSessionScopeKey(request, principalKey);
-  if (sessionScopeKey) return sessionScopeKey;
+  const mcpSessionId = readOpaquePrincipalHeader(request, "mcp-session-id");
+  if (mcpSessionId) {
+    return `mcp-session:${sha256(JSON.stringify([principalKey, mcpSessionId]))}`;
+  }
 
   const requestId = request.mcpRequestId;
   if (!requestId) {
@@ -342,6 +386,26 @@ export function extractMcpCancellationNotifications(
     });
   }
   return notifications;
+}
+
+export function extractMcpToolCallRequestIds(body: unknown): McpRequestId[] {
+  const messages = Array.isArray(body) ? body : [body];
+  const requestIds: McpRequestId[] = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    if (!isRecord(message) || message.method !== "tools/call") continue;
+    const requestId = message.id;
+    if (typeof requestId !== "string" && typeof requestId !== "number") {
+      continue;
+    }
+    const key = `${typeof requestId}:${String(requestId)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    requestIds.push(requestId);
+  }
+
+  return requestIds;
 }
 
 function operationKey(principalKey: string, requestId: McpRequestId): string {

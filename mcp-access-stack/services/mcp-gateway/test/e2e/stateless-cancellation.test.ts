@@ -99,6 +99,129 @@ describe("stateless MCP cancellation", () => {
     }
   });
 
+  it("allows overlapping OpenAI stateless calls that reuse one JSON-RPC id", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const agent = createFakeAgent({
+      listWorkspaces: async () => {
+        calls += 1;
+        await released;
+        return [];
+      },
+    });
+    const fixture = await createFixture(agent);
+    const headers = {
+      "x-openai-subject": "openai-subject-a",
+      "x-openai-session": "conversation-a",
+    };
+    const body = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "list_workspaces",
+        arguments: {},
+      },
+    };
+    try {
+      const firstPromise = postMcp(fixture.url, body, headers);
+      await waitFor(() => calls === 1, 5_000);
+
+      let secondSettled = false;
+      const secondPromise = postMcp(fixture.url, body, headers).then((response) => {
+        secondSettled = true;
+        return response;
+      });
+      await waitFor(() => calls === 2 || secondSettled, 5_000);
+      release();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      const firstBody = await first.json() as {
+        result: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+      const secondBody = await second.json() as {
+        result: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+
+      expect(calls).toBe(2);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(firstBody.result.isError).not.toBe(true);
+      expect(secondBody.result.isError).not.toBe(true);
+      expect(firstBody.result.content?.[0]?.text).toContain("Found 0 workspace(s).");
+      expect(secondBody.result.content?.[0]?.text).toContain("Found 0 workspace(s).");
+    } finally {
+      release();
+      await fixture.close();
+    }
+  });
+
+  it("does not apply a late cancellation to a later reused JSON-RPC id", async () => {
+    let calls = 0;
+    const agent = createFakeAgent({
+      runCommand: async () => {
+        calls += 1;
+        return {
+          status: "executed",
+          shell: "powershell",
+          cwd: ".",
+          exitCode: 0,
+          stdout: "reuse-ok",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    });
+    const fixture = await createFixture(agent);
+    const headers = {
+      "x-openai-subject": "openai-subject-a",
+      "x-openai-session": "conversation-a",
+    };
+    const body = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "run_command",
+        arguments: {
+          workspaceId: "workspace",
+          shell: "powershell",
+          command: "Write-Output reuse",
+          timeoutMs: 30_000,
+        },
+      },
+    };
+    try {
+      const first = await postMcp(fixture.url, body, headers);
+      expect(first.status).toBe(200);
+
+      const cancellation = await postMcp(
+        fixture.url,
+        {
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1, reason: "late cancellation" },
+        },
+        headers,
+      );
+      expect(cancellation.status).toBe(202);
+
+      const second = await postMcp(fixture.url, body, headers);
+      const secondBody = await second.json() as {
+        result: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+      expect(second.status).toBe(200);
+      expect(secondBody.result.isError).not.toBe(true);
+      expect(secondBody.result.content?.[0]?.text).toContain("exit=0");
+      expect(calls).toBe(2);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("releases the MCP request id after confirmation_required before a confirmed retry", async () => {
     const confirmationId = "confirmation-retry-test";
     let calls = 0;
@@ -254,13 +377,18 @@ async function createFixture(agent: LocalAgent): Promise<{
   };
 }
 
-function postMcp(url: URL, body: unknown): Promise<Response> {
+function postMcp(
+  url: URL,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
   return fetch(new URL(mcpPath, url), {
     method: "POST",
     headers: {
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
       "user-agent": "stateless-cancellation-test",
+      ...headers,
     },
     body: JSON.stringify(body),
   });
