@@ -270,6 +270,9 @@ export class LocalAgent {
         durationMs: elapsed(startedAt),
         status: "error",
         reason: appError.code,
+        ...(appError.lifecycle === undefined
+          ? {}
+          : { lifecycle: appError.lifecycle }),
       });
       throw appError;
     }
@@ -1053,6 +1056,9 @@ export class LocalAgent {
           startedAt,
           status: isDenied(appError) ? "denied" : "error",
           reason: appError.code,
+          ...(appError.lifecycle === undefined
+            ? {}
+            : { lifecycle: appError.lifecycle }),
         }),
       );
       throw appError;
@@ -1315,6 +1321,9 @@ export class LocalAgent {
           startedAt,
           status: isDenied(appError) ? "denied" : "error",
           reason: appError.code,
+          ...(appError.lifecycle === undefined
+            ? {}
+            : { lifecycle: appError.lifecycle }),
         }),
       );
       throw appError;
@@ -1488,6 +1497,7 @@ function makeAuditEntry(input: {
   startedAt: number;
   status: AuditEntry["status"];
   reason?: string;
+  lifecycle?: AuditEntry["lifecycle"];
 }): AuditEntry {
   return {
     timestamp: new Date().toISOString(),
@@ -1515,5 +1525,6 @@ function makeAuditEntry(input: {
     durationMs: elapsed(input.startedAt),
     status: input.status,
     ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
   };
 }
