@@ -88,14 +88,14 @@
     "@modelcontextprotocol/inspector": "^0.22.0",
     "@types/compression": "1.8.1",
     "@types/express": "^5.0.6",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.0",
-    "jest": "^30.4.2",
+    "jest": "^30.5.1",
     "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   },
   "allowScripts": {
     "@ast-grep/cli@0.44.1": true,
