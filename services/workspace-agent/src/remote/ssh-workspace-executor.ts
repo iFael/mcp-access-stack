@@ -86,6 +86,14 @@ export interface SshWorkspaceExecutorOptions {
   backgroundStateDirectory: string;
 }
 
+function backgroundTaskAccess(
+  context: OperationContext,
+): { ownerScope?: string } {
+  return context.ownerScope === undefined
+    ? {}
+    : { ownerScope: context.ownerScope };
+}
+
 export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
   private readonly workspaces: Map<string, RemoteWorkspace>;
   private readonly transport: SshWindowsTransport;
@@ -649,6 +657,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
 
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
+    context: OperationContext = {},
   ): Promise<StartBackgroundTaskResult> {
     const parsed = startBackgroundTaskInputSchema.parse(input);
     const workspace = this.workspace(parsed.workspaceId);
@@ -664,20 +673,29 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       operation: parsed.operation,
     });
     if ("status" in authorization) return authorization;
-    const task = await this.background.start_background_task({
-      workspaceId: parsed.workspaceId,
-      operation: parsed.operation,
-      command: parsed.command,
-      shell,
-      cwd,
-      timeoutMs: parsed.timeoutMs,
-    });
+    const task = await this.background.start_background_task(
+      {
+        workspaceId: parsed.workspaceId,
+        operation: parsed.operation,
+        command: parsed.command,
+        shell,
+        cwd,
+        timeoutMs: parsed.timeoutMs,
+      },
+      backgroundTaskAccess(context),
+    );
     return { status: "background_task_started", task };
   }
 
-  async getBackgroundTask(input: GetBackgroundTaskInput): Promise<BackgroundTaskResult> {
+  async getBackgroundTask(
+    input: GetBackgroundTaskInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskResult> {
     this.workspace(input.workspaceId);
-    const task = await this.background.get_background_task(input.id);
+    const task = await this.background.get_background_task(
+      input.id,
+      backgroundTaskAccess(context),
+    );
     return { task: task?.workspaceId === input.workspaceId ? task : null };
   }
 
@@ -686,39 +704,62 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     context: OperationContext = {},
   ): Promise<BackgroundTaskWaitResult> {
     this.workspace(input.workspaceId);
-    const task = await this.background.get_background_task(input.id);
+    const access = backgroundTaskAccess(context);
+    const task = await this.background.get_background_task(input.id, access);
     if (!task || task.workspaceId !== input.workspaceId) {
       return { task: null, logs: null, timedOut: false, elapsedMs: 0 };
     }
-    return this.background.wait_background_task(input.id, {
-      timeoutMs: input.timeoutMs ?? 60_000,
-      maxBytes: input.maxBytes ?? 100_000,
-      ...(context.signal === undefined ? {} : { signal: context.signal }),
-    });
+    return this.background.wait_background_task(
+      input.id,
+      {
+        timeoutMs: input.timeoutMs ?? 60_000,
+        maxBytes: input.maxBytes ?? 100_000,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+      },
+      access,
+    );
   }
-  async listBackgroundTasks(input: ListBackgroundTasksInput): Promise<BackgroundTaskListResult> {
+  async listBackgroundTasks(
+    input: ListBackgroundTasksInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskListResult> {
     this.workspace(input.workspaceId);
-    const tasks = await this.background.list_background_tasks({
-      workspaceId: input.workspaceId,
-      ...(input.state === undefined ? {} : { state: input.state }),
-    });
+    const tasks = await this.background.list_background_tasks(
+      {
+        workspaceId: input.workspaceId,
+        ...(input.state === undefined ? {} : { state: input.state }),
+      },
+      backgroundTaskAccess(context),
+    );
     return { tasks };
   }
 
-  async cancelBackgroundTask(input: CancelBackgroundTaskInput): Promise<BackgroundTaskResult> {
+  async cancelBackgroundTask(
+    input: CancelBackgroundTaskInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskResult> {
     this.workspace(input.workspaceId);
-    const task = await this.background.cancel_background_task(input.id);
+    const task = await this.background.cancel_background_task(
+      input.id,
+      backgroundTaskAccess(context),
+    );
     return { task: task?.workspaceId === input.workspaceId ? task : null };
   }
 
   async readBackgroundTaskLogs(
     input: ReadBackgroundTaskLogsInput,
+    context: OperationContext = {},
   ): Promise<BackgroundTaskLogsLookupResult> {
     this.workspace(input.workspaceId);
-    const task = await this.background.get_background_task(input.id);
+    const access = backgroundTaskAccess(context);
+    const task = await this.background.get_background_task(input.id, access);
     if (!task || task.workspaceId !== input.workspaceId) return { logs: null };
     return {
-      logs: await this.background.read_background_task_logs(input.id, input.maxBytes ?? 100_000),
+      logs: await this.background.read_background_task_logs(
+        input.id,
+        input.maxBytes ?? 100_000,
+        access,
+      ),
     };
   }
 

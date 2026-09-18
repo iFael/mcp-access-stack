@@ -153,6 +153,14 @@ export interface LocalAgentOptions {
   mutationReceiptStore?: MutationReceiptStore;
 }
 
+function backgroundTaskAccess(
+  context: OperationContext,
+): { ownerScope?: string } {
+  return context.ownerScope === undefined
+    ? {}
+    : { ownerScope: context.ownerScope };
+}
+
 export class LocalAgent {
   private readonly fileService = new FileService();
   private readonly gitService = new GitService();
@@ -411,14 +419,17 @@ export class LocalAgent {
         if ("status" in authorization) return authorization;
         return {
           status: "background_task_started" as const,
-          task: await this.backgroundTaskManager.start_background_task({
-            workspaceId: parsed.workspaceId,
-            operation: parsed.operation,
-            command: parsed.command,
-            shell: parsed.shell,
-            cwd: authorization.logicalCwd,
-            timeoutMs: parsed.timeoutMs,
-          }),
+          task: await this.backgroundTaskManager.start_background_task(
+            {
+              workspaceId: parsed.workspaceId,
+              operation: parsed.operation,
+              command: parsed.command,
+              shell: parsed.shell,
+              cwd: authorization.logicalCwd,
+              timeoutMs: parsed.timeoutMs,
+            },
+            backgroundTaskAccess(activeContext),
+          ),
         };
       },
     );
@@ -435,8 +446,11 @@ export class LocalAgent {
       input,
       context,
       (parsed) => ({ query: parsed.id }),
-      async (_workspace, parsed) => {
-        const task = await this.backgroundTaskManager.get_background_task(parsed.id);
+      async (_workspace, parsed, activeContext) => {
+        const task = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          backgroundTaskAccess(activeContext),
+        );
         return { task: task?.workspaceId === parsed.workspaceId ? task : null };
       },
     );
@@ -454,17 +468,25 @@ export class LocalAgent {
       context,
       (parsed) => ({ query: parsed.id }),
       async (_workspace, parsed, activeContext) => {
-        const current = await this.backgroundTaskManager.get_background_task(parsed.id);
+        const access = backgroundTaskAccess(activeContext);
+        const current = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          access,
+        );
         if (current?.workspaceId !== parsed.workspaceId) {
           return { task: null, logs: null, timedOut: false, elapsedMs: 0 };
         }
-        return this.backgroundTaskManager.wait_background_task(parsed.id, {
-          timeoutMs: parsed.timeoutMs,
-          maxBytes: parsed.maxBytes,
-          ...(activeContext.signal === undefined
-            ? {}
-            : { signal: activeContext.signal }),
-        });
+        return this.backgroundTaskManager.wait_background_task(
+          parsed.id,
+          {
+            timeoutMs: parsed.timeoutMs,
+            maxBytes: parsed.maxBytes,
+            ...(activeContext.signal === undefined
+              ? {}
+              : { signal: activeContext.signal }),
+          },
+          access,
+        );
       },
     );
   }
@@ -480,11 +502,14 @@ export class LocalAgent {
       input,
       context,
       () => ({}),
-      async (_workspace, parsed) => ({
-        tasks: await this.backgroundTaskManager.list_background_tasks({
-          workspaceId: parsed.workspaceId,
-          ...(parsed.state === undefined ? {} : { state: parsed.state }),
-        }),
+      async (_workspace, parsed, activeContext) => ({
+        tasks: await this.backgroundTaskManager.list_background_tasks(
+          {
+            workspaceId: parsed.workspaceId,
+            ...(parsed.state === undefined ? {} : { state: parsed.state }),
+          },
+          backgroundTaskAccess(activeContext),
+        ),
       }),
     );
   }
@@ -500,10 +525,19 @@ export class LocalAgent {
       input,
       context,
       (parsed) => ({ query: parsed.id }),
-      async (_workspace, parsed) => {
-        const current = await this.backgroundTaskManager.get_background_task(parsed.id);
+      async (_workspace, parsed, activeContext) => {
+        const access = backgroundTaskAccess(activeContext);
+        const current = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          access,
+        );
         if (current?.workspaceId !== parsed.workspaceId) return { task: null };
-        return { task: await this.backgroundTaskManager.cancel_background_task(parsed.id) };
+        return {
+          task: await this.backgroundTaskManager.cancel_background_task(
+            parsed.id,
+            access,
+          ),
+        };
       },
     );
   }
@@ -519,13 +553,18 @@ export class LocalAgent {
       input,
       context,
       (parsed) => ({ query: parsed.id }),
-      async (_workspace, parsed) => {
-        const current = await this.backgroundTaskManager.get_background_task(parsed.id);
+      async (_workspace, parsed, activeContext) => {
+        const access = backgroundTaskAccess(activeContext);
+        const current = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          access,
+        );
         if (current?.workspaceId !== parsed.workspaceId) return { logs: null };
         return {
           logs: await this.backgroundTaskManager.read_background_task_logs(
             parsed.id,
             parsed.maxBytes,
+            access,
           ),
         };
       },

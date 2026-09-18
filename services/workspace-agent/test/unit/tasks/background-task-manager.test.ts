@@ -183,6 +183,109 @@ describe("BackgroundTaskManager", () => {
     );
   });
 
+  it("isolates deduplication and task access by owner scope", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const input = {
+      workspaceId: "project",
+      operation: "check",
+      command: "npm run check",
+      shell: "pwsh" as const,
+    };
+    const ownerA = { ownerScope: "openai-session:owner-a" };
+    const ownerB = { ownerScope: "openai-session:owner-b" };
+
+    const first = await manager.start_background_task(input, ownerA);
+    const duplicate = await manager.start_background_task(input, ownerA);
+    const secondOwner = await manager.start_background_task(input, ownerB);
+
+    expect(duplicate.id).toBe(first.id);
+    expect(secondOwner.id).not.toBe(first.id);
+    expect(first).not.toHaveProperty("ownerScopeHash");
+    const persisted = JSON.parse(
+      await readFile(path.join(stateDirectory, `${first.id}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted.ownerScopeHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(persisted)).not.toContain(ownerA.ownerScope);
+    await waitFor(async () => runner.calls === 2);
+
+    expect(
+      await manager.get_background_task(first.id, ownerA),
+    ).toMatchObject({ id: first.id });
+    expect(await manager.get_background_task(first.id, ownerB)).toBeNull();
+    expect(
+      (
+        await manager.list_background_tasks(
+          { workspaceId: "project" },
+          ownerA,
+        )
+      ).map((task) => task.id),
+    ).toEqual([first.id]);
+    expect(
+      (
+        await manager.list_background_tasks(
+          { workspaceId: "project" },
+          ownerB,
+        )
+      ).map((task) => task.id),
+    ).toEqual([secondOwner.id]);
+    expect(
+      await manager.read_background_task_logs(first.id, 100_000, ownerB),
+    ).toBeNull();
+    await expect(
+      manager.wait_background_task(
+        first.id,
+        { timeoutMs: 10, maxBytes: 100 },
+        ownerB,
+      ),
+    ).resolves.toMatchObject({ task: null, logs: null });
+    expect(await manager.cancel_background_task(first.id, ownerB)).toBeNull();
+
+    await manager.cancel_background_task(first.id, ownerA);
+    await manager.cancel_background_task(secondOwner.id, ownerB);
+  });
+
+  it("keeps legacy unowned records valid but hides them from scoped callers", async () => {
+    const id = "123e4567-e89b-42d3-a456-426614174001";
+    await writeFile(
+      path.join(stateDirectory, `${id}.json`),
+      `${JSON.stringify({
+        version: 1,
+        id,
+        workspaceId: "project",
+        operation: "legacy",
+        commandHash: "b".repeat(64),
+        command: "echo legacy",
+        shell: "pwsh",
+        cwd: ".",
+        state: "succeeded",
+        createdAt: "2026-09-17T20:00:00.000Z",
+        completedAt: "2026-09-17T20:00:01.000Z",
+        timeoutMs: 120_000,
+      })}\n`,
+      "utf8",
+    );
+
+    const manager = new BackgroundTaskManager({
+      stateDirectory,
+      runner: new ControlledRunner(),
+    });
+    expect(await manager.get_background_task(id)).toMatchObject({
+      id,
+      operation: "legacy",
+    });
+    expect(
+      await manager.get_background_task(id, {
+        ownerScope: "openai-session:new-owner",
+      }),
+    ).toBeNull();
+    expect(
+      await manager.list_background_tasks(
+        { workspaceId: "project" },
+        { ownerScope: "openai-session:new-owner" },
+      ),
+    ).toEqual([]);
+  });
   it("preserves significant whitespace and does not deduplicate different commands", async () => {
     const runner = new ControlledRunner();
     const manager = new BackgroundTaskManager({ stateDirectory, runner });
