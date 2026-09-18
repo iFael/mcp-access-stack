@@ -57,12 +57,21 @@ export interface BackgroundTaskManagerOptions {
   now?: () => Date;
 }
 
+export interface BackgroundTaskAccessContext {
+  ownerScope?: string;
+}
+
+type PersistedBackgroundTaskRecord = BackgroundTaskRecord & {
+  ownerScopeHash?: string;
+};
+
 const ACTIVE_STATES = new Set<BackgroundTaskState>(["starting", "running"]);
 const BACKGROUND_WAIT_POLL_MS = 100;
 const TASK_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TASK_STATE_FILE_PATTERN = new RegExp(`^(${TASK_ID_PATTERN.source.slice(1, -1)})\\.json$`, "iu");
 const MAX_LOG_BYTES = 1_000_000;
+const OWNER_SCOPE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 export class BackgroundTaskManager {
   private readonly controllers = new Map<string, AbortController>();
@@ -78,9 +87,11 @@ export class BackgroundTaskManager {
 
   async start_background_task(
     input: StartBackgroundTaskInput,
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskRecord> {
     await this.ensureInitialized();
     const normalized = normalizeStartInput(input);
+    const ownerScopeHash = hashOwnerScope(access.ownerScope);
     let releaseQueue!: () => void;
     const previousStart = this.startQueue;
     this.startQueue = new Promise<void>((resolve) => {
@@ -90,7 +101,10 @@ export class BackgroundTaskManager {
 
     try {
       const duplicate = (
-        await this.list_background_tasks({ workspaceId: normalized.workspaceId })
+        await this.list_background_tasks(
+          { workspaceId: normalized.workspaceId },
+          access,
+        )
       ).find(
         (task) =>
           task.commandHash === normalized.commandHash &&
@@ -98,7 +112,7 @@ export class BackgroundTaskManager {
       );
       if (duplicate) return duplicate;
 
-      const record: BackgroundTaskRecord = {
+      const record: PersistedBackgroundTaskRecord = {
         version: 1,
         id: randomUUID(),
         workspaceId: normalized.workspaceId,
@@ -110,6 +124,7 @@ export class BackgroundTaskManager {
         state: "starting",
         createdAt: this.now().toISOString(),
         timeoutMs: normalized.timeoutMs,
+        ...(ownerScopeHash === undefined ? {} : { ownerScopeHash }),
       };
       await this.initializeTaskFiles(record.id);
       await this.persist(record);
@@ -125,7 +140,7 @@ export class BackgroundTaskManager {
           }
         })
         .catch(() => undefined);
-      return record;
+      return toPublicRecord(record);
     } finally {
       releaseQueue();
     }
@@ -133,41 +148,36 @@ export class BackgroundTaskManager {
 
   async get_background_task(
     id: string,
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskRecord | null> {
-    await this.ensureInitialized();
-    await this.writes.get(id);
-    try {
-      const raw = await readFile(this.taskPath(id), "utf8");
-      const record = parseRecord(raw);
-      return this.refreshRecoveredTask(record);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+    const record = await this.getAccessibleRecord(id, access);
+    return record ? toPublicRecord(record) : null;
   }
 
   async list_background_tasks(
     filter: { workspaceId?: string; state?: BackgroundTaskState } = {},
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskRecord[]> {
     await this.ensureInitialized();
     await Promise.all(this.writes.values());
     const entries = await readdir(this.options.stateDirectory, {
       withFileTypes: true,
     });
-    const records = await Promise.all(
+    const persisted = await Promise.all(
       entries
         .filter(
           (entry) => entry.isFile() && TASK_STATE_FILE_PATTERN.test(entry.name),
         )
-        .map(async (entry) => {
-          const record = parseRecord(
-            await readFile(
-              path.join(this.options.stateDirectory, entry.name),
-              "utf8",
-            ),
-          );
-          return this.refreshRecoveredTask(record);
-        }),
+        .map((entry) =>
+          readPersistedRecord(
+            path.join(this.options.stateDirectory, entry.name),
+          ),
+        ),
+    );
+    const records = await Promise.all(
+      persisted
+        .filter((record) => canAccessRecord(record, access))
+        .map((record) => this.refreshRecoveredTask(record)),
     );
     return records
       .filter(
@@ -179,17 +189,21 @@ export class BackgroundTaskManager {
         (record) =>
           filter.state === undefined || record.state === filter.state,
       )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map(toPublicRecord);
   }
 
   async cancel_background_task(
     id: string,
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskRecord | null> {
-    const record = await this.get_background_task(id);
-    if (!record || !ACTIVE_STATES.has(record.state)) return record;
+    const record = await this.getAccessibleRecord(id, access);
+    if (!record || !ACTIVE_STATES.has(record.state)) {
+      return record ? toPublicRecord(record) : null;
+    }
 
     const completedAt = this.now();
-    const cancelled: BackgroundTaskRecord = {
+    const cancelled: PersistedBackgroundTaskRecord = {
       ...record,
       state: "cancelled",
       completedAt: completedAt.toISOString(),
@@ -215,14 +229,16 @@ export class BackgroundTaskManager {
     }
 
     await this.writes.get(id);
-    return (await this.get_background_task(id)) ?? cancelled;
+    const latest = await this.getAccessibleRecord(id, access);
+    return latest ? toPublicRecord(latest) : toPublicRecord(cancelled);
   }
 
   async read_background_task_logs(
     id: string,
     maxBytes = 100_000,
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskLogsResult | null> {
-    const record = await this.get_background_task(id);
+    const record = await this.getAccessibleRecord(id, access);
     if (!record) return null;
     const effectiveMaxBytes = Math.min(Math.max(maxBytes, 1), MAX_LOG_BYTES);
     const [stdout, stderr] = await Promise.all([
@@ -246,6 +262,7 @@ export class BackgroundTaskManager {
       maxBytes: number;
       signal?: AbortSignal;
     },
+    access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskWaitResult> {
     const startedAt = Date.now();
     const deadline = startedAt + Math.max(1, Math.trunc(options.timeoutMs));
@@ -255,8 +272,8 @@ export class BackgroundTaskManager {
         throw abortSignalError(options.signal, "Background task wait was cancelled.");
       }
 
-      const task = await this.get_background_task(id);
-      if (!task) {
+      const persisted = await this.getAccessibleRecord(id, access);
+      if (!persisted) {
         return {
           task: null,
           logs: null,
@@ -265,10 +282,15 @@ export class BackgroundTaskManager {
         };
       }
 
+      const task = toPublicRecord(persisted);
       if (!ACTIVE_STATES.has(task.state)) {
         return {
           task,
-          logs: await this.read_background_task_logs(id, options.maxBytes),
+          logs: await this.read_background_task_logs(
+            id,
+            options.maxBytes,
+            access,
+          ),
           timedOut: false,
           elapsedMs: Date.now() - startedAt,
         };
@@ -278,7 +300,11 @@ export class BackgroundTaskManager {
       if (remainingMs <= 0) {
         return {
           task,
-          logs: await this.read_background_task_logs(id, options.maxBytes),
+          logs: await this.read_background_task_logs(
+            id,
+            options.maxBytes,
+            access,
+          ),
           timedOut: true,
           elapsedMs: Date.now() - startedAt,
         };
@@ -292,11 +318,11 @@ export class BackgroundTaskManager {
     }
   }
   private async execute(
-    initial: BackgroundTaskRecord,
+    initial: PersistedBackgroundTaskRecord,
     controller: AbortController,
     command: string,
   ): Promise<void> {
-    let current: BackgroundTaskRecord = {
+    let current: PersistedBackgroundTaskRecord = {
       ...initial,
       state: "running",
       startedAt: this.now().toISOString(),
@@ -324,7 +350,7 @@ export class BackgroundTaskManager {
         },
       );
       await this.sanitizeTaskLogs(current.id);
-      const latest = await this.get_background_task(current.id);
+      const latest = await this.readPersistedRecord(current.id);
       if (latest?.state === "cancelled") return;
 
       if (rawResult.status !== "executed") {
@@ -361,7 +387,7 @@ export class BackgroundTaskManager {
       await this.persist(current);
     } catch (error) {
       await this.sanitizeTaskLogs(current.id);
-      const latest = await this.get_background_task(current.id);
+      const latest = await this.readPersistedRecord(current.id);
       if (latest?.state === "cancelled") return;
       const completedAt = this.now();
       await this.persist({
@@ -409,7 +435,7 @@ export class BackgroundTaskManager {
         .map(async (entry) => {
           const filePath = path.join(this.options.stateDirectory, entry.name);
           try {
-            parseRecord(await readFile(filePath, "utf8"));
+            parsePersistedRecord(await readFile(filePath, "utf8"));
           } catch {
             const quarantinePath = path.join(
               this.quarantineDirectory(),
@@ -422,8 +448,8 @@ export class BackgroundTaskManager {
   }
 
   private async refreshRecoveredTask(
-    record: BackgroundTaskRecord,
-  ): Promise<BackgroundTaskRecord> {
+    record: PersistedBackgroundTaskRecord,
+  ): Promise<PersistedBackgroundTaskRecord> {
     if (
       !ACTIVE_STATES.has(record.state) ||
       this.executions.has(record.id) ||
@@ -435,7 +461,7 @@ export class BackgroundTaskManager {
       return record;
     }
     const completedAt = record.completedAt ?? this.now().toISOString();
-    const interrupted: BackgroundTaskRecord = {
+    const interrupted: PersistedBackgroundTaskRecord = {
       ...record,
       state: "failed",
       completedAt,
@@ -456,6 +482,28 @@ export class BackgroundTaskManager {
     };
     await this.persist(interrupted);
     return interrupted;
+  }
+
+  private async readPersistedRecord(
+    id: string,
+  ): Promise<PersistedBackgroundTaskRecord | null> {
+    await this.ensureInitialized();
+    await this.writes.get(id);
+    try {
+      return parsePersistedRecord(await readFile(this.taskPath(id), "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private async getAccessibleRecord(
+    id: string,
+    access: BackgroundTaskAccessContext,
+  ): Promise<PersistedBackgroundTaskRecord | null> {
+    const record = await this.readPersistedRecord(id);
+    if (!record || !canAccessRecord(record, access)) return null;
+    return this.refreshRecoveredTask(record);
   }
 
   private taskPath(id: string): string {
@@ -497,8 +545,8 @@ export class BackgroundTaskManager {
     }
   }
 
-  private async persist(record: BackgroundTaskRecord): Promise<void> {
-    const parsed = backgroundTaskRecordSchema.parse(record);
+  private async persist(record: PersistedBackgroundTaskRecord): Promise<void> {
+    const parsed = validatePersistedRecord(record);
     const previous = this.writes.get(parsed.id) ?? Promise.resolve();
     const write = previous.then(() =>
       writeJsonAtomically(this.taskPath(parsed.id), parsed),
@@ -561,8 +609,56 @@ function normalizeStartInput(input: StartBackgroundTaskInput): {
   };
 }
 
-function parseRecord(raw: string): BackgroundTaskRecord {
-  return backgroundTaskRecordSchema.parse(JSON.parse(raw));
+function parsePersistedRecord(raw: string): PersistedBackgroundTaskRecord {
+  return validatePersistedRecord(JSON.parse(raw));
+}
+
+function validatePersistedRecord(value: unknown): PersistedBackgroundTaskRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid persisted background task record.");
+  }
+  const raw = value as Record<string, unknown>;
+  const ownerScopeHash = raw.ownerScopeHash;
+  if (
+    ownerScopeHash !== undefined &&
+    (typeof ownerScopeHash !== "string" ||
+      !OWNER_SCOPE_HASH_PATTERN.test(ownerScopeHash))
+  ) {
+    throw new Error("Invalid persisted background task owner scope.");
+  }
+  const {
+    ownerScopeHash: _ownerScopeHash,
+    ...publicValue
+  } = raw;
+  const record = backgroundTaskRecordSchema.parse(publicValue);
+  return ownerScopeHash === undefined
+    ? record
+    : { ...record, ownerScopeHash };
+}
+
+function toPublicRecord(
+  record: PersistedBackgroundTaskRecord,
+): BackgroundTaskRecord {
+  const { ownerScopeHash: _ownerScopeHash, ...publicRecord } = record;
+  return backgroundTaskRecordSchema.parse(publicRecord);
+}
+
+function hashOwnerScope(ownerScope: string | undefined): string | undefined {
+  if (ownerScope === undefined) return undefined;
+  return createHash("sha256").update(ownerScope).digest("hex");
+}
+
+function canAccessRecord(
+  record: PersistedBackgroundTaskRecord,
+  access: BackgroundTaskAccessContext,
+): boolean {
+  return record.ownerScopeHash === hashOwnerScope(access.ownerScope);
+}
+
+async function readPersistedRecord(
+  filePath: string,
+): Promise<PersistedBackgroundTaskRecord> {
+  return parsePersistedRecord(await readFile(filePath, "utf8"));
 }
 
 function assertTaskId(id: string): void {
