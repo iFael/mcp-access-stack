@@ -28,8 +28,8 @@ describe("Windows process tree termination failure", () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-09-19T00:00:00.000Z"));
 
-    spawnMock.mockImplementation((executable: string) =>
-      executable.toLocaleLowerCase("en-US").endsWith("taskkill.exe")
+    spawnMock.mockImplementation((executable: unknown) =>
+      String(executable).toLocaleLowerCase("en-US").endsWith("taskkill.exe")
         ? fakeChild(1)
         : fakeChild(0),
     );
