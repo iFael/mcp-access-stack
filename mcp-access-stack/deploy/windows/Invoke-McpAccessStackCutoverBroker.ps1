@@ -102,6 +102,78 @@ function Write-McpEdgeTaskRecoveryConfig {
     }
 }
 
+function Get-McpOptionalPropertyValue {
+    param(
+        [AllowNull()][object]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $InputObject) { return $null }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-McpEdgeHealthSnapshot {
+    param([Parameter(Mandatory = $true)][string]$EdgeBaseUrl)
+
+    $healthUrl = $EdgeBaseUrl.TrimEnd('/') + '/health'
+    return Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 3 -ErrorAction Stop
+}
+
+function Wait-McpEdgeCutoverHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,
+        [AllowNull()][string]$PreviousConnectorInstanceId,
+        [ValidateRange(5, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastDiagnostic = 'no health response'
+    do {
+        try {
+            $health = Get-McpEdgeHealthSnapshot -EdgeBaseUrl $EdgeBaseUrl
+            $runtime = Get-McpOptionalPropertyValue -InputObject $health -Name 'runtime'
+            $connectorInstanceId = [string](Get-McpOptionalPropertyValue -InputObject $runtime -Name 'connectorInstanceId')
+            $catalogContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $runtime -Name 'catalogContractRevision')
+            $service = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'service')
+            $controlPlaneReady = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'controlPlaneReady')
+            $executionPlaneReady = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'executionPlaneReady')
+            $connectorReady = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'connectorReady')
+            $contractCompatible = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'contractCompatible')
+            $isNewConnector = -not [string]::IsNullOrWhiteSpace($connectorInstanceId) -and (
+                [string]::IsNullOrWhiteSpace($PreviousConnectorInstanceId) -or
+                $connectorInstanceId -ne $PreviousConnectorInstanceId
+            )
+
+            if ($service -eq 'mcp-edge-gateway' -and
+                $controlPlaneReady -and
+                $executionPlaneReady -and
+                $connectorReady -and
+                $contractCompatible -and
+                $isNewConnector) {
+                return [pscustomobject]@{
+                    connectorInstanceId = $connectorInstanceId
+                    catalogContractRevision = $catalogContractRevision
+                    controlPlaneReady = $controlPlaneReady
+                    executionPlaneReady = $executionPlaneReady
+                    connectorReady = $connectorReady
+                    contractCompatible = $contractCompatible
+                }
+            }
+
+            $lastDiagnostic = "service=$service control=$controlPlaneReady execution=$executionPlaneReady connector=$connectorReady compatible=$contractCompatible connectorInstanceId=$connectorInstanceId"
+        }
+        catch {
+            $lastDiagnostic = $_.Exception.Message
+        }
+
+        Start-Sleep -Milliseconds 500
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw "Edge post-cutover health gate failed after $TimeoutSeconds seconds. Last observation: $lastDiagnostic"
+}
+
 if ([string]::IsNullOrWhiteSpace([string]$PSCommandPath)) {
     throw 'Access Stack cutover broker must run as a script file.'
 }
@@ -262,6 +334,15 @@ if ([bool]$browser.enabled) {
 Start-Sleep -Seconds ([int]$request.handoverDelaySeconds)
 $edgeTaskSnapshot = Get-McpScheduledTaskSnapshot -TaskName $edgeTaskName
 $browserTaskSnapshot = if ([bool]$browser.enabled) { Get-McpScheduledTaskSnapshot -TaskName $browserTaskName } else { $null }
+$previousConnectorInstanceId = $null
+try {
+    $previousHealth = Get-McpEdgeHealthSnapshot -EdgeBaseUrl ([string]$edge.edgeBaseUrl)
+    $previousRuntime = Get-McpOptionalPropertyValue -InputObject $previousHealth -Name 'runtime'
+    $previousConnectorInstanceId = [string](Get-McpOptionalPropertyValue -InputObject $previousRuntime -Name 'connectorInstanceId')
+}
+catch {
+    $previousConnectorInstanceId = $null
+}
 $cutoverCommitted = $false
 $edgeTaskResult = $null
 $browserTaskResult = $null
@@ -293,6 +374,10 @@ try {
     Enable-ScheduledTask -TaskName $edgeTaskName | Out-Null
     Start-ScheduledTask -TaskName $edgeTaskName
 
+    $healthGate = Wait-McpEdgeCutoverHealth `
+        -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+        -PreviousConnectorInstanceId $previousConnectorInstanceId
+
     $edgeRecoveryConfig = [ordered]@{
         schemaVersion = 1
         taskName = $edgeTaskName
@@ -323,6 +408,14 @@ try {
         ownershipMode = 'edge-only'
         edgeTask = [string]$edgeTaskResult.taskName
         browserTask = if ([bool]$browser.enabled) { $browserTaskName } else { $null }
+        healthGate = [ordered]@{
+            status = 'passed'
+            connectorInstanceId = [string]$healthGate.connectorInstanceId
+            catalogContractRevision = [string]$healthGate.catalogContractRevision
+            executionPlaneReady = [bool]$healthGate.executionPlaneReady
+            connectorReady = [bool]$healthGate.connectorReady
+            contractCompatible = [bool]$healthGate.contractCompatible
+        }
         recoveryConfig = $edgeRecoveryConfigPath
     })
     exit 0

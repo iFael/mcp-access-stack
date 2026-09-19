@@ -12,6 +12,7 @@ import { AppError, asAppError } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { EdgeConnector } from "./edge/connector.js";
+import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
 
 interface ConnectorRuntimeConfig {
@@ -105,6 +106,8 @@ async function main(): Promise<void> {
   });
 
   try {
+    await assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion);
+    writeLog({ event: "edge_connector_loopback_health_passed" });
     await connector.run(controller.signal);
   } finally {
     connector.stop();
