@@ -214,14 +214,24 @@ Assert-ContainsAll -Label 'Windows detached cutover broker' -Source $broker -Tok
     'failed SHA-256 validation',
     'Start-Sleep -Seconds ([int]$request.handoverDelaySeconds)',
     'Start-ScheduledTask -TaskName $edgeTaskName',
+    'Wait-McpEdgeCutoverHealth',
+    'PreviousConnectorInstanceId',
+    'executionPlaneReady',
+    'contractCompatible',
     "status = 'passed'"
 )
 $edgeInstallIndex = $broker.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
 $cutoverIndex = $broker.IndexOf('$cutoverCommitted = $true')
 $edgeStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
+$healthGateIndex = $broker.IndexOf('$healthGate = Wait-McpEdgeCutoverHealth')
+$passedIndex = $broker.IndexOf("status = 'passed'")
 if ($edgeInstallIndex -lt 0 -or $cutoverIndex -lt 0 -or $edgeStartIndex -lt 0 -or
-    $edgeInstallIndex -ge $cutoverIndex -or $cutoverIndex -ge $edgeStartIndex) {
-    throw 'Detached cutover broker must replace the stopped Edge task before state promotion and start it only after promotion.'
+    $healthGateIndex -lt 0 -or $passedIndex -lt 0 -or
+    $edgeInstallIndex -ge $cutoverIndex -or
+    $cutoverIndex -ge $edgeStartIndex -or
+    $edgeStartIndex -ge $healthGateIndex -or
+    $healthGateIndex -ge $passedIndex) {
+    throw 'Detached cutover broker must install, promote, start, pass the functional health gate, and only then report success.'
 }
 $updater = Read-ProjectFile 'deploy\windows\Update-McpAccessStack.ps1'
 Assert-ContainsAll -Label 'Windows updater' -Source $updater -Tokens @(
