@@ -76,6 +76,45 @@ describe("stateful MCP experiment", () => {
     }
   });
 
+  it("falls back to stateless requests when the client does not negotiate an MCP session", async () => {
+    const fixture = await createFixture(createFakeAgent({}));
+    try {
+      const listed = await postMcp(fixture.url, {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/list",
+        params: {},
+      });
+      const listedBody = await listed.json() as {
+        result?: { tools?: Array<{ name?: string }> };
+      };
+
+      expect(listed.status).toBe(200);
+      expect(listed.headers.get("mcp-session-id")).toBeNull();
+      expect(listedBody.result?.tools).toHaveLength(61);
+
+      const called = await postMcp(fixture.url, {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: {
+          name: "list_workspaces",
+          arguments: {},
+        },
+      });
+      const calledBody = await called.json() as {
+        result?: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+
+      expect(called.status).toBe(200);
+      expect(called.headers.get("mcp-session-id")).toBeNull();
+      expect(calledBody.result?.isError).not.toBe(true);
+      expect(calledBody.result?.content?.[0]?.text).toContain("Found 0 workspace(s).");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("cancels an active tool call from a second POST in the same session", async () => {
     const operation = createBlockingOperation();
     const fixture = await createFixture(operation.agent);
