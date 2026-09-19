@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
   AppError,
   COMMAND_TERMINATION_GRACE_MS,
+  createOperationLifecycle,
+  type OperationDeadline,
 } from "@vs-code-gpt/shared";
 
 const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
@@ -15,21 +17,30 @@ interface WindowsProcessRelation {
   parentPid: number;
 }
 
+export interface ProcessTerminationContext {
+  deadline: OperationDeadline;
+  startedAt: number;
+}
+
 export async function terminateChildProcessTree(
   child: ChildProcess,
+  context?: ProcessTerminationContext,
 ): Promise<void> {
   if (child.pid) {
-    await terminateProcessTreeByPid(child.pid);
+    await terminateProcessTreeByPid(child.pid, context);
     return;
   }
   child.kill();
 }
 
-export async function terminateProcessTreeByPid(pid: number): Promise<void> {
+export async function terminateProcessTreeByPid(
+  pid: number,
+  context?: ProcessTerminationContext,
+): Promise<void> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return;
 
   if (process.platform === "win32") {
-    await terminateWindowsProcessTreeByPid(pid);
+    await terminateWindowsProcessTreeByPid(pid, context);
     return;
   }
 
@@ -42,7 +53,10 @@ export async function terminateProcessTreeByPid(pid: number): Promise<void> {
   }
 }
 
-async function terminateWindowsProcessTreeByPid(rootPid: number): Promise<void> {
+async function terminateWindowsProcessTreeByPid(
+  rootPid: number,
+  context?: ProcessTerminationContext,
+): Promise<void> {
   const deadline = Date.now() + COMMAND_TERMINATION_GRACE_MS;
   const primarySucceeded = await runTaskKill(
     rootPid,
@@ -83,10 +97,23 @@ async function terminateWindowsProcessTreeByPid(rootPid: number): Promise<void> 
 
   const remaining = [...observedPids].filter(processExists);
   if (remaining.length > 0) {
-    throw new AppError(
-      "SHELL_FAILED",
-      "The Windows process tree did not terminate within the command termination grace period.",
-    );
+    const message =
+      "The Windows process tree did not terminate within the command termination grace period.";
+    throw new AppError("SHELL_FAILED", message, {
+      ...(context === undefined
+        ? {}
+        : {
+            lifecycle: createOperationLifecycle(
+              context.deadline,
+              context.startedAt,
+              {
+                layer: "child_process",
+                reason: "process_failed",
+                diagnostic: message,
+              },
+            ),
+          }),
+    });
   }
 }
 

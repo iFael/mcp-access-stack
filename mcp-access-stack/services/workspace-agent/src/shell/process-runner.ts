@@ -79,7 +79,7 @@ export async function runShellCommand(
     const requestTermination = (reason: TerminationReason): void => {
       if (terminationReason !== undefined || settled) return;
       terminationReason = reason;
-      termination ??= terminateChildProcessTree(child);
+      termination ??= terminateChildProcessTree(child, { deadline, startedAt });
       void termination.catch(failTermination);
     };
 
@@ -170,7 +170,7 @@ export async function runShellCommandToFiles(
 
     const terminate = (): Promise<void> => {
       if (!child) return Promise.resolve();
-      termination ??= terminateChildProcessTree(child);
+      termination ??= terminateChildProcessTree(child, { deadline, startedAt });
       return termination;
     };
     const onOutputFailure = (error: unknown): void => {
