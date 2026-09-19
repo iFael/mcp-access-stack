@@ -1,4 +1,11 @@
-import type { BrowserExecutor, SourceControlExecutor, WorkspaceExecutor } from "@vs-code-gpt/shared";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import type {
+  BrowserExecutor,
+  SourceControlExecutor,
+  ToolOperationContextFactory,
+  WorkspaceExecutor,
+} from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import compression from "compression";
@@ -106,6 +113,14 @@ export function createGatewayApplication(
       })
     : undefined);
   const operationRegistry = new McpOperationRegistry();
+  const statefulRequestContext =
+    new AsyncLocalStorage<ToolOperationContextFactory>();
+  type ExperimentalMcpSession = {
+    principalKey: string;
+    server: ReturnType<typeof createMcpServer>;
+    transport: StreamableHTTPServerTransport;
+  };
+  const statefulSessions = new Map<string, ExperimentalMcpSession>();
   const app = express();
 
   app.disable("x-powered-by");
@@ -205,6 +220,45 @@ export function createGatewayApplication(
     mcpMiddlewares.push(createSubjectRateLimiter(config));
   }
 
+  const statefulOperationContextFactory: ToolOperationContextFactory = (
+    extra,
+    requestedTimeoutMs,
+  ) => {
+    const factory = statefulRequestContext.getStore();
+    if (!factory) {
+      throw new Error(
+        "Stateful MCP operation context is unavailable for the current HTTP request.",
+      );
+    }
+    return factory(extra, requestedTimeoutMs);
+  };
+
+  const createExperimentalMcpSession = async (
+    principalKey: string,
+  ): Promise<ExperimentalMcpSession> => {
+    let session!: ExperimentalMcpSession;
+    const server = createMcpServer({
+      workspaceExecutor,
+      sourceControlExecutor,
+      ...(browser === undefined ? {} : { browser }),
+      auth: mcpAuth,
+      operationContextFactory: statefulOperationContextFactory,
+    });
+    const transport = new StreamableHTTPServerTransport({
+      enableJsonResponse: true,
+      sessionIdGenerator: randomUUID,
+      onsessioninitialized: (sessionId) => {
+        statefulSessions.set(sessionId, session);
+      },
+      onsessionclosed: (sessionId) => {
+        statefulSessions.delete(sessionId);
+      },
+    });
+    session = { principalKey, server, transport };
+    await server.connect(transport as Transport);
+    return session;
+  };
+
   mountGptActions(app, config, workspaceExecutor, logger, browser);
 
   app.use(config.mcpPath, createMcpRequestLifecycleMiddleware(logger));
@@ -215,7 +269,32 @@ export function createGatewayApplication(
       response.setHeader("WWW-Authenticate", challenge ?? ownerChallenge ?? "");
     }
 
-    const principalKey = createMcpPrincipalKey(request);
+    const requestedSessionId =
+      config.mcpSessionMode === "stateful-experiment"
+        ? readMcpSessionId(request)
+        : undefined;
+    const requestedSession =
+      requestedSessionId === undefined
+        ? undefined
+        : statefulSessions.get(requestedSessionId);
+    const principalKey =
+      config.mcpSessionMode === "stateful-experiment"
+        ? createMcpPrincipalKey(request, { ignoreMcpSessionId: true })
+        : createMcpPrincipalKey(request);
+
+    if (
+      requestedSessionId !== undefined &&
+      (requestedSession === undefined ||
+        requestedSession.principalKey !== principalKey)
+    ) {
+      response.status(404).json({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32001, message: "MCP session not found." },
+      });
+      return;
+    }
+
     const operationScopeKey = createMcpOperationScopeKey(request, principalKey);
     const cancellationScopeKey = createMcpCancellationScopeKey(request, principalKey);
     const requestLifecycleId = request.mcpRequestId;
@@ -248,6 +327,17 @@ export function createGatewayApplication(
       });
     }
 
+    if (
+      config.mcpSessionMode === "stateful-experiment" &&
+      requestedSessionId !== undefined &&
+      requestedSession !== undefined &&
+      isCancellationOnlyMcpBody(request.body)
+    ) {
+      releasePendingRegistrations();
+      response.status(202).end();
+      return;
+    }
+
     const requestAbort = bindMcpHttpRequestAbort(request, response);
     const operationContextFactory = createGatewayOperationContextFactory({
       registry: operationRegistry,
@@ -277,6 +367,29 @@ export function createGatewayApplication(
       next(error);
       return;
     }
+    if (config.mcpSessionMode === "stateful-experiment") {
+      let session = requestedSession;
+      let createdForRequest = false;
+      try {
+        if (!session) {
+          session = await createExperimentalMcpSession(principalKey);
+          createdForRequest = true;
+        }
+        await statefulRequestContext.run(operationContextFactory, () =>
+          session!.transport.handleRequest(request, response, request.body),
+        );
+      } catch (error) {
+        next(error);
+      } finally {
+        releasePendingRegistrations();
+        requestAbort.release();
+        if (createdForRequest && session?.transport.sessionId === undefined) {
+          await session?.server.close().catch(() => undefined);
+        }
+      }
+      return;
+    }
+
     const server = createMcpServer({
       workspaceExecutor,
       sourceControlExecutor,
@@ -298,8 +411,52 @@ export function createGatewayApplication(
       await server.close().catch(() => undefined);
     }
   });
-  app.get(config.mcpPath, (_request, response) => response.status(405).json({ error: "method_not_allowed" }));
-  app.delete(config.mcpPath, (_request, response) => response.status(405).json({ error: "method_not_allowed" }));
+  const handleExperimentalSessionRequest = async (
+    request: AuthenticatedRequest,
+    response: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    if (config.mcpSessionMode !== "stateful-experiment") {
+      response.status(405).json({ error: "method_not_allowed" });
+      return;
+    }
+
+    const sessionId = readMcpSessionId(request);
+    if (!sessionId) {
+      response.status(400).json({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32000, message: "Mcp-Session-Id is required." },
+      });
+      return;
+    }
+    const session = statefulSessions.get(sessionId);
+    const principalKey = createMcpPrincipalKey(request, {
+      ignoreMcpSessionId: true,
+    });
+    if (!session || session.principalKey !== principalKey) {
+      response.status(404).json({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32001, message: "MCP session not found." },
+      });
+      return;
+    }
+
+    try {
+      await session.transport.handleRequest(request, response);
+    } catch (error) {
+      next(error);
+    } finally {
+      if (request.method === "DELETE") {
+        statefulSessions.delete(sessionId);
+        await session.server.close().catch(() => undefined);
+      }
+    }
+  };
+
+  app.get(config.mcpPath, handleExperimentalSessionRequest);
+  app.delete(config.mcpPath, handleExperimentalSessionRequest);
 
   app.use((error: unknown, request: AuthenticatedRequest, response: Response, _next: NextFunction) => {
     logger.error({
@@ -352,6 +509,24 @@ function bindMcpHttpRequestAbort(
       response.removeListener("close", onClose);
     },
   };
+}
+
+function isCancellationOnlyMcpBody(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return (
+    messages.length > 0 &&
+    messages.every(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        (message as { method?: unknown }).method === "notifications/cancelled",
+    )
+  );
+}
+
+function readMcpSessionId(request: AuthenticatedRequest): string | undefined {
+  const value = request.header("mcp-session-id")?.trim();
+  return value ? value : undefined;
 }
 
 function errorName(error: unknown): string {

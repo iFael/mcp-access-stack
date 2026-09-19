@@ -20,6 +20,9 @@ const configSchema = z
     PORT: z.coerce.number().int().min(0).max(65_535).default(3000),
     PUBLIC_BASE_URL: z.url(),
     AUTH_MODE: z.enum(["oauth", "none", "owner"]).default("oauth"),
+    MCP_SESSION_MODE: z
+      .enum(["stateless", "stateful-experiment"])
+      .default("stateless"),
     OWNER_TOKEN: z.string().trim().min(16).optional(),
     OWNER_OAUTH_SCOPES: z.string().trim().min(1).default("workspaces:read"),
     OWNER_OAUTH_STATE_PATH: z.string().trim().min(1).optional(),
@@ -131,6 +134,7 @@ export interface GatewayConfig {
   port: number;
   publicBaseUrl: URL;
   authMode: "oauth" | "none" | "owner" | "edge-trusted";
+  mcpSessionMode: "stateless" | "stateful-experiment";
   mcpPath: string;
   trustProxy: number;
   oauth?: GatewayOAuthConfig | undefined;
@@ -179,11 +183,20 @@ export function loadGatewayConfig(
   if (RESERVED_MCP_PATHS.has(value.MCP_PATH)) {
     throw new Error("MCP_PATH must not collide with the /agent or /health endpoints.");
   }
+  if (
+    value.NODE_ENV === "production" &&
+    value.MCP_SESSION_MODE === "stateful-experiment"
+  ) {
+    throw new Error(
+      "MCP_SESSION_MODE=stateful-experiment is not allowed in production.",
+    );
+  }
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
     publicBaseUrl,
     authMode: value.AUTH_MODE,
+    mcpSessionMode: value.MCP_SESSION_MODE,
     mcpPath: value.MCP_PATH,
     trustProxy: value.TRUST_PROXY,
     oauth: loadOAuthConfig(value),
