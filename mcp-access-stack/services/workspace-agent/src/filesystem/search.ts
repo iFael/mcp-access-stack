@@ -4,7 +4,7 @@ import {
   type SearchFilesResult,
 } from "@vs-code-gpt/shared";
 import type { FileCandidate } from "./discovery.js";
-import { readTextFile } from "./text-file.js";
+import { readSearchTextFile } from "./text-file.js";
 
 const SEARCH_FILE_CONCURRENCY = 8;
 const SEARCH_LINE_ABORT_CHECK_INTERVAL = 256;
@@ -119,9 +119,9 @@ async function searchCandidate(
   signal?: AbortSignal,
 ): Promise<FileSearchResult> {
   throwIfAborted(signal);
-  let contents: Awaited<ReturnType<typeof readTextFile>>;
+  let text: string;
   try {
-    contents = await readTextFile(candidate.absolutePath, maxFileBytes);
+    text = await readSearchTextFile(candidate.absolutePath, maxFileBytes);
   } catch (error) {
     if (
       error instanceof AppError &&
@@ -135,7 +135,7 @@ async function searchCandidate(
 
   const matches: FileSearchResult["matches"] = [];
   let hasMoreMatches = false;
-  const lines = contents.text.split(/\r?\n/);
+  const lines = text.split(/\r?\n/);
   for (const [lineIndex, line] of lines.entries()) {
     if (lineIndex % SEARCH_LINE_ABORT_CHECK_INTERVAL === 0) {
       throwIfAborted(signal);

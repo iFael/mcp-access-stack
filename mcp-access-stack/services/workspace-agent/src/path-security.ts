@@ -1,7 +1,7 @@
 import { lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { AppError } from "@vs-code-gpt/shared";
-import { minimatch } from "minimatch";
+import { Minimatch } from "minimatch";
 import type {
   AuthorizedPath,
   AuthorizedWritePath,
@@ -101,17 +101,31 @@ function isRealEnvironmentFile(relativePath: string): boolean {
   );
 }
 export class PathSecurity {
-  constructor(private readonly workspace: ResolvedWorkspace) {}
+  private readonly blockedMatchers: Array<{
+    pattern: string;
+    matcher: Minimatch;
+  }>;
+  private readonly subtreeBlockedMatchers: Minimatch[];
+
+  constructor(private readonly workspace: ResolvedWorkspace) {
+    const options = {
+      dot: true,
+      nocase: isWindows,
+      matchBase: false,
+    };
+    this.blockedMatchers = workspace.blockedGlobs.map((pattern) => ({
+      pattern,
+      matcher: new Minimatch(pattern, options),
+    }));
+    this.subtreeBlockedMatchers = workspace.blockedGlobs
+      .filter((pattern) => pattern.endsWith("/**"))
+      .map((pattern) => new Minimatch(pattern.slice(0, -3), options));
+  }
 
   matchedBlockedPattern(relativePath: string): string | undefined {
     const candidate = relativePath === "." ? "" : relativePath;
-    return this.workspace.blockedGlobs.find((pattern) =>
-      minimatch(candidate, pattern, {
-        dot: true,
-        nocase: isWindows,
-        matchBase: false,
-      }),
-    );
+    return this.blockedMatchers.find(({ matcher }) => matcher.match(candidate))
+      ?.pattern;
   }
 
   isBlocked(relativePath: string): boolean {
@@ -120,17 +134,7 @@ export class PathSecurity {
 
   isSubtreeBlocked(relativePath: string): boolean {
     const candidate = relativePath === "." ? "" : relativePath;
-    return this.workspace.blockedGlobs.some((pattern) => {
-      if (!pattern.endsWith("/**")) {
-        return false;
-      }
-      const subtreeRootPattern = pattern.slice(0, -3);
-      return minimatch(candidate, subtreeRootPattern, {
-        dot: true,
-        nocase: isWindows,
-        matchBase: false,
-      });
-    });
+    return this.subtreeBlockedMatchers.some((matcher) => matcher.match(candidate));
   }
   authorizeLogical(input: string, allowDot = false, operation?: string): string {
     const logicalPath = normalizeRelativePath(input, { allowDot });
