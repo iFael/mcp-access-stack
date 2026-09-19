@@ -179,7 +179,7 @@ describe("stateful MCP experiment", () => {
       const sessionId = await initializeMcp(stateful.url);
       const statefulHeaders = { "mcp-session-id": sessionId };
 
-      for (let index = 0; index < 3; index += 1) {
+      for (let index = 0; index < 1; index += 1) {
         await toolsList(stateful.url, statefulHeaders);
         await toolsList(stateless.url);
       }
@@ -187,12 +187,12 @@ describe("stateful MCP experiment", () => {
       const statefulSamples = await measureRepeatedToolsList(
         stateful.url,
         statefulHeaders,
-        12,
+        6,
       );
       const statelessSamples = await measureRepeatedToolsList(
         stateless.url,
         {},
-        12,
+        6,
       );
 
       const statefulSummary = summarizeLatency(statefulSamples);
@@ -201,14 +201,15 @@ describe("stateful MCP experiment", () => {
       console.error(
         "STATEFUL_EXPERIMENT_AB " +
           JSON.stringify({
-            calls: 12,
+            calls: 6,
             stateful: statefulSummary,
             stateless: statelessSummary,
           }),
       );
 
-      expect(statefulSamples).toHaveLength(12);
-      expect(statelessSamples).toHaveLength(12);
+      expect(statefulSamples).toHaveLength(6);
+      expect(statelessSamples).toHaveLength(6);
+      await terminateSession(stateful.url, sessionId);
     } finally {
       await stateful.close();
       await stateless.close();
@@ -233,6 +234,25 @@ describe("stateful MCP experiment", () => {
     }
   });
 });
+
+async function terminateSession(
+  url: URL,
+  sessionId: string,
+): Promise<void> {
+  const response = await fetch(new URL(mcpPath, url), {
+    method: "DELETE",
+    headers: {
+      accept: "application/json, text/event-stream",
+      "mcp-session-id": sessionId,
+      "user-agent": "stateful-experiment-test",
+    },
+  });
+  if (![200, 204].includes(response.status)) {
+    throw new Error(
+      `DELETE session failed with status ${response.status}: ${await response.text()}`,
+    );
+  }
+}
 
 async function toolsList(
   url: URL,

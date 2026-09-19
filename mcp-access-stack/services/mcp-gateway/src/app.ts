@@ -298,6 +298,19 @@ export function createGatewayApplication(
     const operationScopeKey = createMcpOperationScopeKey(request, principalKey);
     const cancellationScopeKey = createMcpCancellationScopeKey(request, principalKey);
     const requestLifecycleId = request.mcpRequestId;
+    const cancellationOnlyBody =
+      config.mcpSessionMode === "stateful-experiment" &&
+      isCancellationOnlyMcpBody(request.body);
+
+    if (cancellationOnlyBody && requestedSessionId === undefined) {
+      response.status(400).json({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32000, message: "Mcp-Session-Id is required." },
+      });
+      return;
+    }
+
     const pendingRegistrations = requestLifecycleId === undefined
       ? []
       : extractMcpToolCallRequestIds(request.body).map((requestId) =>
