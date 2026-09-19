@@ -489,7 +489,10 @@ export function createGatewayApplication(
       next(error);
       return;
     }
-    if (config.mcpSessionMode === "stateful-experiment") {
+    if (
+      config.mcpSessionMode === "stateful-experiment" &&
+      (requestedSession !== undefined || isMcpInitializeRequest(request.body))
+    ) {
       let session = requestedSession;
       let createdForRequest = false;
       try {
@@ -681,6 +684,15 @@ function bindMcpHttpRequestAbort(
       response.removeListener("close", onClose);
     },
   };
+}
+
+function isMcpInitializeRequest(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    (body as { method?: unknown }).method === "initialize"
+  );
 }
 
 function isCancellationOnlyMcpBody(body: unknown): boolean {
