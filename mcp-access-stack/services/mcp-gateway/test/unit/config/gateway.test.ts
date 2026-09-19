@@ -117,7 +117,7 @@ describe("gateway configuration loader", () => {
     ).toThrow();
   });
 
-  it("allows the stateful MCP experiment only outside production", () => {
+  it("keeps stateless as default and allows an explicit stateful production mode", () => {
     const experimental = loadGatewayConfig({
       ...requiredEnv,
       NODE_ENV: "test",
@@ -135,13 +135,12 @@ describe("gateway configuration loader", () => {
     expect(bounded.mcpStatefulSessionTtlMs).toBe(45_000);
     expect(bounded.mcpStatefulMaxSessions).toBe(12);
 
-    expect(() =>
-      loadGatewayConfig({
-        ...requiredEnv,
-        NODE_ENV: "production",
-        MCP_SESSION_MODE: "stateful-experiment",
-      }),
-    ).toThrow(/not allowed in production/u);
+    const production = loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "production",
+      MCP_SESSION_MODE: "stateful-experiment",
+    });
+    expect(production.mcpSessionMode).toBe("stateful-experiment");
   });
 
   it("keeps requiring https for the public base url in production", () => {

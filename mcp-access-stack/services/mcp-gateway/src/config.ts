@@ -187,14 +187,7 @@ export function loadGatewayConfig(
   if (RESERVED_MCP_PATHS.has(value.MCP_PATH)) {
     throw new Error("MCP_PATH must not collide with the /agent or /health endpoints.");
   }
-  if (
-    value.NODE_ENV === "production" &&
-    value.MCP_SESSION_MODE === "stateful-experiment"
-  ) {
-    throw new Error(
-      "MCP_SESSION_MODE=stateful-experiment is not allowed in production.",
-    );
-  }
+
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
