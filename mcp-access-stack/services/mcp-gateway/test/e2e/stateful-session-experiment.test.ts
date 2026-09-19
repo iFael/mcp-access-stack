@@ -172,6 +172,108 @@ describe("stateful MCP experiment", () => {
     }
   });
 
+  it("expires an abandoned stateful session without requiring DELETE", async () => {
+    const fixture = await createFixture(
+      createFakeAgent({}),
+      "stateful-experiment",
+      { ttlMs: 500 },
+    );
+    try {
+      const sessionId = await initializeMcp(fixture.url);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+
+      const response = await postMcp(
+        fixture.url,
+        {
+          jsonrpc: "2.0",
+          id: 77,
+          method: "tools/list",
+          params: {},
+        },
+        { "mcp-session-id": sessionId },
+      );
+      expect(response.status).toBe(404);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("enforces the stateful session cap without evicting an existing session", async () => {
+    const fixture = await createFixture(
+      createFakeAgent({}),
+      "stateful-experiment",
+      { maxSessions: 1 },
+    );
+    try {
+      const firstSessionId = await initializeMcp(fixture.url);
+      const second = await postMcp(fixture.url, {
+        jsonrpc: "2.0",
+        id: 88,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "stateful-experiment-test", version: "0.0.0" },
+        },
+      });
+      expect(second.status).toBe(503);
+
+      await toolsList(fixture.url, { "mcp-session-id": firstSessionId });
+      await terminateSession(fixture.url, firstSessionId);
+
+      const replacementSessionId = await initializeMcp(fixture.url);
+      await terminateSession(fixture.url, replacementSessionId);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("keeps the session cap bounded during concurrent initialize requests", async () => {
+    const fixture = await createFixture(
+      createFakeAgent({}),
+      "stateful-experiment",
+      { maxSessions: 1 },
+    );
+    try {
+      const initializeRequest = (id: number) =>
+        postMcp(fixture.url, {
+          jsonrpc: "2.0",
+          id,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "stateful-experiment-test", version: "0.0.0" },
+          },
+        });
+
+      const responses = await Promise.all([
+        initializeRequest(91),
+        initializeRequest(92),
+      ]);
+      expect(responses.map((response) => response.status).sort()).toEqual([
+        200,
+        503,
+      ]);
+
+      const accepted = responses.find((response) => response.status === 200);
+      const sessionId = accepted?.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      const notification = await postMcp(
+        fixture.url,
+        {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+          params: {},
+        },
+        { "mcp-session-id": sessionId! },
+      );
+      expect(notification.status).toBe(202);
+      await terminateSession(fixture.url, sessionId!);
+    } finally {
+      await fixture.close();
+    }
+  });
   it("records stateless versus stateful repeated tools/list latency", async () => {
     const stateful = await createFixture(createFakeAgent({}), "stateful-experiment");
     const stateless = await createFixture(createFakeAgent({}), "stateless");
@@ -369,6 +471,7 @@ function createBlockingOperation(): {
 async function createFixture(
   agent: LocalAgent,
   sessionMode: "stateless" | "stateful-experiment" = "stateful-experiment",
+  sessionLimits: { ttlMs?: number; maxSessions?: number } = {},
 ): Promise<{
   url: URL;
   close(): Promise<void>;
@@ -376,6 +479,8 @@ async function createFixture(
   const config = makeGatewayConfig({
     authMode: "none",
     mcpSessionMode: sessionMode,
+    mcpStatefulSessionTtlMs: sessionLimits.ttlMs ?? 30 * 60_000,
+    mcpStatefulMaxSessions: sessionLimits.maxSessions ?? 100,
     mcpPath,
     agent: {
       id: "test-agent",
@@ -408,7 +513,7 @@ async function createFixture(
     close: async () => {
       controller.abort();
       await running;
-      gateway.relay!.close();
+      await gateway.close();
       http.server.closeAllConnections();
       await http.close();
     },

@@ -62,6 +62,7 @@ export interface GatewayApplication {
   relay?: AgentRelay;
   logger: Logger;
   resourceMetadataUrl?: URL | undefined;
+  close(): Promise<void>;
 }
 
 export interface GatewayApplicationDependencies {
@@ -119,8 +120,16 @@ export function createGatewayApplication(
     principalKey: string;
     server: ReturnType<typeof createMcpServer>;
     transport: StreamableHTTPServerTransport;
+    lastUsedAtMs: number;
+    activeRequests: number;
+    expiryTimer?: NodeJS.Timeout;
+    capacityReserved: boolean;
+    closed: boolean;
   };
   const statefulSessions = new Map<string, ExperimentalMcpSession>();
+  const statefulSessionInstances = new Set<ExperimentalMcpSession>();
+  let statefulSessionCreations = 0;
+  let gatewayClosed = false;
   const app = express();
 
   app.disable("x-powered-by");
@@ -233,30 +242,130 @@ export function createGatewayApplication(
     return factory(extra, requestedTimeoutMs);
   };
 
+  const releaseExperimentalSessionCapacity = (
+    session: ExperimentalMcpSession,
+  ): void => {
+    if (!session.capacityReserved) return;
+    session.capacityReserved = false;
+    statefulSessionCreations -= 1;
+  };
+
+  const closeExperimentalMcpSession = async (
+    session: ExperimentalMcpSession,
+  ): Promise<void> => {
+    if (session.closed) return;
+    session.closed = true;
+    releaseExperimentalSessionCapacity(session);
+    if (session.expiryTimer) clearTimeout(session.expiryTimer);
+    const sessionId = session.transport.sessionId;
+    if (sessionId && statefulSessions.get(sessionId) === session) {
+      statefulSessions.delete(sessionId);
+    }
+    statefulSessionInstances.delete(session);
+    await session.server.close();
+  };
+
+  const scheduleExperimentalSessionExpiry = (
+    sessionId: string,
+    session: ExperimentalMcpSession,
+  ): void => {
+    if (session.closed) return;
+    if (session.expiryTimer) clearTimeout(session.expiryTimer);
+    const remainingMs = Math.max(
+      1,
+      session.lastUsedAtMs + config.mcpStatefulSessionTtlMs - Date.now(),
+    );
+    session.expiryTimer = setTimeout(() => {
+      if (session.closed) return;
+      if (session.activeRequests > 0) {
+        session.lastUsedAtMs = Date.now();
+        scheduleExperimentalSessionExpiry(sessionId, session);
+        return;
+      }
+      if (
+        Date.now() - session.lastUsedAtMs <
+        config.mcpStatefulSessionTtlMs
+      ) {
+        scheduleExperimentalSessionExpiry(sessionId, session);
+        return;
+      }
+      void closeExperimentalMcpSession(session).catch((error) => {
+        logger.warn({
+          event: "stateful_mcp_session_expiry_failed",
+          reason: errorName(error),
+        });
+      });
+    }, remainingMs);
+    session.expiryTimer.unref();
+  };
+
+  const touchExperimentalMcpSession = (
+    sessionId: string,
+    session: ExperimentalMcpSession,
+  ): void => {
+    if (session.closed) return;
+    session.lastUsedAtMs = Date.now();
+    scheduleExperimentalSessionExpiry(sessionId, session);
+  };
+
   const createExperimentalMcpSession = async (
     principalKey: string,
-  ): Promise<ExperimentalMcpSession> => {
+  ): Promise<ExperimentalMcpSession | undefined> => {
+    if (
+      gatewayClosed ||
+      statefulSessions.size + statefulSessionCreations >=
+        config.mcpStatefulMaxSessions
+    ) {
+      return undefined;
+    }
+    statefulSessionCreations += 1;
     let session!: ExperimentalMcpSession;
-    const server = createMcpServer({
-      workspaceExecutor,
-      sourceControlExecutor,
-      ...(browser === undefined ? {} : { browser }),
-      auth: mcpAuth,
-      operationContextFactory: statefulOperationContextFactory,
-    });
-    const transport = new StreamableHTTPServerTransport({
-      enableJsonResponse: true,
-      sessionIdGenerator: randomUUID,
-      onsessioninitialized: (sessionId) => {
-        statefulSessions.set(sessionId, session);
-      },
-      onsessionclosed: (sessionId) => {
-        statefulSessions.delete(sessionId);
-      },
-    });
-    session = { principalKey, server, transport };
-    await server.connect(transport as Transport);
-    return session;
+    try {
+      const server = createMcpServer({
+        workspaceExecutor,
+        sourceControlExecutor,
+        ...(browser === undefined ? {} : { browser }),
+        auth: mcpAuth,
+        operationContextFactory: statefulOperationContextFactory,
+      });
+      const transport = new StreamableHTTPServerTransport({
+        enableJsonResponse: true,
+        sessionIdGenerator: randomUUID,
+        onsessioninitialized: (sessionId) => {
+          if (session.closed) return;
+          statefulSessions.set(sessionId, session);
+          releaseExperimentalSessionCapacity(session);
+          touchExperimentalMcpSession(sessionId, session);
+        },
+        onsessionclosed: () => {
+          void closeExperimentalMcpSession(session).catch((error) => {
+            logger.warn({
+              event: "stateful_mcp_session_close_failed",
+              reason: errorName(error),
+            });
+          });
+        },
+      });
+      session = {
+        principalKey,
+        server,
+        transport,
+        lastUsedAtMs: Date.now(),
+        activeRequests: 0,
+        capacityReserved: true,
+        closed: false,
+      };
+      statefulSessionInstances.add(session);
+      await server.connect(transport as Transport);
+      return session;
+    } catch (error) {
+      if (session) {
+        await closeExperimentalMcpSession(session).catch(() => undefined);
+      } else {
+        statefulSessionCreations -= 1;
+      }
+      throw error;
+    }
   };
 
   mountGptActions(app, config, workspaceExecutor, logger, browser);
@@ -387,17 +496,49 @@ export function createGatewayApplication(
         if (!session) {
           session = await createExperimentalMcpSession(principalKey);
           createdForRequest = true;
+          if (!session) {
+            response.status(503).json({
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: -32002,
+                message: "MCP stateful session capacity reached.",
+              },
+            });
+            return;
+          }
         }
-        await statefulRequestContext.run(operationContextFactory, () =>
-          session!.transport.handleRequest(request, response, request.body),
-        );
+        const sessionId = requestedSessionId ?? session.transport.sessionId;
+        session.activeRequests += 1;
+        if (sessionId) touchExperimentalMcpSession(sessionId, session);
+        try {
+          await statefulRequestContext.run(operationContextFactory, () =>
+            session!.transport.handleRequest(request, response, request.body),
+          );
+        } finally {
+          session.activeRequests -= 1;
+          const activeSessionId =
+            requestedSessionId ?? session.transport.sessionId;
+          if (activeSessionId && !session.closed) {
+            touchExperimentalMcpSession(activeSessionId, session);
+          }
+        }
       } catch (error) {
         next(error);
       } finally {
         releasePendingRegistrations();
         requestAbort.release();
-        if (createdForRequest && session?.transport.sessionId === undefined) {
-          await session?.server.close().catch(() => undefined);
+        if (
+          createdForRequest &&
+          session !== undefined &&
+          session.transport.sessionId === undefined
+        ) {
+          await closeExperimentalMcpSession(session).catch((error) => {
+            logger.warn({
+              event: "stateful_mcp_session_close_failed",
+              reason: errorName(error),
+            });
+          });
         }
       }
       return;
@@ -456,14 +597,23 @@ export function createGatewayApplication(
       return;
     }
 
+    session.activeRequests += 1;
+    touchExperimentalMcpSession(sessionId, session);
     try {
       await session.transport.handleRequest(request, response);
     } catch (error) {
       next(error);
     } finally {
+      session.activeRequests -= 1;
       if (request.method === "DELETE") {
-        statefulSessions.delete(sessionId);
-        await session.server.close().catch(() => undefined);
+        await closeExperimentalMcpSession(session).catch((error) => {
+          logger.warn({
+            event: "stateful_mcp_session_close_failed",
+            reason: errorName(error),
+          });
+        });
+      } else if (!session.closed) {
+        touchExperimentalMcpSession(sessionId, session);
       }
     }
   };
@@ -489,6 +639,15 @@ export function createGatewayApplication(
     ...(relay === undefined ? {} : { relay }),
     logger,
     resourceMetadataUrl,
+    close: async () => {
+      if (gatewayClosed) return;
+      gatewayClosed = true;
+      relay?.close();
+      const sessions = [...statefulSessionInstances];
+      await Promise.all(
+        sessions.map((session) => closeExperimentalMcpSession(session)),
+      );
+    },
   };
 }
 

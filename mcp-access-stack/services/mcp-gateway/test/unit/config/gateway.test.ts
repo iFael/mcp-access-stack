@@ -25,6 +25,8 @@ describe("gateway configuration loader", () => {
     expect(config.authMode).toBe("oauth");
     expect(config.mcpPath).toBe("/mcp");
     expect(config.mcpSessionMode).toBe("stateless");
+    expect(config.mcpStatefulSessionTtlMs).toBe(30 * 60_000);
+    expect(config.mcpStatefulMaxSessions).toBe(100);
     expect(config.trustProxy).toBe(0);
     expect(config.oauth?.allowedSubjects).toEqual(new Set(["user-1", "user-2"]));
     expect(config.agent.maxConcurrency).toBe(4);
@@ -122,6 +124,16 @@ describe("gateway configuration loader", () => {
       MCP_SESSION_MODE: "stateful-experiment",
     });
     expect(experimental.mcpSessionMode).toBe("stateful-experiment");
+
+    const bounded = loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "test",
+      MCP_SESSION_MODE: "stateful-experiment",
+      MCP_STATEFUL_SESSION_TTL_MS: "45000",
+      MCP_STATEFUL_MAX_SESSIONS: "12",
+    });
+    expect(bounded.mcpStatefulSessionTtlMs).toBe(45_000);
+    expect(bounded.mcpStatefulMaxSessions).toBe(12);
 
     expect(() =>
       loadGatewayConfig({

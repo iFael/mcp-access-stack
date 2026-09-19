@@ -55,7 +55,13 @@ const shutdown = () => {
   }
   shuttingDown = true;
   gateway.logger.info({ event: "gateway_stopping" });
-  gateway.relay?.close();
+  void gateway.close().catch((error: unknown) => {
+    gateway.logger.error({
+      event: "gateway_resource_close_failed",
+      reason: error instanceof Error ? error.name : "UnknownError",
+    });
+    process.exitCode = 1;
+  });
   server.close((error) => {
     if (error) {
       gateway.logger.error({ event: "gateway_stop_failed", reason: error.name });

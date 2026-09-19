@@ -23,6 +23,8 @@ const configSchema = z
     MCP_SESSION_MODE: z
       .enum(["stateless", "stateful-experiment"])
       .default("stateless"),
+    MCP_STATEFUL_SESSION_TTL_MS: positiveInteger(30 * 60_000),
+    MCP_STATEFUL_MAX_SESSIONS: cappedInteger(100, 1_000),
     OWNER_TOKEN: z.string().trim().min(16).optional(),
     OWNER_OAUTH_SCOPES: z.string().trim().min(1).default("workspaces:read"),
     OWNER_OAUTH_STATE_PATH: z.string().trim().min(1).optional(),
@@ -135,6 +137,8 @@ export interface GatewayConfig {
   publicBaseUrl: URL;
   authMode: "oauth" | "none" | "owner" | "edge-trusted";
   mcpSessionMode: "stateless" | "stateful-experiment";
+  mcpStatefulSessionTtlMs: number;
+  mcpStatefulMaxSessions: number;
   mcpPath: string;
   trustProxy: number;
   oauth?: GatewayOAuthConfig | undefined;
@@ -197,6 +201,8 @@ export function loadGatewayConfig(
     publicBaseUrl,
     authMode: value.AUTH_MODE,
     mcpSessionMode: value.MCP_SESSION_MODE,
+    mcpStatefulSessionTtlMs: value.MCP_STATEFUL_SESSION_TTL_MS,
+    mcpStatefulMaxSessions: value.MCP_STATEFUL_MAX_SESSIONS,
     mcpPath: value.MCP_PATH,
     trustProxy: value.TRUST_PROXY,
     oauth: loadOAuthConfig(value),
