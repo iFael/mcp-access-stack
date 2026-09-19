@@ -102,18 +102,23 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { path: "a.txt", sizeBytes: 1, created: true };
   }
 
-  async patchFile(): Promise<import("@vs-code-gpt/shared").PatchFileResult> {
+  async patchFile(
+    input: import("@vs-code-gpt/shared").PatchFileInput,
+  ): Promise<import("@vs-code-gpt/shared").PatchFileResult> {
     this.calls.push("patchFile");
     return {
-      path: "a.txt",
-      sha256Before: "0".repeat(64),
+      path: input.path,
+      sha256Before: input.expectedSha256,
       sha256After: "1".repeat(64),
       encoding: "utf-8",
       lineEnding: "none",
-      replacementsApplied: 1,
+      replacementsApplied: input.replacements.reduce(
+        (total, replacement) => total + (replacement.expectedCount ?? 1),
+        0,
+      ),
       sizeBytes: 1,
       changed: true,
-      dryRun: false,
+      dryRun: input.dryRun ?? false,
     };
   }
 
@@ -490,6 +495,50 @@ describe("registerWorkspaceTools", () => {
     });
     expect(result.isError).not.toBe(true);
   });
+  it("publishes patch_file and routes it to the typed patchFile executor", async () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain("patch_file");
+
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["patch_file"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = registeredTools(server)["patch_file"]!;
+    expect(tool.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+
+    const result = await tool.handler(
+      {
+        workspaceId: "ws",
+        path: "a.txt",
+        expectedSha256: "0".repeat(64),
+        replacements: [
+          { oldText: "x", newText: "y", expectedCount: 1 },
+        ],
+        dryRun: true,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      path: "a.txt",
+      replacementsApplied: 1,
+      changed: true,
+      dryRun: true,
+    });
+    expect(executor.calls).toContain("patchFile");
+  });
+
   it("publishes wait_background_task as a workspace tool", () => {
     expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
       "wait_background_task",
@@ -621,11 +670,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 27-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 28-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(27);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(27);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(28);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(28);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {
