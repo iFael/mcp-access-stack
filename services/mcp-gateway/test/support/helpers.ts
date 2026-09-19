@@ -12,6 +12,9 @@ export function makeGatewayConfig(
     port: 0,
     publicBaseUrl: new URL("http://127.0.0.1"),
     authMode: "oauth",
+    mcpSessionMode: "stateless",
+    mcpStatefulSessionTtlMs: 30 * 60_000,
+    mcpStatefulMaxSessions: 100,
     mcpPath: "/mcp",
     trustProxy: 0,
     oauth: {

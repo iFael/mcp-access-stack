@@ -79,6 +79,7 @@ export interface EdgeConnectorLog {
   backoffMs?: number;
   activeRequests?: number;
   connectionStartedAtMs?: number;
+  connectedAtMs?: number;
   readyAtMs?: number;
   endedAtMs?: number;
   durationMs?: number;
@@ -103,6 +104,7 @@ export interface EdgeConnectorLog {
 type ConnectionState = {
   protocolReady: boolean;
   connectionStartedAtMs: number;
+  connectedAtMs?: number;
   readyAtMs?: number;
   pingCount: number;
   pongCount: number;
@@ -246,6 +248,7 @@ export class EdgeConnector {
       signal?.addEventListener("abort", abort, { once: true });
 
       socket.once("open", () => {
+        connectionState.connectedAtMs = this.now();
         heartbeat = setInterval(() => {
           if (!isAlive) {
             connectionState.heartbeatTimeout = true;
@@ -278,6 +281,7 @@ export class EdgeConnector {
           event: "edge_connector_connected",
           generation,
           connectionStartedAtMs,
+          connectedAtMs: connectionState.connectedAtMs,
           activeRequests: this.activeRequests.size,
         });
       });
@@ -337,6 +341,7 @@ export class EdgeConnector {
           reason: closeReason,
           closeClassification: classifyClose(code),
           connectionStartedAtMs,
+          ...(connectionState.connectedAtMs === undefined ? {} : { connectedAtMs: connectionState.connectedAtMs }),
           ...(connectionState.readyAtMs === undefined ? {} : { readyAtMs: connectionState.readyAtMs }),
           endedAtMs,
           durationMs: Math.max(0, endedAtMs - connectionStartedAtMs),
@@ -398,6 +403,7 @@ export class EdgeConnector {
         event: "edge_connector_ready",
         generation,
         connectionStartedAtMs: connectionState.connectionStartedAtMs,
+        ...(connectionState.connectedAtMs === undefined ? {} : { connectedAtMs: connectionState.connectedAtMs }),
         readyAtMs: connectionState.readyAtMs,
         offlineDurationMs,
         pingCount: connectionState.pingCount,

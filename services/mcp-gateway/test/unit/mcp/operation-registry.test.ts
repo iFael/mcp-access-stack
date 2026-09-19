@@ -316,6 +316,21 @@ describe("MCP cancellation parsing and principal identity", () => {
     expect(firstKey).not.toContain("portable-mcp-session");
   });
 
+  it("can keep the pre-session principal stable for stateful session ownership", () => {
+    const before = requestWithHeaders("203.0.113.10", {
+      "user-agent": "generic-mcp-client",
+    });
+    const after = requestWithHeaders("203.0.113.10", {
+      "mcp-session-id": "portable-mcp-session",
+      "user-agent": "generic-mcp-client",
+    });
+
+    expect(
+      createMcpPrincipalKey(after, { ignoreMcpSessionId: true }),
+    ).toBe(createMcpPrincipalKey(before));
+    expect(createMcpPrincipalKey(after)).not.toBe(createMcpPrincipalKey(before));
+  });
+
   it("does not collapse requests that contain only half of the OpenAI identity", () => {
     const first = requestWithHeaders("203.0.113.10", {
       "x-openai-subject": "openai-subject-test",

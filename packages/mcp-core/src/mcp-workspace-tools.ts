@@ -29,6 +29,8 @@ import {
   listWorkspacesResultSchema,
   readFileInputSchema,
   readFileResultSchema,
+  patchFileInputSchema,
+  patchFileResultSchema,
   runWorkspaceValidationInputSchema,
   runWorkspaceValidationResultSchema,
   runCommandMcpResultSchema,
@@ -139,6 +141,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "list_files",
   "read_file",
   "write_file",
+  "patch_file",
   "run_workspace_validation",
   "run_command",
   "search_files",
@@ -471,6 +474,57 @@ export function registerWorkspaceTools(
               {
                 type: "text",
                 text: `${action} ${structuredContent.path} (${structuredContent.sizeBytes} bytes).`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("patch_file", include)) {
+    server.registerTool(
+      "patch_file",
+      {
+        title: "Patch file",
+        description:
+          "Applies exact text replacements to an existing text file inside the workspace. " +
+          "Requires expectedSha256 from a prior read_file result to prevent stale writes. " +
+          "Each replacement also requires an expectedCount, and dryRun can validate the patch without writing.",
+        inputSchema: patchFileInputSchema,
+        outputSchema: patchFileResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: true,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) {
+          return authError;
+        }
+        try {
+          const structuredContent = patchFileResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.patchFile(input, context),
+            ),
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: structuredContent.dryRun
+                  ? `Validated patch for ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`
+                  : `Patched ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`,
               },
             ],
             structuredContent,
@@ -1468,7 +1522,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   readFile: "read_file",
   readBinaryFile: "read_file",
   writeFile: "write_file",
-  patchFile: "write_file",
+  patchFile: "patch_file",
   runValidation: "run_workspace_validation",
   runCommand: "run_command",
   searchFiles: "search_files",

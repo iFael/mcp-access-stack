@@ -20,6 +20,11 @@ const configSchema = z
     PORT: z.coerce.number().int().min(0).max(65_535).default(3000),
     PUBLIC_BASE_URL: z.url(),
     AUTH_MODE: z.enum(["oauth", "none", "owner"]).default("oauth"),
+    MCP_SESSION_MODE: z
+      .enum(["stateless", "stateful-experiment"])
+      .default("stateless"),
+    MCP_STATEFUL_SESSION_TTL_MS: positiveInteger(30 * 60_000),
+    MCP_STATEFUL_MAX_SESSIONS: cappedInteger(100, 1_000),
     OWNER_TOKEN: z.string().trim().min(16).optional(),
     OWNER_OAUTH_SCOPES: z.string().trim().min(1).default("workspaces:read"),
     OWNER_OAUTH_STATE_PATH: z.string().trim().min(1).optional(),
@@ -131,6 +136,9 @@ export interface GatewayConfig {
   port: number;
   publicBaseUrl: URL;
   authMode: "oauth" | "none" | "owner" | "edge-trusted";
+  mcpSessionMode: "stateless" | "stateful-experiment";
+  mcpStatefulSessionTtlMs: number;
+  mcpStatefulMaxSessions: number;
   mcpPath: string;
   trustProxy: number;
   oauth?: GatewayOAuthConfig | undefined;
@@ -179,11 +187,15 @@ export function loadGatewayConfig(
   if (RESERVED_MCP_PATHS.has(value.MCP_PATH)) {
     throw new Error("MCP_PATH must not collide with the /agent or /health endpoints.");
   }
+
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
     publicBaseUrl,
     authMode: value.AUTH_MODE,
+    mcpSessionMode: value.MCP_SESSION_MODE,
+    mcpStatefulSessionTtlMs: value.MCP_STATEFUL_SESSION_TTL_MS,
+    mcpStatefulMaxSessions: value.MCP_STATEFUL_MAX_SESSIONS,
     mcpPath: value.MCP_PATH,
     trustProxy: value.TRUST_PROXY,
     oauth: loadOAuthConfig(value),

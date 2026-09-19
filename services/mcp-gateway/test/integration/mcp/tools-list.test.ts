@@ -107,8 +107,9 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(60);
+      expect(names).toHaveLength(61);
       expect(names).toEqual(expect.arrayContaining([
+        "patch_file",
         "browser_open_authorized_site",
         "browser_profile_page",
         "browser_dom_index",

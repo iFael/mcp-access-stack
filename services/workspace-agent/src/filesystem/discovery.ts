@@ -6,7 +6,7 @@ import {
   AppError,
   type ListFilesInput,
 } from "@vs-code-gpt/shared";
-import { minimatch } from "minimatch";
+import { Minimatch } from "minimatch";
 import type {
   ResolvedAllowedRoot,
   ResolvedWorkspace,
@@ -21,6 +21,7 @@ export interface FileCandidate {
 const MAX_DISCOVERY_DIRECTORIES = 4096;
 const MAX_DISCOVERY_ENTRIES = 50000;
 const MAX_DISCOVERY_DURATION_MS = 15000;
+const DISCOVERY_DIRECTORY_BUFFER_SIZE = 256;
 
 const IMPLICIT_OPERATIONAL_DIRECTORIES = new Set([
   ".runtime-tools",
@@ -69,8 +70,17 @@ export async function collectAuthorizedFiles(
     : workspace.allowedRoots;
   throwIfAborted(signal);
 
+  const globMatcher =
+    input.glob === undefined
+      ? undefined
+      : new Minimatch(input.glob, {
+          dot: true,
+          nocase: process.platform === "win32",
+          matchBase: false,
+        });
+
   const addFile = (candidate: FileCandidate): boolean => {
-    if (!matchesGlob(candidate.logicalPath, input.glob)) {
+    if (globMatcher !== undefined && !globMatcher.match(candidate.logicalPath)) {
       return true;
     }
     if (files.has(candidate.logicalPath)) {
@@ -159,7 +169,7 @@ export async function listAuthorizedWorkspaceRoots(
     if (IMPLICIT_OPERATIONAL_DIRECTORIES.has(normalizeDirectoryName(entry.name))) {
       continue;
     }
-    if (security.isBlocked(entry.name) || security.isSubtreeBlocked(entry.name)) {
+    if (security.isSubtreeBlocked(entry.name)) {
       continue;
     }
     try {
@@ -243,9 +253,6 @@ async function walkDirectory(
       continue;
     }
 
-    if (security.isBlocked(logicalPath)) {
-      continue;
-    }
     if (entry.isDirectory() && security.isSubtreeBlocked(logicalPath)) {
       continue;
     }
@@ -301,15 +308,26 @@ async function readDirectoryEntriesBounded(
   signal?: AbortSignal,
 ): Promise<Dirent[]> {
   throwIfAborted(signal);
-  const directory = await opendir(absoluteDirectory);
+  const maxDiscoveryEntries =
+    workspace.limits.maxDiscoveryEntries ?? MAX_DISCOVERY_ENTRIES;
+  if (budget.entriesScanned >= maxDiscoveryEntries) {
+    budget.exhausted = true;
+    return [];
+  }
+
+  const remainingEntryBudget = maxDiscoveryEntries - budget.entriesScanned;
+  const directory = await opendir(absoluteDirectory, {
+    bufferSize: Math.min(DISCOVERY_DIRECTORY_BUFFER_SIZE, remainingEntryBudget),
+  });
   const entries: Dirent[] = [];
+
   try {
     while (true) {
       throwIfAborted(signal);
       if (discoveryDeadlineReached(budget)) {
         break;
       }
-      if (budget.entriesScanned >= (workspace.limits.maxDiscoveryEntries ?? MAX_DISCOVERY_ENTRIES)) {
+      if (budget.entriesScanned >= maxDiscoveryEntries) {
         budget.exhausted = true;
         break;
       }
@@ -324,6 +342,7 @@ async function readDirectoryEntriesBounded(
   } finally {
     await directory.close().catch(() => undefined);
   }
+
   entries.sort((left, right) => left.name.localeCompare(right.name));
   return entries;
 }
@@ -351,17 +370,6 @@ function normalizeRequestedRoot(root: string | undefined): string | undefined {
   }
   const normalized = path.posix.normalize(root.replace(/\\/g, "/"));
   return normalized === "." ? undefined : root;
-}
-
-function matchesGlob(relativePath: string, glob: string | undefined): boolean {
-  return (
-    glob === undefined ||
-    minimatch(relativePath, glob, {
-      dot: true,
-      nocase: process.platform === "win32",
-      matchBase: false,
-    })
-  );
 }
 
 function normalizeDirectoryName(name: string): string {

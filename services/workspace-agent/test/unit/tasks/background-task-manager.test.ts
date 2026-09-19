@@ -645,6 +645,203 @@ describe("BackgroundTaskManager", () => {
     });
   });
 
+  it("prunes expired terminal task artifacts while preserving active and recent records", async () => {
+    const now = new Date("2026-09-19T00:00:00.000Z");
+    const oldId = "123e4567-e89b-42d3-a456-426614174010";
+    const recentId = "123e4567-e89b-42d3-a456-426614174011";
+    const activeId = "123e4567-e89b-42d3-a456-426614174012";
+
+    await writePersistedTaskArtifacts(stateDirectory, {
+      version: 1,
+      id: oldId,
+      workspaceId: "project",
+      operation: "old",
+      commandHash: "1".repeat(64),
+      command: "echo old",
+      shell: "pwsh",
+      cwd: ".",
+      state: "succeeded",
+      createdAt: "2026-08-18T00:00:00.000Z",
+      completedAt: "2026-08-18T00:00:01.000Z",
+      timeoutMs: 120_000,
+    });
+    await writePersistedTaskArtifacts(stateDirectory, {
+      version: 1,
+      id: recentId,
+      workspaceId: "project",
+      operation: "recent",
+      commandHash: "2".repeat(64),
+      command: "echo recent",
+      shell: "pwsh",
+      cwd: ".",
+      state: "succeeded",
+      createdAt: "2026-09-18T00:00:00.000Z",
+      completedAt: "2026-09-18T00:00:01.000Z",
+      timeoutMs: 120_000,
+    });
+    await writePersistedTaskArtifacts(
+      stateDirectory,
+      {
+        version: 1,
+        id: activeId,
+        workspaceId: "project",
+        operation: "active",
+        commandHash: "3".repeat(64),
+        command: "echo active",
+        shell: "pwsh",
+        cwd: ".",
+        state: "running",
+        createdAt: "2026-09-18T23:59:00.000Z",
+        startedAt: "2026-09-18T23:59:01.000Z",
+        timeoutMs: 120_000,
+        pid: process.pid,
+      },
+      false,
+    );
+
+    const manager = new BackgroundTaskManager({
+      stateDirectory,
+      runner: new ControlledRunner(),
+      now: () => now,
+      terminalRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+      maxRetainedTerminalTasks: 500,
+    });
+
+    expect((await manager.list_background_tasks()).map((task) => task.id)).toEqual(
+      expect.arrayContaining([recentId, activeId]),
+    );
+    expect(await manager.get_background_task(oldId)).toBeNull();
+
+    const files = await readdir(stateDirectory);
+    expect(files.some((file) => file.startsWith(oldId))).toBe(false);
+    expect(files.some((file) => file.startsWith(recentId))).toBe(true);
+    expect(files.some((file) => file.startsWith(activeId))).toBe(true);
+  });
+
+  it("caps retained terminal tasks by recency without pruning active tasks", async () => {
+    const now = new Date("2026-09-19T00:00:00.000Z");
+    const newestId = "123e4567-e89b-42d3-a456-426614174020";
+    const middleId = "123e4567-e89b-42d3-a456-426614174021";
+    const oldestId = "123e4567-e89b-42d3-a456-426614174022";
+    const activeId = "123e4567-e89b-42d3-a456-426614174023";
+
+    for (const [id, completedAt, hash] of [
+      [newestId, "2026-09-18T23:00:00.000Z", "4"],
+      [middleId, "2026-09-18T22:00:00.000Z", "5"],
+      [oldestId, "2026-09-18T21:00:00.000Z", "6"],
+    ] as const) {
+      await writePersistedTaskArtifacts(stateDirectory, {
+        version: 1,
+        id,
+        workspaceId: "project",
+        operation: "terminal",
+        commandHash: hash.repeat(64),
+        command: `echo ${id}`,
+        shell: "pwsh",
+        cwd: ".",
+        state: "succeeded",
+        createdAt: completedAt,
+        completedAt,
+        timeoutMs: 120_000,
+      });
+    }
+    await writePersistedTaskArtifacts(
+      stateDirectory,
+      {
+        version: 1,
+        id: activeId,
+        workspaceId: "project",
+        operation: "active",
+        commandHash: "7".repeat(64),
+        command: "echo active",
+        shell: "pwsh",
+        cwd: ".",
+        state: "running",
+        createdAt: "2026-09-18T20:00:00.000Z",
+        startedAt: "2026-09-18T20:00:01.000Z",
+        timeoutMs: 120_000,
+        pid: process.pid,
+      },
+      false,
+    );
+
+    const manager = new BackgroundTaskManager({
+      stateDirectory,
+      runner: new ControlledRunner(),
+      now: () => now,
+      terminalRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+      maxRetainedTerminalTasks: 2,
+    });
+
+    const ids = (await manager.list_background_tasks()).map((task) => task.id);
+    expect(ids).toEqual(expect.arrayContaining([newestId, middleId, activeId]));
+    expect(ids).not.toContain(oldestId);
+    expect(await manager.get_background_task(oldestId)).toBeNull();
+
+    const files = await readdir(stateDirectory);
+    expect(files.some((file) => file.startsWith(oldestId))).toBe(false);
+    expect(files.some((file) => file.startsWith(activeId))).toBe(true);
+  });
+
+  it("prunes retained terminal tasks before starting a later task", async () => {
+    const runner = new ControlledRunner();
+    let nowMs = Date.parse("2026-09-19T00:00:00.000Z");
+    const manager = new BackgroundTaskManager({
+      stateDirectory,
+      runner,
+      now: () => new Date(nowMs),
+      terminalRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+      maxRetainedTerminalTasks: 1,
+    });
+
+    const first = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "first",
+      command: "echo first",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(first.id))?.state === "running",
+    );
+    await runner.succeed();
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(first.id))?.state === "succeeded",
+    );
+
+    nowMs += 1_000;
+    const second = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "second",
+      command: "echo second",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(second.id))?.state === "running",
+    );
+    await runner.succeed();
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(second.id))?.state === "succeeded",
+    );
+
+    nowMs += 1_000;
+    const third = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "third",
+      command: "echo third",
+      shell: "pwsh",
+    });
+
+    expect(await manager.get_background_task(first.id)).toBeNull();
+    expect(await manager.get_background_task(second.id)).toMatchObject({
+      state: "succeeded",
+    });
+    await manager.cancel_background_task(third.id);
+  });
+
   it("moves invalid state files to quarantine", async () => {
     const id = "123e4567-e89b-42d3-a456-426614174000";
     await writeFile(path.join(stateDirectory, `${id}.json`), "{invalid", "utf8");
@@ -659,6 +856,39 @@ describe("BackgroundTaskManager", () => {
     expect(quarantined[0]).toContain(`${id}.json`);
   });
 });
+
+async function writePersistedTaskArtifacts(
+  stateDirectory: string,
+  record: Record<string, unknown> & { id: string },
+  includeResult = true,
+): Promise<void> {
+  await Promise.all([
+    writeFile(
+      path.join(stateDirectory, `${record.id}.json`),
+      `${JSON.stringify(record)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(stateDirectory, `${record.id}.stdout.log`),
+      "stdout\n",
+      "utf8",
+    ),
+    writeFile(
+      path.join(stateDirectory, `${record.id}.stderr.log`),
+      "stderr\n",
+      "utf8",
+    ),
+    ...(includeResult
+      ? [
+          writeFile(
+            path.join(stateDirectory, `${record.id}.result.json`),
+            "{}\n",
+            "utf8",
+          ),
+        ]
+      : []),
+  ]);
+}
 
 async function waitFor(
   predicate: () => Promise<boolean>,

@@ -81,6 +81,11 @@ $ownerTokenFile = [IO.Path]::GetFullPath([string](Get-RequiredProperty -InputObj
 $policyPath = [IO.Path]::GetFullPath([string](Get-RequiredProperty -InputObject $config -Name 'policyPath'))
 $allowedOrigins = [string](Get-RequiredProperty -InputObject $config -Name 'allowedOrigins')
 $ownerOAuthScopes = [string](Get-RequiredProperty -InputObject $config -Name 'ownerOAuthScopes')
+$mcpSessionModeProperty = $config.PSObject.Properties['mcpSessionMode']
+$mcpSessionMode = if ($null -eq $mcpSessionModeProperty -or [string]::IsNullOrWhiteSpace([string]$mcpSessionModeProperty.Value)) { 'stateless' } else { [string]$mcpSessionModeProperty.Value }
+if ($mcpSessionMode -notin @('stateless', 'stateful-experiment')) {
+    throw 'Edge Connector recovery configuration contains an invalid MCP session mode.'
+}
 $maxConcurrentRequests = [int](Get-RequiredProperty -InputObject $config -Name 'maxConcurrentRequests')
 $delaySeconds = [int](Get-RequiredProperty -InputObject $config -Name 'delaySeconds')
 $browserEnabled = [bool](Get-RequiredProperty -InputObject $config -Name 'browserEnabled')
@@ -110,6 +115,7 @@ $parameters = @{
     PolicyPath = $policyPath
     AllowedOrigins = $allowedOrigins
     OwnerOAuthScopes = $ownerOAuthScopes
+    McpSessionMode = $mcpSessionMode
     MaxConcurrentRequests = $maxConcurrentRequests
     DelaySeconds = $delaySeconds
     TaskName = $taskName

@@ -24,6 +24,8 @@ foreach ($required in @(
     'BrowserWorkerTokenFile',
     'BROWSER_WORKER_URL',
     'OWNER_OAUTH_STATE_PATH',
+    'MCP_SESSION_MODE',
+    'McpSessionMode',
     'OWNER_TOKEN = $ownerToken',
     'ValidateOnly'
 )) {
@@ -40,6 +42,7 @@ foreach ($required in @(
     'McpEdgeHost.exe',
     '--connector-token-file',
     '--owner-token-file',
+    '--mcp-session-mode',
     '--browser-worker-token-file',
     '--browser-enabled',
     'EnableBrowserWorker',
@@ -171,10 +174,24 @@ try {
     $validation = $validationText | ConvertFrom-Json
     if ([string]$validation.status -ne 'validated' -or
         [string]$validation.executionManifestSha256 -ne $manifestHash -or
+        [string]$validation.mcpSessionMode -ne 'stateless' -or
         $validation.browserEnabled -ne $false) {
         throw 'Edge Connector launcher returned unexpected validation evidence.'
     }
 
+    $statefulValidateArgs = @($validateArgs[0..($validateArgs.Count - 2)]) + @(
+        '-McpSessionMode', 'stateful-experiment',
+        '-ValidateOnly'
+    )
+    $statefulValidationOutput = @(& pwsh @statefulValidateArgs 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $statefulValidationOutput.Count -ne 1) {
+        throw 'Edge Connector stateful launcher fixture validation failed.'
+    }
+    $statefulValidation = [string]$statefulValidationOutput[0] | ConvertFrom-Json
+    if ([string]$statefulValidation.status -ne 'validated' -or
+        [string]$statefulValidation.mcpSessionMode -ne 'stateful-experiment') {
+        throw 'Edge Connector stateful launcher returned unexpected validation evidence.'
+    }
     $enabledValidateArgs = @($validateArgs[0..($validateArgs.Count - 2)]) + @(
         '-EnableBrowserWorker',
         '-BrowserWorkerUrl', 'http://127.0.0.1:3350',
@@ -226,6 +243,7 @@ try {
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
         [string]$plan.plan.processSubsystem -ne 'windows-gui' -or
+        [string]$plan.plan.mcpSessionMode -ne 'stateless' -or
         $plan.plan.browserEnabled -ne $true -or
         [string]$plan.plan.browserWorkerUrl -ne 'http://127.0.0.1:3350' -or
         $plan.plan.consoleAttached -ne $false -or

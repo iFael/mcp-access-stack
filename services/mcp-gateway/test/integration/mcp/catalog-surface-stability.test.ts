@@ -35,10 +35,12 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(60);
-      expect(listed.tools.map((tool) => tool.name)).toContain("browser_status");
+      expect(listed.tools).toHaveLength(61);
+      expect(listed.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["patch_file", "browser_status"]),
+      );
       expect(metadata).toMatchObject({
-        toolCount: 60,
+        toolCount: 61,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);

@@ -63,6 +63,7 @@ param(
     [string]$PolicyPath,
     [string]$AllowedOrigins,
     [string]$OwnerOAuthScopes,
+    [string]$McpSessionMode,
     [int]$MaxConcurrentRequests,
     [int]$DelaySeconds,
     [string]$TaskName,
@@ -88,6 +89,7 @@ $record = [ordered]@{
     policyPath = $PolicyPath
     allowedOrigins = $AllowedOrigins
     ownerOAuthScopes = $OwnerOAuthScopes
+    mcpSessionMode = $McpSessionMode
     maxConcurrentRequests = $MaxConcurrentRequests
     delaySeconds = $DelaySeconds
     taskName = $TaskName
@@ -131,6 +133,7 @@ $record = [ordered]@{
         policyPath = (Join-Path $installationRoot 'workspace-agent\policy.json')
         allowedOrigins = 'https://chatgpt.com,https://chat.openai.com'
         ownerOAuthScopes = 'workspaces:read'
+        mcpSessionMode = 'stateful-experiment'
         maxConcurrentRequests = 8
         delaySeconds = 15
         browserEnabled = $false
@@ -172,6 +175,7 @@ $record = [ordered]@{
     $capture = Get-Content -LiteralPath $capturePath -Raw | ConvertFrom-Json
     if ([string]$capture.releaseId -ne $releaseId -or
         [string]$capture.taskName -ne $taskName -or
+        [string]$capture.mcpSessionMode -ne 'stateful-experiment' -or
         $capture.execute -ne $true -or
         $capture.force -ne $false -or
         $capture.activate -ne $true -or

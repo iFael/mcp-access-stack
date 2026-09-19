@@ -14,6 +14,8 @@ export type EdgeRuntimeTelemetryV1 = {
   nodePid?: number;
   hostPid?: number;
   readySince?: string;
+  reconnectGraceStartedAt?: string;
+  reconnectGraceGeneration?: number;
   lastDisconnectedAt?: string;
   lastDisconnectedGeneration?: number;
   lastDisconnectWasReady?: boolean;
@@ -69,9 +71,17 @@ export function applyConnectorTelemetryEvent(
         event.connectionGeneration === current.connectionGeneration ||
         isLegacyDisconnect
       );
+      const startsReconnectGrace = readySince !== undefined &&
+        current.connectionGeneration !== undefined &&
+        event.connectionGeneration === current.connectionGeneration &&
+        event.wasReady === true;
       return {
         ...rest,
         ...(!disconnectsCurrentReady && readySince !== undefined ? { readySince } : {}),
+        ...(startsReconnectGrace ? {
+          reconnectGraceStartedAt: event.at,
+          reconnectGraceGeneration: event.connectionGeneration,
+        } : {}),
         lastDisconnectedAt: event.at,
         ...(event.connectionGeneration === undefined ? {} : { lastDisconnectedGeneration: event.connectionGeneration }),
         ...(event.wasReady === undefined ? {} : { lastDisconnectWasReady: event.wasReady }),
@@ -140,6 +150,8 @@ function applyReady(
     nodePid: _nodePid,
     hostPid: _hostPid,
     readySince: _readySince,
+    reconnectGraceStartedAt: _reconnectGraceStartedAt,
+    reconnectGraceGeneration: _reconnectGraceGeneration,
     ...continuity
   } = current;
 
