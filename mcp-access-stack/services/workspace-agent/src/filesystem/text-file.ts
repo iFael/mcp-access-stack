@@ -22,16 +22,7 @@ export async function readTextFile(
   absolutePath: string,
   maxFileBytes: number,
 ): Promise<TextFileContents> {
-  const fileStat = await stat(absolutePath);
-  if (fileStat.size > maxFileBytes) {
-    throw new AppError("FILE_TOO_LARGE", "File exceeds the configured size limit.");
-  }
-
-  const buffer = await readFile(absolutePath);
-  if (buffer.includes(0) && !hasUtf16Bom(buffer)) {
-    throw new AppError("BINARY_FILE", "Binary files are not supported.");
-  }
-
+  const buffer = await readTextBuffer(absolutePath, maxFileBytes);
   const decoded = decodeBufferToText(buffer);
   return {
     text: decoded.text,
@@ -41,6 +32,14 @@ export async function readTextFile(
     lineEnding: detectLineEnding(decoded.text),
     bom: readBom(buffer),
   };
+}
+
+export async function readSearchTextFile(
+  absolutePath: string,
+  maxFileBytes: number,
+): Promise<string> {
+  const buffer = await readTextBuffer(absolutePath, maxFileBytes);
+  return decodeBufferToText(buffer).text;
 }
 
 export async function atomicWriteBuffer(
@@ -117,6 +116,22 @@ export function encodeTextPreservingFormat(
     );
   }
   return bom.byteLength === 0 ? encoded : Buffer.concat([bom, encoded]);
+}
+
+async function readTextBuffer(
+  absolutePath: string,
+  maxFileBytes: number,
+): Promise<Buffer> {
+  const fileStat = await stat(absolutePath);
+  if (fileStat.size > maxFileBytes) {
+    throw new AppError("FILE_TOO_LARGE", "File exceeds the configured size limit.");
+  }
+
+  const buffer = await readFile(absolutePath);
+  if (buffer.includes(0) && !hasUtf16Bom(buffer)) {
+    throw new AppError("BINARY_FILE", "Binary files are not supported.");
+  }
+  return buffer;
 }
 
 function hasUtf16Bom(buffer: Buffer): boolean {

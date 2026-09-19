@@ -110,6 +110,7 @@ async function main(): Promise<void> {
     connector.stop();
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
+    await gateway.close();
     await closeServer(localServer);
     writeLog({ event: "edge_connector_process_stopped" });
   }

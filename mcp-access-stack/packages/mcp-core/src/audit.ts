@@ -1,5 +1,6 @@
 import type { PermissionProfile } from "./policy.js";
 import type { SourceControlCapability } from "./source-control-contracts.js";
+import type { OperationLifecycle } from "./timeout-policy.js";
 
 export type AuditStatus = "allowed" | "denied" | "error";
 
@@ -21,4 +22,5 @@ export interface AuditEntry {
   durationMs: number;
   status: AuditStatus;
   reason?: string;
+  lifecycle?: OperationLifecycle;
 }

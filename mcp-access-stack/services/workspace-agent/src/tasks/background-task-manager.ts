@@ -55,6 +55,8 @@ export interface BackgroundTaskManagerOptions {
   stateDirectory: string;
   runner: BackgroundTaskRunner;
   now?: () => Date;
+  terminalRetentionMs?: number;
+  maxRetainedTerminalTasks?: number;
 }
 
 export interface BackgroundTaskAccessContext {
@@ -71,18 +73,33 @@ const TASK_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TASK_STATE_FILE_PATTERN = new RegExp(`^(${TASK_ID_PATTERN.source.slice(1, -1)})\\.json$`, "iu");
 const MAX_LOG_BYTES = 1_000_000;
+const DEFAULT_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const DEFAULT_MAX_RETAINED_TERMINAL_TASKS = 500;
 const OWNER_SCOPE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 export class BackgroundTaskManager {
   private readonly controllers = new Map<string, AbortController>();
   private readonly executions = new Map<string, Promise<void>>();
   private readonly writes = new Map<string, Promise<void>>();
+  private readonly records = new Map<string, PersistedBackgroundTaskRecord>();
   private startQueue: Promise<void> = Promise.resolve();
   private initialization?: Promise<void>;
   private readonly now: () => Date;
+  private readonly terminalRetentionMs: number;
+  private readonly maxRetainedTerminalTasks: number;
 
   constructor(private readonly options: BackgroundTaskManagerOptions) {
     this.now = options.now ?? (() => new Date());
+    this.terminalRetentionMs = positiveIntegerOption(
+      options.terminalRetentionMs,
+      DEFAULT_TERMINAL_RETENTION_MS,
+      "terminalRetentionMs",
+    );
+    this.maxRetainedTerminalTasks = positiveIntegerOption(
+      options.maxRetainedTerminalTasks,
+      DEFAULT_MAX_RETAINED_TERMINAL_TASKS,
+      "maxRetainedTerminalTasks",
+    );
   }
 
   async start_background_task(
@@ -100,17 +117,18 @@ export class BackgroundTaskManager {
     await previousStart;
 
     try {
-      const duplicate = (
-        await this.list_background_tasks(
-          { workspaceId: normalized.workspaceId },
-          access,
-        )
-      ).find(
+      const existing = await this.list_background_tasks(
+        { workspaceId: normalized.workspaceId },
+        access,
+      );
+      const duplicate = existing.find(
         (task) =>
           task.commandHash === normalized.commandHash &&
           ACTIVE_STATES.has(task.state),
       );
       if (duplicate) return duplicate;
+
+      await this.pruneTerminalRecords();
 
       const record: PersistedBackgroundTaskRecord = {
         version: 1,
@@ -160,22 +178,8 @@ export class BackgroundTaskManager {
   ): Promise<BackgroundTaskRecord[]> {
     await this.ensureInitialized();
     await Promise.all(this.writes.values());
-    const entries = await readdir(this.options.stateDirectory, {
-      withFileTypes: true,
-    });
-    const persisted = await Promise.all(
-      entries
-        .filter(
-          (entry) => entry.isFile() && TASK_STATE_FILE_PATTERN.test(entry.name),
-        )
-        .map((entry) =>
-          readPersistedRecord(
-            path.join(this.options.stateDirectory, entry.name),
-          ),
-        ),
-    );
     const records = await Promise.all(
-      persisted
+      [...this.records.values()]
         .filter((record) => canAccessRecord(record, access))
         .map((record) => this.refreshRecoveredTask(record)),
     );
@@ -427,7 +431,7 @@ export class BackgroundTaskManager {
     const entries = await readdir(this.options.stateDirectory, {
       withFileTypes: true,
     });
-    await Promise.all(
+    const loaded = await Promise.all(
       entries
         .filter(
           (entry) => entry.isFile() && TASK_STATE_FILE_PATTERN.test(entry.name),
@@ -435,16 +439,21 @@ export class BackgroundTaskManager {
         .map(async (entry) => {
           const filePath = path.join(this.options.stateDirectory, entry.name);
           try {
-            parsePersistedRecord(await readFile(filePath, "utf8"));
+            return parsePersistedRecord(await readFile(filePath, "utf8"));
           } catch {
             const quarantinePath = path.join(
               this.quarantineDirectory(),
               `${entry.name}.${Date.now()}.${randomUUID()}.invalid`,
             );
             await rename(filePath, quarantinePath);
+            return null;
           }
         }),
     );
+    for (const record of loaded) {
+      if (record) this.records.set(record.id, record);
+    }
+    await this.pruneTerminalRecords();
   }
 
   private async refreshRecoveredTask(
@@ -489,12 +498,7 @@ export class BackgroundTaskManager {
   ): Promise<PersistedBackgroundTaskRecord | null> {
     await this.ensureInitialized();
     await this.writes.get(id);
-    try {
-      return parsePersistedRecord(await readFile(this.taskPath(id), "utf8"));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+    return this.records.get(id) ?? null;
   }
 
   private async getAccessibleRecord(
@@ -504,6 +508,44 @@ export class BackgroundTaskManager {
     const record = await this.readPersistedRecord(id);
     if (!record || !canAccessRecord(record, access)) return null;
     return this.refreshRecoveredTask(record);
+  }
+
+  private async pruneTerminalRecords(): Promise<void> {
+    const nowMs = this.now().getTime();
+    const terminalRecords = [...this.records.values()].filter(
+      (record) => !ACTIVE_STATES.has(record.state),
+    );
+    const expiredIds = new Set(
+      terminalRecords
+        .filter(
+          (record) =>
+            nowMs - terminalRecordTime(record) > this.terminalRetentionMs,
+        )
+        .map((record) => record.id),
+    );
+    const retainedByAge = terminalRecords
+      .filter((record) => !expiredIds.has(record.id))
+      .sort((left, right) => terminalRecordTime(right) - terminalRecordTime(left));
+    const victimIds = new Set([
+      ...expiredIds,
+      ...retainedByAge
+        .slice(this.maxRetainedTerminalTasks)
+        .map((record) => record.id),
+    ]);
+
+    for (const id of victimIds) {
+      const current = this.records.get(id);
+      if (!current || ACTIVE_STATES.has(current.state)) continue;
+      await this.removeTaskArtifacts(id);
+    }
+  }
+
+  private async removeTaskArtifacts(id: string): Promise<void> {
+    await rm(this.stdoutPath(id), { force: true });
+    await rm(this.stderrPath(id), { force: true });
+    await rm(this.resultPath(id), { force: true });
+    await rm(this.taskPath(id), { force: true });
+    this.records.delete(id);
   }
 
   private taskPath(id: string): string {
@@ -554,6 +596,7 @@ export class BackgroundTaskManager {
     this.writes.set(parsed.id, write);
     try {
       await write;
+      this.records.set(parsed.id, parsed);
     } finally {
       if (this.writes.get(parsed.id) === write) {
         this.writes.delete(parsed.id);
@@ -574,6 +617,23 @@ export class BackgroundTaskManager {
       sanitizeLogFile(this.stderrPath(id)),
     ]);
   }
+}
+
+function positiveIntegerOption(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return resolved;
+}
+
+function terminalRecordTime(record: PersistedBackgroundTaskRecord): number {
+  const value = Date.parse(record.completedAt ?? record.createdAt);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function normalizeStartInput(input: StartBackgroundTaskInput): {

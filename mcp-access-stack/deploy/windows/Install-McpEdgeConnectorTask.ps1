@@ -24,6 +24,8 @@ param(
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
     [string]$OwnerOAuthScopes = 'workspaces:read',
+    [ValidateSet('stateless', 'stateful-experiment')]
+    [string]$McpSessionMode = 'stateless',
     [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
     [string]$BrowserWorkerTokenFile,
     [switch]$EnableBrowserWorker,
@@ -135,6 +137,7 @@ $plan = [ordered]@{
     validationLauncherPath = $validationLauncherPath
     edgeHostPath = $edgeHostPath
     runtimeRoot = $runtime
+    mcpSessionMode = $McpSessionMode
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
     execute = $edgeHostPath
@@ -243,6 +246,7 @@ $validationArguments = @(
     '-PolicyPath', $policy,
     '-AllowedOrigins', $AllowedOrigins,
     '-OwnerOAuthScopes', $OwnerOAuthScopes,
+    '-McpSessionMode', $McpSessionMode,
     '-MaxConcurrentRequests', [string]$MaxConcurrentRequests,
     '-ValidateOnly'
 )
@@ -260,6 +264,7 @@ if ($LASTEXITCODE -ne 0 -or $validationJson.Count -ne 1) {
 $validation = $validationJson[0] | ConvertFrom-Json
 if ([string]$validation.status -ne 'validated' -or
     [string]$validation.executionManifestSha256 -ne $manifestSha256 -or
+    [string]$validation.mcpSessionMode -ne $McpSessionMode -or
     [bool]$validation.browserEnabled -ne [bool]$EnableBrowserWorker) {
     throw 'Edge Connector launcher validation returned unexpected evidence.'
 }
@@ -275,6 +280,7 @@ $hostArguments = @(
     '--policy-path', $policy,
     '--allowed-origins', $AllowedOrigins,
     '--owner-oauth-scopes', $OwnerOAuthScopes,
+    '--mcp-session-mode', $McpSessionMode,
     '--max-concurrent-requests', [string]$MaxConcurrentRequests,
     '--restart-count', '0',
     '--restart-interval-seconds', '60',
@@ -369,6 +375,7 @@ else {
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
     edgeHostValidated = $true
+    mcpSessionMode = $McpSessionMode
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
 } | ConvertTo-Json -Compress

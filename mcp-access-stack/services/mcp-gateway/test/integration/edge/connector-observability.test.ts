@@ -104,9 +104,19 @@ describe("EdgeConnector resilience observability", () => {
     });
     const runPromise = connector.run(controller.signal);
     try {
+      const connected = await waitForLog(logs, "edge_connector_connected", (entry) => entry.generation === 1);
+      expect(connected).toMatchObject({
+        generation: 1,
+        connectionStartedAtMs: 1_000,
+        connectedAtMs: 1_100,
+      });
+
       const ready = await waitForLog(logs, "edge_connector_ready", (entry) => entry.generation === 1);
       expect(ready).toMatchObject({
         generation: 1,
+        connectionStartedAtMs: 1_000,
+        connectedAtMs: 1_100,
+        readyAtMs: 1_100,
         connectorInstanceId: RUNTIME_IDENTITY.connectorInstanceId,
         processStartedAt: RUNTIME_IDENTITY.processStartedAt,
         catalogContractRevision: RUNTIME_IDENTITY.catalogContractRevision,
@@ -123,6 +133,7 @@ describe("EdgeConnector resilience observability", () => {
         status: 1006,
         closeClassification: "abnormal",
         connectionStartedAtMs: 1_000,
+        connectedAtMs: 1_100,
         readyAtMs: 1_100,
         endedAtMs: 1_350,
         durationMs: 350,

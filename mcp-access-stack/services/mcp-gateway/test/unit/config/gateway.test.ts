@@ -24,6 +24,9 @@ describe("gateway configuration loader", () => {
     expect(config.port).toBe(3000);
     expect(config.authMode).toBe("oauth");
     expect(config.mcpPath).toBe("/mcp");
+    expect(config.mcpSessionMode).toBe("stateless");
+    expect(config.mcpStatefulSessionTtlMs).toBe(30 * 60_000);
+    expect(config.mcpStatefulMaxSessions).toBe(100);
     expect(config.trustProxy).toBe(0);
     expect(config.oauth?.allowedSubjects).toEqual(new Set(["user-1", "user-2"]));
     expect(config.agent.maxConcurrency).toBe(4);
@@ -112,6 +115,32 @@ describe("gateway configuration loader", () => {
     expect(() =>
       loadGatewayConfig({ ...requiredEnv, NODE_ENV: "test", TRUST_PROXY: "-1" }),
     ).toThrow();
+  });
+
+  it("keeps stateless as default and allows an explicit stateful production mode", () => {
+    const experimental = loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "test",
+      MCP_SESSION_MODE: "stateful-experiment",
+    });
+    expect(experimental.mcpSessionMode).toBe("stateful-experiment");
+
+    const bounded = loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "test",
+      MCP_SESSION_MODE: "stateful-experiment",
+      MCP_STATEFUL_SESSION_TTL_MS: "45000",
+      MCP_STATEFUL_MAX_SESSIONS: "12",
+    });
+    expect(bounded.mcpStatefulSessionTtlMs).toBe(45_000);
+    expect(bounded.mcpStatefulMaxSessions).toBe(12);
+
+    const production = loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "production",
+      MCP_SESSION_MODE: "stateful-experiment",
+    });
+    expect(production.mcpSessionMode).toBe("stateful-experiment");
   });
 
   it("keeps requiring https for the public base url in production", () => {

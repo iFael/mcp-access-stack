@@ -24,6 +24,8 @@ param(
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
     [string]$OwnerOAuthScopes = 'workspaces:read',
+    [ValidateSet('stateless', 'stateful-experiment')]
+    [string]$McpSessionMode = 'stateless',
     [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
     [string]$BrowserWorkerTokenFile,
     [switch]$EnableBrowserWorker,
@@ -198,6 +200,7 @@ if ($ValidateOnly) {
         releaseRoot = $release
         executionManifestSha256 = $actualManifestSha256
         edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority)
+        mcpSessionMode = $McpSessionMode
         nodePath = $nodePath
         edgeConnectorPath = $edgeCliPath
         browserEnabled = [bool]$EnableBrowserWorker
@@ -215,6 +218,7 @@ $env:MCP_EDGE_BASE_URL = $edgeUri.GetLeftPart([UriPartial]::Authority)
 $env:MCP_CONNECTOR_TOKEN_FILE = $connectorTokenPath
 $env:VS_CODE_GPT_POLICY_PATH = $policy
 $env:MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS = [string]$MaxConcurrentRequests
+$env:MCP_SESSION_MODE = $McpSessionMode
 $env:AUTH_MODE = 'owner'
 $env:OWNER_TOKEN = $ownerToken
 $env:OWNER_OAUTH_SCOPES = $OwnerOAuthScopes
@@ -236,6 +240,7 @@ try {
     $exitCode = $LASTEXITCODE
 }
 finally {
+    $env:MCP_SESSION_MODE = $null
     $env:OWNER_TOKEN = $null
     $env:BROWSER_WORKER_TOKEN = $null
     $ownerToken = $null

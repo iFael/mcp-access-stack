@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, test } from "@jest/globals";
 import { searchAuthorizedFiles } from "../../../src/filesystem/search.js";
+import { readSearchTextFile } from "../../../src/filesystem/text-file.js";
 import {
   createFixture,
   type Fixture,
@@ -57,6 +58,35 @@ describe("filesystem search", () => {
         snippet: "Alpha first",
       },
     ]);
+  });
+
+  test("reads search text without changing encoding, size and binary limits", async () => {
+    fixture = await createFixture();
+    const cp1252Path = path.join(fixture.workspacePath, "legacy.txt");
+    const binaryPath = path.join(fixture.workspacePath, "binary.bin");
+    const largePath = path.join(fixture.workspacePath, "large.txt");
+
+    await writeWorkspaceFile(
+      fixture.workspacePath,
+      "legacy.txt",
+      Buffer.from("configura\u00e7\u00e3o", "latin1"),
+    );
+    await writeWorkspaceFile(
+      fixture.workspacePath,
+      "binary.bin",
+      Buffer.from([0x41, 0x00, 0x42]),
+    );
+    await writeWorkspaceFile(fixture.workspacePath, "large.txt", "12345");
+
+    await expect(readSearchTextFile(cp1252Path, 64_000)).resolves.toBe(
+      "configuração",
+    );
+    await expect(readSearchTextFile(binaryPath, 64_000)).rejects.toMatchObject({
+      code: "BINARY_FILE",
+    });
+    await expect(readSearchTextFile(largePath, 4)).rejects.toMatchObject({
+      code: "FILE_TOO_LARGE",
+    });
   });
 
   test("preserves cancellation before reading candidates", async () => {

@@ -196,6 +196,10 @@ function Write-McpCutoverBrokerResult {
 
 $releaseId = [string]$request.expectedReleaseId
 $edge = $request.edge
+$mcpSessionMode = [string]$edge.mcpSessionMode
+if ($mcpSessionMode -notin @('stateless', 'stateful-experiment')) {
+    throw 'Access Stack cutover request contains an invalid MCP session mode.'
+}
 $browser = $request.browser
 $edgeTaskName = [string]$edge.taskName
 $browserTaskName = [string]$browser.taskName
@@ -220,6 +224,7 @@ $edgeParameters = @{
     PolicyPath = [IO.Path]::GetFullPath([string]$edge.policyPath)
     AllowedOrigins = [string]$edge.allowedOrigins
     OwnerOAuthScopes = [string]$edge.ownerOAuthScopes
+    McpSessionMode = $mcpSessionMode
     MaxConcurrentRequests = [int]$edge.maxConcurrentRequests
     DelaySeconds = [int]$edge.delaySeconds
     TaskName = $edgeTaskName
@@ -298,6 +303,7 @@ try {
         policyPath = [IO.Path]::GetFullPath([string]$edge.policyPath)
         allowedOrigins = [string]$edge.allowedOrigins
         ownerOAuthScopes = [string]$edge.ownerOAuthScopes
+        mcpSessionMode = $mcpSessionMode
         maxConcurrentRequests = [int]$edge.maxConcurrentRequests
         delaySeconds = [int]$edge.delaySeconds
         browserEnabled = [bool]$browser.enabled

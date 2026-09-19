@@ -10,6 +10,8 @@ param(
     [Parameter(Mandatory = $true)][string]$PolicyPath,
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
     [string]$OwnerOAuthScopes = 'workspaces:read',
+    [ValidateSet('stateless', 'stateful-experiment')]
+    [string]$McpSessionMode = 'stateless',
     [switch]$EnableBrowserWorker,
     [string]$BrowserWorkerTokenFile,
     [string]$BrowserPrivateDirectory,
@@ -133,6 +135,7 @@ $request = [ordered]@{
         policyPath = [IO.Path]::GetFullPath($PolicyPath)
         allowedOrigins = $AllowedOrigins
         ownerOAuthScopes = $OwnerOAuthScopes
+        mcpSessionMode = $McpSessionMode
         maxConcurrentRequests = 8
         delaySeconds = 15
     }

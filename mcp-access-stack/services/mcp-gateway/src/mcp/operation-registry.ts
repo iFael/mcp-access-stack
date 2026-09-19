@@ -271,7 +271,10 @@ export function createGatewayOperationContextFactory(
   };
 }
 
-export function createMcpPrincipalKey(request: AuthenticatedRequest): string {
+export function createMcpPrincipalKey(
+  request: AuthenticatedRequest,
+  options: { ignoreMcpSessionId?: boolean } = {},
+): string {
   const subject = request.auth?.extra?.subject;
   const clientId = request.auth?.clientId;
   if (typeof subject === "string" || clientId) {
@@ -288,9 +291,11 @@ export function createMcpPrincipalKey(request: AuthenticatedRequest): string {
     return `openai:${sha256(JSON.stringify([openAiSubject, openAiSession]))}`;
   }
 
-  const mcpSessionId = readOpaquePrincipalHeader(request, "mcp-session-id");
-  if (mcpSessionId) {
-    return `session:${sha256(mcpSessionId)}`;
+  if (!options.ignoreMcpSessionId) {
+    const mcpSessionId = readOpaquePrincipalHeader(request, "mcp-session-id");
+    if (mcpSessionId) {
+      return `session:${sha256(mcpSessionId)}`;
+    }
   }
 
   const address = request.ip ?? request.socket.remoteAddress ?? "unknown";

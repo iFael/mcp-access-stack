@@ -82,11 +82,19 @@ describe("gateway HTTP surface", () => {
         openWorldHint: false,
         idempotentHint: true,
       });
+      const patchTool = body.result.tools.find((tool) => tool.name === "patch_file");
+      expect(patchTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
           ![
             "write_file",
+            "patch_file",
             "run_command",
             "start_background_task",
             "cancel_background_task",
