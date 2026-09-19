@@ -92,6 +92,8 @@ describe("connector telemetry reducer", () => {
 
     expect(staleDisconnect.readySince).toBe("2026-09-02T12:00:03.000Z");
     expect(staleDisconnect.connectionGeneration).toBe(2);
+    expect(staleDisconnect.reconnectGraceStartedAt).toBeUndefined();
+    expect(staleDisconnect.reconnectGraceGeneration).toBeUndefined();
     expect(staleDisconnect).toMatchObject({
       lastDisconnectedAt: "2026-09-02T12:00:05.000Z",
       lastDisconnectedGeneration: 1,
@@ -100,6 +102,56 @@ describe("connector telemetry reducer", () => {
       lastDisconnectCode: 1006,
       lastDisconnectWasClean: false,
       disconnectCount: 1,
+    });
+  });
+  it("keeps reconnect grace scoped to the current disconnected generation", () => {
+    const first = applyConnectorTelemetryEvent(createEmptyConnectorTelemetry(), {
+      type: "ready",
+      at: "2026-09-02T12:00:01.000Z",
+      runtime,
+    });
+    const disconnected = applyConnectorTelemetryEvent(first, {
+      type: "disconnected",
+      at: "2026-09-02T12:00:02.000Z",
+      connectionGeneration: 1,
+      wasReady: true,
+      source: "close",
+      closeCode: 1006,
+      wasClean: false,
+    });
+
+    expect(disconnected.readySince).toBeUndefined();
+    expect(disconnected).toMatchObject({
+      reconnectGraceStartedAt: "2026-09-02T12:00:02.000Z",
+      reconnectGraceGeneration: 1,
+    });
+
+    const reconnected = applyConnectorTelemetryEvent(disconnected, {
+      type: "ready",
+      at: "2026-09-02T12:00:03.000Z",
+      runtime: { ...runtime, connectionGeneration: 2 },
+    });
+    expect(reconnected.reconnectGraceStartedAt).toBeUndefined();
+    expect(reconnected.reconnectGraceGeneration).toBeUndefined();
+
+    const staleDisconnect = applyConnectorTelemetryEvent(reconnected, {
+      type: "disconnected",
+      at: "2026-09-02T12:00:05.000Z",
+      connectionGeneration: 1,
+      wasReady: true,
+      source: "close",
+      closeCode: 1006,
+      wasClean: false,
+    });
+
+    expect(staleDisconnect.readySince).toBe("2026-09-02T12:00:03.000Z");
+    expect(staleDisconnect.connectionGeneration).toBe(2);
+    expect(staleDisconnect.reconnectGraceStartedAt).toBeUndefined();
+    expect(staleDisconnect.reconnectGraceGeneration).toBeUndefined();
+    expect(staleDisconnect).toMatchObject({
+      lastDisconnectedAt: "2026-09-02T12:00:05.000Z",
+      lastDisconnectedGeneration: 1,
+      disconnectCount: 2,
     });
   });
   it("keeps the current ready generation when a non-ready handshake socket closes", () => {

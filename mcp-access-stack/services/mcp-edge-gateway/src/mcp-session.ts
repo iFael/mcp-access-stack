@@ -337,11 +337,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null) return true;
 
     const telemetry = await this.connectorTelemetry.read();
-    if (telemetry.lastDisconnectWasReady !== true || telemetry.lastDisconnectedAt === undefined) {
+    if (
+      telemetry.reconnectGraceStartedAt === undefined ||
+      telemetry.reconnectGraceGeneration === undefined ||
+      telemetry.reconnectGraceGeneration !== telemetry.connectionGeneration
+    ) {
       return false;
     }
 
-    const disconnectedAt = Date.parse(telemetry.lastDisconnectedAt);
+    const disconnectedAt = Date.parse(telemetry.reconnectGraceStartedAt);
     if (!Number.isFinite(disconnectedAt)) return false;
     const deadline = disconnectedAt + EDGE_CONNECTOR_RECONNECT_GRACE_MS;
 
