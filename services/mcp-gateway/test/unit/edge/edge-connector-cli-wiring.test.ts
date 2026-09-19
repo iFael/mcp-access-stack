@@ -8,5 +8,8 @@ describe("edge connector CLI wiring", () => {
     const source = readFileSync(sourcePath, "utf8");
 
     expect(source).toContain("sourceControlExecutor: workspaceExecutor");
+    expect(source).toContain("assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion)");
+    expect(source.indexOf("assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion)"))
+      .toBeLessThan(source.indexOf("await connector.run(controller.signal)"));
   });
 });

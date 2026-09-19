@@ -7,6 +7,7 @@ import { createGatewayApplication } from "../../../src/app.js";
 import type { AgentRelay } from "../../../src/relay/service.js";
 import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import { EdgeConnector } from "../../../src/edge/connector.js";
+import { assertLoopbackMcpCompatibility } from "../../../src/edge/loopback-health.js";
 import { listen as listenGateway, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
 
 const INTERNAL_ASSERTION = "a".repeat(43);
@@ -150,6 +151,29 @@ describe("embedded Gateway edge-trusted mode", () => {
         });
         expect(response.status).toBe(401);
       }
+    } finally {
+      await http.close();
+    }
+  });
+
+  it("passes the loopback compatibility probe without session negotiation in stateful mode", async () => {
+    const config = {
+      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
+      authMode: "edge-trusted" as const,
+      mcpSessionMode: "stateful-experiment" as const,
+    };
+    const gateway = createGatewayApplication(config, {
+      logger: silentLogger(),
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceReady: () => true,
+      edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
+    });
+    const http = await listenGateway(gateway.app);
+    try {
+      await expect(
+        assertLoopbackMcpCompatibility(http.url, INTERNAL_ASSERTION),
+      ).resolves.toBeUndefined();
     } finally {
       await http.close();
     }
