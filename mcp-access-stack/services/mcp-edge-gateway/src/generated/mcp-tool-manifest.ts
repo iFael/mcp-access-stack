@@ -447,6 +447,152 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Applies exact text replacements to an existing text file inside the workspace. Requires expectedSha256 from a prior read_file result to prevent stale writes. Each replacement also requires an expectedCount, and dryRun can validate the patch without writing.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "expectedSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "replacements": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedCount": {
+                "default": 1,
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "newText": {
+                "type": "string"
+              },
+              "oldText": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "oldText",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "expectedSha256",
+        "replacements"
+      ],
+      "type": "object"
+    },
+    "name": "patch_file",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "encoding": {
+          "enum": [
+            "utf-8",
+            "utf-16le",
+            "utf-16be",
+            "windows-1252",
+            "latin1"
+          ],
+          "type": "string"
+        },
+        "lineEnding": {
+          "enum": [
+            "lf",
+            "crlf",
+            "cr",
+            "mixed",
+            "none"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "replacementsApplied": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256After": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "sha256Before": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256Before",
+        "sha256After",
+        "encoding",
+        "lineEnding",
+        "replacementsApplied",
+        "sizeBytes",
+        "changed",
+        "dryRun"
+      ],
+      "type": "object"
+    },
+    "title": "Patch file"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": true
     },
     "description": "Runs a predefined, read-only validation in an authorized workspace. Available validations are diff-check, legacy-format, legacy-compat and secret-scan. The validation name selects a fixed implementation; arbitrary commands are not accepted.",
@@ -12743,13 +12889,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "891294325e7ffdd2982703e9995359abc7738136c4e9d9eb88cdeada488a6a47",
-  "serverVersion": "0.4.0-catalog.c891294325e7f.sbf7b894d0d3b",
-  "toolCount": 60,
-  "toolSetRevision": "bf7b894d0d3b632fa0f868f2eadcf9268b51aeb71abede824bb3da65c227f053"
+  "contractRevision": "25c7aade0cfac60acb2c2019bd9a7b0e3150b6cf0481d727beb9a499029b3f0f",
+  "serverVersion": "0.4.0-catalog.c25c7aade0cfa.s7bf898740e4d",
+  "toolCount": 61,
+  "toolSetRevision": "7bf898740e4d85d49cff2e6070ff5165ffd3fe31a9340a81125cb2061d072408"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c891294325e7f.sbf7b894d0d3b"
+  "version": "0.4.0-catalog.c25c7aade0cfa.s7bf898740e4d"
 } as const;
