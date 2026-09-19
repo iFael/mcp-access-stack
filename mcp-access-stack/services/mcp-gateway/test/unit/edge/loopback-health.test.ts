@@ -7,7 +7,7 @@ import { assertLoopbackMcpCompatibility } from "../../../src/edge/loopback-healt
 
 describe("loopback MCP health", () => {
   it("accepts stateless tools/list compatibility without creating a session", async () => {
-    const fetchImpl = jest.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+    const fetchImpl = jest.fn(async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const headers = new Headers(init?.headers);
       expect(headers.get(EDGE_INTERNAL_ASSERTION_HEADER)).toBe("a".repeat(43));
       expect(headers.get(EDGE_INTERNAL_PRINCIPAL_HEADER)).toBeTruthy();
