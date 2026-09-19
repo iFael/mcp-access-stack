@@ -9,6 +9,7 @@ import {
   createMcpOperationScopeKey,
   createMcpPrincipalKey,
   extractMcpCancellationNotifications,
+  extractMcpToolCallRequestIds,
 } from "../../../src/mcp/operation-registry.js";
 
 describe("McpOperationRegistry", () => {
@@ -28,13 +29,82 @@ describe("McpOperationRegistry", () => {
 
   it("preserves an early cancellation until the handler registers", () => {
     const registry = new McpOperationRegistry();
+    const pending = registry.registerPending(
+      "principal",
+      "request-1",
+      "http-request-a",
+    );
 
-    expect(registry.cancel("principal", "request-1", "cancel early")).toBe(false);
-    const registration = registry.begin("principal", "request-1");
+    expect(registry.cancel("principal", "request-1", "cancel early")).toBe(true);
+    const registration = registry.begin(
+      "request:http-a",
+      "request-1",
+      "principal",
+      "http-request-a",
+    );
 
     expect(registration.signal.aborted).toBe(true);
     expect(registration.signal.reason).toBe("cancel early");
     registration.release();
+    pending.release();
+  });
+
+  it("does not carry a late cancellation into a later reused request id", () => {
+    const registry = new McpOperationRegistry();
+
+    expect(registry.cancel("openai-session:a", 1, "late cancel")).toBe(false);
+    const pending = registry.registerPending(
+      "openai-session:a",
+      1,
+      "http-request-b",
+    );
+    const registration = registry.begin(
+      "request:http-b",
+      1,
+      "openai-session:a",
+      "http-request-b",
+    );
+
+    expect(registration.signal.aborted).toBe(false);
+    registration.release();
+    pending.release();
+  });
+
+  it("applies one ambiguous cancellation to every matching pending request", () => {
+    const registry = new McpOperationRegistry();
+    const firstPending = registry.registerPending(
+      "openai-session:a",
+      1,
+      "http-request-a",
+    );
+    const secondPending = registry.registerPending(
+      "openai-session:a",
+      1,
+      "http-request-b",
+    );
+
+    expect(registry.cancel("openai-session:a", 1, "stop both")).toBe(true);
+    const first = registry.begin(
+      "request:http-a",
+      1,
+      "openai-session:a",
+      "http-request-a",
+    );
+    const second = registry.begin(
+      "request:http-b",
+      1,
+      "openai-session:a",
+      "http-request-b",
+    );
+
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(true);
+    expect(first.signal.reason).toBe("stop both");
+    expect(second.signal.reason).toBe("stop both");
+    first.release();
+    second.release();
+    firstPending.release();
+    secondPending.release();
   });
 
   it("rejects duplicate in-flight request ids for the same principal", () => {
@@ -176,6 +246,25 @@ describe("MCP cancellation parsing and principal identity", () => {
     ).toEqual([{ requestId: "abc" }]);
   });
 
+  it("extracts only tools/call ids that can register operation contexts", () => {
+    expect(
+      extractMcpToolCallRequestIds([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "list_workspaces", arguments: {} },
+        },
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        {
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        },
+      ]),
+    ).toEqual([1]);
+  });
+
   it("keeps one anonymous MCP session stable across proxy IP changes", () => {
     const first = anonymousRequest("203.0.113.10", "stable-session");
     const second = anonymousRequest("198.51.100.20", "stable-session");
@@ -288,6 +377,36 @@ describe("MCP cancellation parsing and principal identity", () => {
     firstRegistration.release();
     secondRegistration.release();
     expect(registry.size).toBe(0);
+  });
+
+  it("isolates OpenAI stateless requests while preserving session-scoped cancellation", () => {
+    const headers = {
+      "x-openai-subject": "openai-subject-a",
+      "x-openai-session": "conversation-a",
+    };
+    const first = authenticatedRequest("http-request-a", headers);
+    const second = authenticatedRequest("http-request-b", headers);
+    const principal = createMcpPrincipalKey(first);
+
+    const firstScope = createMcpOperationScopeKey(first, principal);
+    const secondScope = createMcpOperationScopeKey(second, principal);
+    const firstCancellationScope = createMcpCancellationScopeKey(first, principal);
+    const secondCancellationScope = createMcpCancellationScopeKey(second, principal);
+
+    expect(firstScope).not.toBe(secondScope);
+    expect(firstScope).toMatch(/^request:[a-f0-9]{64}$/u);
+    expect(secondScope).toMatch(/^request:[a-f0-9]{64}$/u);
+    expect(firstCancellationScope).toBe(secondCancellationScope);
+    expect(firstCancellationScope).toMatch(/^openai-session:[a-f0-9]{64}$/u);
+
+    const registry = new McpOperationRegistry();
+    const firstRegistration = registry.begin(firstScope, 1, firstCancellationScope);
+    const secondRegistration = registry.begin(secondScope, 1, secondCancellationScope);
+    expect(registry.cancel(firstCancellationScope, 1, "cancel both")).toBe(true);
+    expect(firstRegistration.signal.aborted).toBe(true);
+    expect(secondRegistration.signal.aborted).toBe(true);
+    firstRegistration.release();
+    secondRegistration.release();
   });
 
   it("keeps duplicate detection stable across requests that share an MCP session", () => {

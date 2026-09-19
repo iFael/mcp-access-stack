@@ -28,6 +28,7 @@ import {
   createMcpOperationScopeKey,
   createMcpPrincipalKey,
   extractMcpCancellationNotifications,
+  extractMcpToolCallRequestIds,
 } from "./mcp/operation-registry.js";
 import {
   createOwnerAuthenticationMiddleware,
@@ -217,6 +218,22 @@ export function createGatewayApplication(
     const principalKey = createMcpPrincipalKey(request);
     const operationScopeKey = createMcpOperationScopeKey(request, principalKey);
     const cancellationScopeKey = createMcpCancellationScopeKey(request, principalKey);
+    const requestLifecycleId = request.mcpRequestId;
+    const pendingRegistrations = requestLifecycleId === undefined
+      ? []
+      : extractMcpToolCallRequestIds(request.body).map((requestId) =>
+          operationRegistry.registerPending(
+            cancellationScopeKey,
+            requestId,
+            requestLifecycleId,
+          ),
+        );
+    const releasePendingRegistrations = (): void => {
+      for (const registration of pendingRegistrations) {
+        registration.release();
+      }
+    };
+
     for (const cancellation of extractMcpCancellationNotifications(request.body)) {
       const matched = operationRegistry.cancel(
         cancellationScopeKey,
@@ -237,6 +254,7 @@ export function createGatewayApplication(
       principalKey,
       operationScopeKey,
       cancellationScopeKey,
+      ...(requestLifecycleId === undefined ? {} : { requestLifecycleId }),
       requestSignal: requestAbort.signal,
     });
     try {
@@ -249,10 +267,12 @@ export function createGatewayApplication(
         requestSignal: requestAbort.signal,
       });
       if (handledByFastPath) {
+        releasePendingRegistrations();
         requestAbort.release();
         return;
       }
     } catch (error) {
+      releasePendingRegistrations();
       requestAbort.release();
       next(error);
       return;
@@ -273,6 +293,7 @@ export function createGatewayApplication(
     } catch (error) {
       next(error);
     } finally {
+      releasePendingRegistrations();
       requestAbort.release();
       await server.close().catch(() => undefined);
     }
