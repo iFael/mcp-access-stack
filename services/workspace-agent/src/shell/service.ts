@@ -35,6 +35,7 @@ export interface AuthorizedCommandExecution {
 interface CommandAuthorizationScope {
   executionContext: "foreground" | "background";
   operation: string;
+  interactive?: true;
 }
 
 export class ShellService {
@@ -96,7 +97,11 @@ export class ShellService {
       workspace,
       input,
       signal,
-      { executionContext: "background", operation: input.operation },
+      {
+        executionContext: "background",
+        operation: input.operation,
+        ...(input.interactive ? { interactive: true as const } : {}),
+      },
     );
   }
 
@@ -134,7 +139,33 @@ export class ShellService {
       command: input.command,
       executionContext: scope.executionContext,
       operation: scope.operation,
+      ...(scope.interactive ? { interactive: true as const } : {}),
     };
+
+    if (scope.interactive) {
+      const reasons = [
+        ...(authorization.disposition === "confirmation_required"
+          ? authorization.reasons
+          : []),
+        "interactive process grants persistent stdin access",
+      ].filter((value, index, values) => values.indexOf(value) === index);
+      if (!input.confirmationId) {
+        const confirmation = this.confirmations.create(binding);
+        return {
+          status: "confirmation_required",
+          shell: input.shell,
+          cwd: cwd.logicalPath,
+          confirmationId: confirmation.confirmationId,
+          expiresAt: confirmation.expiresAt,
+          reasons,
+        };
+      }
+      this.confirmations.consume(input.confirmationId, binding);
+      return {
+        logicalCwd: cwd.logicalPath,
+        absoluteCwd: cwd.absolutePath,
+      };
+    }
 
     if (authorization.disposition === "confirmation_required") {
       if (!input.confirmationId) {

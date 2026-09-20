@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "@jest/globals";
 import {
   runShellCommand,
   runShellCommandToFiles,
+  type ShellStdinControl,
 } from "../../../src/shell/process-runner.js";
 import { redactSensitiveText } from "../../../src/tasks/background-task-manager.js";
 import {
@@ -170,6 +171,49 @@ describe("shell process runner", () => {
     });
     expect(persistedStdout).not.toContain("runner-secret");
     expect(persistedStderr).not.toContain("runner-pass");
+  }, 45_000);
+
+  test("writes to a persisted interactive process stdin without PTY", async () => {
+    fixture = await createFixture();
+    outputDirectory = await mkdtemp(path.join(os.tmpdir(), "mcp-shell-output-"));
+    const stdoutPath = path.join(outputDirectory, "stdout.log");
+    const stderrPath = path.join(outputDirectory, "stderr.log");
+    let stdinControl: ShellStdinControl | undefined;
+
+    const execution = runShellCommandToFiles(
+      "powershell",
+      "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine(('stdin:' + $line))",
+      fixture.workspacePath,
+      ".",
+      30_000,
+      {
+        stdoutPath,
+        stderrPath,
+        interactive: true,
+        onStdinControl: (control) => {
+          stdinControl = control;
+        },
+      },
+    );
+
+    const deadline = Date.now() + 5_000;
+    while (!stdinControl && Date.now() < deadline) {
+      await delay(10);
+    }
+    expect(stdinControl).toBeDefined();
+
+    await stdinControl!.write("hello-from-stdin\n");
+    await stdinControl!.close();
+
+    await expect(execution).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      timedOut: false,
+      stdout: expect.stringContaining("stdin:hello-from-stdin"),
+    });
+    expect(await readFile(stdoutPath, "utf8")).toContain(
+      "stdin:hello-from-stdin",
+    );
   }, 45_000);
 
   test("preserves a completed persisted child result when the event loop is delayed", async () => {

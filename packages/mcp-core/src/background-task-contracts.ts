@@ -53,6 +53,7 @@ export const backgroundTaskRecordSchema = z
       .int()
       .min(30_000)
       .max(MAX_BACKGROUND_OPERATION_TIMEOUT_MS),
+    interactive: z.literal(true).optional(),
     pid: z.number().int().positive().optional(),
     result: backgroundTaskRunResultSchema.optional(),
     error: z.string().optional(),
@@ -76,6 +77,7 @@ export const startBackgroundTaskInputSchema = z
     shell: shellNameSchema,
     cwd: z.string().trim().min(1).optional(),
     confirmationId: z.string().trim().min(1).max(128).optional(),
+    interactive: z.boolean().default(false),
     timeoutMs: z
       .number()
       .int()
@@ -126,6 +128,14 @@ export const getBackgroundTaskInputSchema = z
   .strict();
 export type GetBackgroundTaskInput = z.infer<typeof getBackgroundTaskInputSchema>;
 
+export const getBackgroundTasksInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    ids: z.array(taskIdSchema).min(1).max(20),
+  })
+  .strict();
+export type GetBackgroundTasksInput = z.infer<typeof getBackgroundTasksInputSchema>;
+
 export const waitBackgroundTaskInputSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -136,6 +146,22 @@ export const waitBackgroundTaskInputSchema = z
   .strict();
 export type WaitBackgroundTaskInput = z.input<typeof waitBackgroundTaskInputSchema>;
 export type ParsedWaitBackgroundTaskInput = z.output<typeof waitBackgroundTaskInputSchema>;
+
+export const waitBackgroundTaskToolInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    id: taskIdSchema,
+    timeoutMs: z.number().int().positive().max(30_000).default(15_000),
+    maxBytes: z.number().int().positive().max(1_000_000).default(100_000),
+  })
+  .strict();
+export type WaitBackgroundTaskToolInput = z.input<
+  typeof waitBackgroundTaskToolInputSchema
+>;
+export type ParsedWaitBackgroundTaskToolInput = z.output<
+  typeof waitBackgroundTaskToolInputSchema
+>;
+
 export const listBackgroundTasksInputSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -168,6 +194,20 @@ export const backgroundTaskResultSchema = z
   .strict();
 export type BackgroundTaskResult = z.infer<typeof backgroundTaskResultSchema>;
 
+export const backgroundTasksResultSchema = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          id: taskIdSchema,
+          task: backgroundTaskRecordSchema.nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type BackgroundTasksResult = z.infer<typeof backgroundTasksResultSchema>;
+
 export const backgroundTaskListResultSchema = z
   .object({ tasks: z.array(backgroundTaskRecordSchema) })
   .strict();
@@ -195,6 +235,73 @@ export const backgroundTaskLogsLookupResultSchema = z
 export type BackgroundTaskLogsLookupResult = z.infer<
   typeof backgroundTaskLogsLookupResultSchema
 >;
+
+export const writeBackgroundTaskStdinInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    id: taskIdSchema,
+    input: z.string().max(64_000).default(""),
+    close: z.boolean().default(false),
+  })
+  .strict()
+  .refine(({ input, close }) => input.length > 0 || close, {
+    message: "input must not be empty unless close=true.",
+  });
+export type WriteBackgroundTaskStdinInput = z.input<
+  typeof writeBackgroundTaskStdinInputSchema
+>;
+export type ParsedWriteBackgroundTaskStdinInput = z.output<
+  typeof writeBackgroundTaskStdinInputSchema
+>;
+
+export const backgroundTaskStdinResultSchema = z
+  .object({
+    task: backgroundTaskRecordSchema.nullable(),
+    bytesWritten: z.number().int().nonnegative(),
+    stdinClosed: z.boolean(),
+  })
+  .strict();
+export type BackgroundTaskStdinResult = z.infer<
+  typeof backgroundTaskStdinResultSchema
+>;
+
+export const readBackgroundTaskOutputInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    id: taskIdSchema,
+    stdoutOffset: z.number().int().nonnegative().default(0),
+    stderrOffset: z.number().int().nonnegative().default(0),
+    maxBytes: z.number().int().min(4).max(1_000_000).default(256_000),
+  })
+  .strict();
+export type ReadBackgroundTaskOutputInput = z.input<
+  typeof readBackgroundTaskOutputInputSchema
+>;
+export type ParsedReadBackgroundTaskOutputInput = z.output<
+  typeof readBackgroundTaskOutputInputSchema
+>;
+
+export const backgroundTaskOutputChunkSchema = z
+  .object({
+    content: z.string(),
+    offset: z.number().int().nonnegative(),
+    nextOffset: z.number().int().nonnegative(),
+    totalBytes: z.number().int().nonnegative(),
+    eof: z.boolean(),
+  })
+  .strict();
+
+export const backgroundTaskOutputResultSchema = z
+  .object({
+    task: backgroundTaskRecordSchema.nullable(),
+    stdout: backgroundTaskOutputChunkSchema.nullable(),
+    stderr: backgroundTaskOutputChunkSchema.nullable(),
+  })
+  .strict();
+export type BackgroundTaskOutputResult = z.infer<
+  typeof backgroundTaskOutputResultSchema
+>;
+
 export const backgroundTaskWaitResultSchema = z
   .object({
     task: backgroundTaskRecordSchema.nullable(),

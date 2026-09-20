@@ -55,6 +55,18 @@ export interface RemoteWriteResult {
   sha256: string;
 }
 
+export interface RemoteGitHubApiRequest {
+  method: "GET" | "POST" | "PUT";
+  path: string;
+  bodyJson?: string;
+}
+
+export interface RemoteGitHubApiResult {
+  statusCode: number;
+  body: string;
+  authenticationFailed: boolean;
+}
+
 export class SshWindowsTransport {
   private readonly sshExecutable: string;
 
@@ -129,6 +141,24 @@ export class SshWindowsTransport {
           : { expectedSha256: options.expectedSha256 }),
       },
       120_000,
+      signal,
+    );
+  }
+
+  async githubApi(
+    rootPath: string,
+    request: RemoteGitHubApiRequest,
+    signal?: AbortSignal,
+  ): Promise<RemoteGitHubApiResult> {
+    return this.invoke<RemoteGitHubApiResult>(
+      "githubApi",
+      {
+        rootPath,
+        method: request.method,
+        path: request.path,
+        ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
+      },
+      70_000,
       signal,
     );
   }

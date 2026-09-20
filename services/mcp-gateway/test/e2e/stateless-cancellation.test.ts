@@ -23,8 +23,8 @@ describe("stateless MCP cancellation", () => {
           arguments: {
             workspaceId: "workspace",
             shell: "powershell",
-            command: "Start-Sleep -Seconds 120",
-            timeoutMs: 120_000,
+            command: "Start-Sleep -Seconds 60",
+            timeoutMs: 60_000,
           },
         },
       });
@@ -80,8 +80,8 @@ describe("stateless MCP cancellation", () => {
           arguments: {
             workspaceId: "workspace",
             shell: "powershell",
-            command: "Start-Sleep -Seconds 120",
-            timeoutMs: 120_000,
+            command: "Start-Sleep -Seconds 60",
+            timeoutMs: 60_000,
           },
         },
       }));

@@ -9,13 +9,18 @@ import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.j
 
 const lateToolNames = [
   "patch_file",
+  "read_files",
+  "search_files_batch",
   "list_workspace_roots",
   "start_background_task",
   "get_background_task",
+  "get_background_tasks",
   "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
+  "write_background_task_stdin",
+  "read_background_task_output",
   "browser_open_authorized_site",
   "browser_profile_page",
   "browser_dom_index",
@@ -68,14 +73,14 @@ describe("stateless MCP catalog identity", () => {
       const contractRevision = createMcpToolContractRevision(tools);
 
       expect(capabilities).toMatchObject({ tools: { listChanged: true } });
-      expect(tools).toHaveLength(61);
+      expect(tools).toHaveLength(66);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );
       expect(initializeCatalog).toEqual(listCatalog);
       expect(listCatalog).toMatchObject({
         contractRevision,
-        toolCount: 61,
+        toolCount: 66,
       });
       expect(listCatalog).not.toHaveProperty("descriptorRevision");
       expect(serverInfo).toEqual({

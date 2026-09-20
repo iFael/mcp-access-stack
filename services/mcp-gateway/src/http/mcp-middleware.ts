@@ -14,25 +14,33 @@ export type AuthenticatedRequest = Request & {
   mcpRequestId?: string;
   mcpRequestStartedAt?: number;
   mcpBenchmarkTiming?: boolean;
+  mcpTransportMode?: "stateless" | "stateful";
 };
 
-export function createMcpRequestLifecycleMiddleware(logger: Logger): RequestHandler {
+export function createMcpRequestLifecycleMiddleware(
+  logger: Logger,
+  mcpSessionMode: GatewayConfig["mcpSessionMode"] = "stateless",
+): RequestHandler {
   return (request: AuthenticatedRequest, response, next) => {
     const requestId = randomUUID();
     const startedAt = performance.now();
     let finalized = false;
+    const hasMcpSessionId = Boolean(request.header("mcp-session-id"));
     request.mcpRequestId = requestId;
     request.mcpRequestStartedAt = startedAt;
     request.mcpBenchmarkTiming =
       request.header("x-mcp-benchmark-timing") === "1";
+    request.mcpTransportMode =
+      mcpSessionMode === "stateful-experiment" && hasMcpSessionId
+        ? "stateful"
+        : "stateless";
     response.setHeader("x-mcp-request-id", requestId);
 
     const base = {
       requestId,
       method: request.method,
       path: request.path,
-      transportMode: "stateless-json",
-      hasMcpSessionId: Boolean(request.header("mcp-session-id")),
+      hasMcpSessionId,
       hasLastEventId: Boolean(request.header("last-event-id")),
     };
     logger.info({ event: "mcp_http_request_started", ...base });
@@ -43,6 +51,7 @@ export function createMcpRequestLifecycleMiddleware(logger: Logger): RequestHand
       logger.info({
         event,
         ...base,
+        mcpTransportMode: request.mcpTransportMode,
         status,
         statusCode: response.statusCode,
         durationMs: Math.round((performance.now() - startedAt) * 1_000) / 1_000,

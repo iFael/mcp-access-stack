@@ -39,6 +39,15 @@ function Stop-McpScheduledTaskForReplacement {
     throw "Scheduled Task did not stop before replacement: $TaskName"
 }
 
+function Remove-McpScheduledTaskIfPresent {
+    param([Parameter(Mandatory = $true)][string]$TaskName)
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) { return }
+    Stop-McpScheduledTaskForReplacement -TaskName $TaskName
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+
 function Restore-McpScheduledTaskSnapshot {
     param(
         [Parameter(Mandatory = $true)][string]$TaskName,
@@ -346,14 +355,34 @@ catch {
 $cutoverCommitted = $false
 $edgeTaskResult = $null
 $browserTaskResult = $null
+$failureStage = $null
+$failureCode = $null
+$handoverTaskName = "$edgeTaskName handover $([string]$request.requestId)"
+$handoverTaskCreated = $false
+$handoverConnectorInstanceId = $null
+$handoverEdgeParameters = @{}
+foreach ($key in $edgeParameters.Keys) {
+    $handoverEdgeParameters[$key] = $edgeParameters[$key]
+}
+$handoverEdgeParameters.TaskName = $handoverTaskName
+
 try {
-    if ([bool]$browser.enabled) {
-        Stop-McpScheduledTaskForReplacement -TaskName $browserTaskName
-        $browserTaskResult = & $browserTaskInstaller @browserParameters | ConvertFrom-Json
+    if (Get-ScheduledTask -TaskName $handoverTaskName -ErrorAction SilentlyContinue) {
+        throw "Access Stack handover Scheduled Task already exists: $handoverTaskName"
     }
 
-    Stop-McpScheduledTaskForReplacement -TaskName $edgeTaskName
-    $edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json
+    $handoverTaskResult = & $edgeTaskInstaller @handoverEdgeParameters | ConvertFrom-Json
+    if ([string]$handoverTaskResult.taskName -ne $handoverTaskName) {
+        throw 'Edge handover task installer returned unexpected evidence.'
+    }
+    $handoverTaskCreated = $true
+    Enable-ScheduledTask -TaskName $handoverTaskName | Out-Null
+    Start-ScheduledTask -TaskName $handoverTaskName
+
+    $handoverHealth = Wait-McpEdgeCutoverHealth `
+        -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+        -PreviousConnectorInstanceId $previousConnectorInstanceId
+    $handoverConnectorInstanceId = [string]$handoverHealth.connectorInstanceId
 
     $cutoverResult = & $cutoverScript `
         -InstallationRoot $installation `
@@ -367,16 +396,30 @@ try {
     }
     $cutoverCommitted = $true
 
+    Stop-McpScheduledTaskForReplacement -TaskName $edgeTaskName
+    $edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json
+    Enable-ScheduledTask -TaskName $edgeTaskName | Out-Null
+    Start-ScheduledTask -TaskName $edgeTaskName
+    try {
+        $healthGate = Wait-McpEdgeCutoverHealth `
+            -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+            -PreviousConnectorInstanceId $handoverConnectorInstanceId
+    }
+    catch {
+        $failureStage = 'post-cutover-health'
+        $failureCode = 'CUTOVER_POST_HEALTH_FAILED'
+        throw
+    }
+
     if ([bool]$browser.enabled) {
+        Stop-McpScheduledTaskForReplacement -TaskName $browserTaskName
+        $browserTaskResult = & $browserTaskInstaller @browserParameters | ConvertFrom-Json
         Enable-ScheduledTask -TaskName $browserTaskName | Out-Null
         Start-ScheduledTask -TaskName $browserTaskName
     }
-    Enable-ScheduledTask -TaskName $edgeTaskName | Out-Null
-    Start-ScheduledTask -TaskName $edgeTaskName
 
-    $healthGate = Wait-McpEdgeCutoverHealth `
-        -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
-        -PreviousConnectorInstanceId $previousConnectorInstanceId
+    Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName
+    $handoverTaskCreated = $false
 
     $edgeRecoveryConfig = [ordered]@{
         schemaVersion = 1
@@ -423,8 +466,12 @@ try {
 catch {
     $installationError = $_
     $recoveryErrors = [System.Collections.Generic.List[string]]::new()
+    $rollbackAttempted = $false
+    $rollbackStatus = 'not-attempted'
+    $rollbackRestoredReleaseId = $null
 
     if ($cutoverCommitted) {
+        $rollbackAttempted = $true
         try {
             $rollbackResult = & $cutoverScript `
                 -InstallationRoot $installation `
@@ -434,6 +481,7 @@ catch {
             if ([string]$rollbackResult.status -ne 'cutover-ready') {
                 throw 'Execution-node rollback returned unexpected evidence.'
             }
+            $rollbackRestoredReleaseId = [string]$rollbackResult.activeReleaseId
         }
         catch { $recoveryErrors.Add("state rollback: $($_.Exception.Message)") }
     }
@@ -443,6 +491,18 @@ catch {
     if ([bool]$browser.enabled) {
         try { Restore-McpScheduledTaskSnapshot -TaskName $browserTaskName -Snapshot $browserTaskSnapshot }
         catch { $recoveryErrors.Add("browser task restore: $($_.Exception.Message)") }
+    }
+
+    if ($handoverTaskCreated) {
+        try {
+            Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName
+            $handoverTaskCreated = $false
+        }
+        catch { $recoveryErrors.Add("handover task cleanup: $($_.Exception.Message)") }
+    }
+
+    if ($rollbackAttempted) {
+        $rollbackStatus = if ($recoveryErrors.Count -eq 0) { 'passed' } else { 'failed' }
     }
 
     $errorMessage = if ($recoveryErrors.Count -gt 0) {
@@ -456,6 +516,13 @@ catch {
         status = 'failed'
         startedAt = $startedAt
         completedAt = [DateTimeOffset]::UtcNow.ToString('O')
+        failureStage = $failureStage
+        failureCode = $failureCode
+        rollback = [ordered]@{
+            attempted = $rollbackAttempted
+            status = $rollbackStatus
+            restoredReleaseId = $rollbackRestoredReleaseId
+        }
         error = $errorMessage
     })
     Write-Error $errorMessage

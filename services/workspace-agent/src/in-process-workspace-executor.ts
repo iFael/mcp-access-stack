@@ -1,7 +1,9 @@
 import type {
   BackgroundTaskListResult,
   BackgroundTaskLogsLookupResult,
+  BackgroundTaskOutputResult,
   BackgroundTaskResult,
+  BackgroundTaskStdinResult,
   BackgroundTaskWaitResult,
   CancelBackgroundTaskInput,
   GetBackgroundTaskInput,
@@ -19,6 +21,7 @@ import type {
   PatchFileInput,
   PatchFileResult,
   ReadBackgroundTaskLogsInput,
+  ReadBackgroundTaskOutputInput,
   ReadFileInput,
   ReadFileResult,
   ReadBinaryFileInput,
@@ -29,6 +32,7 @@ import type {
   SearchFilesResult,
   StartBackgroundTaskInput,
   StartBackgroundTaskResult,
+  WriteBackgroundTaskStdinInput,
   WriteFileInput,
   WriteFileResult,
   RunCommandInput,
@@ -143,6 +147,20 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     context?: OperationContext,
   ): Promise<BackgroundTaskLogsLookupResult> {
     return this.agent.readBackgroundTaskLogs(input, context);
+  }
+
+  writeBackgroundTaskStdin(
+    input: WriteBackgroundTaskStdinInput,
+    context?: OperationContext,
+  ): Promise<BackgroundTaskStdinResult> {
+    return this.agent.writeBackgroundTaskStdin(input, context);
+  }
+
+  readBackgroundTaskOutput(
+    input: ReadBackgroundTaskOutputInput,
+    context?: OperationContext,
+  ): Promise<BackgroundTaskOutputResult> {
+    return this.agent.readBackgroundTaskOutput(input, context);
   }
   createBranch(...args: Parameters<GitRepositoryExecutor["createBranch"]>) {
     return this.agent.gitCreateBranch(...args);

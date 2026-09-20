@@ -214,24 +214,48 @@ Assert-ContainsAll -Label 'Windows detached cutover broker' -Source $broker -Tok
     'failed SHA-256 validation',
     'Start-Sleep -Seconds ([int]$request.handoverDelaySeconds)',
     'Start-ScheduledTask -TaskName $edgeTaskName',
+    'handoverTaskName',
+    'handoverEdgeParameters.TaskName = $handoverTaskName',
+    'Start-ScheduledTask -TaskName $handoverTaskName',
+    'Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName',
     'Wait-McpEdgeCutoverHealth',
     'PreviousConnectorInstanceId',
     'executionPlaneReady',
     'contractCompatible',
+    "failureStage = 'post-cutover-health'",
+    "failureCode = 'CUTOVER_POST_HEALTH_FAILED'",
+    'rollbackAttempted = $true',
+    "'not-attempted'",
+    'rollbackRestoredReleaseId = [string]$rollbackResult.activeReleaseId',
     "status = 'passed'"
 )
-$edgeInstallIndex = $broker.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
+$handoverInstallIndex = $broker.IndexOf('$handoverTaskResult = & $edgeTaskInstaller @handoverEdgeParameters | ConvertFrom-Json')
+$handoverStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $handoverTaskName')
+$handoverHealthIndex = $broker.IndexOf('$handoverHealth = Wait-McpEdgeCutoverHealth')
 $cutoverIndex = $broker.IndexOf('$cutoverCommitted = $true')
+$edgeStopIndex = $broker.IndexOf('Stop-McpScheduledTaskForReplacement -TaskName $edgeTaskName')
+$edgeInstallIndex = $broker.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
 $edgeStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
 $healthGateIndex = $broker.IndexOf('$healthGate = Wait-McpEdgeCutoverHealth')
+$browserStopIndex = $broker.IndexOf('Stop-McpScheduledTaskForReplacement -TaskName $browserTaskName')
+$handoverCleanupIndex = $broker.IndexOf('Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName')
 $passedIndex = $broker.IndexOf("status = 'passed'")
-if ($edgeInstallIndex -lt 0 -or $cutoverIndex -lt 0 -or $edgeStartIndex -lt 0 -or
-    $healthGateIndex -lt 0 -or $passedIndex -lt 0 -or
-    $edgeInstallIndex -ge $cutoverIndex -or
-    $cutoverIndex -ge $edgeStartIndex -or
+if ($handoverInstallIndex -lt 0 -or $handoverStartIndex -lt 0 -or $handoverHealthIndex -lt 0 -or
+    $cutoverIndex -lt 0 -or $edgeStopIndex -lt 0 -or $edgeInstallIndex -lt 0 -or
+    $edgeStartIndex -lt 0 -or $healthGateIndex -lt 0 -or $handoverCleanupIndex -lt 0 -or
+    $passedIndex -lt 0 -or
+    $handoverInstallIndex -ge $handoverStartIndex -or
+    $handoverStartIndex -ge $handoverHealthIndex -or
+    $handoverHealthIndex -ge $cutoverIndex -or
+    $cutoverIndex -ge $edgeStopIndex -or
+    $edgeStopIndex -ge $edgeInstallIndex -or
+    $edgeInstallIndex -ge $edgeStartIndex -or
     $edgeStartIndex -ge $healthGateIndex -or
-    $healthGateIndex -ge $passedIndex) {
-    throw 'Detached cutover broker must install, promote, start, pass the functional health gate, and only then report success.'
+    ($browserStopIndex -ge 0 -and $healthGateIndex -ge $browserStopIndex) -or
+    ($browserStopIndex -ge 0 -and $browserStopIndex -ge $handoverCleanupIndex) -or
+    $healthGateIndex -ge $handoverCleanupIndex -or
+    $handoverCleanupIndex -ge $passedIndex) {
+    throw 'Detached cutover broker must keep the old owner ready until handover health passes, promote, health-check the canonical replacement, then replace browser state and remove the handover task before reporting success.'
 }
 $updater = Read-ProjectFile 'deploy\windows\Update-McpAccessStack.ps1'
 Assert-ContainsAll -Label 'Windows updater' -Source $updater -Tokens @(

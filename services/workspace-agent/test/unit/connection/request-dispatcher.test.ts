@@ -26,6 +26,8 @@ const operations: RelayOperation[] = [
   "listBackgroundTasks",
   "cancelBackgroundTask",
   "readBackgroundTaskLogs",
+  "writeBackgroundTaskStdin",
+  "readBackgroundTaskOutput",
   "gitCreateBranch",
   "gitStagePaths",
   "gitUnstagePaths",

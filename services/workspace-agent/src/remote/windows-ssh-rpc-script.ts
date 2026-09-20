@@ -169,6 +169,45 @@ function Invoke-McpProcess(
     }
 }
 
+function Get-McpGitHubToken {
+    $previousGitPrompt = $env:GIT_TERMINAL_PROMPT
+    $previousGcmInteractive = $env:GCM_INTERACTIVE
+    try {
+        $env:GIT_TERMINAL_PROMPT = '0'
+        $env:GCM_INTERACTIVE = 'Never'
+
+        try {
+            $gh = (Get-Command gh.exe -ErrorAction Stop).Source
+            $output = @(& $gh auth token 2>$null)
+            if ($LASTEXITCODE -eq 0) {
+                $token = ([string]::Join([Environment]::NewLine, @($output))).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($token)) { return $token }
+            }
+        } catch {}
+
+        try {
+            $git = (Get-Command git.exe -ErrorAction Stop).Source
+            $credentialInput = "protocol=https" + [Environment]::NewLine +
+                "host=github.com" + [Environment]::NewLine + [Environment]::NewLine
+            $output = @($credentialInput | & $git credential fill 2>$null)
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($line in $output) {
+                    $text = [string]$line
+                    if ($text.StartsWith('password=', [StringComparison]::Ordinal)) {
+                        $token = $text.Substring('password='.Length).Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($token)) { return $token }
+                    }
+                }
+            }
+        } catch {}
+
+        return $null
+    } finally {
+        $env:GIT_TERMINAL_PROMPT = $previousGitPrompt
+        $env:GCM_INTERACTIVE = $previousGcmInteractive
+    }
+}
+
 function Invoke-McpRequest([object]$Request) {
     try {
         switch ([string]$Request.operation) {
@@ -250,11 +289,72 @@ function Invoke-McpRequest([object]$Request) {
                 Write-McpResult @{ created=$created; sizeBytes=$bytes.Length; sha256=Get-McpSha256 $bytes }
                 return
             }
+            'githubApi' {
+                $root = Get-McpRoot ([string]$Request.rootPath)
+                $method = ([string]$Request.method).ToUpperInvariant()
+                if ($method -notin @('GET','POST','PUT')) { throw 'Unsupported GitHub API method.' }
+                $apiPath = [string]$Request.path
+                if ([string]::IsNullOrWhiteSpace($apiPath) -or -not $apiPath.StartsWith('/')) {
+                    throw 'GitHub API path must be relative to api.github.com.'
+                }
+                $uri = [Uri]::new('https://api.github.com' + $apiPath)
+                if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.github.com') {
+                    throw 'GitHub API target is invalid.'
+                }
+
+                $token = Get-McpGitHubToken
+                if ([string]::IsNullOrWhiteSpace([string]$token)) {
+                    Write-McpResult @{ statusCode=0; body=''; authenticationFailed=$true }
+                    return
+                }
+
+                $headers = @{
+                    Accept = 'application/vnd.github+json'
+                    Authorization = 'Bearer ' + [string]$token
+                    'X-GitHub-Api-Version' = '2022-11-28'
+                    'User-Agent' = 'mcp-access-stack'
+                }
+                try {
+                    $requestArgs = @{
+                        Uri = $uri.AbsoluteUri
+                        Method = $method
+                        Headers = $headers
+                        SkipHttpErrorCheck = $true
+                        TimeoutSec = 60
+                    }
+                    if ($null -ne $Request.bodyJson -and -not [string]::IsNullOrEmpty([string]$Request.bodyJson)) {
+                        $requestArgs.ContentType = 'application/json'
+                        $requestArgs.Body = [string]$Request.bodyJson
+                    }
+                    $response = Invoke-WebRequest @requestArgs
+                    $statusCode = [int]$response.StatusCode
+                    $content = if ($statusCode -ge 200 -and $statusCode -lt 300) {
+                        [string]$response.Content
+                    } else {
+                        ''
+                    }
+                    if ([Text.Encoding]::UTF8.GetByteCount($content) -gt 2097152) {
+                        throw 'GitHub API response exceeded the configured size limit.'
+                    }
+                    Write-McpResult @{
+                        statusCode = $statusCode
+                        body = $content
+                        authenticationFailed = $false
+                    }
+                    return
+                } finally {
+                    $headers = $null
+                    $token = $null
+                }
+            }
             'exec' {
                 $resolved = Resolve-McpPath ([string]$Request.rootPath) ([string]$Request.logicalCwd) 'Directory'
                 $inner = @'
 $ErrorActionPreference='Continue'
 $payload=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__'))|ConvertFrom-Json
+$env:GIT_TERMINAL_PROMPT='0'
+$env:GCM_INTERACTIVE='Never'
+$env:GIT_PAGER='cat'
 & ([string]$payload.executable) @($payload.args | ForEach-Object { [string]$_ })
 exit $(if($null -eq $LASTEXITCODE){0}else{$LASTEXITCODE})
 '@

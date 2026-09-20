@@ -1,20 +1,28 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "@jest/globals";
+import { AppError } from "@vs-code-gpt/shared";
 import type {
   BackgroundTaskListResult,
   BackgroundTaskLogsLookupResult,
+  BackgroundTaskOutputResult,
   BackgroundTaskResult,
+  BackgroundTaskStdinResult,
+  GetBackgroundTaskInput,
   GetWorkspaceContextResult,
   InspectGitResult,
   ListFilesResult,
   ListWorkspaceRootsResult,
+  ReadBackgroundTaskOutputInput,
+  ReadFileInput,
   ReadFileResult,
   RunWorkspaceValidationResult,
   RunCommandResult,
+  SearchFilesInput,
   SearchFilesResult,
   StartBackgroundTaskInput,
   StartBackgroundTaskResult,
+  WriteBackgroundTaskStdinInput,
   WorkspaceExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
@@ -44,6 +52,8 @@ const backgroundTask = {
 class MockWorkspaceExecutor implements WorkspaceExecutor {
   calls: string[] = [];
   backgroundInputs: StartBackgroundTaskInput[] = [];
+  readFileFailures = new Set<string>();
+  searchFailures = new Set<string>();
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
     this.calls.push("listWorkspaces");
@@ -70,10 +80,13 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { files: [], truncated: false };
   }
 
-  async readFile(): Promise<ReadFileResult> {
+  async readFile(input: ReadFileInput): Promise<ReadFileResult> {
     this.calls.push("readFile");
+    if (this.readFileFailures.has(input.path)) {
+      throw new AppError("FILE_NOT_FOUND", "Requested file does not exist.");
+    }
     return {
-      path: "a.txt",
+      path: input.path,
       content: "x",
       startLine: 1,
       endLine: 1,
@@ -155,9 +168,18 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
-  async searchFiles(): Promise<SearchFilesResult> {
+  async searchFiles(input: SearchFilesInput): Promise<SearchFilesResult> {
     this.calls.push("searchFiles");
-    return { matches: [], truncated: false, skippedFiles: 0 };
+    if (this.searchFailures.has(input.query)) {
+      throw new AppError("FILE_NOT_FOUND", "Search root does not exist.");
+    }
+    return {
+      matches: [
+        { path: "a.txt", line: 1, column: 1, snippet: input.query },
+      ],
+      truncated: false,
+      skippedFiles: 0,
+    };
   }
 
   async inspectGit(): Promise<InspectGitResult> {
@@ -201,9 +223,9 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
-  async getBackgroundTask(): Promise<BackgroundTaskResult> {
+  async getBackgroundTask(input: GetBackgroundTaskInput): Promise<BackgroundTaskResult> {
     this.calls.push("getBackgroundTask");
-    return { task: backgroundTask };
+    return { task: input.id === backgroundTask.id ? backgroundTask : null };
   }
 
   async waitBackgroundTask(): Promise<import("@vs-code-gpt/shared").BackgroundTaskWaitResult> {
@@ -243,6 +265,48 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
         stdoutBytes: 4,
         stderrBytes: 0,
         truncated: false,
+      },
+    };
+  }
+
+  async writeBackgroundTaskStdin(
+    input: WriteBackgroundTaskStdinInput,
+  ): Promise<BackgroundTaskStdinResult> {
+    this.calls.push("writeBackgroundTaskStdin");
+    return {
+      task:
+        input.id === backgroundTask.id
+          ? { ...backgroundTask, interactive: true as const }
+          : null,
+      bytesWritten: Buffer.byteLength(input.input ?? "", "utf8"),
+      stdinClosed: input.close ?? false,
+    };
+  }
+
+  async readBackgroundTaskOutput(
+    input: ReadBackgroundTaskOutputInput,
+  ): Promise<BackgroundTaskOutputResult> {
+    this.calls.push("readBackgroundTaskOutput");
+    if (input.id !== backgroundTask.id) {
+      return { task: null, stdout: null, stderr: null };
+    }
+    const stdoutOffset = input.stdoutOffset ?? 0;
+    const stderrOffset = input.stderrOffset ?? 0;
+    return {
+      task: backgroundTask,
+      stdout: {
+        content: stdoutOffset === 0 ? "done" : "",
+        offset: stdoutOffset,
+        nextOffset: 4,
+        totalBytes: 4,
+        eof: true,
+      },
+      stderr: {
+        content: "",
+        offset: stderrOffset,
+        nextOffset: 0,
+        totalBytes: 0,
+        eof: true,
       },
     };
   }
@@ -311,6 +375,112 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toEqual(["listWorkspaceRoots"]);
   });
 
+  it("reads multiple files in one tool call and isolates item failures", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.readFileFailures.add("missing.txt");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["read_files"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["read_files"]!.handler(
+      {
+        workspaceId: "ws",
+        items: [
+          { path: "first.txt", startLine: 1, endLine: 1 },
+          { path: "missing.txt" },
+          { path: "third.txt" },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "Read 2/3 file item(s)." },
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      items: [
+        {
+          status: "ok",
+          requestedPath: "first.txt",
+          result: { path: "first.txt", content: "x" },
+        },
+        {
+          status: "error",
+          requestedPath: "missing.txt",
+          error: {
+            code: "FILE_NOT_FOUND",
+            message: "Requested file does not exist.",
+          },
+        },
+        {
+          status: "ok",
+          requestedPath: "third.txt",
+          result: { path: "third.txt", content: "x" },
+        },
+      ],
+    });
+    expect(executor.calls).toEqual(["readFile", "readFile", "readFile"]);
+  });
+
+  it("runs multiple file searches in one tool call and isolates failures", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.searchFailures.add("missing-root");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["search_files_batch"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["search_files_batch"]!.handler(
+      {
+        workspaceId: "ws",
+        items: [
+          { query: "alpha" },
+          { query: "missing-root", root: "missing" },
+          { query: "omega", caseSensitive: true },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "Completed 2/3 search(es); matches=2." },
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      items: [
+        {
+          status: "ok",
+          query: "alpha",
+          result: { matches: [{ snippet: "alpha" }] },
+        },
+        {
+          status: "error",
+          query: "missing-root",
+          error: {
+            code: "FILE_NOT_FOUND",
+            message: "Search root does not exist.",
+          },
+        },
+        {
+          status: "ok",
+          query: "omega",
+          result: { matches: [{ snippet: "omega" }] },
+        },
+      ],
+    });
+    expect(executor.calls).toEqual(["searchFiles", "searchFiles", "searchFiles"]);
+  });
+
   it("rejects legacy qualified payloads before the executor", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -326,7 +496,7 @@ describe("registerWorkspaceTools", () => {
       {
         workspaceId: "ws",
         objective: "Executar uma operaÃ§Ã£o qualificada",
-        timeoutMs: 300_001,
+        timeoutMs: 60_001,
       },
       { signal: new AbortController().signal },
     );
@@ -389,7 +559,7 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toEqual([]);
   });
 
-  it("routes commands above 300 seconds to a deduplicated persistent task", async () => {
+  it("routes commands above 60 seconds to a deduplicated persistent task", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -406,7 +576,7 @@ describe("registerWorkspaceTools", () => {
         workspaceId: "ws",
         shell: "git-bash",
         command,
-        timeoutMs: 300_001,
+        timeoutMs: 60_001,
         confirmationId: "long-command-confirmation",
       },
       { signal: new AbortController().signal },
@@ -414,14 +584,14 @@ describe("registerWorkspaceTools", () => {
 
     expect(result.structuredContent).toMatchObject({
       status: "background_task_started",
-      task: { state: "running", timeoutMs: 300_001, command },
+      task: { state: "running", timeoutMs: 60_001, command },
     });
     expect(executor.calls).toEqual(["startBackgroundTask"]);
     expect(executor.backgroundInputs).toEqual([
       expect.objectContaining({
         operation: "run_command",
         command,
-        timeoutMs: 300_001,
+        timeoutMs: 60_001,
         confirmationId: "long-command-confirmation",
       }),
     ]);
@@ -443,7 +613,7 @@ describe("registerWorkspaceTools", () => {
         workspaceId: "ws",
         shell: "powershell",
         command: "Remove-Item stale.txt -Force",
-        timeoutMs: 300_001,
+        timeoutMs: 60_001,
         confirmationId: "background-confirmation",
       },
       { signal: new AbortController().signal },
@@ -485,7 +655,7 @@ describe("registerWorkspaceTools", () => {
         workspaceId: "ws",
         shell: "powershell",
         command: "Remove-Item stale.txt -Force",
-        timeoutMs: 300_001,
+        timeoutMs: 60_001,
       },
       { signal: new AbortController().signal },
     );
@@ -540,6 +710,39 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toContain("patchFile");
   });
 
+  it("gets multiple background tasks in one tool call and preserves order", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["get_background_tasks"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const missingId = "223e4567-e89b-42d3-a456-426614174000";
+    const result = await registeredTools(server)["get_background_tasks"]!.handler(
+      {
+        workspaceId: "ws",
+        ids: [backgroundTask.id, missingId],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "Found 1/2 background task(s)." },
+    ]);
+    expect(result.structuredContent).toEqual({
+      items: [
+        { id: backgroundTask.id, task: backgroundTask },
+        { id: missingId, task: null },
+      ],
+    });
+    expect(executor.calls).toEqual(["getBackgroundTask", "getBackgroundTask"]);
+  });
+
   it("publishes wait_background_task as a workspace tool", () => {
     expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
       "wait_background_task",
@@ -559,7 +762,76 @@ describe("registerWorkspaceTools", () => {
       "wait_background_task",
     ]);
   });
-  it("keeps a 300 second command in the synchronous path", async () => {
+  it("routes interactive background stdin and incremental output through typed tools", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: [
+        "write_background_task_stdin",
+        "read_background_task_output",
+      ],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const stdinTool = registeredTools(server)["write_background_task_stdin"]!;
+    expect(stdinTool.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    });
+    const stdinResult = await stdinTool.handler(
+      {
+        workspaceId: "ws",
+        id: backgroundTask.id,
+        input: "hello\n",
+        close: false,
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(stdinResult.isError).not.toBe(true);
+    expect(stdinResult.structuredContent).toMatchObject({
+      task: { id: backgroundTask.id, interactive: true },
+      bytesWritten: 6,
+      stdinClosed: false,
+    });
+
+    const outputTool = registeredTools(server)["read_background_task_output"]!;
+    expect(outputTool.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    const outputResult = await outputTool.handler(
+      {
+        workspaceId: "ws",
+        id: backgroundTask.id,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+        maxBytes: 256,
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(outputResult.isError).not.toBe(true);
+    expect(outputResult.structuredContent).toMatchObject({
+      task: { id: backgroundTask.id },
+      stdout: {
+        content: "done",
+        offset: 0,
+        nextOffset: 4,
+        totalBytes: 4,
+        eof: true,
+      },
+    });
+    expect(executor.calls).toEqual([
+      "writeBackgroundTaskStdin",
+      "readBackgroundTaskOutput",
+    ]);
+  });
+
+  it("keeps a 60 second command in the synchronous path", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -575,7 +847,7 @@ describe("registerWorkspaceTools", () => {
         workspaceId: "ws",
         shell: "git-bash",
         command: "echo ok",
-        timeoutMs: 300_000,
+        timeoutMs: 60_000,
       },
       { signal: new AbortController().signal },
     );
@@ -671,11 +943,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 28-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 33-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(28);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(28);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(33);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(33);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {

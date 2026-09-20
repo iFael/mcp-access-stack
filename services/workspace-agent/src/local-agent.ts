@@ -8,7 +8,9 @@ import {
   waitBackgroundTaskInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
+  readBackgroundTaskOutputInputSchema,
   startBackgroundTaskInputSchema,
+  writeBackgroundTaskStdinInputSchema,
   inspectGitInputSchema,
   getWorkspaceContextInputSchema,
   listFilesInputSchema,
@@ -22,15 +24,19 @@ import {
   searchFilesInputSchema,
   type BackgroundTaskListResult,
   type BackgroundTaskLogsLookupResult,
+  type BackgroundTaskOutputResult,
   type BackgroundTaskResult,
+  type BackgroundTaskStdinResult,
   type BackgroundTaskWaitResult,
   type CancelBackgroundTaskInput,
   type GetBackgroundTaskInput,
   type WaitBackgroundTaskInput,
   type ListBackgroundTasksInput,
   type ReadBackgroundTaskLogsInput,
+  type ReadBackgroundTaskOutputInput,
   type StartBackgroundTaskInput,
   type StartBackgroundTaskResult,
+  type WriteBackgroundTaskStdinInput,
   type PolicyFile,
   type AuditEntry,
   type InspectGitInput,
@@ -198,6 +204,8 @@ export class LocalAgent {
               stdoutPath: execution.stdoutPath,
               stderrPath: execution.stderrPath,
               onPid: execution.onPid,
+              interactive: execution.interactive,
+              onStdinControl: execution.onStdinControl,
               ...(execution.transformOutput === undefined
                 ? {}
                 : { transformOutput: execution.transformOutput }),
@@ -430,6 +438,7 @@ export class LocalAgent {
               shell: parsed.shell,
               cwd: authorization.logicalCwd,
               timeoutMs: parsed.timeoutMs,
+              interactive: parsed.interactive,
             },
             backgroundTaskAccess(activeContext),
           ),
@@ -570,6 +579,69 @@ export class LocalAgent {
             access,
           ),
         };
+      },
+    );
+  }
+
+  async writeBackgroundTaskStdin(
+    input: WriteBackgroundTaskStdinInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskStdinResult> {
+    return this.runValidatedAudited(
+      "writeBackgroundTaskStdin",
+      "shell",
+      writeBackgroundTaskStdinInputSchema,
+      input,
+      context,
+      (parsed) => ({ query: parsed.id }),
+      async (_workspace, parsed, activeContext) => {
+        const access = backgroundTaskAccess(activeContext);
+        const current = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          access,
+        );
+        if (current?.workspaceId !== parsed.workspaceId) {
+          return { task: null, bytesWritten: 0, stdinClosed: false };
+        }
+        return this.backgroundTaskManager.write_background_task_stdin(
+          parsed.id,
+          parsed.input,
+          parsed.close,
+          access,
+        );
+      },
+    );
+  }
+
+  async readBackgroundTaskOutput(
+    input: ReadBackgroundTaskOutputInput,
+    context: OperationContext = {},
+  ): Promise<BackgroundTaskOutputResult> {
+    return this.runValidatedAudited(
+      "readBackgroundTaskOutput",
+      "read",
+      readBackgroundTaskOutputInputSchema,
+      input,
+      context,
+      (parsed) => ({ query: parsed.id }),
+      async (_workspace, parsed, activeContext) => {
+        const access = backgroundTaskAccess(activeContext);
+        const current = await this.backgroundTaskManager.get_background_task(
+          parsed.id,
+          access,
+        );
+        if (current?.workspaceId !== parsed.workspaceId) {
+          return { task: null, stdout: null, stderr: null };
+        }
+        return this.backgroundTaskManager.read_background_task_output(
+          parsed.id,
+          {
+            stdoutOffset: parsed.stdoutOffset,
+            stderrOffset: parsed.stderrOffset,
+            maxBytes: parsed.maxBytes,
+          },
+          access,
+        );
       },
     );
   }

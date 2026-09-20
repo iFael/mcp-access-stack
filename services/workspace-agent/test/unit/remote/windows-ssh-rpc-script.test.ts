@@ -10,6 +10,37 @@ const windowsIt = process.platform === "win32" ? it : it.skip;
 describe("Windows SSH RPC script", () => {
   let root: string;
 
+  it("keeps GitHub credentials on the remote host for typed API requests", () => {
+    const script = buildWindowsSshRpcScript({
+      operation: "githubApi",
+      rootPath: "C:\\workspace",
+      method: "GET",
+      path: "/user",
+    });
+
+    expect(script).toContain("& $gh auth token");
+    expect(script).toContain("& $git credential fill");
+    expect(script).toContain("Authorization = 'Bearer ' + [string]$token");
+    expect(script).toContain("authenticationFailed");
+    expect(script).not.toContain("unit-test-token");
+    expect(script).not.toContain('"token":');
+  });
+
+  it("forces exec-based Git credential flows to remain non-interactive", () => {
+    const script = buildWindowsSshRpcScript({
+      operation: "exec",
+      rootPath: "C:\\workspace",
+      logicalCwd: ".",
+      executable: "git",
+      args: ["status"],
+      timeoutMs: 30_000,
+    });
+
+    expect(script).toContain("$env:GIT_TERMINAL_PROMPT='0'");
+    expect(script).toContain("$env:GCM_INTERACTIVE='Never'");
+    expect(script).toContain("$env:GIT_PAGER='cat'");
+  });
+
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "mcp-ssh-rpc-"));
     await writeFile(path.join(root, "README.md"), "hello\n", "utf8");

@@ -5,14 +5,20 @@ import { z } from "zod";
 import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
+  backgroundTaskOutputResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskStdinResultSchema,
+  backgroundTasksResultSchema,
   backgroundTaskWaitResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
-  waitBackgroundTaskInputSchema,
+  getBackgroundTasksInputSchema,
+  waitBackgroundTaskToolInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
+  readBackgroundTaskOutputInputSchema,
   startBackgroundTaskInputSchema,
+  writeBackgroundTaskStdinInputSchema,
   startBackgroundTaskMcpResultSchema,
   startBackgroundTaskResultSchema,
 } from "./background-task-contracts.js";
@@ -29,6 +35,8 @@ import {
   listWorkspacesResultSchema,
   readFileInputSchema,
   readFileResultSchema,
+  readFilesInputSchema,
+  readFilesResultSchema,
   patchFileInputSchema,
   patchFileResultSchema,
   runWorkspaceValidationInputSchema,
@@ -39,6 +47,8 @@ import {
   runCommandResultSchema,
   searchFilesInputSchema,
   searchFilesResultSchema,
+  searchFilesBatchInputSchema,
+  searchFilesBatchResultSchema,
   writeFileInputSchema,
   writeFileResultSchema,
   type OperationContext,
@@ -140,19 +150,24 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "list_workspace_roots",
   "list_files",
   "read_file",
+  "read_files",
   "write_file",
   "patch_file",
   "run_workspace_validation",
   "run_command",
   "search_files",
+  "search_files_batch",
   "inspect_workspace_git",
   "get_workspace_context",
   "start_background_task",
   "get_background_task",
+  "get_background_tasks",
   "wait_background_task",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
+  "write_background_task_stdin",
+  "read_background_task_output",
 ] as const;
 
 type BaseWorkspaceToolName = (typeof BASE_WORKSPACE_TOOL_NAMES)[number];
@@ -436,6 +451,81 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("read_files", include)) {
+    server.registerTool(
+      "read_files",
+      {
+        title: "Read files",
+        description:
+          "Reads up to 20 text files or line ranges from one workspace in a single call. " +
+          "Each item succeeds or fails independently; output order matches input order.",
+        inputSchema: readFilesInputSchema,
+        outputSchema: readFilesResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) {
+          return authError;
+        }
+        try {
+          const structuredContent = readFilesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => ({
+                items: await Promise.all(
+                  input.items.map(async (item) => {
+                    try {
+                      const result = readFileResultSchema.parse(
+                        await executor.readFile(
+                          { workspaceId: input.workspaceId, ...item },
+                          context,
+                        ),
+                      );
+                      return {
+                        status: "ok" as const,
+                        requestedPath: item.path,
+                        result,
+                      };
+                    } catch (error) {
+                      const appError =
+                        error instanceof AppErrorClass ? error : asAppError(error);
+                      return {
+                        status: "error" as const,
+                        requestedPath: item.path,
+                        error: {
+                          code: appError.code,
+                          message: sanitizeOperationDiagnostic(appError.message),
+                        },
+                      };
+                    }
+                  }),
+                ),
+              }),
+            ),
+          );
+          const succeeded = structuredContent.items.filter(
+            (item) => item.status === "ok",
+          ).length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Read ${succeeded}/${structuredContent.items.length} file item(s).`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("write_file", include)) {
     server.registerTool(
       "write_file",
@@ -589,7 +679,8 @@ export function registerWorkspaceTools(
         description:
           "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. " +
           "Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. " +
-          "Commands classified as potentially destructive return confirmation_required before execution.",
+          "Commands classified as potentially destructive return confirmation_required before execution. " +
+          "Commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open.",
         inputSchema: runCommandTransportInputSchema,
         outputSchema: runCommandMcpResultSchema,
         annotations: {
@@ -633,7 +724,9 @@ export function registerWorkspaceTools(
       {
         title: "Start background task",
         description:
-          "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Active duplicate commands are deduplicated.",
+          "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. " +
+          "Set interactive=true only when persistent stdin is required; interactive start always requires explicit confirmation and can then be controlled with write_background_task_stdin. " +
+          "Active duplicate commands are deduplicated.",
         inputSchema: startBackgroundTaskInputSchema,
         outputSchema: startBackgroundTaskMcpResultSchema,
         annotations: {
@@ -705,14 +798,70 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("get_background_tasks", include)) {
+    server.registerTool(
+      "get_background_tasks",
+      {
+        title: "Get background tasks",
+        description:
+          "Returns persisted state for up to 20 background task IDs in one call. " +
+          "Output order matches input order; missing or inaccessible IDs return task=null.",
+        inputSchema: getBackgroundTasksInputSchema,
+        outputSchema: backgroundTasksResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = backgroundTasksResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => ({
+                items: await Promise.all(
+                  input.ids.map(async (id) => {
+                    const result = backgroundTaskResultSchema.parse(
+                      await executor.getBackgroundTask(
+                        { workspaceId: input.workspaceId, id },
+                        context,
+                      ),
+                    );
+                    return { id, task: result.task };
+                  }),
+                ),
+              }),
+            ),
+          );
+          const found = structuredContent.items.filter(
+            (item) => item.task !== null,
+          ).length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${found}/${structuredContent.items.length} background task(s).`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("wait_background_task", include)) {
     server.registerTool(
       "wait_background_task",
       {
         title: "Wait for background task",
         description:
-          "Waits up to timeoutMs for one persisted background task to reach a terminal state. A wait timeout stops waiting only and never cancels the task. Returns the current/terminal task plus size-limited redacted stdout/stderr tails.",
-        inputSchema: waitBackgroundTaskInputSchema,
+          "Short-polls one persisted background task for at most 30 seconds. A wait timeout stops waiting only and never cancels the task. For longer work, use get_background_task or get_background_tasks between polls. Returns the current/terminal task plus size-limited redacted stdout/stderr tails.",
+        inputSchema: waitBackgroundTaskToolInputSchema,
         outputSchema: backgroundTaskWaitResultSchema,
         annotations: toolAnnotations,
         _meta: meta,
@@ -721,7 +870,7 @@ export function registerWorkspaceTools(
         const authError = validateAuthentication(options, extra.authInfo);
         if (authError) return authError;
         try {
-          const parsedInput = waitBackgroundTaskInputSchema.parse(input);
+          const parsedInput = waitBackgroundTaskToolInputSchema.parse(input);
           const structuredContent = backgroundTaskWaitResultSchema.parse(
             await withToolOperationContext(
               options.operationContextFactory,
@@ -858,6 +1007,100 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("write_background_task_stdin", include)) {
+    server.registerTool(
+      "write_background_task_stdin",
+      {
+        title: "Write background task stdin",
+        description:
+          "Writes UTF-8 text to an active background task that was explicitly started with interactive=true. " +
+          "Can optionally close stdin after the write. Interactive start always requires explicit confirmation.",
+        inputSchema: writeBackgroundTaskStdinInputSchema,
+        outputSchema: backgroundTaskStdinResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+          idempotentHint: false,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = backgroundTaskStdinResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.writeBackgroundTaskStdin(input, context),
+            ),
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: structuredContent.task
+                  ? "Wrote " + structuredContent.bytesWritten + " byte(s); stdinClosed=" + structuredContent.stdinClosed + "."
+                  : "Background task not found.",
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("read_background_task_output", include)) {
+    server.registerTool(
+      "read_background_task_output",
+      {
+        title: "Read background task output",
+        description:
+          "Reads redacted stdout and stderr incrementally from explicit byte offsets. " +
+          "Returns next offsets so callers can continue without re-reading prior output.",
+        inputSchema: readBackgroundTaskOutputInputSchema,
+        outputSchema: backgroundTaskOutputResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = backgroundTaskOutputResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.readBackgroundTaskOutput(input, context),
+            ),
+          );
+          const stdout = structuredContent.stdout;
+          const stderr = structuredContent.stderr;
+          return {
+            content: [
+              {
+                type: "text",
+                text: structuredContent.task
+                  ? "Read stdout " + (stdout?.offset ?? 0) + "->" + (stdout?.nextOffset ?? 0) +
+                    "; stderr " + (stderr?.offset ?? 0) + "->" + (stderr?.nextOffset ?? 0) + "."
+                  : "Background task not found.",
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("search_files", include)) {
     server.registerTool(
       "search_files",
@@ -888,6 +1131,84 @@ export function registerWorkspaceTools(
           );
           return {
             content: [{ type: "text", text: `Found ${structuredContent.matches.length} match(es).` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("search_files_batch", include)) {
+    server.registerTool(
+      "search_files_batch",
+      {
+        title: "Search files batch",
+        description:
+          "Runs up to 8 independent file-content searches in one workspace call. " +
+          "Each search succeeds or fails independently; output order matches input order.",
+        inputSchema: searchFilesBatchInputSchema,
+        outputSchema: searchFilesBatchResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = searchFilesBatchResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => ({
+                items: await Promise.all(
+                  input.items.map(async (item) => {
+                    try {
+                      const searchInput = searchFilesInputSchema.parse({
+                        workspaceId: input.workspaceId,
+                        ...item,
+                      });
+                      const result = searchFilesResultSchema.parse(
+                        await executor.searchFiles(searchInput, context),
+                      );
+                      return {
+                        status: "ok" as const,
+                        query: item.query,
+                        result,
+                      };
+                    } catch (error) {
+                      const appError =
+                        error instanceof AppErrorClass ? error : asAppError(error);
+                      return {
+                        status: "error" as const,
+                        query: item.query,
+                        error: {
+                          code: appError.code,
+                          message: sanitizeOperationDiagnostic(appError.message),
+                        },
+                      };
+                    }
+                  }),
+                ),
+              }),
+            ),
+          );
+          const completed = structuredContent.items.filter(
+            (item) => item.status === "ok",
+          );
+          const matches = completed.reduce(
+            (total, item) => total + item.result.matches.length,
+            0,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Completed ${completed.length}/${structuredContent.items.length} search(es); matches=${matches}.`,
+              },
+            ],
             structuredContent,
           };
         } catch (error) {
@@ -1039,7 +1360,7 @@ async function executeCommand(
   const direct = directRunCommandInputSchema.safeParse(input);
   if (
     !direct.success ||
-    direct.data.timeoutMs <= MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS
+    direct.data.timeoutMs <= QUICK_OPERATION_TIMEOUT_MS
   ) {
     return executor.runCommand(input, context);
   }
@@ -1534,6 +1855,8 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   listBackgroundTasks: "list_background_tasks",
   cancelBackgroundTask: "cancel_background_task",
   readBackgroundTaskLogs: "read_background_task_logs",
+  writeBackgroundTaskStdin: "write_background_task_stdin",
+  readBackgroundTaskOutput: "read_background_task_output",
   gitCreateBranch: "git_create_branch",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",

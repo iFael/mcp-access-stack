@@ -155,6 +155,88 @@ describe("background task integration", () => {
       ).task?.state,
     ).toBe("cancelled");
   });
+  test("always requires explicit confirmation before starting an interactive background task", async () => {
+    fixture = await createWritableShellFixture();
+    const agent = await LocalAgent.create(fixture.policyPath);
+    const input = {
+      workspaceId: "test",
+      operation: "interactive-session",
+      shell: "powershell" as const,
+      command:
+        "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine(('interactive:' + $line))",
+      timeoutMs: 60_000,
+      interactive: true,
+    };
+
+    const pending = await agent.startBackgroundTask(input);
+    expect(pending).toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining([
+        "interactive process grants persistent stdin access",
+      ]),
+    });
+    if (pending.status !== "confirmation_required") {
+      throw new Error("expected confirmation");
+    }
+    expect((await agent.listBackgroundTasks({ workspaceId: "test" })).tasks).toEqual([]);
+
+    const started = await agent.startBackgroundTask({
+      ...input,
+      confirmationId: pending.confirmationId,
+    });
+    expect(started).toMatchObject({
+      status: "background_task_started",
+      task: {
+        operation: input.operation,
+        interactive: true,
+      },
+    });
+    if (started.status !== "background_task_started") {
+      throw new Error("expected background task");
+    }
+
+    await waitForRunningTask(agent, started.task.id);
+    await expect(
+      agent.startBackgroundTask({
+        ...input,
+        operation: "different-interactive-session",
+        confirmationId: pending.confirmationId,
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+
+    const written = await agent.writeBackgroundTaskStdin({
+      workspaceId: "test",
+      id: started.task.id,
+      input: "hello-from-agent\n",
+      close: true,
+    });
+    expect(written).toMatchObject({
+      task: { id: started.task.id, interactive: true },
+      bytesWritten: 17,
+      stdinClosed: true,
+    });
+
+    const completed = await waitForTask(agent, started.task.id, "succeeded");
+    expect(completed?.state).toBe("succeeded");
+
+    const output = await agent.readBackgroundTaskOutput({
+      workspaceId: "test",
+      id: started.task.id,
+      stdoutOffset: 0,
+      stderrOffset: 0,
+      maxBytes: 256,
+    });
+    expect(output).toMatchObject({
+      task: { id: started.task.id, state: "succeeded" },
+      stdout: {
+        content: expect.stringContaining("interactive:hello-from-agent"),
+        offset: 0,
+        eof: true,
+      },
+    });
+    expect(output.stdout?.nextOffset).toBe(output.stdout?.totalBytes);
+  });
+
   test("requires confirmation before risky background execution and never persists the token", async () => {
     fixture = await createWritableShellFixture();
     const agent = await LocalAgent.create(fixture.policyPath);

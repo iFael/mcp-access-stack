@@ -10,6 +10,7 @@ export interface CommandConfirmationBinding {
   command: string;
   executionContext: "foreground" | "background";
   operation: string;
+  interactive?: true;
 }
 
 interface PendingConfirmation {
@@ -72,7 +73,8 @@ function sameBinding(
     safeEqual(left.cwd, right.cwd) &&
     safeEqual(left.command, right.command) &&
     left.executionContext === right.executionContext &&
-    safeEqual(left.operation, right.operation)
+    safeEqual(left.operation, right.operation) &&
+    left.interactive === right.interactive
   );
 }
 

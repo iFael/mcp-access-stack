@@ -1,7 +1,9 @@
 import {
   backgroundTaskListResultSchema,
   backgroundTaskLogsLookupResultSchema,
+  backgroundTaskOutputResultSchema,
   backgroundTaskResultSchema,
+  backgroundTaskStdinResultSchema,
   backgroundTaskWaitResultSchema,
   getWorkspaceContextResultSchema,
   inspectGitResultSchema,
@@ -27,12 +29,14 @@ import {
   type OperationContext,
   type PatchFileInput,
   type ReadBackgroundTaskLogsInput,
+  type ReadBackgroundTaskOutputInput,
   type ReadFileInput,
   type ReadBinaryFileInput,
   type RunWorkspaceValidationInput,
   type RunCommandInput,
   type SearchFilesInput,
   type StartBackgroundTaskInput,
+  type WriteBackgroundTaskStdinInput,
   type WriteFileInput,
   type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
@@ -189,6 +193,24 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
   ) {
     return backgroundTaskLogsLookupResultSchema.parse(
       await this.relay.call("readBackgroundTaskLogs", input, context),
+    );
+  }
+
+  async writeBackgroundTaskStdin(
+    input: WriteBackgroundTaskStdinInput,
+    context?: OperationContext,
+  ) {
+    return backgroundTaskStdinResultSchema.parse(
+      await this.relay.call("writeBackgroundTaskStdin", input, context),
+    );
+  }
+
+  async readBackgroundTaskOutput(
+    input: ReadBackgroundTaskOutputInput,
+    context?: OperationContext,
+  ) {
+    return backgroundTaskOutputResultSchema.parse(
+      await this.relay.call("readBackgroundTaskOutput", input, context),
     );
   }
   async createBranch(input: GitCreateBranchInput, context?: OperationContext) {

@@ -119,6 +119,20 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
     return this.fallback?.readBackgroundTaskLogs(...args) ??
       Promise.reject(this.notImplemented("readBackgroundTaskLogs"));
   }
+
+  writeBackgroundTaskStdin(
+    ...args: Parameters<WorkspaceExecutor["writeBackgroundTaskStdin"]>
+  ) {
+    return this.fallback?.writeBackgroundTaskStdin(...args) ??
+      Promise.reject(this.notImplemented("writeBackgroundTaskStdin"));
+  }
+
+  readBackgroundTaskOutput(
+    ...args: Parameters<WorkspaceExecutor["readBackgroundTaskOutput"]>
+  ) {
+    return this.fallback?.readBackgroundTaskOutput(...args) ??
+      Promise.reject(this.notImplemented("readBackgroundTaskOutput"));
+  }
   createBranch(...args: Parameters<GitRepositoryExecutor["createBranch"]>) {
     return this.fallback?.createBranch?.(...args) ?? Promise.reject(this.notImplemented("createBranch"));
   }

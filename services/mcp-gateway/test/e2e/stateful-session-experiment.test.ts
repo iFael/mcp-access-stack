@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { Writable } from "node:stream";
 import { describe, expect, it } from "@jest/globals";
+import pino, { type Logger } from "pino";
 import { AgentConnection } from "../../../workspace-agent/src/connection/service.js";
 import type { LocalAgent } from "../../../workspace-agent/src/local-agent.js";
 import { createGatewayApplication } from "../../src/app.js";
@@ -30,7 +32,7 @@ describe("stateful MCP experiment", () => {
       };
 
       expect(listed.status).toBe(200);
-      expect(listedBody.result?.tools).toHaveLength(61);
+      expect(listedBody.result?.tools).toHaveLength(66);
       expect(listedBody.result?.tools?.map((tool) => tool.name)).toContain(
         "patch_file",
       );
@@ -91,7 +93,7 @@ describe("stateful MCP experiment", () => {
 
       expect(listed.status).toBe(200);
       expect(listed.headers.get("mcp-session-id")).toBeNull();
-      expect(listedBody.result?.tools).toHaveLength(61);
+      expect(listedBody.result?.tools).toHaveLength(66);
 
       const called = await postMcp(fixture.url, {
         jsonrpc: "2.0",
@@ -110,6 +112,60 @@ describe("stateful MCP experiment", () => {
       expect(called.headers.get("mcp-session-id")).toBeNull();
       expect(calledBody.result?.isError).not.toBe(true);
       expect(calledBody.result?.content?.[0]?.text).toContain("Found 0 workspace(s).");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("logs explicit stateless versus stateful transport mode without exposing session ids", async () => {
+    const captured = createCapturingLogger();
+    const fixture = await createFixture(
+      createFakeAgent({}),
+      "stateful-experiment",
+      {},
+      captured.logger,
+    );
+    try {
+      const sessionId = await initializeMcp(fixture.url);
+      await toolsList(fixture.url);
+      await toolsList(fixture.url, { "mcp-session-id": sessionId });
+
+      await waitFor(
+        () =>
+          captured.records.filter(
+            (entry) => entry.event === "mcp_http_request_completed",
+          ).length >= 4,
+        2_000,
+      );
+
+      const completed = captured.records.filter(
+        (entry) => entry.event === "mcp_http_request_completed",
+      );
+
+      expect(completed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            mcpTransportMode: "stateful",
+            hasMcpSessionId: false,
+          }),
+          expect.objectContaining({
+            mcpTransportMode: "stateful",
+            hasMcpSessionId: true,
+          }),
+          expect.objectContaining({
+            mcpTransportMode: "stateless",
+            hasMcpSessionId: false,
+          }),
+        ]),
+      );
+      expect(
+        completed.every(
+          (entry) =>
+            entry.mcpTransportMode === "stateless" ||
+            entry.mcpTransportMode === "stateful",
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(completed)).not.toContain(sessionId);
     } finally {
       await fixture.close();
     }
@@ -135,8 +191,8 @@ describe("stateful MCP experiment", () => {
             arguments: {
               workspaceId: "workspace",
               shell: "powershell",
-              command: "Start-Sleep -Seconds 120",
-              timeoutMs: 120_000,
+              command: "Start-Sleep -Seconds 60",
+              timeoutMs: 60_000,
             },
           },
         },
@@ -511,6 +567,7 @@ async function createFixture(
   agent: LocalAgent,
   sessionMode: "stateless" | "stateful-experiment" = "stateful-experiment",
   sessionLimits: { ttlMs?: number; maxSessions?: number } = {},
+  logger: Logger = silentLogger(),
 ): Promise<{
   url: URL;
   close(): Promise<void>;
@@ -530,7 +587,7 @@ async function createFixture(
       maxPayloadBytes: 2 * 1024 * 1024,
     },
   });
-  const gateway = createGatewayApplication(config, { logger: silentLogger() });
+  const gateway = createGatewayApplication(config, { logger });
   const http = await listen(gateway.app);
   http.server.on("upgrade", (request, socket, head) => {
     gateway.relay!.handleUpgrade(request, socket, head);
@@ -556,6 +613,28 @@ async function createFixture(
       http.server.closeAllConnections();
       await http.close();
     },
+  };
+}
+
+function createCapturingLogger(): {
+  logger: Logger;
+  records: Array<Record<string, unknown>>;
+} {
+  const records: Array<Record<string, unknown>> = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      const text = chunk.toString("utf8").trim();
+      if (text.length > 0) {
+        for (const line of text.split(/\r?\n/u)) {
+          records.push(JSON.parse(line) as Record<string, unknown>);
+        }
+      }
+      callback();
+    },
+  });
+  return {
+    logger: pino({ level: "info" }, destination),
+    records,
   };
 }
 

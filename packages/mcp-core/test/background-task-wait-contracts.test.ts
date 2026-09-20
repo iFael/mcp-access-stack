@@ -20,6 +20,26 @@ describe("background task wait contracts", () => {
     });
   });
 
+  test("publishes a short MCP polling contract without shrinking the internal relay contract", () => {
+    const schema = (contracts as Record<string, unknown>)["waitBackgroundTaskToolInputSchema"] as
+      | { parse(value: unknown): unknown }
+      | undefined;
+
+    expect(schema).toBeDefined();
+    expect(schema?.parse({ workspaceId: "project", id: taskId })).toEqual({
+      workspaceId: "project",
+      id: taskId,
+      timeoutMs: 15_000,
+      maxBytes: 100_000,
+    });
+    expect(
+      schema?.parse({ workspaceId: "project", id: taskId, timeoutMs: 30_000 }),
+    ).toMatchObject({ timeoutMs: 30_000 });
+    expect(() =>
+      schema?.parse({ workspaceId: "project", id: taskId, timeoutMs: 30_001 }),
+    ).toThrow();
+  });
+
   test("publishes a wait result with task, log tail and wait metadata", () => {
     const schema = (contracts as Record<string, unknown>)["backgroundTaskWaitResultSchema"] as
       | { parse(value: unknown): unknown }

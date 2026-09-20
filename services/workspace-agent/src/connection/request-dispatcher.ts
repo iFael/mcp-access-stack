@@ -46,6 +46,10 @@ export async function dispatchRelayRequest(
       return agent.cancelBackgroundTask(request.input, context);
     case "readBackgroundTaskLogs":
       return agent.readBackgroundTaskLogs(request.input, context);
+    case "writeBackgroundTaskStdin":
+      return agent.writeBackgroundTaskStdin(request.input, context);
+    case "readBackgroundTaskOutput":
+      return agent.readBackgroundTaskOutput(request.input, context);
     case "gitCreateBranch":
       return agent.gitCreateBranch(request.input, context);
     case "gitStagePaths":

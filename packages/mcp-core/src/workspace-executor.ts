@@ -1,15 +1,19 @@
 import type {
   BackgroundTaskListResult,
   BackgroundTaskLogsLookupResult,
+  BackgroundTaskOutputResult,
   BackgroundTaskResult,
+  BackgroundTaskStdinResult,
   BackgroundTaskWaitResult,
   CancelBackgroundTaskInput,
   GetBackgroundTaskInput,
   ListBackgroundTasksInput,
   ReadBackgroundTaskLogsInput,
+  ReadBackgroundTaskOutputInput,
   StartBackgroundTaskInput,
   StartBackgroundTaskResult,
   WaitBackgroundTaskInput,
+  WriteBackgroundTaskStdinInput,
 } from "./background-task-contracts.js";
 import type {
   GetWorkspaceContextInput,
@@ -100,4 +104,12 @@ export interface WorkspaceExecutor {
     input: ReadBackgroundTaskLogsInput,
     context?: OperationContext,
   ): Promise<BackgroundTaskLogsLookupResult>;
+  writeBackgroundTaskStdin(
+    input: WriteBackgroundTaskStdinInput,
+    context?: OperationContext,
+  ): Promise<BackgroundTaskStdinResult>;
+  readBackgroundTaskOutput(
+    input: ReadBackgroundTaskOutputInput,
+    context?: OperationContext,
+  ): Promise<BackgroundTaskOutputResult>;
 }

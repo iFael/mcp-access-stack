@@ -24,10 +24,18 @@ const OMITTED_OUTPUT_LINE = "[output line omitted: exceeded safe redaction buffe
 
 type TerminationReason = "timeout" | "abort";
 
+export interface ShellStdinControl {
+  write(value: string): Promise<number>;
+  close(): Promise<void>;
+  isClosed(): boolean;
+}
+
 export interface ShellFileExecutionOptions {
   stdoutPath: string;
   stderrPath: string;
   onPid?: (pid: number) => void;
+  interactive?: boolean;
+  onStdinControl?: (control: ShellStdinControl) => void;
   transformOutput?: (value: string) => string;
 }
 
@@ -193,7 +201,7 @@ export async function runShellCommandToFiles(
         cwd,
         shell: false,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [output.interactive ? "pipe" : "ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",
       });
     } catch (error) {
@@ -203,6 +211,14 @@ export async function runShellCommandToFiles(
     }
 
     if (child.pid) output.onPid?.(child.pid);
+    if (output.interactive) {
+      if (!child.stdin) {
+        void Promise.allSettled([stdoutSink.end(), stderrSink.end()]);
+        reject(new AppError("SHELL_FAILED", "Interactive shell stdin was not created."));
+        return;
+      }
+      output.onStdinControl?.(createShellStdinControl(child.stdin));
+    }
 
     let settled = false;
     let terminationReason: TerminationReason | undefined;
@@ -299,6 +315,69 @@ export async function runShellCommandToFiles(
 }
 
 export { terminateProcessTreeByPid };
+
+function createShellStdinControl(
+  stdin: NonNullable<ChildProcess["stdin"]>,
+): ShellStdinControl {
+  let closed = false;
+  let failure: Error | undefined;
+  stdin.on("error", (error) => {
+    failure = error;
+    closed = true;
+  });
+  stdin.on("close", () => {
+    closed = true;
+  });
+
+  return {
+    async write(value: string): Promise<number> {
+      if (closed || stdin.destroyed || !stdin.writable) {
+        throw new AppError(
+          "EXECUTION_STATE_INVALID",
+          "Interactive process stdin is closed.",
+          failure === undefined ? undefined : { cause: failure },
+        );
+      }
+      const bytes = Buffer.byteLength(value, "utf8");
+      try {
+        await new Promise<void>((resolve, reject) => {
+          stdin.write(value, "utf8", (error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+      } catch (error) {
+        throw new AppError(
+          "SHELL_FAILED",
+          "Failed to write to interactive process stdin.",
+          { cause: error },
+        );
+      }
+      return bytes;
+    },
+    async close(): Promise<void> {
+      if (closed || stdin.destroyed || !stdin.writable) {
+        closed = true;
+        return;
+      }
+      try {
+        const completion = finished(stdin);
+        stdin.end();
+        await completion;
+      } catch (error) {
+        throw new AppError(
+          "SHELL_FAILED",
+          "Failed to close interactive process stdin.",
+          { cause: error },
+        );
+      }
+      closed = true;
+    },
+    isClosed(): boolean {
+      return closed || stdin.destroyed || !stdin.writable;
+    },
+  };
+}
 
 async function resolveShellSpec(
   shell: ShellName,

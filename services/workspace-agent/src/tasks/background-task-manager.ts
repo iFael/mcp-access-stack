@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
+  open,
   readFile,
   readdir,
   rename,
@@ -20,6 +21,8 @@ import {
   type BackgroundTaskRecord,
   type BackgroundTaskWaitResult,
   type BackgroundTaskState,
+  type BackgroundTaskOutputResult,
+  type BackgroundTaskStdinResult,
   type DirectRunCommandInput,
   type RunCommandResult,
   type StartBackgroundTaskInput,
@@ -35,10 +38,18 @@ export {
   type StartBackgroundTaskInput,
 } from "@vs-code-gpt/shared";
 
+export interface BackgroundTaskStdinControl {
+  write(value: string): Promise<number>;
+  close(): Promise<void>;
+  isClosed(): boolean;
+}
+
 export interface BackgroundTaskExecutionContext {
   stdoutPath: string;
   stderrPath: string;
   onPid: (pid: number) => void;
+  interactive: boolean;
+  onStdinControl: (control: BackgroundTaskStdinControl) => void;
   transformOutput?: (value: string) => string;
 }
 
@@ -79,6 +90,7 @@ const OWNER_SCOPE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 export class BackgroundTaskManager {
   private readonly controllers = new Map<string, AbortController>();
+  private readonly stdinControls = new Map<string, BackgroundTaskStdinControl>();
   private readonly executions = new Map<string, Promise<void>>();
   private readonly writes = new Map<string, Promise<void>>();
   private readonly records = new Map<string, PersistedBackgroundTaskRecord>();
@@ -142,6 +154,7 @@ export class BackgroundTaskManager {
         state: "starting",
         createdAt: this.now().toISOString(),
         timeoutMs: normalized.timeoutMs,
+        ...(normalized.interactive ? { interactive: true as const } : {}),
         ...(ownerScopeHash === undefined ? {} : { ownerScopeHash }),
       };
       await this.initializeTaskFiles(record.id);
@@ -259,6 +272,59 @@ export class BackgroundTaskManager {
     };
   }
 
+  async write_background_task_stdin(
+    id: string,
+    input: string,
+    close: boolean,
+    access: BackgroundTaskAccessContext = {},
+  ): Promise<BackgroundTaskStdinResult> {
+    const record = await this.getAccessibleRecord(id, access);
+    if (!record) {
+      return { task: null, bytesWritten: 0, stdinClosed: false };
+    }
+    if (record.interactive !== true) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Background task was not started in interactive mode.",
+      );
+    }
+    if (!ACTIVE_STATES.has(record.state)) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Interactive background task is no longer active.",
+      );
+    }
+    const control = this.stdinControls.get(id);
+    if (!control) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Interactive stdin is unavailable for this recovered task.",
+      );
+    }
+    const bytesWritten = input.length > 0 ? await control.write(input) : 0;
+    if (close) await control.close();
+    const latest = await this.getAccessibleRecord(id, access);
+    return {
+      task: latest ? toPublicRecord(latest) : null,
+      bytesWritten,
+      stdinClosed: control.isClosed(),
+    };
+  }
+
+  async read_background_task_output(
+    id: string,
+    options: { stdoutOffset: number; stderrOffset: number; maxBytes: number },
+    access: BackgroundTaskAccessContext = {},
+  ): Promise<BackgroundTaskOutputResult> {
+    const record = await this.getAccessibleRecord(id, access);
+    if (!record) return { task: null, stdout: null, stderr: null };
+    const [stdout, stderr] = await Promise.all([
+      readLogChunk(this.stdoutPath(id), options.stdoutOffset, options.maxBytes),
+      readLogChunk(this.stderrPath(id), options.stderrOffset, options.maxBytes),
+    ]);
+    return { task: toPublicRecord(record), stdout, stderr };
+  }
+
   async wait_background_task(
     id: string,
     options: {
@@ -350,6 +416,10 @@ export class BackgroundTaskManager {
             current = { ...current, pid };
             void this.persist(current);
           },
+          interactive: current.interactive === true,
+          onStdinControl: (control) => {
+            this.stdinControls.set(current.id, control);
+          },
           transformOutput: redactSensitiveText,
         },
       );
@@ -417,6 +487,7 @@ export class BackgroundTaskManager {
       });
     } finally {
       this.controllers.delete(current.id);
+      this.stdinControls.delete(current.id);
     }
   }
 
@@ -643,6 +714,7 @@ function normalizeStartInput(input: StartBackgroundTaskInput): {
   shell: DirectRunCommandInput["shell"];
   cwd: string;
   timeoutMs: number;
+  interactive: boolean;
   commandHash: string;
 } {
   const parsed = startBackgroundTaskInputSchema.parse(input);
@@ -655,6 +727,7 @@ function normalizeStartInput(input: StartBackgroundTaskInput): {
         shell: parsed.shell,
         cwd,
         command,
+        interactive: parsed.interactive,
       }),
     )
     .digest("hex");
@@ -665,6 +738,7 @@ function normalizeStartInput(input: StartBackgroundTaskInput): {
     shell: parsed.shell,
     cwd,
     timeoutMs: parsed.timeoutMs,
+    interactive: parsed.interactive,
     commandHash,
   };
 }
@@ -765,6 +839,79 @@ async function sanitizeLogFile(filePath: string): Promise<void> {
     await rm(filePath, { force: true }).catch(() => undefined);
     throw new Error("Unable to safely persist a background task log.", { cause: error });
   }
+}
+
+async function readLogChunk(
+  filePath: string,
+  offset: number,
+  maxBytes: number,
+): Promise<{
+  content: string;
+  offset: number;
+  nextOffset: number;
+  totalBytes: number;
+  eof: boolean;
+}> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(filePath, "r");
+    const stat = await handle.stat();
+    const totalBytes = stat.size;
+    if (offset > totalBytes) {
+      throw new AppError(
+        "INVALID_ARGUMENT",
+        "Background task output offset is beyond the current end of stream.",
+      );
+    }
+    if (offset === totalBytes) {
+      return { content: "", offset, nextOffset: offset, totalBytes, eof: true };
+    }
+    const readLength = Math.min(maxBytes, totalBytes - offset);
+    const buffer = Buffer.allocUnsafe(readLength);
+    const { bytesRead } = await handle.read(buffer, 0, readLength, offset);
+    const selected = buffer.subarray(0, bytesRead);
+    if (selected.length > 0 && isUtf8ContinuationByte(selected[0]!)) {
+      throw new AppError(
+        "INVALID_ARGUMENT",
+        "Background task output offset is not on a UTF-8 character boundary.",
+      );
+    }
+    const safeLength = completeUtf8PrefixLength(selected);
+    const content = selected.subarray(0, safeLength).toString("utf8");
+    const nextOffset = offset + safeLength;
+    return {
+      content,
+      offset,
+      nextOffset,
+      totalBytes,
+      eof: nextOffset >= totalBytes,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { content: "", offset, nextOffset: offset, totalBytes: 0, eof: true };
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function isUtf8ContinuationByte(value: number): boolean {
+  return (value & 0b1100_0000) === 0b1000_0000;
+}
+
+function completeUtf8PrefixLength(buffer: Buffer): number {
+  if (buffer.length === 0) return 0;
+  let lead = buffer.length - 1;
+  while (lead >= 0 && isUtf8ContinuationByte(buffer[lead]!)) lead -= 1;
+  if (lead < 0) return 0;
+  const first = buffer[lead]!;
+  const expected =
+    (first & 0b1000_0000) === 0 ? 1 :
+    (first & 0b1110_0000) === 0b1100_0000 ? 2 :
+    (first & 0b1111_0000) === 0b1110_0000 ? 3 :
+    (first & 0b1111_1000) === 0b1111_0000 ? 4 : 1;
+  return buffer.length - lead < expected ? lead : buffer.length;
 }
 
 async function readLogFile(

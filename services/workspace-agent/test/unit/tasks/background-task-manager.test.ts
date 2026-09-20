@@ -19,6 +19,8 @@ import {
 class ControlledRunner implements BackgroundTaskRunner {
   calls = 0;
   terminateCalls: number[] = [];
+  stdinWrites: string[] = [];
+  stdinClosed = false;
   private resolveResult?: (result: RunCommandResult) => void;
   private rejectResult?: (error: Error) => void;
   private input?: RunCommandInput;
@@ -35,6 +37,18 @@ class ControlledRunner implements BackgroundTaskRunner {
     this.execution = execution;
     this.signal = signal;
     execution.onPid(4242);
+    if (execution.interactive) {
+      execution.onStdinControl({
+        write: async (value) => {
+          this.stdinWrites.push(value);
+          return Buffer.byteLength(value, "utf8");
+        },
+        close: async () => {
+          this.stdinClosed = true;
+        },
+        isClosed: () => this.stdinClosed,
+      });
+    }
     return new Promise((resolve, reject) => {
       this.resolveResult = resolve;
       this.rejectResult = reject;
@@ -243,6 +257,156 @@ describe("BackgroundTaskManager", () => {
 
     await manager.cancel_background_task(first.id, ownerA);
     await manager.cancel_background_task(secondOwner.id, ownerB);
+  });
+
+  it("writes only to an owned interactive task stdin and can close it", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const ownerA = { ownerScope: "openai-session:interactive-owner-a" };
+    const ownerB = { ownerScope: "openai-session:interactive-owner-b" };
+
+    const started = await manager.start_background_task(
+      {
+        workspaceId: "project",
+        operation: "interactive-check",
+        command: "read-line",
+        shell: "pwsh",
+        interactive: true,
+      },
+      ownerA,
+    );
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id, ownerA))?.state === "running",
+    );
+
+    expect(started).toMatchObject({ interactive: true });
+    await expect(
+      manager.write_background_task_stdin(
+        started.id,
+        "hidden\n",
+        false,
+        ownerB,
+      ),
+    ).resolves.toEqual({
+      task: null,
+      bytesWritten: 0,
+      stdinClosed: false,
+    });
+    expect(runner.stdinWrites).toEqual([]);
+
+    await expect(
+      manager.write_background_task_stdin(
+        started.id,
+        "hello\n",
+        false,
+        ownerA,
+      ),
+    ).resolves.toMatchObject({
+      task: { id: started.id, interactive: true, state: "running" },
+      bytesWritten: 6,
+      stdinClosed: false,
+    });
+    expect(runner.stdinWrites).toEqual(["hello\n"]);
+
+    await expect(
+      manager.write_background_task_stdin(started.id, "", true, ownerA),
+    ).resolves.toMatchObject({
+      task: { id: started.id },
+      bytesWritten: 0,
+      stdinClosed: true,
+    });
+    expect(runner.stdinClosed).toBe(true);
+
+    await manager.cancel_background_task(started.id, ownerA);
+  });
+
+  it("rejects stdin for a non-interactive background task", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const started = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "non-interactive",
+      command: "npm run check",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "running",
+    );
+
+    await expect(
+      manager.write_background_task_stdin(started.id, "hello\n", false),
+    ).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+
+    await manager.cancel_background_task(started.id);
+  });
+
+  it("reads background output incrementally with byte cursors", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const started = await manager.start_background_task({
+      workspaceId: "project",
+      operation: "cursor-output",
+      command: "emit",
+      shell: "pwsh",
+    });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "running",
+    );
+
+    await runner.succeed({ stdout: "αβ\nhello", stderr: "err\n" });
+    await waitFor(
+      async () =>
+        (await manager.get_background_task(started.id))?.state === "succeeded",
+    );
+
+    const first = await manager.read_background_task_output(started.id, {
+      stdoutOffset: 0,
+      stderrOffset: 0,
+      maxBytes: 4,
+    });
+    expect(first.stdout).toEqual({
+      content: "αβ",
+      offset: 0,
+      nextOffset: 4,
+      totalBytes: Buffer.byteLength("αβ\nhello", "utf8"),
+      eof: false,
+    });
+    expect(first.stderr).toEqual({
+      content: "err\n",
+      offset: 0,
+      nextOffset: 4,
+      totalBytes: 4,
+      eof: true,
+    });
+
+    const second = await manager.read_background_task_output(started.id, {
+      stdoutOffset: first.stdout!.nextOffset,
+      stderrOffset: first.stderr!.nextOffset,
+      maxBytes: 64,
+    });
+    expect(second.stdout).toMatchObject({
+      content: "\nhello",
+      offset: 4,
+      nextOffset: Buffer.byteLength("αβ\nhello", "utf8"),
+      eof: true,
+    });
+    expect(second.stderr).toMatchObject({
+      content: "",
+      offset: 4,
+      nextOffset: 4,
+      eof: true,
+    });
+
+    await expect(
+      manager.read_background_task_output(started.id, {
+        stdoutOffset: 1,
+        stderrOffset: 0,
+        maxBytes: 64,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
   });
 
   it("keeps legacy unowned records valid but hides them from scoped callers", async () => {

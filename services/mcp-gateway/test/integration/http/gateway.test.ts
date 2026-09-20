@@ -89,6 +89,15 @@ describe("gateway HTTP surface", () => {
         openWorldHint: false,
         idempotentHint: true,
       });
+      const stdinTool = body.result.tools.find(
+        (tool) => tool.name === "write_background_task_stdin",
+      );
+      expect(stdinTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+        idempotentHint: false,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
@@ -98,6 +107,7 @@ describe("gateway HTTP surface", () => {
             "run_command",
             "start_background_task",
             "cancel_background_task",
+            "write_background_task_stdin",
             "git_create_branch",
             "git_stage_paths",
             "git_unstage_paths",
