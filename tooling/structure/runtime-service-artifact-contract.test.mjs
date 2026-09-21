@@ -73,6 +73,8 @@ test("native Edge host validates the current manifest by artifact id", () => {
   assert.match(source, /RequireJsonString\(artifact, "id"\)/u);
   assert.doesNotMatch(source, /RequireJsonString\(artifact, "role"\)/u);
   assert.match(source, /"edge-validation-launcher"/u);
+  assert.match(source, /"--project-root"/u);
+  assert.match(source, /VS_CODE_GPT_STACK_ROOT/u);
 });
 
 test("edge task recovery is derivable from active lifecycle state and persisted configuration", () => {
@@ -86,6 +88,7 @@ test("edge task recovery is derivable from active lifecycle state and persisted 
   assert.match(accessInstaller, /Start-McpAccessStackCutover\.ps1/u);
   assert.doesNotMatch(accessInstaller, /Stop-ScheduledTask/u);
   assert.match(cutoverBroker, /edge-task-config\.v1\.json/u);
+  assert.match(cutoverBroker, /projectRoot\s*=\s*\$projectRoot/u);
   assert.match(cutoverBroker, /Write-McpEdgeTaskRecoveryConfig/u);
   assert.doesNotMatch(installer, /edge-task-config\.v1\.json/u);
   const edgeStartIndex = cutoverBroker.lastIndexOf("Start-ScheduledTask -TaskName $edgeTaskName");
@@ -98,6 +101,7 @@ test("edge task recovery is derivable from active lifecycle state and persisted 
   const repair = read("deploy/windows/Repair-McpEdgeConnectorTask.ps1");
   assert.match(repair, /lifecycle-state\.v1\.json/u);
   assert.match(repair, /edge-task-config\.v1\.json/u);
+  assert.match(repair, /Get-RequiredProperty[^\n]+projectRoot/u);
   assert.match(repair, /Install-McpEdgeConnectorTask\.ps1/u);
   assert.match(repair, /active\.releaseId/u);
   assert.match(repair, /Start-ScheduledTask/u);

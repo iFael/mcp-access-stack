@@ -4,6 +4,9 @@ param(
     [string]$InstallationRoot,
 
     [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot,
+
+    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')]
     [string]$ReleaseId,
 
@@ -92,6 +95,10 @@ function Assert-McpEdgeTaskFile {
 }
 
 $installation = [IO.Path]::GetFullPath($InstallationRoot)
+$project = [IO.Path]::GetFullPath($ProjectRoot)
+if (-not (Test-Path -LiteralPath $project -PathType Container)) {
+    throw "Project root was not found: $project"
+}
 $releaseRoot = Join-Path $installation ("releases\$ReleaseId")
 $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
 $connectorToken = Assert-McpEdgeTaskFile -Path $ConnectorTokenFile -Name 'Connector token'
@@ -134,6 +141,7 @@ $plan = [ordered]@{
     taskName = $TaskName
     releaseId = $ReleaseId
     releaseRoot = $releaseRoot
+    projectRoot = $project
     validationLauncherPath = $validationLauncherPath
     edgeHostPath = $edgeHostPath
     runtimeRoot = $runtime
@@ -238,6 +246,7 @@ $validationArguments = @(
     '-NoLogo', '-NoProfile', '-ExecutionPolicy', $executionPolicy,
     '-File', $validationLauncherPath,
     '-ReleaseRoot', $releaseRoot,
+    '-ProjectRoot', $project,
     '-ExpectedManifestSha256', $manifestSha256,
     '-RuntimeRoot', $runtime,
     '-EdgeBaseUrl', $EdgeBaseUrl,
@@ -263,6 +272,7 @@ if ($LASTEXITCODE -ne 0 -or $validationJson.Count -ne 1) {
 }
 $validation = $validationJson[0] | ConvertFrom-Json
 if ([string]$validation.status -ne 'validated' -or
+    [string]$validation.projectRoot -ne $project -or
     [string]$validation.executionManifestSha256 -ne $manifestSha256 -or
     [string]$validation.mcpSessionMode -ne $McpSessionMode -or
     [bool]$validation.browserEnabled -ne [bool]$EnableBrowserWorker) {
@@ -272,6 +282,7 @@ $edgeOrigin = [string]$validation.edgeOrigin
 $browserEnabled = if ($EnableBrowserWorker) { 'true' } else { 'false' }
 $hostArguments = @(
     '--release-root', $releaseRoot,
+    '--project-root', $project,
     '--expected-manifest-sha256', $manifestSha256,
     '--runtime-root', $runtime,
     '--edge-base-url', $edgeOrigin,
@@ -372,6 +383,7 @@ else {
     activated = [bool]$Activate
     taskName = $TaskName
     releaseId = $ReleaseId
+    projectRoot = $project
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
     edgeHostValidated = $true
