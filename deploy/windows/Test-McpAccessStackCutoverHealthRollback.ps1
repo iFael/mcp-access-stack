@@ -106,26 +106,62 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$activeContractRevision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+$candidateContractRevision = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 [IO.File]::WriteAllText($PidFile, [string]$PID, [Text.UTF8Encoding]::new($false))
+$currentHealth = if (Test-Path -LiteralPath $HealthStateFile -PathType Leaf) {
+    Get-Content -LiteralPath $HealthStateFile -Raw | ConvertFrom-Json
+}
+else { $null }
+
+if ($PublishHealth) {
+    if ($null -eq $currentHealth -or $null -eq $currentHealth.runtime) {
+        throw 'Candidate publish requires an existing active health state.'
+    }
+    $health = [ordered]@{
+        service = 'mcp-edge-gateway'
+        controlPlaneReady = $true
+        executionPlaneReady = $true
+        connectorReady = $true
+        contractCompatible = $true
+        activeContractRevision = [string]$currentHealth.activeContractRevision
+        candidateContractRevision = $candidateContractRevision
+        candidateConnectorReady = $true
+        candidateRuntime = [ordered]@{
+            connectorInstanceId = $ConnectorInstanceId
+            catalogContractRevision = $candidateContractRevision
+            releaseId = $ReleaseId
+        }
+        runtime = $currentHealth.runtime
+    }
+    [IO.File]::WriteAllText(
+        $HealthStateFile,
+        (($health | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine),
+        [Text.UTF8Encoding]::new($false)
+    )
+    Start-Sleep -Seconds 300
+    return
+}
+
+$activeRevision = if ($null -eq $currentHealth) { $candidateContractRevision } else { [string]$currentHealth.activeContractRevision }
 $health = [ordered]@{
     service = 'mcp-edge-gateway'
     controlPlaneReady = $true
     executionPlaneReady = $true
     connectorReady = $true
     contractCompatible = $true
+    activeContractRevision = $activeRevision
     runtime = [ordered]@{
         connectorInstanceId = $ConnectorInstanceId
-        catalogContractRevision = 'rollback-test-contract'
+        catalogContractRevision = $activeRevision
         releaseId = $ReleaseId
     }
 }
-if ($PublishHealth -or $ServeHealth) {
-    [IO.File]::WriteAllText(
-        $HealthStateFile,
-        (($health | ConvertTo-Json -Depth 6 -Compress) + [Environment]::NewLine),
-        [Text.UTF8Encoding]::new($false)
-    )
-}
+[IO.File]::WriteAllText(
+    $HealthStateFile,
+    (($health | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine),
+    [Text.UTF8Encoding]::new($false)
+)
 if (-not $ServeHealth) {
     Start-Sleep -Seconds 300
     return
@@ -143,15 +179,8 @@ for ($attempt = 0; $attempt -lt 30 -and -not $started; $attempt++) {
         Start-Sleep -Milliseconds 100
     }
 }
-$body = $health | ConvertTo-Json -Depth 6 -Compress
-$payload = [Text.Encoding]::UTF8.GetBytes($body)
 $crlf = [string][char]13 + [string][char]10
 $headerTerminator = $crlf + $crlf
-$headers = 'HTTP/1.1 200 OK' + $crlf +
-    'Content-Type: application/json' + $crlf +
-    'Content-Length: ' + $payload.Length + $crlf +
-    'Connection: close' + $crlf + $crlf
-$headerBytes = [Text.Encoding]::ASCII.GetBytes($headers)
 try {
     while ($true) {
         $client = $listener.AcceptTcpClient()
@@ -164,6 +193,23 @@ try {
                 if ($read -le 0) { break }
                 $request += [Text.Encoding]::ASCII.GetString($buffer, 0, $read)
             } while ($request.Length -lt 16384 -and -not $request.Contains($headerTerminator))
+
+            $responseBody = $health
+            if ($request.StartsWith('POST /_internal/contract-rollout/promote ')) {
+                $health.activeContractRevision = $candidateContractRevision
+                $health.runtime.catalogContractRevision = $candidateContractRevision
+                $responseBody = [ordered]@{
+                    status = 'already-promoted'
+                    activeContractRevision = $candidateContractRevision
+                }
+            }
+            $body = $responseBody | ConvertTo-Json -Depth 6 -Compress
+            $payload = [Text.Encoding]::UTF8.GetBytes($body)
+            $headers = 'HTTP/1.1 200 OK' + $crlf +
+                'Content-Type: application/json' + $crlf +
+                'Content-Length: ' + $payload.Length + $crlf +
+                'Connection: close' + $crlf + $crlf
+            $headerBytes = [Text.Encoding]::ASCII.GetBytes($headers)
             $stream.Write($headerBytes, 0, $headerBytes.Length)
             $stream.Write($payload, 0, $payload.Length)
             $stream.Flush()
@@ -236,7 +282,12 @@ elseif (Test-Path -LiteralPath (Join-Path $InstallationRoot 'state\handover-succ
 }
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $releaseRoot
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
 $task = New-ScheduledTask -Action $action -Principal $principal -Settings $settings -Description 'MCP Access Stack isolated rollback-test candidate.'
 Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId
@@ -379,7 +430,12 @@ function Register-TestPreviousTask {
         '" -HealthStateFile "' + $HealthStateFile + '"'
     $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $WorkingDirectory
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
     $task = New-ScheduledTask -Action $action -Principal $principal -Settings $settings -Description 'MCP Access Stack isolated rollback-test previous connector.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
     $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId
@@ -439,6 +495,8 @@ function Write-ServerLog {
 
 [IO.File]::WriteAllText($PidFile, [string]$PID, [Text.UTF8Encoding]::new($false))
 Write-ServerLog -Message ('started pid=' + [string]$PID + ' port=' + [string]$Port)
+$activeContractRevision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+$candidateContractRevision = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 
 $initialHealth = [ordered]@{
     service = 'mcp-edge-gateway'
@@ -446,9 +504,12 @@ $initialHealth = [ordered]@{
     executionPlaneReady = $true
     connectorReady = $true
     contractCompatible = $true
+    activeContractRevision = $activeContractRevision
+    candidateContractRevision = $candidateContractRevision
+    candidateConnectorReady = $false
     runtime = [ordered]@{
         connectorInstanceId = $ConnectorInstanceId
-        catalogContractRevision = 'rollback-test-contract'
+        catalogContractRevision = $activeContractRevision
         releaseId = $ReleaseId
     }
 }
@@ -477,7 +538,60 @@ try {
                 $request += [Text.Encoding]::ASCII.GetString($buffer, 0, $read)
             } while ($request.Length -lt 16384 -and -not $request.Contains($headerTerminator))
 
-            $body = (Get-Content -LiteralPath $HealthStateFile -Raw).Trim()
+            $currentHealth = Get-Content -LiteralPath $HealthStateFile -Raw | ConvertFrom-Json
+            $responseBody = $currentHealth
+            if ($request.StartsWith('POST /_internal/contract-rollout/promote ')) {
+                $candidateRuntime = $currentHealth.candidateRuntime
+                if ($null -eq $candidateRuntime) { throw 'Promotion requested without a ready candidate runtime.' }
+                $promotedHealth = [ordered]@{
+                    service = 'mcp-edge-gateway'
+                    controlPlaneReady = $true
+                    executionPlaneReady = $true
+                    connectorReady = $true
+                    contractCompatible = $true
+                    activeContractRevision = $candidateContractRevision
+                    runtime = $candidateRuntime
+                }
+                [IO.File]::WriteAllText(
+                    $HealthStateFile,
+                    (($promotedHealth | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine),
+                    [Text.UTF8Encoding]::new($false)
+                )
+                $responseBody = [ordered]@{
+                    status = 'promoted'
+                    activeContractRevision = $candidateContractRevision
+                }
+            }
+            elseif ($request.StartsWith('POST /_internal/contract-rollout/rollback ')) {
+                $candidateRuntime = $currentHealth.runtime
+                $rolledBackHealth = [ordered]@{
+                    service = 'mcp-edge-gateway'
+                    controlPlaneReady = $true
+                    executionPlaneReady = $true
+                    connectorReady = $true
+                    contractCompatible = $true
+                    activeContractRevision = $activeContractRevision
+                    candidateContractRevision = $candidateContractRevision
+                    candidateConnectorReady = $true
+                    candidateRuntime = $candidateRuntime
+                    runtime = [ordered]@{
+                        connectorInstanceId = $ConnectorInstanceId
+                        catalogContractRevision = $activeContractRevision
+                        releaseId = $ReleaseId
+                    }
+                }
+                [IO.File]::WriteAllText(
+                    $HealthStateFile,
+                    (($rolledBackHealth | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine),
+                    [Text.UTF8Encoding]::new($false)
+                )
+                $responseBody = [ordered]@{
+                    status = 'rolled-back'
+                    activeContractRevision = $activeContractRevision
+                    candidateContractRevision = $candidateContractRevision
+                }
+            }
+            $body = $responseBody | ConvertTo-Json -Depth 8 -Compress
             $payload = [Text.Encoding]::UTF8.GetBytes($body)
             $headers = 'HTTP/1.1 200 OK' + $crlf +
                 'Content-Type: application/json' + $crlf +
@@ -673,6 +787,11 @@ try {
         if ([string]$result.healthGate.connectorInstanceId -ne $canonicalConnectorInstanceId) {
             throw "Canonical connector did not become final owner: $($result.healthGate.connectorInstanceId)"
         }
+        if ($result.contractPromotion.required -ne $true -or
+            [string]$result.contractPromotion.status -ne 'promoted' -or
+            [string]$result.contractPromotion.activeContractRevision -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') {
+            throw ('Contract promotion evidence mismatch: ' + ($result.contractPromotion | ConvertTo-Json -Compress))
+        }
 
         $stateAfterSuccess = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if ([string]$stateAfterSuccess.active.releaseId -ne $candidateReleaseId -or
@@ -694,6 +813,10 @@ try {
             [string]$healthAfterSuccess.runtime.releaseId -ne $candidateReleaseId) {
             throw 'Canonical candidate did not answer health after successful handover.'
         }
+        if ([string]$healthAfterSuccess.activeContractRevision -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' -or
+            $healthAfterSuccess.PSObject.Properties.Name -contains 'candidateContractRevision') {
+            throw 'Contract rollout did not converge to promoted active-only health.'
+        }
 
         [pscustomobject]@{
             status = 'passed'
@@ -704,6 +827,8 @@ try {
             canonicalConnectorInstanceId = [string]$result.healthGate.connectorInstanceId
             activeReleaseId = [string]$stateAfterSuccess.active.releaseId
             previousReleaseId = [string]$stateAfterSuccess.previous.releaseId
+            contractPromotionStatus = [string]$result.contractPromotion.status
+            activeContractRevision = [string]$healthAfterSuccess.activeContractRevision
             handoverTaskRemoved = $true
             canonicalTaskRunning = $true
             canonicalHealthResponding = $true

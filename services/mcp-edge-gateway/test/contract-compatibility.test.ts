@@ -3,6 +3,10 @@ import { describe, expect, it } from "@jest/globals";
 import {
   EXPECTED_MCP_CONTRACT_REVISION,
   isConnectorContractCompatible,
+  isExpectedContractPrepared,
+  promoteMcpContractRolloutState,
+  reconcileMcpContractRolloutState,
+  rollbackMcpContractRolloutState,
 } from "../src/contract-compatibility.js";
 import { EDGE_MCP_CATALOG_METADATA } from "../src/generated/mcp-tool-manifest.js";
 
@@ -50,5 +54,118 @@ describe("Edge/connector MCP contract compatibility", () => {
 
   it("fails closed when runtime contract identity is missing", () => {
     expect(isConnectorContractCompatible(undefined)).toBe(false);
+  });
+
+  it("prepares the new build while preserving the observed active revision", () => {
+    const activeRevision = "1".repeat(64);
+    const prepared = reconcileMcpContractRolloutState(
+      undefined,
+      activeRevision,
+      "2026-09-21T00:00:00.000Z",
+    );
+
+    expect(prepared.changed).toBe(true);
+    expect(prepared.state).toEqual({
+      version: 1,
+      activeContractRevision: activeRevision,
+      candidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+      preparedAt: "2026-09-21T00:00:00.000Z",
+    });
+    expect(isExpectedContractPrepared(prepared.state)).toBe(true);
+    expect(isConnectorContractCompatible(runtimeIdentity({ catalogContractRevision: activeRevision }), prepared.state)).toBe(true);
+    expect(isConnectorContractCompatible(runtimeIdentity(), prepared.state)).toBe(true);
+  });
+
+  it("does not silently replace an already prepared candidate with another build", () => {
+    const state = {
+      version: 1 as const,
+      activeContractRevision: "1".repeat(64),
+      candidateContractRevision: "2".repeat(64),
+      preparedAt: "2026-09-20T00:00:00.000Z",
+    };
+    const reconciled = reconcileMcpContractRolloutState(
+      state,
+      state.activeContractRevision,
+      "2026-09-21T00:00:00.000Z",
+    );
+
+    expect(reconciled).toEqual({ state, changed: false });
+    expect(isExpectedContractPrepared(reconciled.state)).toBe(false);
+  });
+
+  it("promotes only when the prepared candidate is the selected runtime", () => {
+    const activeRevision = "1".repeat(64);
+    const state = {
+      version: 1 as const,
+      activeContractRevision: activeRevision,
+      candidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+      preparedAt: "2026-09-21T00:00:00.000Z",
+    };
+
+    expect(promoteMcpContractRolloutState(
+      state,
+      activeRevision,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      activeRevision,
+      "2026-09-21T00:01:00.000Z",
+    )).toEqual({ ok: false, code: "candidate_not_ready" });
+
+    const promoted = promoteMcpContractRolloutState(
+      state,
+      activeRevision,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      "2026-09-21T00:01:00.000Z",
+    );
+    expect(promoted).toEqual({
+      ok: true,
+      alreadyPromoted: false,
+      state: {
+        version: 1,
+        activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        previousContractRevision: activeRevision,
+        promotedAt: "2026-09-21T00:01:00.000Z",
+      },
+    });
+
+    if (!promoted.ok) throw new Error("promotion unexpectedly failed");
+    expect(promoteMcpContractRolloutState(
+      promoted.state,
+      activeRevision,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      "2026-09-21T00:02:00.000Z",
+    )).toEqual({ ok: true, state: promoted.state, alreadyPromoted: true });
+
+    expect(isConnectorContractCompatible(
+      runtimeIdentity({ catalogContractRevision: activeRevision }),
+      promoted.state,
+    )).toBe(false);
+
+    expect(rollbackMcpContractRolloutState(
+      promoted.state,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      activeRevision,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      "2026-09-21T00:03:00.000Z",
+    )).toEqual({ ok: false, code: "previous_not_ready" });
+
+    const rolledBack = rollbackMcpContractRolloutState(
+      promoted.state,
+      EXPECTED_MCP_CONTRACT_REVISION,
+      activeRevision,
+      activeRevision,
+      "2026-09-21T00:03:00.000Z",
+    );
+    expect(rolledBack).toEqual({
+      ok: true,
+      alreadyRolledBack: false,
+      state: {
+        version: 1,
+        activeContractRevision: activeRevision,
+        candidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        preparedAt: "2026-09-21T00:03:00.000Z",
+      },
+    });
   });
 });

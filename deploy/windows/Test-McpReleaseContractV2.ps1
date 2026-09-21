@@ -135,7 +135,14 @@ try {
         'CLOUDFLARE_ACCOUNT_ID',
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
+        'Preflight contract rollout compatibility',
+        'Contract-changing release requires rollout infrastructure from the previous stable Edge before deploy.',
+        'another candidate contract is still prepared',
         'expectedContractRevision',
+        'activeContractRevision',
+        'candidateContractRevision',
+        'executionPlaneReady',
+        'contractCompatible',
         '/health',
         'controlPlaneReady'
     )) {
@@ -150,7 +157,7 @@ try {
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
         throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
     }
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge deployment gates publication, and v1 remains historical read compatibility.'
+    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge prepare gates publication without invalidating the active connector, and v1 remains historical read compatibility.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

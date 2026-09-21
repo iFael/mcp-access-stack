@@ -5,6 +5,7 @@ import {
 import {
   createMcpControlPlane,
   type EdgeExecutionTransport,
+  type EdgeMcpCatalog,
   type EdgeMcpControlPlane,
 } from "./mcp-control-plane.js";
 import {
@@ -44,6 +45,12 @@ export class EdgeControlPlaneConfigurationError extends Error {
   }
 }
 
+export const EDGE_BUILD_MCP_CATALOG: EdgeMcpCatalog = {
+  manifest: EDGE_MCP_TOOL_MANIFEST,
+  catalogMetadata: EDGE_MCP_CATALOG_METADATA,
+  serverIdentity: EDGE_MCP_SERVER_IDENTITY,
+};
+
 export interface EdgeControlPlaneRuntime {
   authenticator: EdgeAuthenticator;
   oauth: EdgeOAuthRouteHandler;
@@ -55,6 +62,7 @@ export function createEdgeControlPlaneRuntime(
   env: EdgeControlPlaneEnv,
   storage: OwnerOAuthStorage,
   execution: EdgeExecutionTransport,
+  catalog: EdgeMcpCatalog = EDGE_BUILD_MCP_CATALOG,
 ): EdgeControlPlaneRuntime {
   const publicBaseUrl = parsePublicBaseUrl(requireValue(env.MCP_PUBLIC_BASE_URL, "MCP_PUBLIC_BASE_URL"));
   const mode = requireValue(env.MCP_EDGE_AUTH_MODE, "MCP_EDGE_AUTH_MODE");
@@ -113,9 +121,9 @@ export function createEdgeControlPlaneRuntime(
   const controlPlane = createMcpControlPlane({
     authenticator,
     execution,
-    manifest: EDGE_MCP_TOOL_MANIFEST,
-    catalogMetadata: EDGE_MCP_CATALOG_METADATA,
-    serverIdentity: EDGE_MCP_SERVER_IDENTITY,
+    manifest: catalog.manifest,
+    catalogMetadata: catalog.catalogMetadata,
+    serverIdentity: catalog.serverIdentity,
   });
   const router = createMcpSessionRouter({ oauth, controlPlane });
   return { authenticator, oauth, controlPlane, router };

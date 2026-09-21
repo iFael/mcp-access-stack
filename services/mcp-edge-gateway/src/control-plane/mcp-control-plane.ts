@@ -42,12 +42,15 @@ export interface EdgeMcpToolDescriptor {
   [key: string]: unknown;
 }
 
-export interface EdgeMcpControlPlaneOptions {
-  authenticator: EdgeAuthenticator;
-  execution: EdgeExecutionTransport;
+export interface EdgeMcpCatalog {
   manifest: readonly EdgeMcpToolDescriptor[];
   catalogMetadata: Readonly<Record<string, unknown>>;
   serverIdentity: Readonly<{ name: string; version: string }>;
+}
+
+export interface EdgeMcpControlPlaneOptions extends EdgeMcpCatalog {
+  authenticator: EdgeAuthenticator;
+  execution: EdgeExecutionTransport;
 }
 
 export interface EdgeMcpControlPlane {

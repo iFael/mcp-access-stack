@@ -1,3 +1,4 @@
+import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol";
 import type { EdgeRuntimeTelemetryV1 } from "./connector-telemetry.js";
 import { EXPECTED_MCP_CONTRACT_REVISION } from "./contract-compatibility.js";
 
@@ -6,8 +7,21 @@ export interface EdgeSessionHealth {
   executionPlaneReady: boolean;
   connectorReady: boolean;
   contractCompatible: boolean;
+  activeContractRevision?: string;
+  candidateContractRevision?: string;
+  candidateConnectorReady?: boolean;
+  candidateRuntime?: ConnectorRuntimeIdentity;
   runtimeTelemetry?: EdgeRuntimeTelemetryV1;
 }
+
+export type PublicEdgeCandidateRuntimeHealth = {
+  connectorInstanceId: string;
+  connectionGeneration: number;
+  catalogContractRevision: string;
+  toolSetRevision: string;
+  toolCount: number;
+  serverVersion: string;
+};
 
 export type PublicEdgeRuntimeHealth = {
   connectorInstanceId?: string;
@@ -37,6 +51,10 @@ export function createEdgeHealthStatus(
     connectorReady: boolean;
     contractCompatible: boolean;
     expectedContractRevision: string;
+    activeContractRevision: string;
+    candidateContractRevision?: string;
+    candidateConnectorReady?: boolean;
+    candidateRuntime?: PublicEdgeCandidateRuntimeHealth;
     runtime?: PublicEdgeRuntimeHealth;
   };
 } {
@@ -53,10 +71,31 @@ export function createEdgeHealthStatus(
       connectorReady: session.connectorReady,
       contractCompatible: session.contractCompatible,
       expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+      activeContractRevision: session.activeContractRevision ?? EXPECTED_MCP_CONTRACT_REVISION,
+      ...(session.candidateContractRevision === undefined
+        ? {}
+        : {
+            candidateContractRevision: session.candidateContractRevision,
+            candidateConnectorReady: session.candidateConnectorReady === true,
+            ...(session.candidateRuntime === undefined
+              ? {}
+              : { candidateRuntime: toPublicCandidateRuntimeHealth(session.candidateRuntime) }),
+          }),
       ...(session.runtimeTelemetry === undefined
         ? {}
         : { runtime: toPublicRuntimeHealth(session.runtimeTelemetry) }),
     },
+  };
+}
+
+function toPublicCandidateRuntimeHealth(runtime: ConnectorRuntimeIdentity): PublicEdgeCandidateRuntimeHealth {
+  return {
+    connectorInstanceId: runtime.connectorInstanceId,
+    connectionGeneration: runtime.connectionGeneration,
+    catalogContractRevision: runtime.catalogContractRevision,
+    toolSetRevision: runtime.toolSetRevision,
+    toolCount: runtime.toolCount,
+    serverVersion: runtime.serverVersion,
   };
 }
 

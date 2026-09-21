@@ -11,6 +11,11 @@ export function isPreferredConnectorRuntime(
     if (candidateStartedAt !== currentStartedAt) return candidateStartedAt > currentStartedAt;
     const candidateId = candidate?.connectorInstanceId ?? "";
     const currentId = current?.connectorInstanceId ?? "";
+    if (candidateId === currentId) {
+      const candidateGeneration = candidate?.connectionGeneration ?? 0;
+      const currentGeneration = current?.connectionGeneration ?? 0;
+      return candidateGeneration > currentGeneration;
+    }
     return candidateId.localeCompare(currentId) > 0;
   }
   return Number.isFinite(candidateStartedAt) && !Number.isFinite(currentStartedAt);

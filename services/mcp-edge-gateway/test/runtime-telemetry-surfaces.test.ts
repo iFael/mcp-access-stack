@@ -99,4 +99,123 @@ describe("runtime telemetry surfaces", () => {
       runtimeTelemetry,
     });
   });
+
+  it("requires connector-token authentication for contract promotion", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    const candidateRevision = "c".repeat(64);
+    const activeRevision = "a".repeat(64);
+    let received: unknown;
+    const session = {
+      promoteContractRollout: async (input: unknown) => {
+        received = input;
+        return JSON.stringify({
+          status: 200,
+          body: { status: "promoted", activeContractRevision: candidateRevision },
+        });
+      },
+    };
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_SESSION: {
+        idFromName: () => ({ toString: () => "session-id" }),
+        get: () => session,
+      },
+    } as never;
+    const body = {
+      expectedActiveContractRevision: activeRevision,
+      expectedCandidateContractRevision: candidateRevision,
+    };
+
+    const unauthorized = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/promote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/promote", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer connector-token-fixture",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(authorized.status).toBe(200);
+    expect(await authorized.json()).toEqual({
+      status: "promoted",
+      activeContractRevision: candidateRevision,
+    });
+    expect(received).toEqual(body);
+  });
+
+  it("requires connector-token authentication for contract rollback", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    const activeRevision = "c".repeat(64);
+    const previousRevision = "a".repeat(64);
+    let received: unknown;
+    const session = {
+      rollbackContractRollout: async (input: unknown) => {
+        received = input;
+        return JSON.stringify({
+          status: 200,
+          body: {
+            status: "rolled-back",
+            activeContractRevision: previousRevision,
+            candidateContractRevision: activeRevision,
+          },
+        });
+      },
+    };
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_SESSION: {
+        idFromName: () => ({ toString: () => "session-id" }),
+        get: () => session,
+      },
+    } as never;
+    const body = {
+      expectedActiveContractRevision: activeRevision,
+      expectedPreviousContractRevision: previousRevision,
+    };
+
+    const unauthorized = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/rollback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/rollback", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer connector-token-fixture",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(authorized.status).toBe(200);
+    expect(await authorized.json()).toEqual({
+      status: "rolled-back",
+      activeContractRevision: previousRevision,
+      candidateContractRevision: activeRevision,
+    });
+    expect(received).toEqual(body);
+  });
 });

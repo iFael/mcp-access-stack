@@ -1,10 +1,27 @@
 import { DurableObject } from "cloudflare:workers";
 import type { AuthenticatedEdgePrincipal, ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
-import { isConnectorContractCompatible } from "./contract-compatibility.js";
+import {
+  EXPECTED_MCP_CONTRACT_REVISION,
+  MCP_CONTRACT_ROLLOUT_STORAGE_KEY,
+  isConnectorContractCompatible,
+  isMcpContractRevision,
+  promoteMcpContractRolloutState,
+  reconcileMcpContractRolloutState,
+  rollbackMcpContractRolloutState,
+  type McpContractRolloutStateV1,
+} from "./contract-compatibility.js";
 import { isPreferredConnectorRuntime, selectPreferredConnectorProtocol } from "./connector-handover.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
-import { createAgentUnavailableMcpResponse, getMcpResponseDiagnostic } from "./control-plane/mcp-control-plane.js";
+import {
+  createAgentUnavailableMcpResponse,
+  getMcpResponseDiagnostic,
+  type EdgeMcpCatalog,
+} from "./control-plane/mcp-control-plane.js";
+import {
+  persistMcpCatalogSnapshot,
+  readMcpCatalogSnapshot,
+} from "./control-plane/active-catalog.js";
 import {
   ConnectorTelemetryStore,
   type ConnectorTelemetryEvent,
@@ -17,6 +34,7 @@ import {
   shouldPersistSessionDiagnostic,
 } from "./control-plane/session-diagnostics.js";
 import {
+  EDGE_BUILD_MCP_CATALOG,
   EdgeControlPlaneConfigurationError,
   createEdgeControlPlaneRuntime,
   type EdgeControlPlaneEnv,
@@ -71,12 +89,32 @@ type PendingRelay = {
 export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly pending = new Map<string, PendingRelay>();
   private readonly connectorTelemetry: ConnectorTelemetryStore;
+  private contractRolloutState!: McpContractRolloutStateV1;
+  private activeMcpCatalog: EdgeMcpCatalog | null = null;
   private controlRuntime: EdgeControlPlaneRuntime | undefined;
   private v3CutoverComplete = false;
 
   constructor(ctx: DurableObjectState, private readonly edgeEnv: EdgeGatewayEnv) {
     super(ctx, edgeEnv);
     this.connectorTelemetry = new ConnectorTelemetryStore(this.ctx.storage);
+    this.ctx.blockConcurrencyWhile(async () => {
+      await persistMcpCatalogSnapshot(this.ctx.storage, EDGE_BUILD_MCP_CATALOG);
+      const current = await this.ctx.storage.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+      const telemetry = await this.connectorTelemetry.read();
+      const reconciled = reconcileMcpContractRolloutState(
+        current,
+        telemetry.catalogContractRevision,
+        new Date().toISOString(),
+      );
+      this.contractRolloutState = reconciled.state;
+      if (reconciled.changed) {
+        await this.ctx.storage.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, reconciled.state);
+      }
+      this.activeMcpCatalog = await readMcpCatalogSnapshot(
+        this.ctx.storage,
+        reconciled.state.activeContractRevision,
+      );
+    });
   }
 
   async getStatus(): Promise<{
@@ -84,9 +122,19 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     executionPlaneReady: boolean;
     connectorReady: boolean;
     contractCompatible: boolean;
+    activeContractRevision: string;
+    candidateContractRevision?: string;
+    candidateConnectorReady: boolean;
+    candidateRuntime?: ConnectorRuntimeIdentity;
     runtimeTelemetry: EdgeRuntimeTelemetryV1;
   }> {
     const executionConnector = this.getPreferredExecutionReadyConnector();
+    const candidateConnector = this.contractRolloutState.candidateContractRevision === undefined
+      ? null
+      : this.getReadyConnectorForContractRevision(this.contractRolloutState.candidateContractRevision);
+    const candidateRuntime = candidateConnector
+      ? this.readConnectorAttachment(candidateConnector)?.runtime
+      : undefined;
     const connector = executionConnector ?? this.getPreferredReadyConnector();
     const connectorReady = connector !== null;
     const attachment = connector ? this.readConnectorAttachment(connector) : null;
@@ -110,6 +158,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       executionPlaneReady: controlPlaneReady && executionConnector !== null,
       connectorReady,
       contractCompatible,
+      activeContractRevision: this.contractRolloutState.activeContractRevision,
+      ...(this.contractRolloutState.candidateContractRevision === undefined
+        ? {}
+        : { candidateContractRevision: this.contractRolloutState.candidateContractRevision }),
+      candidateConnectorReady: candidateConnector !== null,
+      ...(candidateRuntime === undefined ? {} : { candidateRuntime }),
       runtimeTelemetry: selectedRuntime === undefined
         ? runtimeTelemetry
         : {
@@ -133,6 +187,140 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
   async getRuntimeTelemetry(): Promise<EdgeRuntimeTelemetryV1> {
     return this.connectorTelemetry.read();
+  }
+
+  async promoteContractRollout(input: unknown): Promise<string> {
+    const result = await this.promoteContractRolloutResult(input);
+    return JSON.stringify(result);
+  }
+
+  private async promoteContractRolloutResult(input: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedCandidateContractRevision" ||
+        !isMcpContractRevision(input.expectedActiveContractRevision) ||
+        !isMcpContractRevision(input.expectedCandidateContractRevision)) {
+      return { status: 400, body: { error: "invalid_contract_promotion" } };
+    }
+
+    const candidateConnector = this.getReadyConnectorForContractRevision(
+      input.expectedCandidateContractRevision,
+    );
+    const candidateReadyRevision = candidateConnector
+      ? this.readConnectorAttachment(candidateConnector)?.runtime?.catalogContractRevision
+      : undefined;
+    const promotion = promoteMcpContractRolloutState(
+      this.contractRolloutState,
+      input.expectedActiveContractRevision,
+      input.expectedCandidateContractRevision,
+      candidateReadyRevision,
+      new Date().toISOString(),
+    );
+    if (!promotion.ok) {
+      return {
+        status: 409,
+        body: {
+          error: promotion.code,
+          expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+          activeContractRevision: this.contractRolloutState.activeContractRevision,
+          ...(this.contractRolloutState.candidateContractRevision === undefined
+            ? {}
+            : { candidateContractRevision: this.contractRolloutState.candidateContractRevision }),
+        },
+      };
+    }
+
+    if (!promotion.alreadyPromoted) {
+      const promotedCatalog = await readMcpCatalogSnapshot(
+        this.ctx.storage,
+        promotion.state.activeContractRevision,
+      );
+      if (!promotedCatalog) {
+        return {
+          status: 503,
+          body: { error: "promoted_catalog_snapshot_unavailable" },
+        };
+      }
+      await this.ctx.storage.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, promotion.state);
+      this.contractRolloutState = promotion.state;
+      this.activeMcpCatalog = promotedCatalog;
+      this.controlRuntime = undefined;
+    }
+    this.refreshOpenConnectorContractCompatibility();
+    return {
+      status: 200,
+      body: {
+        status: promotion.alreadyPromoted ? "already-promoted" : "promoted",
+        activeContractRevision: this.contractRolloutState.activeContractRevision,
+      },
+    };
+  }
+
+  async rollbackContractRollout(input: unknown): Promise<string> {
+    const result = await this.rollbackContractRolloutResult(input);
+    return JSON.stringify(result);
+  }
+
+  private async rollbackContractRolloutResult(input: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedPreviousContractRevision" ||
+        !isMcpContractRevision(input.expectedActiveContractRevision) ||
+        !isMcpContractRevision(input.expectedPreviousContractRevision)) {
+      return { status: 400, body: { error: "invalid_contract_rollback" } };
+    }
+
+    const previousConnector = this.getReadyConnectorForContractRevision(
+      input.expectedPreviousContractRevision,
+    );
+    const previousReadyRevision = previousConnector
+      ? this.readConnectorAttachment(previousConnector)?.runtime?.catalogContractRevision
+      : undefined;
+    const rollback = rollbackMcpContractRolloutState(
+      this.contractRolloutState,
+      input.expectedActiveContractRevision,
+      input.expectedPreviousContractRevision,
+      previousReadyRevision,
+      new Date().toISOString(),
+    );
+    if (!rollback.ok) {
+      return {
+        status: 409,
+        body: {
+          error: rollback.code,
+          activeContractRevision: this.contractRolloutState.activeContractRevision,
+          ...(this.contractRolloutState.previousContractRevision === undefined
+            ? {}
+            : { previousContractRevision: this.contractRolloutState.previousContractRevision }),
+        },
+      };
+    }
+
+    if (!rollback.alreadyRolledBack) {
+      const restoredCatalog = await readMcpCatalogSnapshot(
+        this.ctx.storage,
+        rollback.state.activeContractRevision,
+      );
+      if (!restoredCatalog) {
+        return {
+          status: 503,
+          body: { error: "rollback_catalog_snapshot_unavailable" },
+        };
+      }
+      await this.ctx.storage.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, rollback.state);
+      this.contractRolloutState = rollback.state;
+      this.activeMcpCatalog = restoredCatalog;
+      this.controlRuntime = undefined;
+    }
+    this.refreshOpenConnectorContractCompatibility();
+    return {
+      status: 200,
+      body: {
+        status: rollback.alreadyRolledBack ? "already-rolled-back" : "rolled-back",
+        activeContractRevision: this.contractRolloutState.activeContractRevision,
+        ...(this.contractRolloutState.candidateContractRevision === undefined
+          ? {}
+          : { candidateContractRevision: this.contractRolloutState.candidateContractRevision }),
+      },
+    };
   }
 
   async bootstrapLegacyOwnerState(input: unknown): Promise<string> {
@@ -207,7 +395,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (parsed.type === "connector-ready") {
       const runtime = "runtime" in parsed ? parsed.runtime : undefined;
       const contractCompatible = attachment.protocolVersion === LEGACY_EDGE_PROTOCOL_VERSION ||
-        isConnectorContractCompatible(runtime);
+        isConnectorContractCompatible(runtime, this.contractRolloutState);
       webSocket.serializeAttachment({
         role: "connector",
         ready: true,
@@ -336,6 +524,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
   private getControlRuntime(): EdgeControlPlaneRuntime {
+    if (!this.activeMcpCatalog) {
+      throw new EdgeControlPlaneConfigurationError("Active MCP catalog snapshot is unavailable.");
+    }
     this.controlRuntime ??= createEdgeControlPlaneRuntime(
       this.edgeEnv,
       this.ctx.storage,
@@ -353,6 +544,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           );
         },
       },
+      this.activeMcpCatalog,
     );
     return this.controlRuntime;
   }
@@ -556,6 +748,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     protocolVersion?: number,
     requireCompatible = false,
     closingCandidate?: { webSocket: WebSocket; attachment: ConnectorAttachment },
+    requiredContractRevision?: string,
   ): WebSocket | null {
     let selected: WebSocket | null = null;
     let selectedAttachment: ConnectorAttachment | null = null;
@@ -570,6 +763,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           (requireCompatible &&
             attachment.protocolVersion !== LEGACY_EDGE_PROTOCOL_VERSION &&
             attachment.contractCompatible !== true) ||
+          (requiredContractRevision !== undefined &&
+            attachment.protocolVersion !== LEGACY_EDGE_PROTOCOL_VERSION &&
+            attachment.runtime?.catalogContractRevision !== requiredContractRevision) ||
           (!isClosingCandidate && webSocket.readyState !== WebSocket.OPEN)) {
         continue;
       }
@@ -597,13 +793,25 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   }
 
   private getExecutionReadyConnector(protocolVersion?: number): WebSocket | null {
-    return this.selectReadyConnector(protocolVersion, true);
+    const requiredRevision = protocolVersion === LEGACY_EDGE_PROTOCOL_VERSION
+      ? undefined
+      : this.contractRolloutState.activeContractRevision;
+    return this.selectReadyConnector(protocolVersion, true, undefined, requiredRevision);
+  }
+
+  private getReadyConnectorForContractRevision(revision: string): WebSocket | null {
+    return this.selectReadyConnector(EDGE_PROTOCOL_VERSION, false, undefined, revision);
   }
 
   private getPreferredExecutionReadyConnector(
     closingCandidate?: { webSocket: WebSocket; attachment: ConnectorAttachment },
   ): WebSocket | null {
-    const v3 = this.selectReadyConnector(EDGE_PROTOCOL_VERSION, true, closingCandidate);
+    const v3 = this.selectReadyConnector(
+      EDGE_PROTOCOL_VERSION,
+      true,
+      closingCandidate,
+      this.contractRolloutState.activeContractRevision,
+    );
     const legacy = this.selectReadyConnector(LEGACY_EDGE_PROTOCOL_VERSION, true, closingCandidate);
     const protocol = selectPreferredConnectorProtocol(v3 !== null, legacy !== null);
     return protocol === EDGE_PROTOCOL_VERSION ? v3
@@ -672,6 +880,19 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const connector = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION);
     if (!connector) return null;
     return this.readConnectorAttachment(connector)?.connectionGeneration ?? null;
+  }
+
+  private refreshOpenConnectorContractCompatibility(): void {
+    for (const webSocket of this.ctx.getWebSockets("connector")) {
+      const attachment = this.readConnectorAttachment(webSocket);
+      if (!attachment) continue;
+      const contractCompatible = attachment.protocolVersion === LEGACY_EDGE_PROTOCOL_VERSION ||
+        isConnectorContractCompatible(attachment.runtime, this.contractRolloutState);
+      webSocket.serializeAttachment({
+        ...attachment,
+        contractCompatible,
+      } satisfies ConnectorAttachment);
+    }
   }
 
   private updateConnectorTelemetry(event: ConnectorTelemetryEvent): void {

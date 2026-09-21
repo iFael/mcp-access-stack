@@ -231,13 +231,42 @@ jobs:
           test -n "$expected"
           echo "revision=$expected" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy exact Edge contract to production
+      - name: Preflight contract rollout compatibility
+        env:
+          EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}
+          EDGE_HEALTH_URL: https://mcp-access-stack.rafaeldamasio77.workers.dev/health
+        run: |
+          set -euo pipefail
+          current_health="$(curl --fail --silent --show-error "$EDGE_HEALTH_URL")"
+          service="$(jq -r '.service // empty' <<<"$current_health")"
+          current_expected="$(jq -r '.expectedContractRevision // empty' <<<"$current_health")"
+          active_revision="$(jq -r '.activeContractRevision // empty' <<<"$current_health")"
+          candidate_revision="$(jq -r '.candidateContractRevision // empty' <<<"$current_health")"
+          if [[ "$service" != "mcp-edge-gateway" || -z "$current_expected" ]]; then
+            echo "Current Edge health is not a valid rollout authority." >&2
+            echo "$current_health" >&2
+            exit 1
+          fi
+          if [[ "$current_expected" != "$EXPECTED_CONTRACT_REVISION" ]]; then
+            if [[ -z "$active_revision" || "$active_revision" != "$current_expected" ]]; then
+              echo "Contract-changing release requires rollout infrastructure from the previous stable Edge before deploy." >&2
+              echo "currentExpected=$current_expected active=$active_revision next=$EXPECTED_CONTRACT_REVISION" >&2
+              exit 1
+            fi
+            if [[ -n "$candidate_revision" ]]; then
+              echo "Contract-changing release refused because another candidate contract is still prepared: $candidate_revision" >&2
+              exit 1
+            fi
+          fi
+          echo "Edge rollout preflight passed: current=$current_expected active=$active_revision next=$EXPECTED_CONTRACT_REVISION"
+
+      - name: Prepare exact Edge contract in production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy --workspace @mcp-access-stack/edge-gateway
 
-      - name: Verify deployed Edge contract before publication
+      - name: Verify prepared Edge contract before publication
         env:
           EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}
           EDGE_HEALTH_URL: https://mcp-access-stack.rafaeldamasio77.workers.dev/health
@@ -247,16 +276,29 @@ jobs:
           for attempt in $(seq 1 12); do
             if last_health="$(curl --fail --silent --show-error "$EDGE_HEALTH_URL")"; then
               actual_revision="$(jq -r '.expectedContractRevision // empty' <<<"$last_health")"
+              active_revision="$(jq -r '.activeContractRevision // empty' <<<"$last_health")"
+              candidate_revision="$(jq -r '.candidateContractRevision // empty' <<<"$last_health")"
               control_plane_ready="$(jq -r '.controlPlaneReady // false' <<<"$last_health")"
+              execution_plane_ready="$(jq -r '.executionPlaneReady // false' <<<"$last_health")"
+              connector_ready="$(jq -r '.connectorReady // false' <<<"$last_health")"
+              contract_compatible="$(jq -r '.contractCompatible // false' <<<"$last_health")"
               service="$(jq -r '.service // empty' <<<"$last_health")"
-              if [[ "$service" == "mcp-edge-gateway" && "$actual_revision" == "$EXPECTED_CONTRACT_REVISION" && "$control_plane_ready" == "true" ]]; then
-                echo "Edge contract verified: $actual_revision"
+              rollout_ready=false
+              if [[ "$active_revision" == "$EXPECTED_CONTRACT_REVISION" || "$candidate_revision" == "$EXPECTED_CONTRACT_REVISION" ]]; then
+                rollout_ready=true
+              fi
+              connected_runtime_safe=true
+              if [[ "$connector_ready" == "true" && ( "$contract_compatible" != "true" || "$execution_plane_ready" != "true" ) ]]; then
+                connected_runtime_safe=false
+              fi
+              if [[ "$service" == "mcp-edge-gateway" && "$actual_revision" == "$EXPECTED_CONTRACT_REVISION" && "$control_plane_ready" == "true" && "$rollout_ready" == "true" && "$connected_runtime_safe" == "true" ]]; then
+                echo "Edge contract prepared: expected=$actual_revision active=$active_revision candidate=$candidate_revision"
                 exit 0
               fi
             fi
             sleep 5
           done
-          echo "Edge contract verification failed. Expected: $EXPECTED_CONTRACT_REVISION" >&2
+          echo "Edge contract prepare verification failed. Expected: $EXPECTED_CONTRACT_REVISION" >&2
           echo "$last_health" >&2
           exit 1
 

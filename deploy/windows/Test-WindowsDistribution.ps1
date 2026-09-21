@@ -222,6 +222,16 @@ Assert-ContainsAll -Label 'Windows detached cutover broker' -Source $broker -Tok
     'PreviousConnectorInstanceId',
     'executionPlaneReady',
     'contractCompatible',
+    'activeContractRevision',
+    'candidateContractRevision',
+    'Wait-McpEdgeCandidateHealth',
+    'Complete-McpEdgeContractPromotion',
+    '/_internal/contract-rollout/promote',
+    'Complete-McpEdgeContractRollback',
+    '/_internal/contract-rollout/rollback',
+    "failureStage = 'contract-promotion'",
+    "failureCode = 'CONTRACT_PROMOTION_FAILED'",
+    'contractPromotion',
     "failureStage = 'post-cutover-health'",
     "failureCode = 'CUTOVER_POST_HEALTH_FAILED'",
     'rollbackAttempted = $true',
@@ -231,31 +241,40 @@ Assert-ContainsAll -Label 'Windows detached cutover broker' -Source $broker -Tok
 )
 $handoverInstallIndex = $broker.IndexOf('$handoverTaskResult = & $edgeTaskInstaller @handoverEdgeParameters | ConvertFrom-Json')
 $handoverStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $handoverTaskName')
+$candidateHealthIndex = $broker.IndexOf('$handoverHealth = Wait-McpEdgeCandidateHealth')
 $handoverHealthIndex = $broker.IndexOf('$handoverHealth = Wait-McpEdgeCutoverHealth')
 $cutoverIndex = $broker.IndexOf('$cutoverCommitted = $true')
+$contractPromotionIndex = $broker.IndexOf('$contractPromotion = Complete-McpEdgeContractPromotion')
 $edgeStopIndex = $broker.IndexOf('Stop-McpScheduledTaskForReplacement -TaskName $edgeTaskName')
 $edgeInstallIndex = $broker.IndexOf('$edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json')
 $edgeStartIndex = $broker.IndexOf('Start-ScheduledTask -TaskName $edgeTaskName')
 $healthGateIndex = $broker.IndexOf('$healthGate = Wait-McpEdgeCutoverHealth')
 $browserStopIndex = $broker.IndexOf('Stop-McpScheduledTaskForReplacement -TaskName $browserTaskName')
 $handoverCleanupIndex = $broker.IndexOf('Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName')
+$recoveryConfigIndex = $broker.IndexOf('Write-McpEdgeTaskRecoveryConfig -Path $edgeRecoveryConfigPath -Value $edgeRecoveryConfig')
 $passedIndex = $broker.IndexOf("status = 'passed'")
-if ($handoverInstallIndex -lt 0 -or $handoverStartIndex -lt 0 -or $handoverHealthIndex -lt 0 -or
-    $cutoverIndex -lt 0 -or $edgeStopIndex -lt 0 -or $edgeInstallIndex -lt 0 -or
+if ($handoverInstallIndex -lt 0 -or $handoverStartIndex -lt 0 -or
+    ($candidateHealthIndex -lt 0 -and $handoverHealthIndex -lt 0) -or
+    $cutoverIndex -lt 0 -or $contractPromotionIndex -lt 0 -or
+    $edgeStopIndex -lt 0 -or $edgeInstallIndex -lt 0 -or
     $edgeStartIndex -lt 0 -or $healthGateIndex -lt 0 -or $handoverCleanupIndex -lt 0 -or
-    $passedIndex -lt 0 -or
+    $recoveryConfigIndex -lt 0 -or $contractPromotionIndex -lt 0 -or $passedIndex -lt 0 -or
     $handoverInstallIndex -ge $handoverStartIndex -or
-    $handoverStartIndex -ge $handoverHealthIndex -or
-    $handoverHealthIndex -ge $cutoverIndex -or
-    $cutoverIndex -ge $edgeStopIndex -or
+    ($candidateHealthIndex -ge 0 -and $handoverStartIndex -ge $candidateHealthIndex) -or
+    ($candidateHealthIndex -ge 0 -and $candidateHealthIndex -ge $cutoverIndex) -or
+    ($handoverHealthIndex -ge 0 -and $handoverStartIndex -ge $handoverHealthIndex) -or
+    ($handoverHealthIndex -ge 0 -and $handoverHealthIndex -ge $cutoverIndex) -or
+    $cutoverIndex -ge $contractPromotionIndex -or
+    $contractPromotionIndex -ge $edgeStopIndex -or
     $edgeStopIndex -ge $edgeInstallIndex -or
     $edgeInstallIndex -ge $edgeStartIndex -or
     $edgeStartIndex -ge $healthGateIndex -or
     ($browserStopIndex -ge 0 -and $healthGateIndex -ge $browserStopIndex) -or
     ($browserStopIndex -ge 0 -and $browserStopIndex -ge $handoverCleanupIndex) -or
     $healthGateIndex -ge $handoverCleanupIndex -or
-    $handoverCleanupIndex -ge $passedIndex) {
-    throw 'Detached cutover broker must keep the old owner ready until handover health passes, promote, health-check the canonical replacement, then replace browser state and remove the handover task before reporting success.'
+    $handoverCleanupIndex -ge $recoveryConfigIndex -or
+    $recoveryConfigIndex -ge $passedIndex) {
+    throw 'Detached cutover broker must keep the active contract serving while the candidate becomes ready, commit local lifecycle, promote the Edge contract, replace the canonical connector, health-check it, then finish cleanup/recovery before reporting success.'
 }
 $updater = Read-ProjectFile 'deploy\windows\Update-McpAccessStack.ps1'
 Assert-ContainsAll -Label 'Windows updater' -Source $updater -Tokens @(

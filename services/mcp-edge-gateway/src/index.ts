@@ -33,6 +33,52 @@ export default {
       const runtimeTelemetry = await session.getRuntimeTelemetry();
       return jsonResponse({ ...result, runtimeTelemetry });
     }
+    if (url.pathname === "/_internal/contract-rollout/promote" && request.method === "POST") {
+      const expectedToken = env.MCP_CONNECTOR_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" } });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return jsonResponse({ error: "invalid_contract_promotion_content_type" }, 415);
+      }
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return jsonResponse({ error: "contract_promotion_too_large" }, 413);
+      }
+      let input: unknown;
+      try { input = JSON.parse(body) as unknown; } catch {
+        return jsonResponse({ error: "invalid_contract_promotion" }, 400);
+      }
+      const result = JSON.parse(await session.promoteContractRollout(input)) as {
+        status: number;
+        body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
+    if (url.pathname === "/_internal/contract-rollout/rollback" && request.method === "POST") {
+      const expectedToken = env.MCP_CONNECTOR_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" } });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return jsonResponse({ error: "invalid_contract_rollback_content_type" }, 415);
+      }
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return jsonResponse({ error: "contract_rollback_too_large" }, 413);
+      }
+      let input: unknown;
+      try { input = JSON.parse(body) as unknown; } catch {
+        return jsonResponse({ error: "invalid_contract_rollback" }, 400);
+      }
+      const result = JSON.parse(await session.rollbackContractRollout(input)) as {
+        status: number;
+        body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
     if (url.pathname === "/_internal/owner-oauth/bootstrap" && request.method === "POST") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;
       if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);

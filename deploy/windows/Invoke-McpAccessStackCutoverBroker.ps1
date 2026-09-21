@@ -164,6 +164,8 @@ function Wait-McpEdgeCutoverHealth {
                 return [pscustomobject]@{
                     connectorInstanceId = $connectorInstanceId
                     catalogContractRevision = $catalogContractRevision
+                    activeContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'activeContractRevision')
+                    candidateContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateContractRevision')
                     controlPlaneReady = $controlPlaneReady
                     executionPlaneReady = $executionPlaneReady
                     connectorReady = $connectorReady
@@ -181,6 +183,179 @@ function Wait-McpEdgeCutoverHealth {
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
 
     throw "Edge post-cutover health gate failed after $TimeoutSeconds seconds. Last observation: $lastDiagnostic"
+}
+
+function Wait-McpEdgeCandidateHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,
+        [Parameter(Mandatory = $true)][string]$ExpectedCandidateContractRevision,
+        [AllowNull()][string]$PreviousConnectorInstanceId,
+        [ValidateRange(5, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastDiagnostic = 'no health response'
+    do {
+        try {
+            $health = Get-McpEdgeHealthSnapshot -EdgeBaseUrl $EdgeBaseUrl
+            $candidateRuntime = Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateRuntime'
+            $candidateConnectorReady = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateConnectorReady')
+            $connectorInstanceId = [string](Get-McpOptionalPropertyValue -InputObject $candidateRuntime -Name 'connectorInstanceId')
+            $catalogContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $candidateRuntime -Name 'catalogContractRevision')
+            $activeContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'activeContractRevision')
+            $candidateContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateContractRevision')
+            $service = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'service')
+            $controlPlaneReady = [bool](Get-McpOptionalPropertyValue -InputObject $health -Name 'controlPlaneReady')
+            $isNewConnector = -not [string]::IsNullOrWhiteSpace($connectorInstanceId) -and (
+                [string]::IsNullOrWhiteSpace($PreviousConnectorInstanceId) -or
+                $connectorInstanceId -ne $PreviousConnectorInstanceId
+            )
+
+            if ($service -eq 'mcp-edge-gateway' -and
+                $controlPlaneReady -and
+                $candidateConnectorReady -and
+                $candidateContractRevision -eq $ExpectedCandidateContractRevision -and
+                $catalogContractRevision -eq $ExpectedCandidateContractRevision -and
+                $isNewConnector) {
+                return [pscustomobject]@{
+                    connectorInstanceId = $connectorInstanceId
+                    catalogContractRevision = $catalogContractRevision
+                    activeContractRevision = $activeContractRevision
+                    candidateContractRevision = $candidateContractRevision
+                    candidateConnectorReady = $candidateConnectorReady
+                }
+            }
+
+            $lastDiagnostic = "service=$service control=$controlPlaneReady candidateReady=$candidateConnectorReady active=$activeContractRevision candidate=$candidateContractRevision candidateRuntime=$catalogContractRevision connectorInstanceId=$connectorInstanceId"
+        }
+        catch {
+            $lastDiagnostic = $_.Exception.Message
+        }
+
+        Start-Sleep -Milliseconds 500
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw "Edge candidate health gate failed after $TimeoutSeconds seconds. Last observation: $lastDiagnostic"
+}
+
+function Complete-McpEdgeContractPromotion {
+    param(
+        [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,
+        [Parameter(Mandatory = $true)][string]$ConnectorTokenFile,
+        [Parameter(Mandatory = $true)][string]$ExpectedActiveContractRevision,
+        [Parameter(Mandatory = $true)][string]$ExpectedCandidateContractRevision,
+        [ValidateRange(5, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $connectorToken = (Get-Content -LiteralPath $ConnectorTokenFile -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($connectorToken)) {
+        throw 'Edge contract promotion requires a non-empty connector token.'
+    }
+    $promotionUrl = $EdgeBaseUrl.TrimEnd('/') + '/_internal/contract-rollout/promote'
+    $payload = [ordered]@{
+        expectedActiveContractRevision = $ExpectedActiveContractRevision
+        expectedCandidateContractRevision = $ExpectedCandidateContractRevision
+    } | ConvertTo-Json -Compress
+    $requestError = $null
+    try {
+        $null = Invoke-RestMethod `
+            -Uri $promotionUrl `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $connectorToken" } `
+            -ContentType 'application/json' `
+            -Body $payload `
+            -TimeoutSec 5 `
+            -ErrorAction Stop
+    }
+    catch {
+        $requestError = $_.Exception.Message
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastDiagnostic = "requestError=$requestError no health response"
+    do {
+        try {
+            $health = Get-McpEdgeHealthSnapshot -EdgeBaseUrl $EdgeBaseUrl
+            $activeContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'activeContractRevision')
+            $candidateContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateContractRevision')
+            if ($activeContractRevision -eq $ExpectedCandidateContractRevision -and
+                [string]::IsNullOrWhiteSpace($candidateContractRevision)) {
+                return [pscustomobject]@{
+                    status = if ($null -eq $requestError) { 'promoted' } else { 'reconciled' }
+                    activeContractRevision = $activeContractRevision
+                    requestError = $requestError
+                }
+            }
+            $lastDiagnostic = "requestError=$requestError active=$activeContractRevision candidate=$candidateContractRevision"
+        }
+        catch {
+            $lastDiagnostic = "requestError=$requestError healthError=$($_.Exception.Message)"
+        }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw "Edge contract promotion did not reconcile after $TimeoutSeconds seconds. Last observation: $lastDiagnostic"
+}
+
+function Complete-McpEdgeContractRollback {
+    param(
+        [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,
+        [Parameter(Mandatory = $true)][string]$ConnectorTokenFile,
+        [Parameter(Mandatory = $true)][string]$ExpectedActiveContractRevision,
+        [Parameter(Mandatory = $true)][string]$ExpectedPreviousContractRevision,
+        [ValidateRange(5, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $connectorToken = (Get-Content -LiteralPath $ConnectorTokenFile -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($connectorToken)) {
+        throw 'Edge contract rollback requires a non-empty connector token.'
+    }
+    $rollbackUrl = $EdgeBaseUrl.TrimEnd('/') + '/_internal/contract-rollout/rollback'
+    $payload = [ordered]@{
+        expectedActiveContractRevision = $ExpectedActiveContractRevision
+        expectedPreviousContractRevision = $ExpectedPreviousContractRevision
+    } | ConvertTo-Json -Compress
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastDiagnostic = 'rollback not attempted'
+    do {
+        $requestError = $null
+        try {
+            $null = Invoke-RestMethod `
+                -Uri $rollbackUrl `
+                -Method Post `
+                -Headers @{ Authorization = "Bearer $connectorToken" } `
+                -ContentType 'application/json' `
+                -Body $payload `
+                -TimeoutSec 5 `
+                -ErrorAction Stop
+        }
+        catch {
+            $requestError = $_.Exception.Message
+        }
+
+        try {
+            $health = Get-McpEdgeHealthSnapshot -EdgeBaseUrl $EdgeBaseUrl
+            $activeContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'activeContractRevision')
+            $candidateContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $health -Name 'candidateContractRevision')
+            if ($activeContractRevision -eq $ExpectedPreviousContractRevision -and
+                $candidateContractRevision -eq $ExpectedActiveContractRevision) {
+                return [pscustomobject]@{
+                    status = if ($null -eq $requestError) { 'rolled-back' } else { 'reconciled' }
+                    activeContractRevision = $activeContractRevision
+                    candidateContractRevision = $candidateContractRevision
+                    requestError = $requestError
+                }
+            }
+            $lastDiagnostic = "requestError=$requestError active=$activeContractRevision candidate=$candidateContractRevision"
+        }
+        catch {
+            $lastDiagnostic = "requestError=$requestError healthError=$($_.Exception.Message)"
+        }
+
+        Start-Sleep -Milliseconds 500
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw "Edge contract rollback did not reconcile after $TimeoutSeconds seconds. Last observation: $lastDiagnostic"
 }
 
 if ([string]::IsNullOrWhiteSpace([string]$PSCommandPath)) {
@@ -344,15 +519,24 @@ Start-Sleep -Seconds ([int]$request.handoverDelaySeconds)
 $edgeTaskSnapshot = Get-McpScheduledTaskSnapshot -TaskName $edgeTaskName
 $browserTaskSnapshot = if ([bool]$browser.enabled) { Get-McpScheduledTaskSnapshot -TaskName $browserTaskName } else { $null }
 $previousConnectorInstanceId = $null
+$preparedActiveContractRevision = $null
+$preparedCandidateContractRevision = $null
 try {
     $previousHealth = Get-McpEdgeHealthSnapshot -EdgeBaseUrl ([string]$edge.edgeBaseUrl)
     $previousRuntime = Get-McpOptionalPropertyValue -InputObject $previousHealth -Name 'runtime'
     $previousConnectorInstanceId = [string](Get-McpOptionalPropertyValue -InputObject $previousRuntime -Name 'connectorInstanceId')
+    $preparedActiveContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $previousHealth -Name 'activeContractRevision')
+    $preparedCandidateContractRevision = [string](Get-McpOptionalPropertyValue -InputObject $previousHealth -Name 'candidateContractRevision')
 }
 catch {
     $previousConnectorInstanceId = $null
+    $preparedActiveContractRevision = $null
+    $preparedCandidateContractRevision = $null
 }
 $cutoverCommitted = $false
+$contractPromotionAttempted = $false
+$contractPromotionCommitted = $false
+$contractPromotionRequired = -not [string]::IsNullOrWhiteSpace($preparedCandidateContractRevision)
 $edgeTaskResult = $null
 $browserTaskResult = $null
 $failureStage = $null
@@ -379,10 +563,43 @@ try {
     Enable-ScheduledTask -TaskName $handoverTaskName | Out-Null
     Start-ScheduledTask -TaskName $handoverTaskName
 
-    $handoverHealth = Wait-McpEdgeCutoverHealth `
-        -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
-        -PreviousConnectorInstanceId $previousConnectorInstanceId
+    if ([string]::IsNullOrWhiteSpace($preparedActiveContractRevision)) {
+        $failureStage = 'contract-prepare'
+        $failureCode = 'CONTRACT_PREPARE_INVALID'
+        throw 'Edge contract prepare health is missing activeContractRevision.'
+    }
+
+    if ($contractPromotionRequired) {
+        $handoverHealth = Wait-McpEdgeCandidateHealth `
+            -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+            -ExpectedCandidateContractRevision $preparedCandidateContractRevision `
+            -PreviousConnectorInstanceId $previousConnectorInstanceId
+    }
+    else {
+        $handoverHealth = Wait-McpEdgeCutoverHealth `
+            -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+            -PreviousConnectorInstanceId $previousConnectorInstanceId
+    }
     $handoverConnectorInstanceId = [string]$handoverHealth.connectorInstanceId
+    $candidateRuntimeContractRevision = [string]$handoverHealth.catalogContractRevision
+    if ([string]$handoverHealth.activeContractRevision -ne $preparedActiveContractRevision -or
+        [string]$handoverHealth.candidateContractRevision -ne $preparedCandidateContractRevision) {
+        $failureStage = 'contract-prepare'
+        $failureCode = 'CONTRACT_PREPARE_CHANGED'
+        throw 'Edge contract prepare state changed while waiting for handover.'
+    }
+    if ($contractPromotionRequired) {
+        if ($preparedCandidateContractRevision -ne $candidateRuntimeContractRevision) {
+            $failureStage = 'contract-prepare'
+            $failureCode = 'CONTRACT_PREPARE_INVALID'
+            throw 'Edge contract candidate does not match the handover connector runtime.'
+        }
+    }
+    elseif ($preparedActiveContractRevision -ne $candidateRuntimeContractRevision) {
+        $failureStage = 'contract-prepare'
+        $failureCode = 'CONTRACT_PREPARE_INVALID'
+        throw 'Edge stable contract does not match the handover connector runtime.'
+    }
 
     $cutoverResult = & $cutoverScript `
         -InstallationRoot $installation `
@@ -395,6 +612,38 @@ try {
         throw 'Execution-node Edge-only cutover returned unexpected evidence.'
     }
     $cutoverCommitted = $true
+
+    $contractPromotion = [pscustomobject]@{
+        status = 'not-required'
+        activeContractRevision = $preparedActiveContractRevision
+        requestError = $null
+    }
+    if ($contractPromotionRequired) {
+        try {
+            $contractPromotionAttempted = $true
+            $contractPromotion = Complete-McpEdgeContractPromotion `
+                -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+                -ConnectorTokenFile ([string]$edge.connectorTokenFile) `
+                -ExpectedActiveContractRevision $preparedActiveContractRevision `
+                -ExpectedCandidateContractRevision $preparedCandidateContractRevision
+            $contractPromotionCommitted = $true
+
+            $promotedHandoverHealth = Wait-McpEdgeCutoverHealth `
+                -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+                -PreviousConnectorInstanceId $previousConnectorInstanceId
+            if ([string]$promotedHandoverHealth.connectorInstanceId -ne $handoverConnectorInstanceId -or
+                [string]$promotedHandoverHealth.catalogContractRevision -ne $preparedCandidateContractRevision -or
+                [string]$promotedHandoverHealth.activeContractRevision -ne $preparedCandidateContractRevision -or
+                -not [string]::IsNullOrWhiteSpace([string]$promotedHandoverHealth.candidateContractRevision)) {
+                throw 'Edge contract promotion did not transfer execution to the handover connector.'
+            }
+        }
+        catch {
+            $failureStage = 'contract-promotion'
+            $failureCode = 'CONTRACT_PROMOTION_FAILED'
+            throw
+        }
+    }
 
     Stop-McpScheduledTaskForReplacement -TaskName $edgeTaskName
     $edgeTaskResult = & $edgeTaskInstaller @edgeParameters | ConvertFrom-Json
@@ -441,7 +690,21 @@ try {
     }
     Write-McpEdgeTaskRecoveryConfig -Path $edgeRecoveryConfigPath -Value $edgeRecoveryConfig
 
-    Write-McpCutoverBrokerResult -Value ([ordered]@{
+    $expectedFinalActiveContractRevision = if ($contractPromotionRequired) {
+        $preparedCandidateContractRevision
+    }
+    else {
+        $preparedActiveContractRevision
+    }
+    if ([string]$healthGate.catalogContractRevision -ne $candidateRuntimeContractRevision -or
+        [string]$healthGate.activeContractRevision -ne $expectedFinalActiveContractRevision -or
+        -not [string]::IsNullOrWhiteSpace([string]$healthGate.candidateContractRevision)) {
+        $failureStage = 'post-cutover-health'
+        $failureCode = 'CUTOVER_CONTRACT_STATE_INVALID'
+        throw 'Canonical Edge health does not match the final promoted contract state.'
+    }
+
+    $successResult = [ordered]@{
         schemaVersion = 1
         requestId = [string]$request.requestId
         releaseId = $releaseId
@@ -459,8 +722,21 @@ try {
             connectorReady = [bool]$healthGate.connectorReady
             contractCompatible = [bool]$healthGate.contractCompatible
         }
+        contractPromotion = [ordered]@{
+            required = [bool]$contractPromotionRequired
+            status = [string]$contractPromotion.status
+            activeContractRevision = [string]$contractPromotion.activeContractRevision
+            requestError = if ($null -eq $contractPromotion.requestError) { $null } else { [string]$contractPromotion.requestError }
+        }
         recoveryConfig = $edgeRecoveryConfigPath
-    })
+    }
+    try {
+        Write-McpCutoverBrokerResult -Value $successResult
+    }
+    catch {
+        [Console]::Error.WriteLine('Cutover completed and contract promotion committed, but result persistence failed: ' + $_.Exception.Message)
+        exit 2
+    }
     exit 0
 }
 catch {
@@ -469,6 +745,9 @@ catch {
     $rollbackAttempted = $false
     $rollbackStatus = 'not-attempted'
     $rollbackRestoredReleaseId = $null
+    $contractRollbackAttempted = $false
+    $contractRollbackStatus = 'not-attempted'
+    $contractRollbackActiveRevision = $null
 
     if ($cutoverCommitted) {
         $rollbackAttempted = $true
@@ -493,7 +772,26 @@ catch {
         catch { $recoveryErrors.Add("browser task restore: $($_.Exception.Message)") }
     }
 
-    if ($handoverTaskCreated) {
+    if ($contractPromotionAttempted) {
+        $contractRollbackAttempted = $true
+        try {
+            $contractRollback = Complete-McpEdgeContractRollback `
+                -EdgeBaseUrl ([string]$edge.edgeBaseUrl) `
+                -ConnectorTokenFile ([string]$edge.connectorTokenFile) `
+                -ExpectedActiveContractRevision $preparedCandidateContractRevision `
+                -ExpectedPreviousContractRevision $preparedActiveContractRevision
+            $contractRollbackStatus = [string]$contractRollback.status
+            $contractRollbackActiveRevision = [string]$contractRollback.activeContractRevision
+        }
+        catch {
+            $contractRollbackStatus = 'failed'
+            $recoveryErrors.Add("contract rollback: $($_.Exception.Message)")
+        }
+    }
+
+    $canRemoveHandoverTask = -not $contractPromotionAttempted -or
+        ($contractRollbackAttempted -and $contractRollbackStatus -in @('rolled-back', 'reconciled'))
+    if ($handoverTaskCreated -and $canRemoveHandoverTask) {
         try {
             Remove-McpScheduledTaskIfPresent -TaskName $handoverTaskName
             $handoverTaskCreated = $false
@@ -522,6 +820,12 @@ catch {
             attempted = $rollbackAttempted
             status = $rollbackStatus
             restoredReleaseId = $rollbackRestoredReleaseId
+        }
+        contractRollback = [ordered]@{
+            attempted = $contractRollbackAttempted
+            status = $contractRollbackStatus
+            activeContractRevision = $contractRollbackActiveRevision
+            handoverRetained = [bool]($handoverTaskCreated -and -not $canRemoveHandoverTask)
         }
         error = $errorMessage
     })

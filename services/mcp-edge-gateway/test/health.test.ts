@@ -20,6 +20,7 @@ describe("Edge health plane separation", () => {
         connectorReady: false,
         contractCompatible: false,
         expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
       },
     });
   });
@@ -41,6 +42,7 @@ describe("Edge health plane separation", () => {
         connectorReady: true,
         contractCompatible: false,
         expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
       },
     });
   });
@@ -60,6 +62,7 @@ describe("Edge health plane separation", () => {
         connectorReady: true,
         contractCompatible: true,
         expectedContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
       },
     });
   });

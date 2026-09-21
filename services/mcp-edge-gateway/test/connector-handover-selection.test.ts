@@ -53,6 +53,22 @@ describe("connector handover ownership selection", () => {
     expect(isPreferredConnectorRuntime(reconnectedOldProcess, activeNewProcess)).toBe(false);
   });
 
+  it("prefers the newer connection generation for the same connector process", () => {
+    const previousConnection = runtime(
+      "22222222-2222-4222-8222-222222222222",
+      "2026-09-19T12:01:00.000Z",
+      1,
+    );
+    const reconnected = runtime(
+      "22222222-2222-4222-8222-222222222222",
+      "2026-09-19T12:01:00.000Z",
+      5,
+    );
+
+    expect(isPreferredConnectorRuntime(reconnected, previousConnection)).toBe(true);
+    expect(isPreferredConnectorRuntime(previousConnection, reconnected)).toBe(false);
+  });
+
   it("uses connector instance id only as a deterministic tie breaker", () => {
     const left = runtime(
       "11111111-1111-4111-8111-111111111111",
