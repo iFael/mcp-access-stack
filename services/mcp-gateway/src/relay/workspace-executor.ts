@@ -11,6 +11,9 @@ import {
   listWorkspaceRootsResultSchema,
   listWorkspacesResultSchema,
   patchFileResultSchema,
+  getReleaseStateResultSchema,
+  prepareReleaseResultSchema,
+  promoteReleaseResultSchema,
   readFileResultSchema,
   readBinaryFileResultSchema,
   runWorkspaceValidationResultSchema,
@@ -28,6 +31,9 @@ import {
   type ListWorkspaceRootsInput,
   type OperationContext,
   type PatchFileInput,
+  type GetReleaseStateInput,
+  type PrepareReleaseInput,
+  type PromoteReleaseInput,
   type ReadBackgroundTaskLogsInput,
   type ReadBackgroundTaskOutputInput,
   type ReadFileInput,
@@ -104,6 +110,24 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
 
   async patchFile(input: PatchFileInput, context?: OperationContext) {
     return patchFileResultSchema.parse(await this.relay.call("patchFile", input, context));
+  }
+
+  async getReleaseState(input: GetReleaseStateInput, context?: OperationContext) {
+    return getReleaseStateResultSchema.parse(
+      await this.relay.call("getReleaseState", input, context),
+    );
+  }
+
+  async prepareRelease(input: PrepareReleaseInput, context?: OperationContext) {
+    return prepareReleaseResultSchema.parse(
+      await this.relay.call("prepareRelease", input, context),
+    );
+  }
+
+  async promoteRelease(input: PromoteReleaseInput, context?: OperationContext) {
+    return promoteReleaseResultSchema.parse(
+      await this.relay.call("promoteRelease", input, context),
+    );
   }
 
   async runValidation(

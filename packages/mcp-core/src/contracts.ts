@@ -51,6 +51,14 @@ import {
   writeBackgroundTaskStdinInputSchema,
 } from "./background-task-contracts.js";
 import { commandConfirmationRequiredResultSchema } from "./command-confirmation-contracts.js";
+import {
+  getReleaseStateInputSchema,
+  getReleaseStateResultSchema,
+  prepareReleaseInputSchema,
+  prepareReleaseResultSchema,
+  promoteReleaseInputSchema,
+  promoteReleaseResultSchema,
+} from "./release-lifecycle-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const relativePathSchema = z.string().min(1);
@@ -658,6 +666,9 @@ export const relayOperations = [
   "readBinaryFile",
   "writeFile",
   "patchFile",
+  "getReleaseState",
+  "prepareRelease",
+  "promoteRelease",
   "runValidation",
   "runCommand",
   "searchFiles",
@@ -721,6 +732,21 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     ...relayRequestBase,
     operation: z.literal("patchFile"),
     input: patchFileInputSchema,
+  }).strict(),
+  z.object({
+    ...relayRequestBase,
+    operation: z.literal("getReleaseState"),
+    input: getReleaseStateInputSchema,
+  }).strict(),
+  z.object({
+    ...relayRequestBase,
+    operation: z.literal("prepareRelease"),
+    input: prepareReleaseInputSchema,
+  }).strict(),
+  z.object({
+    ...relayRequestBase,
+    operation: z.literal("promoteRelease"),
+    input: promoteReleaseInputSchema,
   }).strict(),
   z.object({
     ...relayRequestBase,
@@ -870,6 +896,9 @@ export const relayResultSchemas = {
   readBinaryFile: readBinaryFileResultSchema,
   writeFile: writeFileResultSchema,
   patchFile: patchFileResultSchema,
+  getReleaseState: getReleaseStateResultSchema,
+  prepareRelease: prepareReleaseResultSchema,
+  promoteRelease: promoteReleaseResultSchema,
   runValidation: runWorkspaceValidationResultSchema,
   runCommand: runCommandResultSchema,
   searchFiles: searchFilesResultSchema,

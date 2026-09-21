@@ -98,12 +98,32 @@ describe("gateway HTTP surface", () => {
         openWorldHint: false,
         idempotentHint: false,
       });
+      const prepareReleaseTool = body.result.tools.find(
+        (tool) => tool.name === "prepare_release",
+      );
+      expect(prepareReleaseTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
+      const promoteReleaseTool = body.result.tools.find(
+        (tool) => tool.name === "promote_release",
+      );
+      expect(promoteReleaseTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: true,
+        idempotentHint: false,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
           ![
             "write_file",
             "patch_file",
+            "prepare_release",
+            "promote_release",
             "run_command",
             "start_background_task",
             "cancel_background_task",

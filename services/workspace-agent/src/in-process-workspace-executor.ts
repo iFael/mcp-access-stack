@@ -20,6 +20,12 @@ import type {
   OperationContext,
   PatchFileInput,
   PatchFileResult,
+  GetReleaseStateInput,
+  GetReleaseStateResult,
+  PrepareReleaseInput,
+  PrepareReleaseResult,
+  PromoteReleaseInput,
+  PromoteReleaseResult,
   ReadBackgroundTaskLogsInput,
   ReadBackgroundTaskOutputInput,
   ReadFileInput,
@@ -80,6 +86,27 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
 
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult> {
     return this.agent.patchFile(input, context);
+  }
+
+  getReleaseState(
+    input: GetReleaseStateInput,
+    context?: OperationContext,
+  ): Promise<GetReleaseStateResult> {
+    return this.agent.getReleaseState(input, context);
+  }
+
+  prepareRelease(
+    input: PrepareReleaseInput,
+    context?: OperationContext,
+  ): Promise<PrepareReleaseResult> {
+    return this.agent.prepareRelease(input, context);
+  }
+
+  promoteRelease(
+    input: PromoteReleaseInput,
+    context?: OperationContext,
+  ): Promise<PromoteReleaseResult> {
+    return this.agent.promoteRelease(input, context);
   }
 
   runValidation(

@@ -24,6 +24,12 @@ export async function dispatchRelayRequest(
       return agent.writeFile(request.input, context);
     case "patchFile":
       return agent.patchFile(request.input, context);
+    case "getReleaseState":
+      return agent.getReleaseState(request.input, context);
+    case "prepareRelease":
+      return agent.prepareRelease(request.input, context);
+    case "promoteRelease":
+      return agent.promoteRelease(request.input, context);
     case "runValidation":
       return agent.runValidation(request.input, context);
     case "runCommand":

@@ -137,6 +137,55 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async getReleaseState(): Promise<import("@vs-code-gpt/shared").GetReleaseStateResult> {
+    this.calls.push("getReleaseState");
+    return {
+      workspaceId: "ws",
+      installationRoot: "C:\\McpAccessStack",
+      state: {
+        version: 1,
+        active: {
+          releaseId: "1.1.0-beta.49",
+          manifestSha256: "0".repeat(64),
+          materializedAt: "2026-09-21T00:00:00.000Z",
+        },
+        candidate: null,
+        previous: null,
+        updatedAt: "2026-09-21T00:00:00.000Z",
+      },
+      activeBootstrap: {
+        updateScriptPresent: true,
+        cutoverScriptPresent: true,
+      },
+    };
+  }
+
+  async prepareRelease(
+    input: import("@vs-code-gpt/shared").PrepareReleaseInput,
+  ): Promise<import("@vs-code-gpt/shared").PrepareReleaseResult> {
+    this.calls.push("prepareRelease");
+    return {
+      status: "background_task_started",
+      tag: input.tag,
+      task: { ...backgroundTask, operation: "prepare_release" },
+    };
+  }
+
+  async promoteRelease(
+    input: import("@vs-code-gpt/shared").PromoteReleaseInput,
+  ): Promise<import("@vs-code-gpt/shared").PromoteReleaseResult> {
+    this.calls.push("promoteRelease");
+    return {
+      status: "handover_started",
+      releaseId: input.releaseId,
+      requestId: "123e4567-e89b-42d3-a456-426614174001",
+      brokerTaskName: "MCP Access Stack production cutover-broker",
+      resultPath: "C:\\McpAccessStack\\state\\result.json",
+      installationRoot: "C:\\McpAccessStack",
+      projectRoot: "C:\\Project\\mcp-access-stack",
+    };
+  }
+
   async runValidation(): Promise<RunWorkspaceValidationResult> {
     this.calls.push("runValidation");
     return {
@@ -745,6 +794,67 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toContain("patchFile");
   });
 
+  it("publishes typed release lifecycle tools with risk-specific annotations", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["get_release_state", "prepare_release", "promote_release"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tools = registeredTools(server);
+    expect(tools["get_release_state"]!.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+    expect(tools["prepare_release"]!.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+      idempotentHint: true,
+    });
+    expect(tools["promote_release"]!.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+      idempotentHint: false,
+    });
+
+    const signal = new AbortController().signal;
+    const state = await tools["get_release_state"]!.handler(
+      { workspaceId: "ws" },
+      { signal },
+    );
+    const prepared = await tools["prepare_release"]!.handler(
+      { workspaceId: "ws", tag: "v1.1.0-beta.50" },
+      { signal },
+    );
+    const promoted = await tools["promote_release"]!.handler(
+      { workspaceId: "ws", releaseId: "1.1.0-beta.50" },
+      { signal },
+    );
+
+    expect(state.isError).not.toBe(true);
+    expect(prepared.structuredContent).toMatchObject({
+      status: "background_task_started",
+      tag: "v1.1.0-beta.50",
+    });
+    expect(promoted.structuredContent).toMatchObject({
+      status: "handover_started",
+      releaseId: "1.1.0-beta.50",
+    });
+    expect(executor.calls).toEqual([
+      "getReleaseState",
+      "prepareRelease",
+      "promoteRelease",
+    ]);
+  });
+
   it("gets multiple background tasks in one tool call and preserves order", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -981,8 +1091,8 @@ describe("registerSourceControlTools", () => {
   it("publishes exactly eleven source-control names inside the 33-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(33);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(33);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(36);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(36);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {
