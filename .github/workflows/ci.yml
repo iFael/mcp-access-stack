@@ -150,6 +150,10 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.edgeGateway == 'true')
         run: npm run check:edge
 
+      - name: Validate Edge manifest parity
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.edgeGateway == 'true')
+        run: npm run test:mcp-edge-manifest
+
       - name: Validate operations and policy scripts
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.operationsTooling == 'true')
         run: npm run check:operations

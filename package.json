@@ -48,6 +48,7 @@
     "test:workspace-agent:e2e": "node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --selectProjects workspace-agent-e2e",
     "test:mcp-gateway": "node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand",
     "test:mcp-edge-gateway": "node tooling/testing/run-jest.mjs --config services/mcp-edge-gateway/jest.config.ts --runInBand",
+    "test:mcp-edge-manifest": "node tooling/testing/run-jest.mjs --config services/mcp-edge-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-edge-gateway/test/manifest-parity.test.ts",
     "test:mcp-gateway:unit": "node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --selectProjects mcp-gateway-unit",
     "test:mcp-gateway:integration": "node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --selectProjects mcp-gateway-integration",
     "test:mcp-gateway:e2e": "node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --selectProjects mcp-gateway-e2e",
