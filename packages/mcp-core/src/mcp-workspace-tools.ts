@@ -1348,6 +1348,9 @@ function backgroundStartContext(context: OperationContext): OperationContext {
     ...(context.correlationId === undefined
       ? {}
       : { correlationId: context.correlationId }),
+    ...(context.ownerScope === undefined
+      ? {}
+      : { ownerScope: context.ownerScope }),
     deadline: createOperationDeadline(QUICK_OPERATION_TIMEOUT_MS, undefined),
   };
 }

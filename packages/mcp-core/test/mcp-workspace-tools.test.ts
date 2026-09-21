@@ -11,6 +11,7 @@ import type {
   GetBackgroundTaskInput,
   GetWorkspaceContextResult,
   InspectGitResult,
+  OperationContext,
   ListFilesResult,
   ListWorkspaceRootsResult,
   ReadBackgroundTaskOutputInput,
@@ -52,6 +53,7 @@ const backgroundTask = {
 class MockWorkspaceExecutor implements WorkspaceExecutor {
   calls: string[] = [];
   backgroundInputs: StartBackgroundTaskInput[] = [];
+  backgroundContexts: OperationContext[] = [];
   readFileFailures = new Set<string>();
   searchFailures = new Set<string>();
 
@@ -210,9 +212,11 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
 
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
+    context: OperationContext = {},
   ): Promise<StartBackgroundTaskResult> {
     this.calls.push("startBackgroundTask");
     this.backgroundInputs.push(input);
+    this.backgroundContexts.push(context);
     return {
       status: "background_task_started",
       task: {
@@ -595,6 +599,37 @@ describe("registerWorkspaceTools", () => {
         confirmationId: "long-command-confirmation",
       }),
     ]);
+  });
+
+  it("preserves ownerScope when a long run_command routes to background", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_command"],
+      securitySchemes: [{ type: "noauth" }],
+      operationContextFactory: () => ({
+        context: { ownerScope: "openai-session:auto-route-owner" },
+        release: () => undefined,
+      }),
+    });
+
+    await registeredTools(server)["run_command"]!.handler(
+      {
+        workspaceId: "ws",
+        shell: "powershell",
+        command: "Start-Sleep -Seconds 61",
+        timeoutMs: 60_001,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(executor.backgroundContexts).toHaveLength(1);
+    expect(executor.backgroundContexts[0]).toMatchObject({
+      ownerScope: "openai-session:auto-route-owner",
+    });
   });
 
   it("preserves confirmationId when a long run_command routes to background", async () => {
