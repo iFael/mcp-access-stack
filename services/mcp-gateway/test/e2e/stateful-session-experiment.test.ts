@@ -32,7 +32,7 @@ describe("stateful MCP experiment", () => {
       };
 
       expect(listed.status).toBe(200);
-      expect(listedBody.result?.tools).toHaveLength(69);
+      expect(listedBody.result?.tools).toHaveLength(70);
       expect(listedBody.result?.tools?.map((tool) => tool.name)).toContain(
         "patch_file",
       );
@@ -93,7 +93,7 @@ describe("stateful MCP experiment", () => {
 
       expect(listed.status).toBe(200);
       expect(listed.headers.get("mcp-session-id")).toBeNull();
-      expect(listedBody.result?.tools).toHaveLength(69);
+      expect(listedBody.result?.tools).toHaveLength(70);
 
       const called = await postMcp(fixture.url, {
         jsonrpc: "2.0",
