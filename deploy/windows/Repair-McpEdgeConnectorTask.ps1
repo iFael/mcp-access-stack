@@ -74,6 +74,10 @@ if ([int]$config.schemaVersion -ne 1) {
     throw 'Unsupported Edge Connector recovery configuration version.'
 }
 $taskName = [string](Get-RequiredProperty -InputObject $config -Name 'taskName')
+$projectRoot = [IO.Path]::GetFullPath([string](Get-RequiredProperty -InputObject $config -Name 'projectRoot'))
+if (-not (Test-Path -LiteralPath $projectRoot -PathType Container)) {
+    throw "Edge Connector recovery project root was not found: $projectRoot"
+}
 $runtimeRoot = [IO.Path]::GetFullPath([string](Get-RequiredProperty -InputObject $config -Name 'runtimeRoot'))
 $edgeBaseUrl = [string](Get-RequiredProperty -InputObject $config -Name 'edgeBaseUrl')
 $connectorTokenFile = [IO.Path]::GetFullPath([string](Get-RequiredProperty -InputObject $config -Name 'connectorTokenFile'))
@@ -94,6 +98,7 @@ $plan = [ordered]@{
     status = if ($Execute) { 'ready-to-repair' } else { 'planned' }
     installationRoot = $installation
     taskName = $taskName
+    projectRoot = $projectRoot
     activeReleaseId = $releaseId
     activeManifestSha256 = $activeManifestSha256
     configPath = $configPath
@@ -107,6 +112,7 @@ if (-not $Execute) {
 
 $parameters = @{
     InstallationRoot = $installation
+    ProjectRoot = $projectRoot
     ReleaseId = $releaseId
     RuntimeRoot = $runtimeRoot
     EdgeBaseUrl = $edgeBaseUrl

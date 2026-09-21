@@ -4,6 +4,9 @@ param(
     [string]$ReleaseRoot,
 
     [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot,
+
+    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[a-f0-9]{64}$')]
     [string]$ExpectedManifestSha256,
 
@@ -122,7 +125,11 @@ function Read-McpEdgeBrowserToken {
     return $token
 }
 $release = [IO.Path]::GetFullPath($ReleaseRoot)
+$project = [IO.Path]::GetFullPath($ProjectRoot)
 $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
+if (-not (Test-Path -LiteralPath $project -PathType Container)) {
+    throw "Project root was not found: $project"
+}
 $manifestPath = Join-Path $release 'execution-node-manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw 'Execution-node manifest was not found in the Edge Connector release.'
@@ -198,6 +205,7 @@ if ($ValidateOnly) {
     [pscustomobject]@{
         status = 'validated'
         releaseRoot = $release
+        projectRoot = $project
         executionManifestSha256 = $actualManifestSha256
         edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority)
         mcpSessionMode = $McpSessionMode
@@ -217,6 +225,7 @@ $stderrLog = Join-Path $logs 'edge-connector.stderr.log'
 $env:MCP_EDGE_BASE_URL = $edgeUri.GetLeftPart([UriPartial]::Authority)
 $env:MCP_CONNECTOR_TOKEN_FILE = $connectorTokenPath
 $env:VS_CODE_GPT_POLICY_PATH = $policy
+$env:VS_CODE_GPT_STACK_ROOT = $project
 $env:MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS = [string]$MaxConcurrentRequests
 $env:MCP_SESSION_MODE = $McpSessionMode
 $env:AUTH_MODE = 'owner'
@@ -241,6 +250,7 @@ try {
 }
 finally {
     $env:MCP_SESSION_MODE = $null
+    $env:VS_CODE_GPT_STACK_ROOT = $null
     $env:OWNER_TOKEN = $null
     $env:BROWSER_WORKER_TOKEN = $null
     $ownerToken = $null

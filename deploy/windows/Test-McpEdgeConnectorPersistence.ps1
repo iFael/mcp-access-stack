@@ -16,6 +16,8 @@ $launcherContent = Get-Content -LiteralPath $launcherSource -Raw
 $installerContent = Get-Content -LiteralPath $installer -Raw
 foreach ($required in @(
     'ExpectedManifestSha256',
+    'ProjectRoot',
+    'VS_CODE_GPT_STACK_ROOT',
     "'edge-connector'",
     "'edge-validation-launcher'",
     "'node-runtime'",
@@ -40,6 +42,8 @@ foreach ($required in @(
     '-RestartCount 5',
     '-RunLevel Limited',
     'McpEdgeHost.exe',
+    'ProjectRoot',
+    '--project-root',
     '--connector-token-file',
     '--owner-token-file',
     '--mcp-session-mode',
@@ -70,6 +74,7 @@ foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OW
 }
 
 $fixtureRoot = Join-Path $env:TEMP ('mcp-edge-persistence-' + [guid]::NewGuid().ToString('N'))
+$projectRoot = Join-Path $fixtureRoot 'project'
 $releaseRoot = Join-Path $fixtureRoot 'release'
 $runtimeRoot = Join-Path $fixtureRoot 'private-runtime'
 $launcher = Join-Path $releaseRoot 'deploy\windows\Start-McpEdgeConnector.ps1'
@@ -95,7 +100,8 @@ try {
         (Split-Path -Parent $edgeHost), `
         (Split-Path -Parent $browserServer), `
         (Split-Path -Parent $browserLauncher), `
-        $runtimeRoot | Out-Null
+        $runtimeRoot, `
+        $projectRoot | Out-Null
     Copy-Item -LiteralPath $launcherSource -Destination $launcher
     [IO.File]::WriteAllText($edgeCli, "console.log('edge-fixture');`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($nodePath, 'node-fixture', [Text.UTF8Encoding]::new($false))
@@ -155,6 +161,7 @@ try {
         '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', $launcher,
         '-ReleaseRoot', $releaseRoot,
+        '-ProjectRoot', $projectRoot,
         '-ExpectedManifestSha256', $manifestHash,
         '-RuntimeRoot', $runtimeRoot,
         '-EdgeBaseUrl', 'https://mcp-access-stack.example.workers.dev',
@@ -172,7 +179,10 @@ try {
         throw 'Edge Connector launcher leaked a fixture secret.'
     }
     $validation = $validationText | ConvertFrom-Json
+    $expectedProjectRoot = [IO.Path]::GetFullPath((Get-Item -LiteralPath $projectRoot).FullName)
+    $observedProjectRoot = [IO.Path]::GetFullPath((Get-Item -LiteralPath ([string]$validation.projectRoot)).FullName)
     if ([string]$validation.status -ne 'validated' -or
+        -not $observedProjectRoot.Equals($expectedProjectRoot, [StringComparison]::OrdinalIgnoreCase) -or
         [string]$validation.executionManifestSha256 -ne $manifestHash -or
         [string]$validation.mcpSessionMode -ne 'stateless' -or
         $validation.browserEnabled -ne $false) {
@@ -218,6 +228,7 @@ try {
 
     $planOutput = @(& pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer `
         -InstallationRoot (Join-Path $fixtureRoot 'installation') `
+        -ProjectRoot $projectRoot `
         -ReleaseId 'edge-fixture' `
         -RuntimeRoot $runtimeRoot `
         -EdgeBaseUrl 'https://mcp-access-stack.example.workers.dev' `
@@ -239,7 +250,9 @@ try {
         throw 'Edge Connector task installer leaked a fixture secret.'
     }
     $plan = $planText | ConvertFrom-Json
+    $observedPlanProjectRoot = [IO.Path]::GetFullPath((Get-Item -LiteralPath ([string]$plan.plan.projectRoot)).FullName)
     if ([string]$plan.status -ne 'planned' -or
+        -not $observedPlanProjectRoot.Equals($expectedProjectRoot, [StringComparison]::OrdinalIgnoreCase) -or
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
         [string]$plan.plan.processSubsystem -ne 'windows-gui' -or

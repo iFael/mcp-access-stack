@@ -229,6 +229,7 @@ finally {
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$InstallationRoot,
+    [Parameter(Mandatory = $true)][string]$ProjectRoot,
     [Parameter(Mandatory = $true)][string]$ReleaseId,
     [Parameter(Mandatory = $true)][string]$RuntimeRoot,
     [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,

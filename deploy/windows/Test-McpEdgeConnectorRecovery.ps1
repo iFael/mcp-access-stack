@@ -25,6 +25,7 @@ function Write-TestJson {
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mcp-edge-repair-' + [guid]::NewGuid().ToString('N'))
 $installationRoot = Join-Path $testRoot 'installation'
+$projectRoot = Join-Path $testRoot 'project'
 $releaseId = '1.1.0-beta.repair-fixture'
 $releaseRoot = Join-Path $installationRoot "releases\$releaseId"
 $releaseScripts = Join-Path $releaseRoot 'deploy\windows'
@@ -48,13 +49,14 @@ function Start-ScheduledTask {
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path $releaseScripts | Out-Null
+    New-Item -ItemType Directory -Force -Path $releaseScripts, $projectRoot | Out-Null
     Copy-Item -LiteralPath $repairSource -Destination (Join-Path $releaseScripts 'Repair-McpEdgeConnectorTask.ps1')
 
     $fixtureInstaller = @'
 [CmdletBinding()]
 param(
     [string]$InstallationRoot,
+    [string]$ProjectRoot,
     [string]$ReleaseId,
     [string]$RuntimeRoot,
     [string]$EdgeBaseUrl,
@@ -81,6 +83,7 @@ if ($env:MCP_EDGE_REPAIR_REQUIRE_FORCE -eq 'true' -and -not $Force) {
 $status = if ([string]::IsNullOrWhiteSpace([string]$env:MCP_EDGE_REPAIR_INSTALLER_STATUS)) { 'installed' } else { [string]$env:MCP_EDGE_REPAIR_INSTALLER_STATUS }
 $record = [ordered]@{
     installationRoot = $InstallationRoot
+    projectRoot = $ProjectRoot
     releaseId = $ReleaseId
     runtimeRoot = $RuntimeRoot
     edgeBaseUrl = $EdgeBaseUrl
@@ -126,6 +129,7 @@ $record = [ordered]@{
     Write-TestJson -Path (Join-Path $installationRoot 'state\edge-task-config.v1.json') -Value ([ordered]@{
         schemaVersion = 1
         taskName = $taskName
+        projectRoot = $projectRoot
         runtimeRoot = (Join-Path $installationRoot 'runtime\edge-connector')
         edgeBaseUrl = 'https://edge.example'
         connectorTokenFile = (Join-Path $installationRoot 'secrets\connector-token.txt')
@@ -147,6 +151,7 @@ $record = [ordered]@{
     if ($plan.Count -ne 1) { throw 'Recovery plan must emit exactly one JSON document.' }
     $planValue = [string]$plan[0] | ConvertFrom-Json
     if ([string]$planValue.status -ne 'planned' -or
+        [string]$planValue.projectRoot -ne $projectRoot -or
         [string]$planValue.activeReleaseId -ne $releaseId -or
         $planValue.execute -ne $false -or
         (Test-Path -LiteralPath $capturePath)) {
@@ -174,6 +179,7 @@ $record = [ordered]@{
 
     $capture = Get-Content -LiteralPath $capturePath -Raw | ConvertFrom-Json
     if ([string]$capture.releaseId -ne $releaseId -or
+        [string]$capture.projectRoot -ne $projectRoot -or
         [string]$capture.taskName -ne $taskName -or
         [string]$capture.mcpSessionMode -ne 'stateful-experiment' -or
         $capture.execute -ne $true -or

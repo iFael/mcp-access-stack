@@ -72,6 +72,7 @@ internal static class Program
     private sealed class Options
     {
         public string ReleaseRoot = string.Empty;
+        public string ProjectRoot = string.Empty;
         public string ExpectedManifestSha256 = string.Empty;
         public string RuntimeRoot = string.Empty;
         public string EdgeBaseUrl = string.Empty;
@@ -258,6 +259,7 @@ internal static class Program
             }
 
             if (name == "--release-root") options.ReleaseRoot = value;
+            else if (name == "--project-root") options.ProjectRoot = value;
             else if (name == "--expected-manifest-sha256") options.ExpectedManifestSha256 = value;
             else if (name == "--runtime-root") options.RuntimeRoot = value;
             else if (name == "--edge-base-url") options.EdgeBaseUrl = value;
@@ -281,6 +283,7 @@ internal static class Program
     private static bool IsAllowedOption(string value)
     {
         return value == "--release-root" ||
+            value == "--project-root" ||
             value == "--expected-manifest-sha256" ||
             value == "--runtime-root" ||
             value == "--edge-base-url" ||
@@ -301,6 +304,7 @@ internal static class Program
     private static void ValidateOptions(Options options)
     {
         options.ReleaseRoot = RequireDirectory(options.ReleaseRoot, "Release root");
+        options.ProjectRoot = RequireDirectory(options.ProjectRoot, "Project root");
         options.RuntimeRoot = RequireDirectory(options.RuntimeRoot, "Runtime root");
         options.ConnectorTokenFile = RequireAbsolutePath(options.ConnectorTokenFile, "Connector token file");
         options.OwnerTokenFile = RequireAbsolutePath(options.OwnerTokenFile, "Owner token file");
@@ -542,6 +546,7 @@ internal static class Program
         startInfo.EnvironmentVariables["MCP_EDGE_BASE_URL"] = edgeUri.GetLeftPart(UriPartial.Authority);
         startInfo.EnvironmentVariables["MCP_CONNECTOR_TOKEN_FILE"] = connectorTokenPath;
         startInfo.EnvironmentVariables["VS_CODE_GPT_POLICY_PATH"] = policyPath;
+        startInfo.EnvironmentVariables["VS_CODE_GPT_STACK_ROOT"] = options.ProjectRoot;
         startInfo.EnvironmentVariables["VS_CODE_GPT_DATA_DIR"] = options.RuntimeRoot;
         startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_BACKGROUND_TASKS_DIR");
         startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_COMMAND_INVOCATIONS_DIR");

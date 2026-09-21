@@ -451,6 +451,14 @@ function Write-McpCutoverBrokerResult {
 }
 
 $releaseId = [string]$request.expectedReleaseId
+$projectRootValue = [string]$request.projectRoot
+if ([string]::IsNullOrWhiteSpace($projectRootValue)) {
+    throw 'Access Stack cutover request is missing projectRoot.'
+}
+$projectRoot = [IO.Path]::GetFullPath($projectRootValue)
+if (-not (Test-Path -LiteralPath $projectRoot -PathType Container)) {
+    throw "Access Stack cutover project root was not found: $projectRoot"
+}
 $edge = $request.edge
 $mcpSessionMode = [string]$edge.mcpSessionMode
 if ($mcpSessionMode -notin @('stateless', 'stateful-experiment')) {
@@ -472,6 +480,7 @@ Write-McpCutoverBrokerResult -Value ([ordered]@{
 
 $edgeParameters = @{
     InstallationRoot = $installation
+    ProjectRoot = $projectRoot
     ReleaseId = $releaseId
     RuntimeRoot = [IO.Path]::GetFullPath([string]$edge.runtimeRoot)
     EdgeBaseUrl = [string]$edge.edgeBaseUrl
@@ -673,6 +682,7 @@ try {
     $edgeRecoveryConfig = [ordered]@{
         schemaVersion = 1
         taskName = $edgeTaskName
+        projectRoot = $projectRoot
         runtimeRoot = [IO.Path]::GetFullPath([string]$edge.runtimeRoot)
         edgeBaseUrl = [string]$edge.edgeBaseUrl
         connectorTokenFile = [IO.Path]::GetFullPath([string]$edge.connectorTokenFile)
