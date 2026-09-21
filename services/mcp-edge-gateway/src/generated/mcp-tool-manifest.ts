@@ -886,6 +886,678 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "get_release_state",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeBootstrap": {
+          "additionalProperties": false,
+          "properties": {
+            "cutoverScriptPresent": {
+              "type": "boolean"
+            },
+            "updateScriptPresent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "updateScriptPresent",
+            "cutoverScriptPresent"
+          ],
+          "type": "object"
+        },
+        "installationRoot": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "manifestSha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "materializedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "releaseId": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "releaseId",
+                    "manifestSha256",
+                    "materializedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "candidate": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "manifestSha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "materializedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "releaseId": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "releaseId",
+                    "manifestSha256",
+                    "materializedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "manifestSha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "materializedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "releaseId": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "releaseId",
+                    "manifestSha256",
+                    "materializedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "version": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "version",
+            "active",
+            "candidate",
+            "previous",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "installationRoot",
+        "state",
+        "activeBootstrap"
+      ],
+      "type": "object"
+    },
+    "title": "Get release state"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "pattern": "^v[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "tag"
+      ],
+      "type": "object"
+    },
+    "name": "prepare_release",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "background_task_started"
+          ],
+          "type": "string"
+        },
+        "tag": {
+          "pattern": "^v[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "task": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "maxLength": 32000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "commandHash": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "completedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "cwd": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "interactive": {
+              "const": true,
+              "type": "boolean"
+            },
+            "lifecycle": {
+              "additionalProperties": false,
+              "properties": {
+                "deadlineAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "diagnostic": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "effectiveTimeoutMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "elapsedMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "enum": [
+                    "timeout",
+                    "cancelled",
+                    "client_disconnected",
+                    "upstream_timeout",
+                    "process_failed"
+                  ],
+                  "type": "string"
+                },
+                "requestedTimeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 86400000,
+                  "type": "integer"
+                },
+                "terminatedBy": {
+                  "enum": [
+                    "chatgpt_tool",
+                    "mcp_server",
+                    "gateway",
+                    "relay",
+                    "workspace_agent",
+                    "executor",
+                    "child_process",
+                    "http_client",
+                    "http_server",
+                    "websocket",
+                    "proxy",
+                    "background_task_manager",
+                    "external"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestedTimeoutMs",
+                "effectiveTimeoutMs",
+                "deadlineAt",
+                "elapsedMs"
+              ],
+              "type": "object"
+            },
+            "operation": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "exitCode": {
+                  "anyOf": [
+                    {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lifecycle": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deadlineAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "diagnostic": {
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "effectiveTimeoutMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "elapsedMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "enum": [
+                        "timeout",
+                        "cancelled",
+                        "client_disconnected",
+                        "upstream_timeout",
+                        "process_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "requestedTimeoutMs": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 86400000,
+                      "type": "integer"
+                    },
+                    "terminatedBy": {
+                      "enum": [
+                        "chatgpt_tool",
+                        "mcp_server",
+                        "gateway",
+                        "relay",
+                        "workspace_agent",
+                        "executor",
+                        "child_process",
+                        "http_client",
+                        "http_server",
+                        "websocket",
+                        "proxy",
+                        "background_task_manager",
+                        "external"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "requestedTimeoutMs",
+                    "effectiveTimeoutMs",
+                    "deadlineAt",
+                    "elapsedMs"
+                  ],
+                  "type": "object"
+                },
+                "shell": {
+                  "enum": [
+                    "powershell",
+                    "pwsh",
+                    "cmd",
+                    "wsl",
+                    "git-bash"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "executed",
+                  "type": "string"
+                },
+                "stderr": {
+                  "type": "string"
+                },
+                "stdout": {
+                  "type": "string"
+                },
+                "timedOut": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "shell",
+                "cwd",
+                "exitCode",
+                "stdout",
+                "stderr",
+                "timedOut"
+              ],
+              "type": "object"
+            },
+            "shell": {
+              "enum": [
+                "powershell",
+                "pwsh",
+                "cmd",
+                "wsl",
+                "git-bash"
+              ],
+              "type": "string"
+            },
+            "startedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "starting",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "timeoutMs": {
+              "maximum": 86400000,
+              "minimum": 30000,
+              "type": "integer"
+            },
+            "version": {
+              "const": 1,
+              "type": "number"
+            },
+            "workspaceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "workspaceId",
+            "operation",
+            "commandHash",
+            "command",
+            "shell",
+            "cwd",
+            "state",
+            "createdAt",
+            "timeoutMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "status",
+        "tag"
+      ],
+      "type": "object"
+    },
+    "title": "Prepare release"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "releaseId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "releaseId"
+      ],
+      "type": "object"
+    },
+    "name": "promote_release",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "brokerTaskName": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "installationRoot": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "projectRoot": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "releaseId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "requestId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "resultPath": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "handover_started"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "releaseId"
+      ],
+      "type": "object"
+    },
+    "title": "Promote release"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Runs a predefined, read-only validation in an authorized workspace. Available validations are diff-check, legacy-format, legacy-compat and secret-scan. The validation name selects a fixed implementation; arbitrary commands are not accepted.",
     "execution": {
       "taskSupport": "forbidden"
@@ -14666,13 +15338,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "47b548bce35c3fb391505c614aa248e2de8bf8b1c3d3ed66902a3d47828c2ef8",
-  "serverVersion": "0.4.0-catalog.c47b548bce35c.s56b6820f7a62",
-  "toolCount": 66,
-  "toolSetRevision": "56b6820f7a624c5ff19656ee1aaabd0519090712733f7ed7394ce4a326ed7f21"
+  "contractRevision": "f8e4f323a01ed4adfa13feddacd66c30b76bf2a3e092f027ce93d5e6fcbe9a43",
+  "serverVersion": "0.4.0-catalog.cf8e4f323a01e.s7156f2b3dd67",
+  "toolCount": 69,
+  "toolSetRevision": "7156f2b3dd67e2d581d96cf393d4b977942ecd405585462b77439c7ad17265ba"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c47b548bce35c.s56b6820f7a62"
+  "version": "0.4.0-catalog.cf8e4f323a01e.s7156f2b3dd67"
 } as const;
