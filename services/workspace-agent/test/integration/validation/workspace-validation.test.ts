@@ -3,6 +3,7 @@ import { readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
+import { resolveSecretScanTool } from "../../../src/validation/secret-scan.js";
 import {
   createFixture,
   git,
@@ -266,6 +267,35 @@ describe("workspace validation", () => {
     },
   );
   (existsSync(installedGitleaksPath) ? test : test.skip)(
+    "prefers the canonical installed Gitleaks over a stale GITLEAKS_PATH override",
+    async () => {
+      const agent = await createValidationAgent();
+      await writeWorkspaceFile(fixture!.workspacePath, "clean.txt", "clean\n");
+      process.env.GITLEAKS_PATH = path.join(
+        fixture!.basePath,
+        "removed-project",
+        "gitleaks.exe",
+      );
+
+      const result = await agent.runValidation({
+        workspaceId: "test",
+        root: ".",
+        validation: "secret-scan",
+        scope: "paths",
+        paths: ["clean.txt"],
+      });
+
+      expect(result.executed).toBe(true);
+      expect(result.passed).toBe(true);
+      expect(result.tool).toMatchObject({
+        name: "gitleaks",
+        available: true,
+        version: "8.30.1",
+      });
+    },
+  );
+
+  (existsSync(installedGitleaksPath) ? test : test.skip)(
     "redacts secrets returned by the installed Gitleaks binary",
     async () => {
       const agent = await createValidationAgent();
@@ -434,28 +464,22 @@ describe("workspace validation", () => {
     );
   });
 
-  test("returns a structured unavailable result when Gitleaks is absent", async () => {
-    const agent = await createValidationAgent();
-    await writeWorkspaceFile(fixture!.workspacePath, "file.txt", "safe\n");
-    process.env.GITLEAKS_PATH = path.join(fixture!.workspacePath, "missing-gitleaks.exe");
-
-    const result = await agent.runValidation({
-      workspaceId: "test",
-      root: ".",
-      validation: "secret-scan",
-      scope: "paths",
-      paths: ["file.txt"],
-    });
-
-    expect(result).toMatchObject({
-      executed: false,
-      passed: false,
-      tool: { name: "gitleaks", available: false },
-      findings: [],
-    });
-    expect(result.issues[0]).toContain("Gitleaks is not installed");
-    await expect(readFile(path.join(fixture!.workspacePath, "file.txt"), "utf8")).resolves.toBe(
-      "safe\n",
+  test("resolves Gitleaks as unavailable only when every candidate is absent", async () => {
+    await createValidationAgent();
+    const previousPath = process.env.PATH;
+    process.env.GITLEAKS_PATH = path.join(
+      fixture!.workspacePath,
+      "missing-gitleaks.exe",
     );
+    process.env.PATH = "";
+
+    try {
+      await expect(
+        resolveSecretScanTool(fixture!.basePath, fixture!.workspacePath),
+      ).resolves.toBeUndefined();
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 });

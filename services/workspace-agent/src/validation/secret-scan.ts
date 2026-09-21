@@ -89,9 +89,10 @@ export async function resolveSecretScanTool(
     process.platform === "win32" ? "gitleaks.exe" : "gitleaks",
   );
   const explicit = process.env.GITLEAKS_PATH?.trim();
-  const candidates = explicit
-    ? [explicit]
-    : [localBinary, process.platform === "win32" ? "gitleaks.exe" : "gitleaks"];
+  const candidates = [
+    localBinary,
+    ...(explicit && explicit !== localBinary ? [explicit] : []),
+  ];
 
   for (const candidate of candidates) {
     if (path.isAbsolute(candidate) && !(await isFile(candidate))) continue;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const offsetDateTimeSchema = z.iso.datetime({ offset: true });
 const releaseIdSchema = z
   .string()
   .trim()
@@ -172,7 +173,7 @@ export const windowsExecutionReleasePointerSchema = z
   .object({
     releaseId: releaseIdSchema,
     manifestSha256: sha256Schema,
-    materializedAt: z.iso.datetime(),
+    materializedAt: offsetDateTimeSchema,
   })
   .strict();
 export type WindowsExecutionReleasePointer = z.infer<
@@ -185,7 +186,7 @@ export const windowsExecutionNodeStateSchema = z
     active: windowsExecutionReleasePointerSchema.nullable(),
     candidate: windowsExecutionReleasePointerSchema.nullable(),
     previous: windowsExecutionReleasePointerSchema.nullable(),
-    updatedAt: z.iso.datetime(),
+    updatedAt: offsetDateTimeSchema,
   })
   .strict()
   .superRefine((state, context) => {
