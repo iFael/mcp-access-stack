@@ -16,6 +16,14 @@ import type {
   WriteBackgroundTaskStdinInput,
 } from "./background-task-contracts.js";
 import type {
+  GetReleaseStateInput,
+  GetReleaseStateResult,
+  PrepareReleaseInput,
+  PrepareReleaseResult,
+  PromoteReleaseInput,
+  PromoteReleaseResult,
+} from "./release-lifecycle-contracts.js";
+import type {
   GetWorkspaceContextInput,
   GetWorkspaceContextResult,
   InspectGitInput,
@@ -69,6 +77,18 @@ export interface WorkspaceExecutor {
   ): Promise<ReadBinaryFileResult>;
   writeFile(input: WriteFileInput, context?: OperationContext): Promise<WriteFileResult>;
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult>;
+  getReleaseState(
+    input: GetReleaseStateInput,
+    context?: OperationContext,
+  ): Promise<GetReleaseStateResult>;
+  prepareRelease(
+    input: PrepareReleaseInput,
+    context?: OperationContext,
+  ): Promise<PrepareReleaseResult>;
+  promoteRelease(
+    input: PromoteReleaseInput,
+    context?: OperationContext,
+  ): Promise<PromoteReleaseResult>;
   runValidation(
     input: RunWorkspaceValidationInput,
     context?: OperationContext,

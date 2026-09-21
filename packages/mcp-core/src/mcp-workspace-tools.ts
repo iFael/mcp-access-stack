@@ -58,6 +58,14 @@ import {
   type RunCommandResult,
 } from "./contracts.js";
 import {
+  getReleaseStateInputSchema,
+  getReleaseStateResultSchema,
+  prepareReleaseInputSchema,
+  prepareReleaseResultSchema,
+  promoteReleaseInputSchema,
+  promoteReleaseResultSchema,
+} from "./release-lifecycle-contracts.js";
+import {
   gitCommitInputSchema,
   gitCommitResultSchema,
   gitCreateBranchInputSchema,
@@ -153,6 +161,9 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "read_files",
   "write_file",
   "patch_file",
+  "get_release_state",
+  "prepare_release",
+  "promote_release",
   "run_workspace_validation",
   "run_command",
   "search_files",
@@ -617,6 +628,121 @@ export function registerWorkspaceTools(
                   : `Patched ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`,
               },
             ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("get_release_state", include)) {
+    server.registerTool(
+      "get_release_state",
+      {
+        title: "Get release state",
+        description:
+          "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps.",
+        inputSchema: getReleaseStateInputSchema,
+        outputSchema: getReleaseStateResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = getReleaseStateResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.getReleaseState(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: `Active release: ${structuredContent.state.active?.releaseId ?? "none"}; candidate: ${structuredContent.state.candidate?.releaseId ?? "none"}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("prepare_release", include)) {
+    server.registerTool(
+      "prepare_release",
+      {
+        title: "Prepare release",
+        description:
+          "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path.",
+        inputSchema: prepareReleaseInputSchema,
+        outputSchema: prepareReleaseResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: true,
+          idempotentHint: true,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = prepareReleaseResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.prepareRelease(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "confirmation_required" ? "Release preparation requires confirmation." : `Release preparation started as background task ${structuredContent.task.id}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("promote_release", include)) {
+    server.registerTool(
+      "promote_release",
+      {
+        title: "Promote release",
+        description:
+          "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths.",
+        inputSchema: promoteReleaseInputSchema,
+        outputSchema: promoteReleaseResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+          idempotentHint: false,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = promoteReleaseResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.promoteRelease(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "confirmation_required" ? "Release promotion requires confirmation." : `Release cutover started with request ${structuredContent.requestId}.` }],
             structuredContent,
           };
         } catch (error) {
@@ -1847,6 +1973,9 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   readBinaryFile: "read_file",
   writeFile: "write_file",
   patchFile: "patch_file",
+  getReleaseState: "get_release_state",
+  prepareRelease: "prepare_release",
+  promoteRelease: "promote_release",
   runValidation: "run_workspace_validation",
   runCommand: "run_command",
   searchFiles: "search_files",

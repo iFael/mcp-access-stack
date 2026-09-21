@@ -18,6 +18,7 @@ export * from "./policy.js";
 export * from "./policy-merge.js";
 export * from "./project-write-policy.js";
 export * from "./relay-retry-policy.js";
+export * from "./release-lifecycle-contracts.js";
 export * from "./source-control-contracts.js";
 export * from "./source-control-executor.js";
 export * from "./source-control-policy.js";

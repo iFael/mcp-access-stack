@@ -16,6 +16,9 @@ import {
   listFilesInputSchema,
   listWorkspaceRootsInputSchema,
   patchFileInputSchema,
+  getReleaseStateInputSchema,
+  prepareReleaseInputSchema,
+  promoteReleaseInputSchema,
   readFileInputSchema,
   readBinaryFileInputSchema,
   runWorkspaceValidationInputSchema,
@@ -50,6 +53,12 @@ import {
   type OperationContext,
   type PatchFileInput,
   type PatchFileResult,
+  type GetReleaseStateInput,
+  type GetReleaseStateResult,
+  type PrepareReleaseInput,
+  type PrepareReleaseResult,
+  type PromoteReleaseInput,
+  type PromoteReleaseResult,
   type ReadFileInput,
   type ReadFileResult,
   type ReadBinaryFileInput,
@@ -128,6 +137,7 @@ import { ShellService } from "./shell/service.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
+import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js";
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
@@ -173,6 +183,7 @@ export class LocalAgent {
   private readonly shellService = new ShellService();
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
+  private readonly releaseLifecycleService: ReleaseLifecycleService;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
   private readonly injectedGitOriginResolver: GitOriginResolver | undefined;
   private readonly injectedGitHubExecutor: GitHubExecutor | undefined;
@@ -216,6 +227,10 @@ export class LocalAgent {
         terminate: terminateProcessTreeByPid,
       },
     });
+    this.releaseLifecycleService = new ReleaseLifecycleService(
+      this.shellService,
+      this.backgroundTaskManager,
+    );
   }
 
   static async create(
@@ -375,6 +390,70 @@ export class LocalAgent {
       context,
       (parsed) => ({ path: parsed.path }),
       (workspace, parsed) => this.fileService.patchFile(workspace, parsed),
+    );
+  }
+
+  async getReleaseState(
+    input: GetReleaseStateInput,
+    context: OperationContext = {},
+  ): Promise<GetReleaseStateResult> {
+    return this.runValidatedAudited(
+      "getReleaseState",
+      "read",
+      getReleaseStateInputSchema,
+      input,
+      context,
+      () => ({}),
+      (workspace) => this.releaseLifecycleService.getState(workspace),
+    );
+  }
+
+  async prepareRelease(
+    input: PrepareReleaseInput,
+    context: OperationContext = {},
+  ): Promise<PrepareReleaseResult> {
+    return this.runValidatedAudited(
+      "prepareRelease",
+      "shell",
+      prepareReleaseInputSchema,
+      input,
+      context,
+      (parsed) => ({ query: parsed.tag }),
+      async (workspace, parsed, activeContext) => {
+        const repository = await this.canonicalGitHubRepository(
+          workspace.id,
+          ".",
+          activeContext.signal,
+        );
+        if (repository === undefined) {
+          throw new AppError(
+            "CAPABILITY_UNSUPPORTED",
+            "Release preparation requires the canonical workspace origin to be a GitHub repository.",
+          );
+        }
+        return this.releaseLifecycleService.prepare(
+          workspace,
+          repository,
+          parsed,
+          activeContext,
+        );
+      },
+    );
+  }
+
+  async promoteRelease(
+    input: PromoteReleaseInput,
+    context: OperationContext = {},
+  ): Promise<PromoteReleaseResult> {
+    return this.runValidatedAudited(
+      "promoteRelease",
+      "shell",
+      promoteReleaseInputSchema,
+      input,
+      context,
+      (parsed) => ({ query: parsed.releaseId }),
+      (workspace, parsed, activeContext) =>
+        this.releaseLifecycleService.promote(workspace, parsed, activeContext),
     );
   }
 

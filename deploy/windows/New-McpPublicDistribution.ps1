@@ -153,6 +153,8 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeOwnerOAuthBoo
 Copy-Item -LiteralPath $edgeOwnerOAuthBootstrapSource -Destination $edgeOwnerOAuthBootstrapTarget
 $edgeRecoveryReleaseFiles = @(
     'Repair-McpEdgeConnectorTask.ps1',
+    'Update-McpAccessStack.ps1',
+    'Start-McpAccessStackCutover.ps1',
     'Invoke-McpAccessStackCutoverBroker.ps1',
     'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Install-McpBrowserWorkerTask.ps1',

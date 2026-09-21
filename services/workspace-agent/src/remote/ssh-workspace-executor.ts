@@ -70,6 +70,12 @@ import {
   type OperationContext,
   type PatchFileInput,
   type PatchFileResult,
+  type GetReleaseStateInput,
+  type GetReleaseStateResult,
+  type PrepareReleaseInput,
+  type PrepareReleaseResult,
+  type PromoteReleaseInput,
+  type PromoteReleaseResult,
   type ReadBackgroundTaskLogsInput,
   type ReadBackgroundTaskOutputInput,
   type ReadBinaryFileInput,
@@ -460,6 +466,36 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       changed,
       dryRun,
     };
+  }
+
+  async getReleaseState(
+    _input: GetReleaseStateInput,
+    _context: OperationContext = {},
+  ): Promise<GetReleaseStateResult> {
+    throw new AppError(
+      "CAPABILITY_UNSUPPORTED",
+      "Release lifecycle operations are available only on the local in-process workspace executor.",
+    );
+  }
+
+  async prepareRelease(
+    _input: PrepareReleaseInput,
+    _context: OperationContext = {},
+  ): Promise<PrepareReleaseResult> {
+    throw new AppError(
+      "CAPABILITY_UNSUPPORTED",
+      "Release lifecycle operations are available only on the local in-process workspace executor.",
+    );
+  }
+
+  async promoteRelease(
+    _input: PromoteReleaseInput,
+    _context: OperationContext = {},
+  ): Promise<PromoteReleaseResult> {
+    throw new AppError(
+      "CAPABILITY_UNSUPPORTED",
+      "Release lifecycle operations are available only on the local in-process workspace executor.",
+    );
   }
 
   async searchFiles(
