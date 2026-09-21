@@ -886,6 +886,305 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Runs up to 12 independent read-only workspace inspections in one MCP call. Prefer this over multiple separate read-only calls when inputs are already known. Supports roots/files/file reads/search/Git/context/background-task lookup/list/release state. Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "caseSensitive": {
+                "type": "boolean"
+              },
+              "diffMode": {
+                "enum": [
+                  "none",
+                  "summary",
+                  "full"
+                ],
+                "type": "string"
+              },
+              "endLine": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "glob": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "key": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxDiffBytes": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
+              "operation": {
+                "enum": [
+                  "list_workspace_roots",
+                  "list_files",
+                  "read_file",
+                  "search_files",
+                  "inspect_workspace_git",
+                  "get_workspace_context",
+                  "get_background_task",
+                  "list_background_tasks",
+                  "get_release_state"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "paths": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "query": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "root": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "startLine": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "state": {
+                "enum": [
+                  "starting",
+                  "running",
+                  "succeeded",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "operation"
+            ],
+            "type": "object"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "type": "array"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "name": "inspect_workspace_batch",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "POLICY_INVALID",
+                      "WORKSPACE_NOT_FOUND",
+                      "WORKSPACE_DISABLED",
+                      "PERMISSION_DENIED",
+                      "WRITE_NOT_ALLOWED",
+                      "SHELL_NOT_ALLOWED",
+                      "SHELL_FAILED",
+                      "SHELL_UNAVAILABLE",
+                      "COMMAND_CONFIRMATION_INVALID",
+                      "INVALID_PATH",
+                      "PATH_OUTSIDE_WORKSPACE",
+                      "PATH_OUTSIDE_ALLOWED_ROOTS",
+                      "BLOCKED_PATH",
+                      "FILE_NOT_FOUND",
+                      "NOT_A_FILE",
+                      "NOT_A_DIRECTORY",
+                      "FILE_TOO_LARGE",
+                      "INVALID_UTF8",
+                      "BINARY_FILE",
+                      "LIMIT_EXCEEDED",
+                      "NOT_GIT_REPOSITORY",
+                      "GIT_ERROR",
+                      "SOURCE_CONTROL_CAPABILITY_DENIED",
+                      "SOURCE_CONTROL_CONFIRMATION_INVALID",
+                      "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT",
+                      "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+                      "GIT_HEAD_MISMATCH",
+                      "GIT_BRANCH_CONFLICT",
+                      "GIT_INDEX_CHANGED",
+                      "GIT_REMOTE_CHANGED",
+                      "GIT_MERGE_NOT_FAST_FORWARD",
+                      "GIT_PROTECTED_BRANCH",
+                      "AUDIT_FAILED",
+                      "AGENT_UNAVAILABLE",
+                      "AGENT_BUSY",
+                      "AGENT_TIMEOUT",
+                      "OPERATION_CANCELLED",
+                      "RELAY_PROTOCOL_ERROR",
+                      "IDEMPOTENCY_KEY_CONFLICT",
+                      "EXECUTION_NOT_FOUND",
+                      "EXECUTION_STATE_INVALID",
+                      "EXECUTION_OUTCOME_UNKNOWN",
+                      "AUTHENTICATION_FAILED",
+                      "BROWSER_WORKER_UNAVAILABLE",
+                      "BROWSER_WORKER_TIMEOUT",
+                      "BROWSER_DISCONNECTED",
+                      "BROWSER_CONTEXT_RECOVERY_FAILED",
+                      "TASK_SCOPE_REQUIRED",
+                      "TASK_NOT_FOUND",
+                      "TASK_OWNERSHIP_MISMATCH",
+                      "TASK_SUSPENDED",
+                      "TASK_EXPIRED",
+                      "SITE_ACCESS_AUTHORIZATION_REQUIRED",
+                      "SITE_ACCESS_GRANT_EXPIRED",
+                      "SITE_NAVIGATION_BLOCKED",
+                      "SITE_POLICY_NOT_FOUND",
+                      "SITE_PRODUCTION_BLOCKED",
+                      "LOGIN_CREDENTIAL_UNAVAILABLE",
+                      "LOGIN_CREDENTIALS_INVALID",
+                      "LOGIN_INTERACTION_REQUIRED",
+                      "CREDENTIAL_BROKER_UNAVAILABLE",
+                      "CREDENTIAL_BROKER_PROTOCOL_MISMATCH",
+                      "CREDENTIAL_BROKER_ACCESS_DENIED",
+                      "BROWSER_CAPABILITY_UNSUPPORTED",
+                      "BROWSER_OPERATION_MODE_UNSUPPORTED",
+                      "FRAME_NOT_FOUND",
+                      "FRAME_NOT_READY",
+                      "FRAME_CROSS_ORIGIN",
+                      "LOCATOR_NOT_FOUND",
+                      "LOCATOR_AMBIGUOUS",
+                      "LOCATOR_LOW_CONFIDENCE",
+                      "NAVIGATION_TIMEOUT",
+                      "STATE_NOT_REACHED",
+                      "ACTION_BLOCKED_BY_POLICY",
+                      "CAPABILITY_UNSUPPORTED",
+                      "TAB_NOT_FOUND",
+                      "STALE_TAB_ID",
+                      "TAB_NOT_OWNED",
+                      "TAB_PROTECTED",
+                      "NAVIGATION_BLOCKED",
+                      "AUTHENTICATION_REQUIRED",
+                      "CAPTCHA_DETECTED",
+                      "ACTION_REQUIRES_CONFIRMATION",
+                      "BROWSER_CONFIRMATION_INVALID",
+                      "INVALID_ARGUMENT",
+                      "INTERNAL_ERROR"
+                    ],
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "key": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "list_workspace_roots",
+                  "list_files",
+                  "read_file",
+                  "search_files",
+                  "inspect_workspace_git",
+                  "get_workspace_context",
+                  "get_background_task",
+                  "list_background_tasks",
+                  "get_release_state"
+                ],
+                "type": "string"
+              },
+              "result": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "error"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "operation",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "title": "Inspect workspace batch"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps.",
     "execution": {
       "taskSupport": "forbidden"
@@ -15338,13 +15637,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "b430235e0b010d9c5ecab8304776229308dcb58a45ab168dd23589f3019d0957",
-  "serverVersion": "0.4.0-catalog.cb430235e0b01.s7156f2b3dd67",
-  "toolCount": 69,
-  "toolSetRevision": "7156f2b3dd67e2d581d96cf393d4b977942ecd405585462b77439c7ad17265ba"
+  "contractRevision": "41ec220d0d92254dd4f7a8df030859a268a22f3f4b71c04a3cf4fc8f223e1b61",
+  "serverVersion": "0.4.0-catalog.c41ec220d0d92.sf15257990970",
+  "toolCount": 70,
+  "toolSetRevision": "f15257990970da918c7b855b5a1f31869b4a2d79f541374fa363529e093986ac"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cb430235e0b01.s7156f2b3dd67"
+  "version": "0.4.0-catalog.c41ec220d0d92.sf15257990970"
 } as const;

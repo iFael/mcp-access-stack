@@ -58,6 +58,10 @@ import {
   type RunCommandResult,
 } from "./contracts.js";
 import {
+  inspectWorkspaceBatchInputSchema,
+  inspectWorkspaceBatchResultSchema,
+} from "./read-orchestration-contracts.js";
+import {
   getReleaseStateInputSchema,
   getReleaseStateResultSchema,
   prepareReleaseInputSchema,
@@ -159,6 +163,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "list_files",
   "read_file",
   "read_files",
+  "inspect_workspace_batch",
   "write_file",
   "patch_file",
   "get_release_state",
@@ -626,6 +631,215 @@ export function registerWorkspaceTools(
                 text: structuredContent.dryRun
                   ? `Validated patch for ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`
                   : `Patched ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("inspect_workspace_batch", include)) {
+    server.registerTool(
+      "inspect_workspace_batch",
+      {
+        title: "Inspect workspace batch",
+        description:
+          "Runs up to 12 independent read-only workspace inspections in one MCP call. " +
+          "Prefer this over multiple separate read-only calls when inputs are already known. " +
+          "Supports roots/files/file reads/search/Git/context/background-task lookup/list/release state. " +
+          "Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
+        inputSchema: inspectWorkspaceBatchInputSchema,
+        outputSchema: inspectWorkspaceBatchResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = inspectWorkspaceBatchResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => ({
+                items: await Promise.all(
+                  input.items.map(async (item) => {
+                    try {
+                      switch (item.operation) {
+                        case "list_workspace_roots":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: listWorkspaceRootsResultSchema.parse(
+                              await executor.listWorkspaceRoots(
+                                listWorkspaceRootsInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "list_files":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: listFilesResultSchema.parse(
+                              await executor.listFiles(
+                                listFilesInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  root: item.root,
+                                  glob: item.glob,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "read_file":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: readFileResultSchema.parse(
+                              await executor.readFile(
+                                readFileInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  path: item.path,
+                                  startLine: item.startLine,
+                                  endLine: item.endLine,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "search_files":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: searchFilesResultSchema.parse(
+                              await executor.searchFiles(
+                                searchFilesInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  query: item.query,
+                                  root: item.root,
+                                  glob: item.glob,
+                                  caseSensitive: item.caseSensitive,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "inspect_workspace_git":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: inspectGitResultSchema.parse(
+                              await executor.inspectGit(
+                                inspectGitInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  root: item.root,
+                                  diffMode: item.diffMode,
+                                  paths: item.paths,
+                                  maxDiffBytes: item.maxDiffBytes,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "get_workspace_context":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: getWorkspaceContextResultSchema.parse(
+                              await executor.getWorkspaceContext(
+                                getWorkspaceContextInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  root: item.root,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "get_background_task":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: backgroundTaskResultSchema.parse(
+                              await executor.getBackgroundTask(
+                                getBackgroundTaskInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  id: item.taskId,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "list_background_tasks":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: backgroundTaskListResultSchema.parse(
+                              await executor.listBackgroundTasks(
+                                listBackgroundTasksInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  state: item.state,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "get_release_state":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: getReleaseStateResultSchema.parse(
+                              await executor.getReleaseState(
+                                getReleaseStateInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                      }
+                    } catch (error) {
+                      const appError =
+                        error instanceof AppErrorClass ? error : asAppError(error);
+                      return {
+                        key: item.key,
+                        operation: item.operation,
+                        status: "error" as const,
+                        error: {
+                          code: appError.code,
+                          message: sanitizeOperationDiagnostic(appError.message),
+                        },
+                      };
+                    }
+                  }),
+                ),
+              }),
+            ),
+          );
+          const ok = structuredContent.items.filter(
+            (item) => item.status === "ok",
+          ).length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Completed ${ok}/${structuredContent.items.length} read-only inspection(s).`,
               },
             ],
             structuredContent,

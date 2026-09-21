@@ -794,6 +794,62 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toContain("patchFile");
   });
 
+  it("batches independent read-only inspections and isolates item errors", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.readFileFailures.add("missing.txt");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["inspect_workspace_batch"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = registeredTools(server)["inspect_workspace_batch"]!;
+    expect(tool.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+
+    const result = await tool.handler(
+      {
+        workspaceId: "ws",
+        items: [
+          { key: "file", operation: "read_file", path: "a.txt" },
+          { key: "missing", operation: "read_file", path: "missing.txt" },
+          { key: "search", operation: "search_files", query: "needle" },
+          { key: "release", operation: "get_release_state" },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      items: [
+        { key: "file", operation: "read_file", status: "ok" },
+        {
+          key: "missing",
+          operation: "read_file",
+          status: "error",
+          error: { code: "FILE_NOT_FOUND" },
+        },
+        { key: "search", operation: "search_files", status: "ok" },
+        { key: "release", operation: "get_release_state", status: "ok" },
+      ],
+    });
+    expect(executor.calls).toEqual(
+      expect.arrayContaining([
+        "readFile",
+        "searchFiles",
+        "getReleaseState",
+      ]),
+    );
+  });
+
   it("publishes typed release lifecycle tools with risk-specific annotations", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -1088,11 +1144,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 33-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 37-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(36);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(36);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(37);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(37);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {
