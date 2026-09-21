@@ -155,6 +155,27 @@ describe("Windows Edge execution contracts", () => {
     expect(() => windowsExecutionReleaseManifestSchema.parse(absolute)).toThrow();
   });
 
+  it("accepts offset-aware lifecycle timestamps written by the Windows producer", () => {
+    const parsed = windowsExecutionNodeStateSchema.parse({
+      version: 1,
+      active: {
+        releaseId: "1.1.0-beta.50",
+        manifestSha256: sha256,
+        materializedAt: "2026-09-21T13:41:30.2390389-03:00",
+      },
+      candidate: null,
+      previous: {
+        releaseId: "1.1.0-beta.48",
+        manifestSha256: "b".repeat(64),
+        materializedAt: "2026-09-20T23:26:37.0529727-03:00",
+      },
+      updatedAt: "2026-09-21T16:45:41.6812804+00:00",
+    });
+
+    expect(parsed.active?.releaseId).toBe("1.1.0-beta.50");
+    expect(parsed.previous?.releaseId).toBe("1.1.0-beta.48");
+  });
+
   it("keeps active, candidate and previous release pointers distinct", () => {
     const pointer = {
       releaseId: "1.2.0",
