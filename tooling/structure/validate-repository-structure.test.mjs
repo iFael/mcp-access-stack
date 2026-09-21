@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -86,8 +86,8 @@ test("keeps authoritative development and build surfaces on Node 26", async () =
   assert.match(rootPackage.devDependencies["@types/node"], /^\^26\./u);
 
   for (const workflowPath of [
-    "../../../.github/workflows/ci.yml",
-    "../../../.github/workflows/release.yml",
+    "../../.github/workflows/ci.yml",
+    "../../.github/workflows/release.yml",
   ]) {
     const workflow = await readFile(new URL(workflowPath, import.meta.url), "utf8");
     const majors = [...workflow.matchAll(/node-version:\s*["']?(\d+)/gu)].map((match) => match[1]);
@@ -99,7 +99,7 @@ test("keeps authoritative development and build surfaces on Node 26", async () =
 
 test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
   const expected = `      - name: Typecheck affected graph
@@ -121,7 +121,7 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
 
 test("keeps main integration sharded instead of one monolithic timeout", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
   const normalized = workflow.replaceAll("\r\n", "\n");
@@ -152,7 +152,7 @@ test("keeps main integration sharded instead of one monolithic timeout", async (
 
 test("provisions Playwright Chromium for the main node shard", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
   const normalized = workflow.replaceAll("\r\n", "\n");
@@ -172,7 +172,7 @@ test("provisions Playwright Chromium for the main node shard", async () => {
 
 test("parallelizes expensive PR validation lanes behind the canonical check", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
   const normalized = workflow.replaceAll("\r\n", "\n");
@@ -279,7 +279,7 @@ test("parallelizes expensive PR validation lanes behind the canonical check", as
 });
 test("keeps canonical CI free of Docker image lanes", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(workflow, /dockerGateway|dockerBrowser|dockerProxy|release-image-|docker\/build-push-action|deploy\/docker|deploy\/remote/u);
@@ -287,7 +287,7 @@ test("keeps canonical CI free of Docker image lanes", async () => {
 
 test("keeps public release workflow free of Docker and GHCR image publication", async () => {
   const workflow = await readFile(
-    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    new URL("../../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(workflow, /release-image-|docker\/build-push-action|docker\/login-action|deploy\/docker|deploy\/remote|gateway-digest|proxy-digest|browser-worker-digest/u);

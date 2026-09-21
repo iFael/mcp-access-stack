@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$workflowRoot = [IO.Path]::GetFullPath((Join-Path $root '..\.github\workflows'))
+$workflowRoot = [IO.Path]::GetFullPath((Join-Path $root '.github\workflows'))
 
 $parseIssues = @()
 foreach ($file in Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.ps1') {

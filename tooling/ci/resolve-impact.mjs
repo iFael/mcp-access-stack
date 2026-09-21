@@ -172,9 +172,7 @@ function normalizePath(value) {
 }
 
 function stripProjectPrefix(repositoryPath) {
-  if (repositoryPath === "mcp-access-stack") return "";
-  if (!repositoryPath.startsWith("mcp-access-stack/")) return null;
-  return repositoryPath.slice("mcp-access-stack/".length);
+  return repositoryPath;
 }
 
 function isDocumentationPath(repositoryPath) {
@@ -205,7 +203,7 @@ function runCli() {
   try {
     result = classifyChangedPaths(resolveChangedPaths(baseSha, headSha));
   } catch (error) {
-    result = classifyChangedPaths(["mcp-access-stack/__resolver_failure__"]);
+    result = classifyChangedPaths(["__resolver_failure__"]);
     result.resolverFailed = true;
     result.resolverError = error instanceof Error ? error.message : String(error);
   }

@@ -19,7 +19,7 @@ test("retires Docker/V2 deployment surfaces from the current repository", () => 
 });
 
 test("removes Docker-specific repository automation and runtime defaults", () => {
-  const dependabot = readFileSync(path.join(root, "../.github/dependabot.yml"), "utf8");
+  const dependabot = readFileSync(path.join(root, ".github/dependabot.yml"), "utf8");
   assert.equal(dependabot.includes("package-ecosystem: docker"), false);
   assert.equal(dependabot.includes("deploy/docker"), false);
 

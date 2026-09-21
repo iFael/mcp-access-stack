@@ -20,7 +20,7 @@ function pick(result) {
 test("docs-only changes do not fan out into runtime validation", () => {
   const result = classifyChangedPaths([
     "README.md",
-    "mcp-access-stack/docs/architecture/EDGE_MCP_RUNTIME.md",
+    "docs/architecture/EDGE_MCP_RUNTIME.md",
   ]);
   assert.deepEqual(pick(result), {
     shared: false,
@@ -37,7 +37,7 @@ test("docs-only changes do not fan out into runtime validation", () => {
 });
 
 test("shared mcp-core changes fan out to known consumers", () => {
-  const result = classifyChangedPaths(["mcp-access-stack/packages/mcp-core/src/contracts.ts"]);
+  const result = classifyChangedPaths(["packages/mcp-core/src/contracts.ts"]);
   assert.equal(result.shared, true);
   assert.equal(result.workspaceAgent, true);
   assert.equal(result.mcpGateway, true);
@@ -50,7 +50,7 @@ test("shared mcp-core changes fan out to known consumers", () => {
 
 test("mcp-gateway changes include the Edge parity consumer", () => {
   const result = classifyChangedPaths([
-    "mcp-access-stack/services/mcp-gateway/src/mcp/server.ts",
+    "services/mcp-gateway/src/mcp/server.ts",
   ]);
   assert.equal(result.mcpGateway, true);
   assert.equal(result.edgeGateway, true);
@@ -58,7 +58,7 @@ test("mcp-gateway changes include the Edge parity consumer", () => {
 });
 
 test("edge protocol changes fan out to both gateway consumers", () => {
-  const result = classifyChangedPaths(["mcp-access-stack/packages/edge-protocol/src/index.ts"]);
+  const result = classifyChangedPaths(["packages/edge-protocol/src/index.ts"]);
   assert.equal(result.edgeProtocol, true);
   assert.equal(result.mcpGateway, true);
   assert.equal(result.edgeGateway, true);
@@ -67,7 +67,7 @@ test("edge protocol changes fan out to both gateway consumers", () => {
 });
 
 test("workspace-agent changes include the gateway that embeds it", () => {
-  const result = classifyChangedPaths(["mcp-access-stack/services/workspace-agent/src/local-agent.ts"]);
+  const result = classifyChangedPaths(["services/workspace-agent/src/local-agent.ts"]);
   assert.equal(result.workspaceAgent, true);
   assert.equal(result.mcpGateway, true);
   assert.equal(result.windowsRuntime, true);
@@ -75,7 +75,7 @@ test("workspace-agent changes include the gateway that embeds it", () => {
 });
 
 test("root dependency graph changes fail closed to broad coverage", () => {
-  const result = classifyChangedPaths(["mcp-access-stack/package-lock.json"]);
+  const result = classifyChangedPaths(["package-lock.json"]);
   for (const [key, value] of Object.entries(result)) {
     if (key === "docsOnly" || key === "resolverFailed" || key === "changedPaths") continue;
     assert.equal(value, true, `${key} should be true for root broad changes`);
@@ -84,7 +84,7 @@ test("root dependency graph changes fail closed to broad coverage", () => {
 });
 
 test("unknown relevant source paths fail closed to broad coverage", () => {
-  const result = classifyChangedPaths(["mcp-access-stack/experimental/new-runtime-hook.mjs"]);
+  const result = classifyChangedPaths(["experimental/new-runtime-hook.mjs"]);
   assert.equal(result.rootBroad, true);
   assert.equal(result.shared, true);
   assert.equal(result.edgeProtocol, true);

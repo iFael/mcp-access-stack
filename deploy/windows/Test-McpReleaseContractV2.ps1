@@ -105,7 +105,7 @@ try {
         throw 'Immutable release builder does not bundle the Windows Node runtime inside the release.'
     }
 
-    $repositoryRoot = [IO.Path]::GetFullPath((Join-Path (Join-Path $PSScriptRoot '..\..') '..'))
+    $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
     $releaseWorkflowPath = Join-Path $repositoryRoot '.github\workflows\release.yml'
     $releaseWorkflow = Get-Content -Raw -LiteralPath $releaseWorkflowPath
     $releaseStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpRelease.ps1', [StringComparison]::Ordinal)
