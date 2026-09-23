@@ -794,8 +794,9 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toContain("patchFile");
   });
 
-  it("batches independent read-only inspections and isolates item errors", async () => {
+  it("batches independent read-only inspections across workspace, background and GitHub reads while isolating item errors", async () => {
     const executor = new MockWorkspaceExecutor();
+    const sourceControlExecutor = new MockSourceControlExecutor();
     executor.readFileFailures.add("missing.txt");
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -804,13 +805,14 @@ describe("registerWorkspaceTools", () => {
     registerWorkspaceTools(server, executor, {
       includeTools: ["inspect_workspace_batch"],
       securitySchemes: [{ type: "noauth" }],
+      sourceControlExecutor,
     });
 
     const tool = registeredTools(server)["inspect_workspace_batch"]!;
     expect(tool.annotations).toMatchObject({
       readOnlyHint: true,
       destructiveHint: false,
-      openWorldHint: false,
+      openWorldHint: true,
       idempotentHint: true,
     });
 
@@ -821,6 +823,10 @@ describe("registerWorkspaceTools", () => {
           { key: "file", operation: "read_file", path: "a.txt" },
           { key: "missing", operation: "read_file", path: "missing.txt" },
           { key: "search", operation: "search_files", query: "needle" },
+          { key: "logs", operation: "read_background_task_logs", taskId: backgroundTask.id, maxBytes: 1024 },
+          { key: "output", operation: "read_background_task_output", taskId: backgroundTask.id, stdoutOffset: 0, stderrOffset: 0, maxBytes: 1024 },
+          { key: "repository", operation: "github_get_repository", owner: "octo", repository: "repo" },
+          { key: "pull", operation: "github_get_pull_request", owner: "octo", repository: "repo", pullNumber: 7 },
           { key: "release", operation: "get_release_state" },
         ],
       },
@@ -838,6 +844,10 @@ describe("registerWorkspaceTools", () => {
           error: { code: "FILE_NOT_FOUND" },
         },
         { key: "search", operation: "search_files", status: "ok" },
+        { key: "logs", operation: "read_background_task_logs", status: "ok" },
+        { key: "output", operation: "read_background_task_output", status: "ok" },
+        { key: "repository", operation: "github_get_repository", status: "ok" },
+        { key: "pull", operation: "github_get_pull_request", status: "ok" },
         { key: "release", operation: "get_release_state", status: "ok" },
       ],
     });
@@ -845,8 +855,13 @@ describe("registerWorkspaceTools", () => {
       expect.arrayContaining([
         "readFile",
         "searchFiles",
+        "readBackgroundTaskLogs",
+        "readBackgroundTaskOutput",
         "getReleaseState",
       ]),
+    );
+    expect(sourceControlExecutor.calls.map((call) => call.method)).toEqual(
+      expect.arrayContaining(["getRepository", "getPullRequest"]),
     );
   });
 

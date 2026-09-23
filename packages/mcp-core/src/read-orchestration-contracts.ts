@@ -2,6 +2,7 @@ import { z } from "zod";
 import { backgroundTaskStateSchema } from "./background-task-contracts.js";
 import { gitDiffModeSchema } from "./contracts.js";
 import { errorCodes } from "./errors.js";
+import { githubOwnerSchema, githubRepositoryNameSchema } from "./source-control-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const keySchema = z.string().trim().min(1).max(64);
@@ -17,6 +18,10 @@ export const inspectWorkspaceBatchOperationSchema = z.enum([
   "get_workspace_context",
   "get_background_task",
   "list_background_tasks",
+  "read_background_task_logs",
+  "read_background_task_output",
+  "github_get_repository",
+  "github_get_pull_request",
   "get_release_state",
 ]);
 
@@ -40,6 +45,12 @@ const inspectWorkspaceBatchItemBaseSchema = z
     maxDiffBytes: z.number().int().positive().max(1_000_000).optional(),
     taskId: taskIdSchema.optional(),
     state: backgroundTaskStateSchema.optional(),
+    maxBytes: z.number().int().positive().max(1_000_000).optional(),
+    stdoutOffset: z.number().int().nonnegative().optional(),
+    stderrOffset: z.number().int().nonnegative().optional(),
+    owner: githubOwnerSchema.optional(),
+    repository: githubRepositoryNameSchema.optional(),
+    pullNumber: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -75,19 +86,40 @@ const allowedFieldsByOperation: Record<
   get_workspace_context: new Set(["key", "operation", "root"]),
   get_background_task: new Set(["key", "operation", "taskId"]),
   list_background_tasks: new Set(["key", "operation", "state"]),
+  read_background_task_logs: new Set(["key", "operation", "taskId", "maxBytes"]),
+  read_background_task_output: new Set([
+    "key",
+    "operation",
+    "taskId",
+    "stdoutOffset",
+    "stderrOffset",
+    "maxBytes",
+  ]),
+  github_get_repository: new Set(["key", "operation", "owner", "repository"]),
+  github_get_pull_request: new Set([
+    "key",
+    "operation",
+    "owner",
+    "repository",
+    "pullNumber",
+  ]),
   get_release_state: new Set(["key", "operation"]),
 };
 
 export const inspectWorkspaceBatchItemSchema =
   inspectWorkspaceBatchItemBaseSchema.superRefine((item, ctx) => {
-    const required =
+    const required: readonly (keyof typeof item)[] =
       item.operation === "read_file"
-        ? (["path"] as const)
+        ? ["path"]
         : item.operation === "search_files"
-          ? (["query"] as const)
-          : item.operation === "get_background_task"
-            ? (["taskId"] as const)
-            : ([] as const);
+          ? ["query"]
+          : ["get_background_task", "read_background_task_logs", "read_background_task_output"].includes(item.operation)
+            ? ["taskId"]
+            : item.operation === "github_get_repository"
+              ? ["owner", "repository"]
+              : item.operation === "github_get_pull_request"
+                ? ["owner", "repository", "pullNumber"]
+                : [];
 
     for (const field of required) {
       if (item[field] === undefined) {

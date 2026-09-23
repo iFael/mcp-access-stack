@@ -883,10 +883,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
-      "openWorldHint": false,
+      "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Runs up to 12 independent read-only workspace inspections in one MCP call. Prefer this over multiple separate read-only calls when inputs are already known. Supports roots/files/file reads/search/Git/context/background-task lookup/list/release state. Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
+    "description": "Runs up to 12 independent read-only workspace inspections in one MCP call. Prefer this over multiple separate read-only calls when inputs are already known. Supports roots/files/file reads/search/Git/context/background-task lookup/list/log/output, GitHub repository/PR reads and release state. Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -923,6 +923,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "minLength": 1,
                 "type": "string"
               },
+              "maxBytes": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
               "maxDiffBytes": {
                 "exclusiveMinimum": 0,
                 "maximum": 1000000,
@@ -938,8 +943,18 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "get_workspace_context",
                   "get_background_task",
                   "list_background_tasks",
+                  "read_background_task_logs",
+                  "read_background_task_output",
+                  "github_get_repository",
+                  "github_get_pull_request",
                   "get_release_state"
                 ],
+                "type": "string"
+              },
+              "owner": {
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$",
                 "type": "string"
               },
               "path": {
@@ -954,8 +969,19 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "maxItems": 20,
                 "type": "array"
               },
+              "pullNumber": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
               "query": {
                 "minLength": 1,
+                "type": "string"
+              },
+              "repository": {
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9._-]+$",
                 "type": "string"
               },
               "root": {
@@ -976,6 +1002,16 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "cancelled"
                 ],
                 "type": "string"
+              },
+              "stderrOffset": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "stdoutOffset": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               "taskId": {
                 "format": "uuid",
@@ -1132,6 +1168,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "get_workspace_context",
                   "get_background_task",
                   "list_background_tasks",
+                  "read_background_task_logs",
+                  "read_background_task_output",
+                  "github_get_repository",
+                  "github_get_pull_request",
                   "get_release_state"
                 ],
                 "type": "string"
@@ -15637,13 +15677,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "41ec220d0d92254dd4f7a8df030859a268a22f3f4b71c04a3cf4fc8f223e1b61",
-  "serverVersion": "0.4.0-catalog.c41ec220d0d92.sf15257990970",
+  "contractRevision": "867499ca3ac6d10337766a9f0ce4841d84b972d20f281a6f1fb1087793ced678",
+  "serverVersion": "0.4.0-catalog.c867499ca3ac6.sf15257990970",
   "toolCount": 70,
   "toolSetRevision": "f15257990970da918c7b855b5a1f31869b4a2d79f541374fa363529e093986ac"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c41ec220d0d92.sf15257990970"
+  "version": "0.4.0-catalog.c867499ca3ac6.sf15257990970"
 } as const;

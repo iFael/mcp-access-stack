@@ -203,6 +203,7 @@ export interface RegisterWorkspaceToolsOptions {
   /** Subset of tools to expose (default: all six). */
   includeTools?: readonly WorkspaceToolName[];
   operationContextFactory?: ToolOperationContextFactory;
+  sourceControlExecutor?: Pick<GitHubExecutor, "getRepository" | "getPullRequest">;
   auth?: {
     requiredScope: string;
     resourceMetadataUrl: URL;
@@ -650,11 +651,11 @@ export function registerWorkspaceTools(
         description:
           "Runs up to 12 independent read-only workspace inspections in one MCP call. " +
           "Prefer this over multiple separate read-only calls when inputs are already known. " +
-          "Supports roots/files/file reads/search/Git/context/background-task lookup/list/release state. " +
+          "Supports roots/files/file reads/search/Git/context/background-task lookup/list/log/output, GitHub repository/PR reads and release state. " +
           "Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
         inputSchema: inspectWorkspaceBatchInputSchema,
         outputSchema: inspectWorkspaceBatchResultSchema,
-        annotations: toolAnnotations,
+        annotations: { ...toolAnnotations, openWorldHint: true },
         _meta: meta,
       },
       async (input, extra) => {
@@ -799,6 +800,89 @@ export function registerWorkspaceTools(
                               ),
                             ),
                           };
+                        case "read_background_task_logs":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: backgroundTaskLogsLookupResultSchema.parse(
+                              await executor.readBackgroundTaskLogs(
+                                readBackgroundTaskLogsInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  id: item.taskId,
+                                  maxBytes: item.maxBytes,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "read_background_task_output":
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: backgroundTaskOutputResultSchema.parse(
+                              await executor.readBackgroundTaskOutput(
+                                readBackgroundTaskOutputInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  id: item.taskId,
+                                  stdoutOffset: item.stdoutOffset,
+                                  stderrOffset: item.stderrOffset,
+                                  maxBytes: item.maxBytes,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        case "github_get_repository": {
+                          const github = options.sourceControlExecutor;
+                          if (!github) {
+                            throw new AppErrorClass(
+                              "CAPABILITY_UNSUPPORTED",
+                              "GitHub read executor is unavailable.",
+                            );
+                          }
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: githubRepositoryResultSchema.parse(
+                              await github.getRepository(
+                                githubGetRepositoryInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  owner: item.owner,
+                                  repository: item.repository,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        }
+                        case "github_get_pull_request": {
+                          const github = options.sourceControlExecutor;
+                          if (!github) {
+                            throw new AppErrorClass(
+                              "CAPABILITY_UNSUPPORTED",
+                              "GitHub read executor is unavailable.",
+                            );
+                          }
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: githubPullRequestResultSchema.parse(
+                              await github.getPullRequest(
+                                githubGetPullRequestInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  owner: item.owner,
+                                  repository: item.repository,
+                                  pullNumber: item.pullNumber,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        }
                         case "get_release_state":
                           return {
                             key: item.key,

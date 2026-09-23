@@ -59,6 +59,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     ...(options.operationContextFactory === undefined
       ? {}
       : { operationContextFactory: options.operationContextFactory }),
+    sourceControlExecutor: options.sourceControlExecutor,
   });
 
   registerSourceControlTools(server, options.sourceControlExecutor, {

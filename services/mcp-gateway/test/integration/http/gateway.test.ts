@@ -116,12 +116,22 @@ describe("gateway HTTP surface", () => {
         openWorldHint: true,
         idempotentHint: false,
       });
+      const inspectBatchTool = body.result.tools.find(
+        (tool) => tool.name === "inspect_workspace_batch",
+      );
+      expect(inspectBatchTool?.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
           ![
             "write_file",
             "patch_file",
+            "inspect_workspace_batch",
             "prepare_release",
             "promote_release",
             "run_command",
