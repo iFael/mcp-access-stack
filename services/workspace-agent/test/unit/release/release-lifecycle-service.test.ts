@@ -201,6 +201,29 @@ describe("ReleaseLifecycleService", () => {
     expect(executedInput.command).not.toContain("AllowUnsignedDevelopment");
   });
 
+  it("fails closed when persisted recovery projectRoot differs from the canonical workspace", async () => {
+    await writeState({
+      candidate: {
+        releaseId: CANDIDATE,
+        manifestSha256: "1".repeat(64),
+        materializedAt: ISO,
+      },
+    });
+    await writeBootstrap("Start-McpAccessStackCutover.ps1");
+    await writeRecoveryConfig(path.join(installationRoot, "legacy-project"));
+
+    const service = new ReleaseLifecycleService({} as any, {} as any);
+    await expect(
+      service.promote(
+        workspace,
+        { workspaceId: "ws", releaseId: CANDIDATE },
+        {},
+      ),
+    ).rejects.toMatchObject({
+      code: "EXECUTION_STATE_INVALID",
+    });
+  });
+
   async function writeState({
     candidate,
   }: {
@@ -243,7 +266,9 @@ describe("ReleaseLifecycleService", () => {
     await writeFile(path.join(directory, name), "# signed in production\n", "utf8");
   }
 
-  async function writeRecoveryConfig(): Promise<void> {
+  async function writeRecoveryConfig(
+    projectRoot = workspace.rootPath,
+  ): Promise<void> {
     const stateRoot = path.join(installationRoot, "state");
     await mkdir(stateRoot, { recursive: true });
     await writeFile(
@@ -251,6 +276,7 @@ describe("ReleaseLifecycleService", () => {
       JSON.stringify({
         schemaVersion: 1,
         taskName: "MCP Access Stack production edge-connector",
+        projectRoot,
         runtimeRoot: path.join(installationRoot, "environments", "production", "edge-connector"),
         edgeBaseUrl: "https://mcp-access-stack.example.workers.dev",
         connectorTokenFile: path.join(installationRoot, "environments", "production", "edge-connector", "connector-token.txt"),

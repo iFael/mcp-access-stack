@@ -36,6 +36,7 @@ const edgeRecoveryConfigSchema = z
   .object({
     schemaVersion: z.literal(1),
     taskName: z.string().min(1),
+    projectRoot: z.string().min(1),
     runtimeRoot: z.string().min(1),
     edgeBaseUrl: z.string().url().refine((value) => value.startsWith("https://"), {
       message: "edgeBaseUrl must use HTTPS.",
@@ -217,6 +218,18 @@ export class ReleaseLifecycleService {
     );
     await assertBootstrapPresent(cutover, "Start-McpAccessStackCutover.ps1");
     const config = await readEdgeRecoveryConfig(installationRoot);
+    const persistedProjectRoot = path.resolve(config.projectRoot);
+    const samePersistedProjectRoot =
+      process.platform === "win32"
+        ? persistedProjectRoot.toLocaleLowerCase("en-US") ===
+          projectRoot.toLocaleLowerCase("en-US")
+        : persistedProjectRoot === projectRoot;
+    if (!samePersistedProjectRoot) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Edge Connector recovery configuration projectRoot does not match the canonical workspace.",
+      );
+    }
     if (config.browserEnabled) {
       throw new AppError(
         "CAPABILITY_UNSUPPORTED",
