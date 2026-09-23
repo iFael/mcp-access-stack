@@ -29,7 +29,7 @@ interface ReleaseBackgroundTaskManager {
   start_background_task: BackgroundTaskManager["start_background_task"];
 }
 
-const PREPARE_TIMEOUT_MS = 15 * 60 * 1_000;
+const PREPARE_TIMEOUT_MS = 30 * 60 * 1_000;
 const PROMOTE_TIMEOUT_MS = 60_000;
 
 const edgeRecoveryConfigSchema = z
