@@ -139,6 +139,7 @@ describe("ReleaseLifecycleService", () => {
     expect(authorizedInput.command).not.toContain("AllowUnsignedDevelopment");
     expect(startedInput.operation).toBe("prepare_release");
     expect(startedInput.command).toBe(authorizedInput.command);
+    expect(startedInput.timeoutMs).toBe(30 * 60 * 1_000);
   });
 
   it("promotes only the staged candidate using persisted recovery configuration", async () => {
