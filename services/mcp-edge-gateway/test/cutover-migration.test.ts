@@ -136,6 +136,7 @@ describe("Owner OAuth v2 -> Edge v3 cutover migration", () => {
     const oauth = new EdgeOwnerOAuth(storage, { ...baseConfig, ownerSecret: undefined } as unknown as EdgeOwnerOAuthConfig);
     const verifier = "pkce-verifier-abcdefghijklmnopqrstuvwxyz0123456789";
     const challenge = await sha256Base64Url(verifier);
+    const migratedPassword = "shared-password-cutover-abcdefghijkl";
     const authorized = await oauth.handle(formRequest("https://edge.example/authorize", {
       response_type: "code",
       client_id: "legacy-chatgpt-client",
@@ -146,6 +147,8 @@ describe("Owner OAuth v2 -> Edge v3 cutover migration", () => {
       state: "state-cutover",
       resource: "https://edge.example/mcp",
       owner_token: ownerSecret,
+      owner_password: migratedPassword,
+      owner_password_confirm: migratedPassword,
     }));
     expect(authorized?.status).toBe(302);
   });

@@ -50,6 +50,7 @@ type RefreshTokenRecord = {
   scopes: string[];
   resource: string;
   expiresAt: number;
+  credentialVersion?: string;
 };
 
 type RevokedAccessRecord = { expiresAt: number };
@@ -57,6 +58,7 @@ type LegacyAccessTokenRecord = RefreshTokenRecord;
 type OwnerCredentialMaterial = {
   ownerVerifierHash: string;
   signingKey: string;
+  credentialVersion?: string;
 };
 
 const OWNER_BOOTSTRAP_MARKER_KEY = "owner:bootstrap:v1";
@@ -127,6 +129,16 @@ export class EdgeOwnerOAuth {
   async isConfigured(): Promise<boolean> {
     if (this.config.ownerSecret !== undefined && this.config.ownerSecret.length >= 16) return true;
     return isOwnerCredentialMaterial(await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY));
+  }
+
+  async rotateOwnerPassword(password: string): Promise<void> {
+    if (password.length < 16 || password.length > 2048 || /[\r\n\0]/u.test(password)) {
+      throw new Error("Owner password is invalid.");
+    }
+    const material = await deriveOwnerCredentialMaterial(password);
+    material.credentialVersion = crypto.randomUUID();
+    await this.storage.put(OWNER_CREDENTIAL_MATERIAL_KEY, material);
+    this.hmacKeyPromise = undefined;
   }
 
   async bootstrapLegacyState(snapshot: unknown, suppliedOwnerSecret: string): Promise<void> {
@@ -232,12 +244,31 @@ export class EdgeOwnerOAuth {
       scopes.length === 0 || !scopes.every((scope) => this.config.scopes.includes(scope))
     ) return oauthError("invalid_request", 400);
 
+    const passwordConfigured = (await this.currentCredentialVersion()) !== undefined;
     if (request.method === "GET") {
-      return htmlResponse(this.authorizationPage(client, fields));
+      return htmlResponse(this.authorizationPage(client, fields, passwordConfigured));
     }
-    const supplied = fields.get("owner_token") ?? "";
-    if (!(await this.ownerSecretMatches(supplied))) {
-      return htmlResponse(this.authorizationPage(client, fields, "Owner credential was not accepted."), 401);
+
+    if (!passwordConfigured) {
+      const currentCredential = fields.get("owner_token") ?? "";
+      const password = fields.get("owner_password") ?? "";
+      const confirmation = fields.get("owner_password_confirm") ?? "";
+      if (!(await this.ownerSecretMatches(currentCredential))) {
+        return htmlResponse(this.authorizationPage(client, fields, false, "Current credential was not accepted."), 401);
+      }
+      if (password !== confirmation) {
+        return htmlResponse(this.authorizationPage(client, fields, false, "Passwords do not match."), 400);
+      }
+      try {
+        await this.rotateOwnerPassword(password);
+      } catch {
+        return htmlResponse(this.authorizationPage(client, fields, false, "Password must contain between 16 and 2048 characters."), 400);
+      }
+    } else {
+      const supplied = fields.get("owner_password") ?? "";
+      if (!(await this.ownerSecretMatches(supplied))) {
+        return htmlResponse(this.authorizationPage(client, fields, true, "Password was not accepted."), 401);
+      }
     }
 
     const code = `code-${randomToken()}`;
@@ -281,6 +312,7 @@ export class EdgeOwnerOAuth {
       const key = refreshKey(hash);
       const record = await this.storage.get<RefreshTokenRecord>(key);
       if (!record || record.clientId !== clientId || record.expiresAt <= nowSeconds()) return oauthError("invalid_grant", 400);
+      if (record.credentialVersion !== await this.currentCredentialVersion()) return oauthError("invalid_grant", 400);
       const resource = fields.get("resource") ?? record.resource;
       if (resource !== record.resource) return oauthError("invalid_grant", 400);
       const requested = parseScopes(fields.get("scope") ?? record.scopes.join(" "));
@@ -323,11 +355,13 @@ export class EdgeOwnerOAuth {
     };
     const accessToken = await this.signAccessToken(claims);
     const refreshToken = `refresh-${randomToken()}`;
+    const credentialVersion = await this.currentCredentialVersion();
     await this.storage.put(refreshKey(await sha256Base64Url(refreshToken)), {
       clientId,
       scopes: [...scopes],
       resource,
       expiresAt: now + this.config.refreshTokenTtlSeconds,
+      ...(credentialVersion === undefined ? {} : { credentialVersion }),
     } satisfies RefreshTokenRecord);
     return {
       access_token: accessToken,
@@ -368,6 +402,11 @@ export class EdgeOwnerOAuth {
   private hmacKey(): Promise<CryptoKey> {
     this.hmacKeyPromise ??= this.loadSigningKey();
     return this.hmacKeyPromise;
+  }
+
+  private async currentCredentialVersion(): Promise<string | undefined> {
+    const stored = await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY);
+    return isOwnerCredentialMaterial(stored) ? stored.credentialVersion : undefined;
   }
 
   private async loadSigningKey(): Promise<CryptoKey> {
@@ -471,12 +510,15 @@ export class EdgeOwnerOAuth {
     return url.protocol === "https:" && url.hostname === this.config.publicBaseUrl.hostname && !url.username && !url.password;
   }
 
-  private authorizationPage(client: OwnerClient, fields: URLSearchParams, error?: string): string {
+  private authorizationPage(client: OwnerClient, fields: URLSearchParams, passwordConfigured: boolean, error?: string): string {
     const hidden = [...fields.entries()]
-      .filter(([name]) => name !== "owner_token")
+      .filter(([name]) => name !== "owner_password" && name !== "owner_password_confirm" && name !== "owner_token")
       .map(([name, value]) => `<input type="hidden" name="${htmlEscape(name)}" value="${htmlEscape(value)}">`)
       .join("\n");
-    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}<label>Owner<input name="owner_token" type="password" required></label><button type="submit">Authorize</button></form></main></body></html>`;
+    const credentialFields = passwordConfigured
+      ? `<label>Password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
+      : `<p>One-time migration: enter the current credential and choose the shared password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New password<input name="owner_password" type="password" autocomplete="new-password" minlength="16" required></label><label>Confirm password<input name="owner_password_confirm" type="password" autocomplete="new-password" minlength="16" required></label>`;
+    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}<button type="submit">Authorize</button></form></main></body></html>`;
   }
 }
 
@@ -509,7 +551,8 @@ async function deriveOwnerCredentialMaterial(ownerSecret: string): Promise<Owner
 }
 function isOwnerCredentialMaterial(value: unknown): value is OwnerCredentialMaterial {
   return isRecord(value) && typeof value.ownerVerifierHash === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.ownerVerifierHash) &&
-    typeof value.signingKey === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.signingKey);
+    typeof value.signingKey === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.signingKey) &&
+    (value.credentialVersion === undefined || (typeof value.credentialVersion === "string" && value.credentialVersion.length > 0 && value.credentialVersion.length <= 64));
 }
 function constantTimeBase64UrlEquals(left: string, right: string): boolean {
   const a = decodeBase64UrlBytes(left);
