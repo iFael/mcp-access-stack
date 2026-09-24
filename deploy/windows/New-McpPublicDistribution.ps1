@@ -117,7 +117,9 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
+    'config\windows-companion-policy.example.json',
     'deploy\windows\Install-McpAccessStack.ps1',
+    'deploy\windows\Install-McpWindowsAdminCompanion.ps1',
     'deploy\windows\Start-McpAccessStackCutover.ps1',
     'deploy\windows\Invoke-McpAccessStackCutoverBroker.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',

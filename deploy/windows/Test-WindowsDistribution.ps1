@@ -108,6 +108,7 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'Stage-McpWindowsExecutionNodeCandidate.ps1',
     'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Install-McpEdgeConnectorTask.ps1',
+    'Install-McpWindowsAdminCompanion.ps1',
     'Install-McpBrowserWorkerTask.ps1',
     'Start-McpEdgeConnector.ps1',
     'Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
@@ -130,6 +131,26 @@ Assert-ContainsNone -Label 'Public distribution builder' -Source $distributionBu
     'Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
     'Request-McpWindowsExecutionNodeCutover.ps1',
     'deploy\docker'
+)
+
+$windowsCompanion = Read-ProjectFile 'deploy\windows\Install-McpWindowsAdminCompanion.ps1'
+Assert-ContainsAll -Label 'Windows admin companion' -Source $windowsCompanion -Tokens @(
+    'MCP Access Stack Windows admin companion',
+    'OpenSSH.Server~~~~0.0.1.0',
+    'ListenAddress 127.0.0.1',
+    'PasswordAuthentication no',
+    'AllowUsers $AdminUser',
+    'permitlisten="127.0.0.1:%s"',
+    'New-ScheduledTaskPrincipal',
+    "-UserId 'SYSTEM'",
+    'fltmc.exe',
+    'MCP_WINDOWS_COMPANION_ENABLED=true',
+    'systemctl --user restart mcp-access-stack-edge-connector.service'
+)
+Assert-ContainsNone -Label 'Windows admin companion' -Source $windowsCompanion -Tokens @(
+    '0.0.0.0',
+    'PasswordAuthentication yes',
+    'StrictHostKeyChecking=no'
 )
 
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'
