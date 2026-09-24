@@ -239,9 +239,9 @@ mkdir -p "$user_unit_root"
 cp -- "$final_root/deploy/linux/mcp-access-stack-edge-connector.service" "$user_unit_root/$edge_task_name"
 chmod 644 "$user_unit_root/$edge_task_name"
 systemctl --user daemon-reload
-systemctl --user enable "$edge_task_name" >/dev/null
 
 if $activate; then
+  systemctl --user enable "$edge_task_name" >/dev/null
   systemctl --user restart "$edge_task_name"
 fi
 
