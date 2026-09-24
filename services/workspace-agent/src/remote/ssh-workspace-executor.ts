@@ -138,6 +138,7 @@ import {
   protectedGitPushReason,
 } from "../shell/command-risk.js";
 import { CommandConfirmationRegistry } from "../shell/confirmation.js";
+import { trustedWorkspaceCriticalReason } from "../shell/trusted-workspace-authorization.js";
 import { FileMutationReceiptStore } from "../source-control/file-mutation-receipt-store.js";
 import { GitHubCommitChecksWatchManager } from "../source-control/github-checks-watch-manager.js";
 import { GitHubService } from "../source-control/github-service.js";
@@ -170,6 +171,7 @@ export interface SshWorkspaceExecutorOptions {
   transport?: SshWindowsTransport;
   transportConfig?: SshWindowsTransportConfig;
   backgroundStateDirectory: string;
+  probeOnCreate?: boolean;
 }
 
 function backgroundTaskAccess(
@@ -245,7 +247,9 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       options.policy ??
       JSON.parse(await readLocalFile(requirePolicyPath(options.policyPath), "utf8"));
     const executor = new SshWorkspaceExecutor(policy, options);
-    await executor.probe();
+    if (options.probeOnCreate !== false) {
+      await executor.probe();
+    }
     await executor.githubChecksWatchManager.recover();
     return executor;
   }
@@ -704,7 +708,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     const workspace = this.workspace(input.workspaceId);
     const shell = resolveShell(input.shell, workspace.allowedShells);
     const cwd = this.authorizeShellCwd(workspace, input.cwd ?? ".");
-    const authorization = this.authorizeCommandExecution({
+    const authorization = await this.authorizeCommandExecution({
       workspaceId: workspace.id,
       shell,
       cwd,
@@ -801,7 +805,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     }
     const shell = resolveShell(parsed.shell, workspace.allowedShells);
     const cwd = this.authorizeShellCwd(workspace, parsed.cwd ?? ".");
-    const authorization = this.authorizeCommandExecution({
+    const authorization = await this.authorizeCommandExecution({
       workspaceId: workspace.id,
       shell,
       cwd,
@@ -934,7 +938,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     );
   }
 
-  private authorizeCommandExecution(input: {
+  private async authorizeCommandExecution(input: {
     workspaceId: string;
     shell: ShellName;
     cwd: string;
@@ -942,9 +946,18 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     confirmationId?: string;
     executionContext: "foreground" | "background";
     operation: string;
-  }): { shell: ShellName; cwd: string } | CommandConfirmationRequiredResult {
+  }): Promise<{ shell: ShellName; cwd: string } | CommandConfirmationRequiredResult> {
     this.enforceGitPushPolicy(input.shell, input.command);
     const risk = classifyCommandRisk(input.shell, input.command);
+    const criticalReason = await trustedWorkspaceCriticalReason(
+      input.shell,
+      input.command,
+      input.cwd,
+    );
+    const reasons = [
+      ...risk.reasons,
+      ...(criticalReason === undefined ? [] : [criticalReason]),
+    ];
     const binding = {
       workspaceId: input.workspaceId,
       shell: input.shell,
@@ -953,7 +966,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       executionContext: input.executionContext,
       operation: input.operation,
     };
-    if (risk.destructive) {
+    if (risk.destructive || criticalReason !== undefined) {
       if (!input.confirmationId) {
         const confirmation = this.confirmations.create(binding);
         return {
@@ -962,8 +975,8 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
           cwd: input.cwd,
           confirmationId: confirmation.confirmationId,
           expiresAt: confirmation.expiresAt,
-          reasons: risk.reasons.length > 0
-            ? risk.reasons
+          reasons: reasons.length > 0
+            ? [...new Set(reasons)]
             : ["Potentially destructive remote command requires explicit confirmation."],
         };
       }
