@@ -24,6 +24,7 @@ import type {
   SearchFilesResult,
   StartBackgroundTaskInput,
   StartBackgroundTaskResult,
+  WaitBackgroundTaskInput,
   WriteBackgroundTaskStdinInput,
   WorkspaceExecutor,
   WorkspaceSummary,
@@ -63,6 +64,12 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
   validationInputs: RunWorkspaceValidationInput[] = [];
   validationResultFailures = new Set<RunWorkspaceValidationInput["validation"]>();
   validationErrors = new Set<RunWorkspaceValidationInput["validation"]>();
+  waitInputs: WaitBackgroundTaskInput[] = [];
+  waitErrors = new Set<string>();
+  waitTimedOutIds = new Set<string>();
+  waitDelayMs = 0;
+  activeWaits = 0;
+  maxConcurrentWaits = 0;
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
     this.calls.push("listWorkspaces");
@@ -302,21 +309,44 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { task: input.id === backgroundTask.id ? backgroundTask : null };
   }
 
-  async waitBackgroundTask(): Promise<import("@vs-code-gpt/shared").BackgroundTaskWaitResult> {
+  async waitBackgroundTask(
+    input: WaitBackgroundTaskInput,
+  ): Promise<import("@vs-code-gpt/shared").BackgroundTaskWaitResult> {
     this.calls.push("waitBackgroundTask");
-    return {
-      task: { ...backgroundTask, state: "succeeded" },
-      logs: {
-        id: backgroundTask.id,
-        stdout: "done",
-        stderr: "",
-        stdoutBytes: 4,
-        stderrBytes: 0,
-        truncated: false,
-      },
-      timedOut: false,
-      elapsedMs: 12,
-    };
+    this.waitInputs.push(input);
+    this.activeWaits += 1;
+    this.maxConcurrentWaits = Math.max(
+      this.maxConcurrentWaits,
+      this.activeWaits,
+    );
+    try {
+      if (this.waitDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.waitDelayMs));
+      }
+      if (this.waitErrors.has(input.id)) {
+        throw new AppError("AGENT_TIMEOUT", "Background wait failed.");
+      }
+      const timedOut = this.waitTimedOutIds.has(input.id);
+      return {
+        task: {
+          ...backgroundTask,
+          id: input.id,
+          state: timedOut ? "running" : "succeeded",
+        },
+        logs: {
+          id: input.id,
+          stdout: timedOut ? "" : "done",
+          stderr: "",
+          stdoutBytes: timedOut ? 0 : 4,
+          stderrBytes: 0,
+          truncated: false,
+        },
+        timedOut,
+        elapsedMs: timedOut ? input.timeoutMs ?? 60_000 : 12,
+      };
+    } finally {
+      this.activeWaits -= 1;
+    }
   }
 
   async listBackgroundTasks(): Promise<BackgroundTaskListResult> {
@@ -1276,6 +1306,81 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toEqual(["getBackgroundTask", "getBackgroundTask"]);
   });
 
+  it("waits for multiple background tasks concurrently and isolates wait errors", async () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
+      "wait_background_tasks",
+    );
+
+    const executor = new MockWorkspaceExecutor();
+    executor.waitDelayMs = 10;
+    const timedOutId = "223e4567-e89b-42d3-a456-426614174000";
+    const errorId = "323e4567-e89b-42d3-a456-426614174000";
+    executor.waitTimedOutIds.add(timedOutId);
+    executor.waitErrors.add(errorId);
+
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["wait_background_tasks"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = registeredTools(server)["wait_background_tasks"]!;
+    expect(tool.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+
+    const result = await tool.handler(
+      {
+        workspaceId: "ws",
+        ids: [backgroundTask.id, timedOutId, errorId],
+        timeoutMs: 20_000,
+        maxBytes: 2048,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      timedOutCount: 1,
+      errorCount: 1,
+      items: [
+        {
+          id: backgroundTask.id,
+          status: "ok",
+          result: { timedOut: false, task: { state: "succeeded" } },
+        },
+        {
+          id: timedOutId,
+          status: "ok",
+          result: { timedOut: true, task: { state: "running" } },
+        },
+        {
+          id: errorId,
+          status: "error",
+          error: { code: "AGENT_TIMEOUT" },
+        },
+      ],
+    });
+    expect(executor.waitInputs.map((input) => input.id)).toEqual([
+      backgroundTask.id,
+      timedOutId,
+      errorId,
+    ]);
+    expect(
+      executor.waitInputs.every(
+        (input) => input.timeoutMs === 20_000 && input.maxBytes === 2048,
+      ),
+    ).toBe(true);
+    expect(executor.maxConcurrentWaits).toBe(3);
+    expect(executor.calls).not.toContain("cancelBackgroundTask");
+  });
+
   it("publishes wait_background_task as a workspace tool", () => {
     expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
       "wait_background_task",
@@ -1476,11 +1581,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 39-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 40-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(39);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(39);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(40);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(40);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { shellNameSchema } from "./policy.js";
+import { errorCodes } from "./errors.js";
 import { commandConfirmationRequiredResultSchema } from "./command-confirmation-contracts.js";
 import {
   MAX_BACKGROUND_OPERATION_TIMEOUT_MS,
@@ -162,6 +163,34 @@ export type ParsedWaitBackgroundTaskToolInput = z.output<
   typeof waitBackgroundTaskToolInputSchema
 >;
 
+export const waitBackgroundTasksToolInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    ids: z.array(taskIdSchema).min(1).max(8),
+    timeoutMs: z.number().int().positive().max(30_000).default(15_000),
+    maxBytes: z.number().int().positive().max(1_000_000).default(100_000),
+  })
+  .strict()
+  .superRefine(({ ids }, context) => {
+    const unique = new Set<string>();
+    for (const [index, id] of ids.entries()) {
+      if (unique.has(id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["ids", index],
+          message: "Background task ids must be unique.",
+        });
+      }
+      unique.add(id);
+    }
+  });
+export type WaitBackgroundTasksToolInput = z.input<
+  typeof waitBackgroundTasksToolInputSchema
+>;
+export type ParsedWaitBackgroundTasksToolInput = z.output<
+  typeof waitBackgroundTasksToolInputSchema
+>;
+
 export const listBackgroundTasksInputSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -312,4 +341,48 @@ export const backgroundTaskWaitResultSchema = z
   .strict();
 export type BackgroundTaskWaitResult = z.infer<
   typeof backgroundTaskWaitResultSchema
+>;
+
+const backgroundTaskWaitBatchErrorSchema = z
+  .object({
+    code: z.enum(errorCodes),
+    message: z.string(),
+  })
+  .strict();
+
+export const backgroundTaskWaitBatchItemResultSchema = z
+  .object({
+    id: taskIdSchema,
+    status: z.enum(["ok", "error"]),
+    result: backgroundTaskWaitResultSchema.optional(),
+    error: backgroundTaskWaitBatchErrorSchema.optional(),
+  })
+  .strict()
+  .superRefine((item, context) => {
+    if (item.status === "ok" && item.result === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["result"],
+        message: "result is required when status=ok.",
+      });
+    }
+    if (item.status === "error" && item.error === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "error is required when status=error.",
+      });
+    }
+  });
+
+export const backgroundTasksWaitResultSchema = z
+  .object({
+    items: z.array(backgroundTaskWaitBatchItemResultSchema).min(1).max(8),
+    timedOutCount: z.number().int().nonnegative().max(8),
+    errorCount: z.number().int().nonnegative().max(8),
+  })
+  .strict();
+
+export type BackgroundTasksWaitResult = z.infer<
+  typeof backgroundTasksWaitResultSchema
 >;
