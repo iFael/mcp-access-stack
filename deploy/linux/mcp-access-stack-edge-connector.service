@@ -8,8 +8,8 @@ StartLimitBurst=6
 [Service]
 Type=simple
 WorkingDirectory=/srv/mcp-access-stack
-EnvironmentFile=/etc/mcp-access-stack/edge-connector.env
-ExecStart=/var/lib/mcp-access-stack/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment
+EnvironmentFile=%h/edge-connector.env
+ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment
 Restart=always
 RestartSec=2s
 TimeoutStopSec=30s

@@ -215,6 +215,25 @@ jq -n   --arg taskName "$edge_task_name"   --arg projectRoot "$project_root"   -
 mv -f -- "$state_root/edge-task-config.v1.json.tmp" "$state_root/edge-task-config.v1.json"
 chmod 600 "$state_root/edge-task-config.v1.json"
 
+env_path="$installation_root/edge-connector.env"
+cat > "$env_path.tmp" <<EOF
+VS_CODE_GPT_STACK_ROOT=$project_root
+MCP_RELEASE_ROOT=$installation_root/current
+MCP_ACCESS_STACK_RUNTIME_ROOT=$edge_runtime_root
+MCP_ACCESS_STACK_INSTALLATION_ROOT=$installation_root
+MCP_EDGE_BASE_URL=$edge_base_url
+MCP_CONNECTOR_TOKEN_FILE=$connector_token_file
+MCP_OWNER_TOKEN_FILE=$owner_token_file
+VS_CODE_GPT_POLICY_PATH=$policy_path
+MCP_NODE_BINARY=/usr/local/bin/node
+MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=$max_concurrent_requests
+MCP_SESSION_MODE=$mcp_session_mode
+OWNER_OAUTH_SCOPES=$owner_oauth_scopes
+ALLOWED_ORIGINS=$allowed_origins
+EOF
+mv -f -- "$env_path.tmp" "$env_path"
+chmod 600 "$env_path"
+
 user_unit_root="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$user_unit_root"
 cp -- "$final_root/deploy/linux/mcp-access-stack-edge-connector.service" "$user_unit_root/$edge_task_name"

@@ -71,7 +71,8 @@ if command -v pwsh >/dev/null 2>&1; then
 fi
 grep -Fq 'Invoke-McpAccessStackCutoverBroker.ps1' "$root/deploy/linux/Start-McpAccessStackCutover.sh"
 grep -Fq 'systemd-run --user' "$root/deploy/linux/Start-McpAccessStackCutover.sh"
-grep -Fq 'ExecStart=/var/lib/mcp-access-stack/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
+grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"
+grep -Fq 'ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
 grep -Fq 'Restart=always' "$unit"
 grep -Fq 'WantedBy=default.target' "$unit"
 unit_fixture="$tmp/mcp-access-stack-edge-connector.service"
