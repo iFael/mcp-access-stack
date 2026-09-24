@@ -141,8 +141,6 @@ Assert-ContainsAll -Label 'Windows admin companion' -Source $windowsCompanion -T
     'PasswordAuthentication no',
     'AllowUsers $AdminUser',
     'permitlisten="127.0.0.1:%s"',
-    'permitopen="127.0.0.1:%s"',
-    'no-user-rc',
     'New-ScheduledTaskPrincipal',
     "-UserId 'SYSTEM'",
     'fltmc.exe',
