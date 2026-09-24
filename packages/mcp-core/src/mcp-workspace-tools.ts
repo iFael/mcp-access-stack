@@ -80,6 +80,8 @@ import {
 import {
   gitCommitInputSchema,
   gitCommitResultSchema,
+  gitCommitPathsInputSchema,
+  gitCommitPathsResultSchema,
   gitCreateBranchInputSchema,
   gitCreateBranchResultSchema,
   gitMergeBranchInputSchema,
@@ -159,10 +161,23 @@ const listWorkspacesOutputSchema = z
   .object({ workspaces: listWorkspacesResultSchema })
   .strict();
 
-export type SourceControlToolName = SourceControlOperationName;
+export type SourceControlToolName =
+  | SourceControlOperationName
+  | "git_commit_paths";
 
 export const SOURCE_CONTROL_TOOL_NAMES = [
-  ...sourceControlOperationNameSchema.options,
+  "git_create_branch",
+  "git_stage_paths",
+  "git_unstage_paths",
+  "git_commit",
+  "git_commit_paths",
+  "git_merge_branch",
+  "git_push_branch",
+  "github_get_repository",
+  "github_create_repository",
+  "github_get_pull_request",
+  "github_create_pull_request",
+  "github_merge_pull_request",
 ] as const satisfies readonly SourceControlToolName[];
 
 const BASE_WORKSPACE_TOOL_NAMES = [
@@ -2254,7 +2269,13 @@ const sourceControlMcpSchemas = {
     output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, headSha: mcpSourceControlSha }).strict(),
   },
   git_stage_paths: {
-    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), paths: mcpSourceControlPaths }).strict(),
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      paths: mcpSourceControlPaths,
+      expectedHeadSha: mcpSourceControlSha.optional(),
+      requireCleanIndex: z.boolean().optional(),
+    }).strict(),
     output: z.object({ root: mcpSourceControlRoot, headSha: mcpSourceControlSha, indexTreeSha: mcpSourceControlSha, paths: mcpSourceControlPaths }).strict(),
   },
   git_unstage_paths: {
@@ -2264,6 +2285,33 @@ const sourceControlMcpSchemas = {
   git_commit: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), message: z.string().trim().min(1).max(4_000), expectedHeadSha: mcpSourceControlSha, expectedIndexTreeSha: mcpSourceControlSha }).strict(),
     output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, commitSha: mcpSourceControlSha }).strict(),
+  },
+  git_commit_paths: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      paths: mcpSourceControlPaths,
+      message: z.string().trim().min(1).max(4_000),
+      expectedHeadSha: mcpSourceControlSha,
+    }).strict(),
+    output: z.object({
+      status: z.enum(["completed", "reconciliation_required"]),
+      root: mcpSourceControlRoot,
+      branch: mcpSourceControlBranch.optional(),
+      previousHeadSha: mcpSourceControlSha.optional(),
+      stagedIndexTreeSha: mcpSourceControlSha.optional(),
+      commitSha: mcpSourceControlSha.optional(),
+      headSha: mcpSourceControlSha.optional(),
+      indexTreeSha: mcpSourceControlSha.optional(),
+      paths: mcpSourceControlPaths,
+      phase: z.enum(["post_stage_head_mismatch", "commit"]).optional(),
+      error: z.object({
+        code: z.string().min(1),
+        message: z.string().min(1),
+      }).strict().optional(),
+    }).strict().refine((value) => gitCommitPathsResultSchema.safeParse(value).success, {
+      message: "Invalid git_commit_paths MCP result.",
+    }),
   },
   git_merge_branch: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), sourceBranch: mcpSourceControlBranch, expectedTargetHeadSha: mcpSourceControlSha, expectedSourceHeadSha: mcpSourceControlSha }).strict(),
@@ -2349,6 +2397,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+  git_commit_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_merge_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
@@ -2462,6 +2511,114 @@ export function registerSourceControlTools(
           );
           return sourceControlSuccess("Git commit created.", structuredContent);
         } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_commit_paths", include)) {
+    server.registerTool(
+      "git_commit_paths",
+      {
+        title: "Stage and commit Git paths",
+        description:
+          "Stages and commits one explicit bounded path list against an exact expected HEAD. " +
+          "The index must be clean before staging, so unrelated pre-staged changes cannot be included. " +
+          "If staging succeeds but commit fails, the tool returns reconciliation_required and leaves the index unchanged for explicit inspection; it never performs a silent rollback.",
+        inputSchema: sourceControlMcpSchemas.git_commit_paths.input,
+        outputSchema: sourceControlMcpSchemas.git_commit_paths.output,
+        annotations: sourceControlAnnotations.git_commit_paths,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitCommitPathsInputSchema.parse(input);
+          const structuredContent = gitCommitPathsResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => {
+                const staged = gitStagePathsResultSchema.parse(
+                  await executor.stagePaths(
+                    {
+                      workspaceId: parsed.workspaceId,
+                      ...(parsed.root === undefined ? {} : { root: parsed.root }),
+                      paths: parsed.paths,
+                      expectedHeadSha: parsed.expectedHeadSha,
+                      requireCleanIndex: true,
+                    },
+                    context,
+                  ),
+                );
+
+                if (staged.headSha !== parsed.expectedHeadSha) {
+                  return {
+                    status: "reconciliation_required" as const,
+                    root: staged.root,
+                    headSha: staged.headSha,
+                    indexTreeSha: staged.indexTreeSha,
+                    paths: staged.paths,
+                    phase: "post_stage_head_mismatch" as const,
+                    error: {
+                      code: "GIT_HEAD_MISMATCH" as const,
+                      message:
+                        "Git HEAD changed after staging; the staged index requires explicit reconciliation.",
+                    },
+                  };
+                }
+
+                try {
+                  const committed = gitCommitResultSchema.parse(
+                    await executor.commit(
+                      {
+                        workspaceId: parsed.workspaceId,
+                        ...(parsed.root === undefined ? {} : { root: parsed.root }),
+                        message: parsed.message,
+                        expectedHeadSha: parsed.expectedHeadSha,
+                        expectedIndexTreeSha: staged.indexTreeSha,
+                      },
+                      context,
+                    ),
+                  );
+                  return {
+                    status: "completed" as const,
+                    root: committed.root,
+                    branch: committed.branch,
+                    previousHeadSha: parsed.expectedHeadSha,
+                    stagedIndexTreeSha: staged.indexTreeSha,
+                    commitSha: committed.commitSha,
+                    paths: staged.paths,
+                  };
+                } catch (error) {
+                  const appError =
+                    error instanceof AppErrorClass ? error : asAppError(error);
+                  return {
+                    status: "reconciliation_required" as const,
+                    root: staged.root,
+                    headSha: staged.headSha,
+                    indexTreeSha: staged.indexTreeSha,
+                    paths: staged.paths,
+                    phase: "commit" as const,
+                    error: {
+                      code: appError.code,
+                      message: sanitizeOperationDiagnostic(appError.message),
+                    },
+                  };
+                }
+              },
+            ),
+          );
+          return sourceControlSuccess(
+            structuredContent.status === "completed"
+              ? "Git paths staged and committed."
+              : "Git paths staged but commit did not complete; explicit reconciliation is required.",
+            structuredContent,
+          );
+        } catch (error) {
+          return toolError(error);
+        }
       },
     );
   }

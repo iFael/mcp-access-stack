@@ -5,6 +5,8 @@ import {
   confirmableSourceControlOperationNameSchema,
   gitBranchSchema,
   gitCommitInputSchema,
+  gitCommitPathsInputSchema,
+  gitCommitPathsResultSchema,
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
@@ -169,6 +171,53 @@ describe("source-control contracts", () => {
       workspaceId: "repo",
       paths: ["src/A.ts", "src/a.ts"],
     })).toMatchObject({ paths: ["src/A.ts", "src/a.ts"] });
+
+    expect(gitStagePathsInputSchema.parse({
+      workspaceId: "repo",
+      paths: ["src/a.ts"],
+      expectedHeadSha: shaA,
+      requireCleanIndex: true,
+    })).toMatchObject({
+      expectedHeadSha: shaA,
+      requireCleanIndex: true,
+    });
+  });
+
+  test("defines a bounded explicit-path commit composite with reconciliation result", () => {
+    expect(gitCommitPathsInputSchema.parse({
+      workspaceId: "repo",
+      paths: ["src/a.ts"],
+      message: "typed commit",
+      expectedHeadSha: shaA,
+    })).toEqual({
+      workspaceId: "repo",
+      paths: ["src/a.ts"],
+      message: "typed commit",
+      expectedHeadSha: shaA,
+    });
+
+    expect(gitCommitPathsResultSchema.parse({
+      status: "completed",
+      root: ".",
+      branch: "feature/task",
+      previousHeadSha: shaA,
+      stagedIndexTreeSha: shaB,
+      commitSha: shaC,
+      paths: ["src/a.ts"],
+    })).toMatchObject({ status: "completed", commitSha: shaC });
+
+    expect(gitCommitPathsResultSchema.parse({
+      status: "reconciliation_required",
+      root: ".",
+      headSha: shaA,
+      indexTreeSha: shaB,
+      paths: ["src/a.ts"],
+      phase: "commit",
+      error: {
+        code: "GIT_ERROR",
+        message: "commit failed",
+      },
+    })).toMatchObject({ status: "reconciliation_required", phase: "commit" });
   });
 
   test("unstages only explicit paths with HEAD and index preconditions", () => {

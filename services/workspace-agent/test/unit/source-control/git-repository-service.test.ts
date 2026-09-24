@@ -119,9 +119,12 @@ describe("GitRepositoryService create/stage/unstage", () => {
     await writeWorkspaceFile(fixture!.workspacePath, "a.txt", "a\n");
     await writeWorkspaceFile(fixture!.workspacePath, "b.txt", "b\n");
 
+    const expectedHeadSha = head();
     const result = await service.stagePaths({
       workspaceId: "test",
       paths: ["a.txt"],
+      expectedHeadSha,
+      requireCleanIndex: true,
     });
 
     expect(result.paths).toEqual(["a.txt"]);
@@ -130,6 +133,39 @@ describe("GitRepositoryService create/stage/unstage", () => {
     expect(git(fixture!.workspacePath, ["diff", "--cached", "--name-only"]).trim()).toBe(
       "a.txt",
     );
+  });
+
+  it("checks HEAD and a clean index before staging explicit commit paths", async () => {
+    const { service } = await setupRepository({ branch: "feature/task4" });
+    await writeWorkspaceFile(fixture!.workspacePath, "a.txt", "a\n");
+    await writeWorkspaceFile(fixture!.workspacePath, "b.txt", "b\n");
+    git(fixture!.workspacePath, ["add", "b.txt"]);
+    const expectedHeadSha = head();
+
+    await expect(
+      service.stagePaths({
+        workspaceId: "test",
+        paths: ["a.txt"],
+        expectedHeadSha,
+        requireCleanIndex: true,
+      }),
+    ).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(
+      git(fixture!.workspacePath, ["diff", "--cached", "--name-only"]).trim(),
+    ).toBe("b.txt");
+
+    git(fixture!.workspacePath, ["restore", "--staged", "b.txt"]);
+    await expect(
+      service.stagePaths({
+        workspaceId: "test",
+        paths: ["a.txt"],
+        expectedHeadSha: "f".repeat(40),
+        requireCleanIndex: true,
+      }),
+    ).rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    expect(
+      git(fixture!.workspacePath, ["diff", "--cached", "--name-only"]).trim(),
+    ).toBe("");
   });
 
   it("blocks mandatory private paths before staging", async () => {

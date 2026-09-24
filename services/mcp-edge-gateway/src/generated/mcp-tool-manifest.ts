@@ -7886,6 +7886,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
         "paths": {
           "items": {
             "maxLength": 4096,
@@ -7895,6 +7899,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxItems": 200,
           "minItems": 1,
           "type": "array"
+        },
+        "requireCleanIndex": {
+          "type": "boolean"
         },
         "root": {
           "maxLength": 4096,
@@ -8135,6 +8142,155 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Commit staged Git changes"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Stages and commits one explicit bounded path list against an exact expected HEAD. The index must be clean before staging, so unrelated pre-staged changes cannot be included. If staging succeeds but commit fails, the tool returns reconciliation_required and leaves the index unchanged for explicit inspection; it never performs a silent rollback.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "paths",
+        "message",
+        "expectedHeadSha"
+      ],
+      "type": "object"
+    },
+    "name": "git_commit_paths",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "commitSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "error": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "indexTreeSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "phase": {
+          "enum": [
+            "post_stage_head_mismatch",
+            "commit"
+          ],
+          "type": "string"
+        },
+        "previousHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "stagedIndexTreeSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "reconciliation_required"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "root",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "title": "Stage and commit Git paths"
   },
   {
     "_meta": {
@@ -17027,13 +17183,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "a96bca6745021fc98629cc31e4c4ef1b51d8211ffa3f992e8378f6c2f1d61b4a",
-  "serverVersion": "0.4.0-catalog.ca96bca674502.s49dd7b541c1f",
-  "toolCount": 73,
-  "toolSetRevision": "49dd7b541c1f9b87b3f4a446c8ac104b1ae7808aaa8182cbe16bf1c79e1daeca"
+  "contractRevision": "8ce917c8f257319914e7696bcaab5ae9edd5a78c569e32c51f09164ac2867f23",
+  "serverVersion": "0.4.0-catalog.c8ce917c8f257.se05fd6331573",
+  "toolCount": 74,
+  "toolSetRevision": "e05fd6331573a3c0c157e0d9c9796b6b68c9dee44741809cb4c272d9f60a9e9c"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ca96bca674502.s49dd7b541c1f"
+  "version": "0.4.0-catalog.c8ce917c8f257.se05fd6331573"
 } as const;

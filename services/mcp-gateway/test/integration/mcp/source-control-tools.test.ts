@@ -278,7 +278,54 @@ describe("MCP typed source-control boundary", () => {
       });
     },
   );
-  it("routes each public tool once with parsed input, structured result and operation context", async () => {
+  it("composes git_commit_paths through the typed source-control executor", async () => {
+    const executor = new RecordingSourceControlExecutor();
+
+    await withConnectedServer(executor, async (client) => {
+      const result = await client.callTool({
+        name: "git_commit_paths",
+        arguments: {
+          workspaceId: "repo",
+          root: "project",
+          paths: ["src/a.ts", "src/b.ts"],
+          message: "Task 8 composite",
+          expectedHeadSha: shaA,
+        },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        status: "completed",
+        root: "project",
+        branch: "feature/task8",
+        previousHeadSha: shaA,
+        stagedIndexTreeSha: shaB,
+        commitSha: shaC,
+        paths: ["src/a.ts", "src/b.ts"],
+      });
+      expect(executor.calls.map((call) => call.method)).toEqual([
+        "stagePaths",
+        "commit",
+      ]);
+      expect(executor.calls[0]?.input).toEqual({
+        workspaceId: "repo",
+        root: "project",
+        paths: ["src/a.ts", "src/b.ts"],
+        expectedHeadSha: shaA,
+        requireCleanIndex: true,
+      });
+      expect(executor.calls[1]?.input).toEqual({
+        workspaceId: "repo",
+        root: "project",
+        message: "Task 8 composite",
+        expectedHeadSha: shaA,
+        expectedIndexTreeSha: shaB,
+      });
+      expect(executor.calls.every((call) => call.context?.ownerScope === "owner:test")).toBe(true);
+    });
+  });
+
+  it("routes each relay-backed public tool once with parsed input, structured result and operation context", async () => {
     const executor = new RecordingSourceControlExecutor();
 
     await withConnectedServer(executor, async (client) => {
@@ -339,7 +386,7 @@ describe("MCP typed source-control boundary", () => {
     });
   });
 
-  it("rejects extra backend result fields for all eleven tools without emitting them", async () => {
+  it("rejects extra backend result fields for all eleven relay-backed tools without emitting them", async () => {
     const executor = new RecordingSourceControlExecutor();
     const forbiddenResultFields = ["authorization", "token", "rawResponse", "stderr"] as const;
 

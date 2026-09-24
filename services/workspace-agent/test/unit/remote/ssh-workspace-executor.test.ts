@@ -427,6 +427,8 @@ describe("SshWorkspaceExecutor", () => {
   it("stages and unstages only explicit authorized remote paths", async () => {
     queueRepository(transport);
     transport.execResults.push(
+      remoteResult(`${SHA_A}\n`),
+      remoteResult(),
       remoteResult(),
       remoteResult(`${SHA_A}\n`),
       remoteResult(`${SHA_B}\n`),
@@ -434,6 +436,8 @@ describe("SshWorkspaceExecutor", () => {
     const staged = await executor.stagePaths({
       workspaceId: "test",
       paths: ["src/a.ts"],
+      expectedHeadSha: SHA_A,
+      requireCleanIndex: true,
     });
     expect(staged).toEqual({
       root: ".",
@@ -474,6 +478,27 @@ describe("SshWorkspaceExecutor", () => {
       "--",
       "src/a.ts",
     ]);
+  });
+
+  it("blocks explicit remote staging when the index is already dirty", async () => {
+    queueRepository(transport);
+    transport.execResults.push(
+      remoteResult(`${SHA_A}\n`),
+      remoteResult("", 1),
+    );
+
+    await expect(
+      executor.stagePaths({
+        workspaceId: "test",
+        paths: ["src/a.ts"],
+        expectedHeadSha: SHA_A,
+        requireCleanIndex: true,
+      }),
+    ).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+
+    expect(
+      transport.execCommands.some((entry) => entry.argv.includes("add")),
+    ).toBe(false);
   });
 
   it("blocks remote staging paths denied by workspace policy", async () => {

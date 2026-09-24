@@ -78,6 +78,24 @@ export class GitRepositoryService implements GitRepositoryExecutor {
   ): Promise<GitStagePathsResult> {
     const parsed = gitStagePathsInputSchema.parse(input);
     const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", context?.signal);
+    if (parsed.expectedHeadSha !== undefined) {
+      const actualHead = await this.runner.headSha(repository.repositoryRoot, context?.signal);
+      assertSha(
+        "GIT_HEAD_MISMATCH",
+        parsed.expectedHeadSha,
+        actualHead,
+        "Git HEAD changed before staging.",
+      );
+    }
+    if (
+      parsed.requireCleanIndex &&
+      !(await this.runner.indexIsClean(repository.repositoryRoot, context?.signal))
+    ) {
+      throw new AppError(
+        "GIT_INDEX_CHANGED",
+        "Git index must be clean before staging explicit commit paths.",
+      );
+    }
     const paths = await this.authorizePaths(repository, parsed.paths);
     await this.runner.stagePaths(repository.repositoryRoot, paths, context?.signal);
     return {

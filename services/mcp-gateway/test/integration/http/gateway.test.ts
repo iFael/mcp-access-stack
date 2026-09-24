@@ -150,6 +150,7 @@ describe("gateway HTTP surface", () => {
             "git_stage_paths",
             "git_unstage_paths",
             "git_commit",
+            "git_commit_paths",
             "git_merge_branch",
             "git_push_branch",
             "github_get_repository",

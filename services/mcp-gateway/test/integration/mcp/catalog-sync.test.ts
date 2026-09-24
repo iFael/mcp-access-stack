@@ -35,6 +35,7 @@ const expectedLateTools = [
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
+  "git_commit_paths",
   "git_merge_branch",
   "git_push_branch",
   "github_get_repository",
@@ -64,7 +65,7 @@ describe("MCP connector catalog synchronization", () => {
         | undefined;
       const contractRevision = createMcpToolContractRevision(listed.tools);
 
-      expect(listed.tools).toHaveLength(73);
+      expect(listed.tools).toHaveLength(74);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -79,7 +80,7 @@ describe("MCP connector catalog synchronization", () => {
       expect(descriptions.get_workspace_context).toContain("project instruction files");
       expect(catalogMeta).toMatchObject({
         contractRevision,
-        toolCount: 73,
+        toolCount: 74,
       });
       expect(catalogMeta).not.toHaveProperty("descriptorRevision");
       expect(serverVersion).toEqual({
@@ -187,8 +188,8 @@ describe("MCP server instance catalog continuity", () => {
       );
       expect(secondServerVersion).toEqual(firstServerVersion);
       expect(secondCapabilities).toEqual(firstCapabilities);
-      expect(names).toHaveLength(73);
-      expect(new Set(names).size).toBe(73);
+      expect(names).toHaveLength(74);
+      expect(new Set(names).size).toBe(74);
       expect(metadata?.contractRevision).toBe(
         createMcpToolContractRevision(secondList.tools),
       );
