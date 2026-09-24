@@ -36,16 +36,16 @@ function Wait-Selected([string]$Base,[string]$Revision,[string[]]$Excluded=@(),[
       $ready=(Optional $h 'connectorReady') -eq $true
       $execution=(Optional $h 'executionPlaneReady') -eq $true
       $compatible=(Optional $h 'contractCompatible') -eq $true
-      $excluded=$Excluded -contains $id
+      $isExcluded=$Excluded -contains $id
       $idPresent=-not [string]::IsNullOrWhiteSpace($id)
       $catalogMatch=[StringComparer]::Ordinal.Equals($catalog,$expectedRevision)
       $activeMatch=[StringComparer]::Ordinal.Equals($active,$expectedRevision)
       $candidateEmpty=[string]::IsNullOrWhiteSpace($candidate)
-      $matches=$ready -and $execution -and $compatible -and -not $excluded -and $idPresent -and $catalogMatch -and $activeMatch -and $candidateEmpty
+      $matches=$ready -and $execution -and $compatible -and -not $isExcluded -and $idPresent -and $catalogMatch -and $activeMatch -and $candidateEmpty
       if ($matches) {
         return [pscustomobject]@{connectorInstanceId=$id;catalogContractRevision=$catalog;activeContractRevision=$active;executionPlaneReady=$execution;connectorReady=$ready;contractCompatible=$compatible}
       }
-      $last="execution=$execution ready=$ready compatible=$compatible expected=$expectedRevision active=$active activeMatch=$activeMatch candidate=$candidate candidateEmpty=$candidateEmpty catalog=$catalog catalogMatch=$catalogMatch id=$id idPresent=$idPresent excluded=$excluded"
+      $last="execution=$execution ready=$ready compatible=$compatible expected=$expectedRevision active=$active activeMatch=$activeMatch candidate=$candidate candidateEmpty=$candidateEmpty catalog=$catalog catalogMatch=$catalogMatch id=$id idPresent=$idPresent excluded=$isExcluded"
     } catch { $last=$_.Exception.Message }
     Start-Sleep -Milliseconds 500
   } while ([DateTimeOffset]::UtcNow -lt $deadline)
