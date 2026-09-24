@@ -89,6 +89,13 @@ describe("gateway HTTP surface", () => {
         openWorldHint: false,
         idempotentHint: true,
       });
+      const patchFilesTool = body.result.tools.find((tool) => tool.name === "patch_files");
+      expect(patchFilesTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      });
       const stdinTool = body.result.tools.find(
         (tool) => tool.name === "write_background_task_stdin",
       );
@@ -131,6 +138,7 @@ describe("gateway HTTP surface", () => {
           ![
             "write_file",
             "patch_file",
+            "patch_files",
             "inspect_workspace_batch",
             "prepare_release",
             "promote_release",

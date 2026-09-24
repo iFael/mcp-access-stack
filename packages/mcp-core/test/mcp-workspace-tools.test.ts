@@ -56,6 +56,9 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
   backgroundContexts: OperationContext[] = [];
   readFileFailures = new Set<string>();
   searchFailures = new Set<string>();
+  patchInputs: Array<import("@vs-code-gpt/shared").PatchFileInput> = [];
+  patchPreflightFailures = new Set<string>();
+  patchApplyFailures = new Set<string>();
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
     this.calls.push("listWorkspaces");
@@ -121,6 +124,13 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     input: import("@vs-code-gpt/shared").PatchFileInput,
   ): Promise<import("@vs-code-gpt/shared").PatchFileResult> {
     this.calls.push("patchFile");
+    this.patchInputs.push(input);
+    if ((input.dryRun ?? false) && this.patchPreflightFailures.has(input.path)) {
+      throw new AppError("INVALID_ARGUMENT", "Patch preflight failed.");
+    }
+    if (!(input.dryRun ?? false) && this.patchApplyFailures.has(input.path)) {
+      throw new AppError("INVALID_ARGUMENT", "Patch apply failed.");
+    }
     return {
       path: input.path,
       sha256Before: input.expectedSha256,
@@ -794,6 +804,156 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toContain("patchFile");
   });
 
+  it("preflights every patch_files item before applying sequentially", async () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain("patch_files");
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["patch_files"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = registeredTools(server)["patch_files"]!;
+    expect(tool.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+
+    const result = await tool.handler(
+      {
+        workspaceId: "ws",
+        items: [
+          {
+            path: "a.txt",
+            expectedSha256: "0".repeat(64),
+            replacements: [{ oldText: "a", newText: "A", expectedCount: 1 }],
+          },
+          {
+            path: "b.txt",
+            expectedSha256: "0".repeat(64),
+            replacements: [{ oldText: "b", newText: "B", expectedCount: 1 }],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      preflightPassed: true,
+      completed: true,
+      partial: false,
+      appliedCount: 2,
+      items: [
+        { path: "a.txt", status: "applied" },
+        { path: "b.txt", status: "applied" },
+      ],
+    });
+    expect(executor.patchInputs.map((input) => [input.path, input.dryRun])).toEqual([
+      ["a.txt", true],
+      ["b.txt", true],
+      ["a.txt", false],
+      ["b.txt", false],
+    ]);
+  });
+
+  it("performs zero writes when any patch_files preflight fails", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.patchPreflightFailures.add("b.txt");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["patch_files"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["patch_files"]!.handler(
+      {
+        workspaceId: "ws",
+        items: [
+          {
+            path: "a.txt",
+            expectedSha256: "0".repeat(64),
+            replacements: [{ oldText: "a", newText: "A", expectedCount: 1 }],
+          },
+          {
+            path: "b.txt",
+            expectedSha256: "0".repeat(64),
+            replacements: [{ oldText: "b", newText: "B", expectedCount: 1 }],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      preflightPassed: false,
+      completed: false,
+      partial: false,
+      appliedCount: 0,
+      items: [
+        { path: "a.txt", status: "preflight_ok" },
+        { path: "b.txt", status: "preflight_error", error: { code: "INVALID_ARGUMENT" } },
+      ],
+    });
+    expect(executor.patchInputs).toHaveLength(2);
+    expect(executor.patchInputs.every((input) => input.dryRun === true)).toBe(true);
+  });
+
+  it("stops patch_files on the first apply error and reports partial mutation", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.patchApplyFailures.add("b.txt");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["patch_files"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["patch_files"]!.handler(
+      {
+        workspaceId: "ws",
+        items: ["a.txt", "b.txt", "c.txt"].map((path) => ({
+          path,
+          expectedSha256: "0".repeat(64),
+          replacements: [{ oldText: path[0], newText: path[0]!.toUpperCase(), expectedCount: 1 }],
+        })),
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      preflightPassed: true,
+      completed: false,
+      partial: true,
+      appliedCount: 1,
+      stoppedAtPath: "b.txt",
+      items: [
+        { path: "a.txt", status: "applied" },
+        { path: "b.txt", status: "apply_error", error: { code: "INVALID_ARGUMENT" } },
+        { path: "c.txt", status: "skipped_after_error" },
+      ],
+    });
+    expect(executor.patchInputs.map((input) => [input.path, input.dryRun])).toEqual([
+      ["a.txt", true],
+      ["b.txt", true],
+      ["c.txt", true],
+      ["a.txt", false],
+      ["b.txt", false],
+    ]);
+  });
+
   it("batches independent read-only inspections across workspace, background and GitHub reads while isolating item errors", async () => {
     const executor = new MockWorkspaceExecutor();
     const sourceControlExecutor = new MockSourceControlExecutor();
@@ -1159,11 +1319,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 37-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 38-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(37);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(37);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(38);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(38);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {
