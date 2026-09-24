@@ -1,0 +1,30 @@
+[Unit]
+Description=MCP Access Stack Edge Connector
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=6
+
+[Service]
+Type=simple
+User=mcp-access-stack
+Group=mcp-access-stack
+WorkingDirectory=/srv/mcp-access-stack
+EnvironmentFile=/etc/mcp-access-stack/edge-connector.env
+ExecStart=/srv/mcp-access-stack/deploy/linux/Start-McpEdgeConnector.sh --from-environment
+Restart=on-failure
+RestartSec=60s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

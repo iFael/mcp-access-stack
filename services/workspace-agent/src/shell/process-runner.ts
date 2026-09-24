@@ -399,7 +399,7 @@ async function resolveShellSpec(
       };
     case "pwsh":
       return {
-        executable: "pwsh.exe",
+        executable: resolvePwshExecutable(),
         args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
       };
     case "cmd":
@@ -418,6 +418,10 @@ async function resolveShellSpec(
         args: ["-lc", command],
       };
   }
+}
+
+export function resolvePwshExecutable(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "pwsh.exe" : "pwsh";
 }
 
 async function resolveGitBash(): Promise<string> {

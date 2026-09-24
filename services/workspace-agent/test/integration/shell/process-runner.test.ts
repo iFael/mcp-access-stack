@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "@jest/globals";
 import {
+  resolvePwshExecutable,
   runShellCommand,
   runShellCommandToFiles,
   type ShellStdinControl,
@@ -26,6 +27,11 @@ afterEach(async () => {
 }, 30_000);
 
 describe("shell process runner", () => {
+  test("resolves pwsh natively on Windows and Linux", () => {
+    expect(resolvePwshExecutable("win32")).toBe("pwsh.exe");
+    expect(resolvePwshExecutable("linux")).toBe("pwsh");
+  });
+
   test("executes a shell without using Node shell mode", async () => {
     fixture = await createFixture();
 
