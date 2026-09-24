@@ -17,6 +17,7 @@ import type {
   ReadBackgroundTaskOutputInput,
   ReadFileInput,
   ReadFileResult,
+  RunWorkspaceValidationInput,
   RunWorkspaceValidationResult,
   RunCommandResult,
   SearchFilesInput,
@@ -59,6 +60,9 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
   patchInputs: Array<import("@vs-code-gpt/shared").PatchFileInput> = [];
   patchPreflightFailures = new Set<string>();
   patchApplyFailures = new Set<string>();
+  validationInputs: RunWorkspaceValidationInput[] = [];
+  validationResultFailures = new Set<RunWorkspaceValidationInput["validation"]>();
+  validationErrors = new Set<RunWorkspaceValidationInput["validation"]>();
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
     this.calls.push("listWorkspaces");
@@ -196,22 +200,29 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
-  async runValidation(): Promise<RunWorkspaceValidationResult> {
+  async runValidation(
+    input: RunWorkspaceValidationInput,
+  ): Promise<RunWorkspaceValidationResult> {
     this.calls.push("runValidation");
+    this.validationInputs.push(input);
+    if (this.validationErrors.has(input.validation)) {
+      throw new AppError("INTERNAL_ERROR", "Validation executor failed.");
+    }
+    const passed = !this.validationResultFailures.has(input.validation);
     return {
-      workspaceId: "ws",
-      root: ".",
-      validation: "diff-check",
-      scope: "changes",
+      workspaceId: input.workspaceId,
+      root: input.root ?? ".",
+      validation: input.validation,
+      scope: input.scope ?? "changes",
       executed: true,
-      passed: true,
-      tool: { name: "git", available: true, version: "git version test" },
+      passed,
+      tool: { name: input.validation, available: true, version: "test" },
       filesScanned: 0,
       findings: [],
       findingsCount: 0,
       truncated: false,
       durationMs: 1,
-      issues: [],
+      issues: passed ? [] : ["validation failed"],
       warnings: [],
     };
   }
@@ -954,6 +965,152 @@ describe("registerWorkspaceTools", () => {
     ]);
   });
 
+  it("runs workspace validation suites sequentially in one tool call", async () => {
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain(
+      "run_workspace_validations",
+    );
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_workspace_validations"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = registeredTools(server)["run_workspace_validations"]!;
+    expect(tool.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    });
+
+    const result = await tool.handler(
+      {
+        workspaceId: "ws",
+        validations: ["diff-check", "legacy-format", "secret-scan"],
+        scope: "changes",
+        maxFindings: 50,
+        timeoutMs: 30_000,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      workspaceId: "ws",
+      root: ".",
+      scope: "changes",
+      stopOnFailure: false,
+      completed: true,
+      passed: true,
+      attemptedCount: 3,
+      skippedCount: 0,
+      items: [
+        { validation: "diff-check", status: "passed" },
+        { validation: "legacy-format", status: "passed" },
+        { validation: "secret-scan", status: "passed" },
+      ],
+    });
+    expect(executor.validationInputs.map((input) => input.validation)).toEqual([
+      "diff-check",
+      "legacy-format",
+      "secret-scan",
+    ]);
+    expect(
+      executor.validationInputs.every(
+        (input) =>
+          input.scope === "changes" &&
+          input.maxFindings === 50 &&
+          input.timeoutMs === 30_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("stops workspace validation suites after the first failed result when requested", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.validationResultFailures.add("legacy-format");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_workspace_validations"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["run_workspace_validations"]!.handler(
+      {
+        workspaceId: "ws",
+        validations: ["diff-check", "legacy-format", "secret-scan"],
+        stopOnFailure: true,
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      completed: false,
+      passed: false,
+      attemptedCount: 2,
+      skippedCount: 1,
+      items: [
+        { validation: "diff-check", status: "passed" },
+        { validation: "legacy-format", status: "failed" },
+        { validation: "secret-scan", status: "skipped_after_failure" },
+      ],
+    });
+    expect(executor.validationInputs.map((input) => input.validation)).toEqual([
+      "diff-check",
+      "legacy-format",
+    ]);
+  });
+
+  it("isolates workspace validation execution errors when stopOnFailure is false", async () => {
+    const executor = new MockWorkspaceExecutor();
+    executor.validationErrors.add("legacy-compat");
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["run_workspace_validations"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const result = await registeredTools(server)["run_workspace_validations"]!.handler(
+      {
+        workspaceId: "ws",
+        validations: ["diff-check", "legacy-compat", "secret-scan"],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      completed: true,
+      passed: false,
+      attemptedCount: 3,
+      skippedCount: 0,
+      items: [
+        { validation: "diff-check", status: "passed" },
+        {
+          validation: "legacy-compat",
+          status: "error",
+          error: { code: "INTERNAL_ERROR" },
+        },
+        { validation: "secret-scan", status: "passed" },
+      ],
+    });
+    expect(executor.validationInputs.map((input) => input.validation)).toEqual([
+      "diff-check",
+      "legacy-compat",
+      "secret-scan",
+    ]);
+  });
+
   it("batches independent read-only inspections across workspace, background and GitHub reads while isolating item errors", async () => {
     const executor = new MockWorkspaceExecutor();
     const sourceControlExecutor = new MockSourceControlExecutor();
@@ -1319,11 +1476,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 38-tool workspace surface", () => {
+  it("publishes exactly eleven source-control names inside the 39-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(38);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(38);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(39);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(39);
   });
 
   it("registers exact annotations and routes each tool to exactly one typed method", async () => {

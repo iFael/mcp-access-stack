@@ -44,6 +44,9 @@ import {
   patchFilesResultSchema,
   runWorkspaceValidationInputSchema,
   runWorkspaceValidationResultSchema,
+  runWorkspaceValidationsInputSchema,
+  runWorkspaceValidationsItemResultSchema,
+  runWorkspaceValidationsResultSchema,
   runCommandMcpResultSchema,
   runCommandInputSchema,
   runCommandToolInputSchema,
@@ -174,6 +177,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "prepare_release",
   "promote_release",
   "run_workspace_validation",
+  "run_workspace_validations",
   "run_command",
   "search_files",
   "search_files_batch",
@@ -1260,6 +1264,125 @@ export function registerWorkspaceTools(
           ].join("; ");
           return {
             content: [{ type: "text", text: summary }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("run_workspace_validations", include)) {
+    server.registerTool(
+      "run_workspace_validations",
+      {
+        title: "Run workspace validations",
+        description:
+          "Runs up to four distinct predefined read-only workspace validations sequentially in one MCP call. " +
+          "The suite shares root/scope/paths/maxFindings/timeoutMs across validations. " +
+          "Results are reported per validation; stopOnFailure can skip remaining validations after the first failed result or execution error. " +
+          "Arbitrary commands are not accepted.",
+        inputSchema: runWorkspaceValidationsInputSchema,
+        outputSchema: runWorkspaceValidationsResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsedInput = runWorkspaceValidationsInputSchema.parse(input);
+          const suiteTimeoutMs = Math.min(
+            MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+            parsedInput.timeoutMs * parsedInput.validations.length,
+          );
+          const structuredContent = runWorkspaceValidationsResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              suiteTimeoutMs,
+              async (context) => {
+                const items: Array<
+                  z.infer<typeof runWorkspaceValidationsItemResultSchema>
+                > = [];
+                let stopped = false;
+
+                for (const validation of parsedInput.validations) {
+                  if (stopped) {
+                    items.push({
+                      validation,
+                      status: "skipped_after_failure",
+                    });
+                    continue;
+                  }
+
+                  try {
+                    const result = runWorkspaceValidationResultSchema.parse(
+                      await executor.runValidation(
+                        runWorkspaceValidationInputSchema.parse({
+                          workspaceId: parsedInput.workspaceId,
+                          root: parsedInput.root,
+                          validation,
+                          scope: parsedInput.scope,
+                          paths: parsedInput.paths,
+                          maxFindings: parsedInput.maxFindings,
+                          timeoutMs: parsedInput.timeoutMs,
+                        }),
+                        context,
+                      ),
+                    );
+                    const status = result.passed ? "passed" : "failed";
+                    items.push({ validation, status, result });
+                    if (!result.passed && parsedInput.stopOnFailure) {
+                      stopped = true;
+                    }
+                  } catch (error) {
+                    const appError =
+                      error instanceof AppErrorClass ? error : asAppError(error);
+                    items.push({
+                      validation,
+                      status: "error",
+                      error: {
+                        code: appError.code,
+                        message: sanitizeOperationDiagnostic(appError.message),
+                      },
+                    });
+                    if (parsedInput.stopOnFailure) {
+                      stopped = true;
+                    }
+                  }
+                }
+
+                const skippedCount = items.filter(
+                  (item) => item.status === "skipped_after_failure",
+                ).length;
+                return {
+                  workspaceId: parsedInput.workspaceId,
+                  root: parsedInput.root,
+                  scope: parsedInput.scope,
+                  stopOnFailure: parsedInput.stopOnFailure,
+                  completed: skippedCount === 0,
+                  passed: items.every((item) => item.status === "passed"),
+                  attemptedCount: items.length - skippedCount,
+                  skippedCount,
+                  items,
+                };
+              },
+            ),
+          );
+
+          const passedCount = structuredContent.items.filter(
+            (item) => item.status === "passed",
+          ).length;
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Validation suite: passed=${passedCount}/${structuredContent.items.length}; attempted=${structuredContent.attemptedCount}; skipped=${structuredContent.skippedCount}.`,
+              },
+            ],
             structuredContent,
           };
         } catch (error) {

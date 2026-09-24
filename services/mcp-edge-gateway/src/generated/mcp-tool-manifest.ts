@@ -2473,6 +2473,451 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Runs up to four distinct predefined read-only workspace validations sequentially in one MCP call. The suite shares root/scope/paths/maxFindings/timeoutMs across validations. Results are reported per validation; stopOnFailure can skip remaining validations after the first failed result or execution error. Arbitrary commands are not accepted.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "maxFindings": {
+          "default": 100,
+          "exclusiveMinimum": 0,
+          "maximum": 200,
+          "type": "integer"
+        },
+        "paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "root": {
+          "default": ".",
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "default": "changes",
+          "enum": [
+            "changes",
+            "paths",
+            "repository"
+          ],
+          "type": "string"
+        },
+        "stopOnFailure": {
+          "default": false,
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "default": 60000,
+          "exclusiveMinimum": 0,
+          "maximum": 300000,
+          "type": "integer"
+        },
+        "validations": {
+          "items": {
+            "enum": [
+              "diff-check",
+              "legacy-format",
+              "legacy-compat",
+              "secret-scan"
+            ],
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "validations"
+      ],
+      "type": "object"
+    },
+    "name": "run_workspace_validations",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "attemptedCount": {
+          "maximum": 4,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "POLICY_INVALID",
+                      "WORKSPACE_NOT_FOUND",
+                      "WORKSPACE_DISABLED",
+                      "PERMISSION_DENIED",
+                      "WRITE_NOT_ALLOWED",
+                      "SHELL_NOT_ALLOWED",
+                      "SHELL_FAILED",
+                      "SHELL_UNAVAILABLE",
+                      "COMMAND_CONFIRMATION_INVALID",
+                      "INVALID_PATH",
+                      "PATH_OUTSIDE_WORKSPACE",
+                      "PATH_OUTSIDE_ALLOWED_ROOTS",
+                      "BLOCKED_PATH",
+                      "FILE_NOT_FOUND",
+                      "NOT_A_FILE",
+                      "NOT_A_DIRECTORY",
+                      "FILE_TOO_LARGE",
+                      "INVALID_UTF8",
+                      "BINARY_FILE",
+                      "LIMIT_EXCEEDED",
+                      "NOT_GIT_REPOSITORY",
+                      "GIT_ERROR",
+                      "SOURCE_CONTROL_CAPABILITY_DENIED",
+                      "SOURCE_CONTROL_CONFIRMATION_INVALID",
+                      "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT",
+                      "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+                      "GIT_HEAD_MISMATCH",
+                      "GIT_BRANCH_CONFLICT",
+                      "GIT_INDEX_CHANGED",
+                      "GIT_REMOTE_CHANGED",
+                      "GIT_MERGE_NOT_FAST_FORWARD",
+                      "GIT_PROTECTED_BRANCH",
+                      "AUDIT_FAILED",
+                      "AGENT_UNAVAILABLE",
+                      "AGENT_BUSY",
+                      "AGENT_TIMEOUT",
+                      "OPERATION_CANCELLED",
+                      "RELAY_PROTOCOL_ERROR",
+                      "IDEMPOTENCY_KEY_CONFLICT",
+                      "EXECUTION_NOT_FOUND",
+                      "EXECUTION_STATE_INVALID",
+                      "EXECUTION_OUTCOME_UNKNOWN",
+                      "AUTHENTICATION_FAILED",
+                      "BROWSER_WORKER_UNAVAILABLE",
+                      "BROWSER_WORKER_TIMEOUT",
+                      "BROWSER_DISCONNECTED",
+                      "BROWSER_CONTEXT_RECOVERY_FAILED",
+                      "TASK_SCOPE_REQUIRED",
+                      "TASK_NOT_FOUND",
+                      "TASK_OWNERSHIP_MISMATCH",
+                      "TASK_SUSPENDED",
+                      "TASK_EXPIRED",
+                      "SITE_ACCESS_AUTHORIZATION_REQUIRED",
+                      "SITE_ACCESS_GRANT_EXPIRED",
+                      "SITE_NAVIGATION_BLOCKED",
+                      "SITE_POLICY_NOT_FOUND",
+                      "SITE_PRODUCTION_BLOCKED",
+                      "LOGIN_CREDENTIAL_UNAVAILABLE",
+                      "LOGIN_CREDENTIALS_INVALID",
+                      "LOGIN_INTERACTION_REQUIRED",
+                      "CREDENTIAL_BROKER_UNAVAILABLE",
+                      "CREDENTIAL_BROKER_PROTOCOL_MISMATCH",
+                      "CREDENTIAL_BROKER_ACCESS_DENIED",
+                      "BROWSER_CAPABILITY_UNSUPPORTED",
+                      "BROWSER_OPERATION_MODE_UNSUPPORTED",
+                      "FRAME_NOT_FOUND",
+                      "FRAME_NOT_READY",
+                      "FRAME_CROSS_ORIGIN",
+                      "LOCATOR_NOT_FOUND",
+                      "LOCATOR_AMBIGUOUS",
+                      "LOCATOR_LOW_CONFIDENCE",
+                      "NAVIGATION_TIMEOUT",
+                      "STATE_NOT_REACHED",
+                      "ACTION_BLOCKED_BY_POLICY",
+                      "CAPABILITY_UNSUPPORTED",
+                      "TAB_NOT_FOUND",
+                      "STALE_TAB_ID",
+                      "TAB_NOT_OWNED",
+                      "TAB_PROTECTED",
+                      "NAVIGATION_BLOCKED",
+                      "AUTHENTICATION_REQUIRED",
+                      "CAPTCHA_DETECTED",
+                      "ACTION_REQUIRES_CONFIRMATION",
+                      "BROWSER_CONFIRMATION_INVALID",
+                      "INVALID_ARGUMENT",
+                      "INTERNAL_ERROR"
+                    ],
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "result": {
+                "additionalProperties": false,
+                "properties": {
+                  "durationMs": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "executed": {
+                    "type": "boolean"
+                  },
+                  "filesScanned": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "findings": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "column": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "fingerprint": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "line": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "path": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "ruleId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "severity": {
+                          "enum": [
+                            "info",
+                            "warning",
+                            "error"
+                          ],
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "git",
+                            "format",
+                            "ast-grep",
+                            "gitleaks"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ruleId",
+                        "severity",
+                        "message",
+                        "path",
+                        "source"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "findingsCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "issues": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "passed": {
+                    "type": "boolean"
+                  },
+                  "root": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "scope": {
+                    "enum": [
+                      "changes",
+                      "paths",
+                      "repository"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "available": {
+                        "type": "boolean"
+                      },
+                      "name": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "version": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "available"
+                    ],
+                    "type": "object"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  },
+                  "validation": {
+                    "enum": [
+                      "diff-check",
+                      "legacy-format",
+                      "legacy-compat",
+                      "secret-scan"
+                    ],
+                    "type": "string"
+                  },
+                  "warnings": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "workspaceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "workspaceId",
+                  "root",
+                  "validation",
+                  "scope",
+                  "executed",
+                  "passed",
+                  "tool",
+                  "filesScanned",
+                  "findings",
+                  "findingsCount",
+                  "truncated",
+                  "durationMs",
+                  "issues",
+                  "warnings"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "error",
+                  "skipped_after_failure"
+                ],
+                "type": "string"
+              },
+              "validation": {
+                "enum": [
+                  "diff-check",
+                  "legacy-format",
+                  "legacy-compat",
+                  "secret-scan"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "validation",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "root": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "changes",
+            "paths",
+            "repository"
+          ],
+          "type": "string"
+        },
+        "skippedCount": {
+          "maximum": 4,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stopOnFailure": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "root",
+        "scope",
+        "stopOnFailure",
+        "completed",
+        "passed",
+        "attemptedCount",
+        "skippedCount",
+        "items"
+      ],
+      "type": "object"
+    },
+    "title": "Run workspace validations"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": true,
       "idempotentHint": false,
       "openWorldHint": false,
@@ -16011,13 +16456,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "79af8588301dd75bdfb658c354e98c33256dd540197d3b253ac5b1fad7b34dc0",
-  "serverVersion": "0.4.0-catalog.c79af8588301d.s40c875072dbc",
-  "toolCount": 71,
-  "toolSetRevision": "40c875072dbcb22985eb45df8f589576b5dee164c5f7e32ac9dda8b9d3354a61"
+  "contractRevision": "ced0b9da62702f5054f0bdf58862e4be73b7b52b67633f843882a0bbefe2d0a5",
+  "serverVersion": "0.4.0-catalog.cced0b9da6270.sb8d5edf949ab",
+  "toolCount": 72,
+  "toolSetRevision": "b8d5edf949ab06b5e43d72964c740a408792deaa0f42b24ec692f6633e7aacf7"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c79af8588301d.s40c875072dbc"
+  "version": "0.4.0-catalog.cced0b9da6270.sb8d5edf949ab"
 } as const;

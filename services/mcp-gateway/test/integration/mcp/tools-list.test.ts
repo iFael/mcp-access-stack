@@ -107,10 +107,11 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(71);
+      expect(names).toHaveLength(72);
       expect(names).toEqual(expect.arrayContaining([
         "patch_file",
         "patch_files",
+        "run_workspace_validations",
         "get_release_state",
         "prepare_release",
         "promote_release",

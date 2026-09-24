@@ -367,6 +367,97 @@ export const runWorkspaceValidationResultSchema = z
 
 export type RunWorkspaceValidationResult = z.infer<typeof runWorkspaceValidationResultSchema>;
 
+export const runWorkspaceValidationsInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: relativePathSchema.default("."),
+    validations: z.array(workspaceValidationNameSchema).min(1).max(4),
+    scope: workspaceValidationScopeSchema.default("changes"),
+    paths: z.array(relativePathSchema).max(20).default([]),
+    maxFindings: z.number().int().positive().max(200).default(100),
+    timeoutMs: synchronousTimeoutMsSchema,
+    stopOnFailure: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine(({ validations, scope, paths }, context) => {
+    if (scope === "paths" && paths.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["paths"],
+        message: "paths must contain at least one item when scope is paths.",
+      });
+    }
+
+    const unique = new Set<WorkspaceValidationName>();
+    for (const [index, validation] of validations.entries()) {
+      if (unique.has(validation)) {
+        context.addIssue({
+          code: "custom",
+          path: ["validations", index],
+          message: "Validation names must be unique within a suite.",
+        });
+      }
+      unique.add(validation);
+    }
+  });
+
+export type RunWorkspaceValidationsInput = z.input<
+  typeof runWorkspaceValidationsInputSchema
+>;
+
+const workspaceValidationSuiteErrorSchema = z
+  .object({
+    code: z.enum(errorCodes),
+    message: z.string(),
+  })
+  .strict();
+
+export const runWorkspaceValidationsItemResultSchema = z
+  .object({
+    validation: workspaceValidationNameSchema,
+    status: z.enum(["passed", "failed", "error", "skipped_after_failure"]),
+    result: runWorkspaceValidationResultSchema.optional(),
+    error: workspaceValidationSuiteErrorSchema.optional(),
+  })
+  .strict()
+  .superRefine((item, context) => {
+    if (
+      ["passed", "failed"].includes(item.status) &&
+      item.result === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["result"],
+        message: "result is required when validation execution completed.",
+      });
+    }
+    if (item.status === "error" && item.error === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "error is required when validation execution errors.",
+      });
+    }
+  });
+
+export const runWorkspaceValidationsResultSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: relativePathSchema,
+    scope: workspaceValidationScopeSchema,
+    stopOnFailure: z.boolean(),
+    completed: z.boolean(),
+    passed: z.boolean(),
+    attemptedCount: z.number().int().nonnegative().max(4),
+    skippedCount: z.number().int().nonnegative().max(4),
+    items: z.array(runWorkspaceValidationsItemResultSchema).min(1).max(4),
+  })
+  .strict();
+
+export type RunWorkspaceValidationsResult = z.infer<
+  typeof runWorkspaceValidationsResultSchema
+>;
+
 const commandExecutionCommonSchema = z
   .object({
     workspaceId: workspaceIdSchema,
