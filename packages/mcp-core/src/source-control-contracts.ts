@@ -140,6 +140,19 @@ const githubUrlSchema = z.string().url();
 const githubVisibilitySchema = z.enum(["private", "public", "internal"]);
 const githubPullRequestStateSchema = z.enum(["open", "closed"]);
 const githubMergeMethodSchema = z.enum(["merge", "squash"]);
+const githubCheckStatusSchema = z.enum(["queued", "in_progress", "completed", "unknown"]);
+const githubCheckConclusionSchema = z.enum([
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "action_required",
+  "stale",
+  "startup_failure",
+  "unknown",
+]).nullable();
 
 export const sourceControlCapabilities = [
   "git.branch.write",
@@ -166,6 +179,10 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_sync_branch",
   "git_push_branch",
   "github_get_repository",
+  "github_get_commit_checks",
+  "github_start_commit_checks_watch",
+  "github_get_commit_checks_watches",
+  "github_wait_commit_checks_watch",
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
@@ -433,6 +450,229 @@ export const githubRepositoryResultSchema = z
   })
   .strict();
 export type GitHubRepositoryResult = z.infer<typeof githubRepositoryResultSchema>;
+
+export const githubGetCommitChecksInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    commitSha: gitShaSchema,
+  })
+  .strict();
+export type GitHubGetCommitChecksInput = z.input<
+  typeof githubGetCommitChecksInputSchema
+>;
+
+export const githubCommitCheckSchema = z
+  .object({
+    id: z.number().int().positive(),
+    name: z.string().trim().min(1).max(256),
+    status: githubCheckStatusSchema,
+    conclusion: githubCheckConclusionSchema,
+    detailsUrl: githubUrlSchema.nullable(),
+    startedAt: z.iso.datetime().nullable(),
+    completedAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+
+export const githubCommitChecksResultSchema = z
+  .object({
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    commitSha: gitShaSchema,
+    totalCount: z.number().int().nonnegative(),
+    returnedCount: z.number().int().nonnegative().max(100),
+    pendingCount: z.number().int().nonnegative().max(100),
+    successfulCount: z.number().int().nonnegative().max(100),
+    failingCount: z.number().int().nonnegative().max(100),
+    truncated: z.boolean(),
+    allCompleted: z.boolean(),
+    passed: z.boolean(),
+    checks: z.array(githubCommitCheckSchema).max(100),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.returnedCount !== value.checks.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["returnedCount"],
+        message: "returnedCount must equal checks.length.",
+      });
+    }
+    if (
+      value.pendingCount + value.successfulCount + value.failingCount !==
+      value.returnedCount
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "check counters must sum to returnedCount.",
+      });
+    }
+    const expectedCompleted =
+      value.totalCount > 0 && !value.truncated && value.pendingCount === 0;
+    if (value.allCompleted !== expectedCompleted) {
+      context.addIssue({
+        code: "custom",
+        path: ["allCompleted"],
+        message: "allCompleted does not match aggregate check state.",
+      });
+    }
+    if (
+      value.passed !==
+      (value.allCompleted && value.failingCount === 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["passed"],
+        message: "passed does not match aggregate check state.",
+      });
+    }
+  });
+export type GitHubCommitChecksResult = z.infer<
+  typeof githubCommitChecksResultSchema
+>;
+
+export const githubCommitChecksWatchStateSchema = z.enum([
+  "watching",
+  "passed",
+  "failed",
+  "timed_out",
+  "error",
+]);
+export type GitHubCommitChecksWatchState = z.infer<
+  typeof githubCommitChecksWatchStateSchema
+>;
+
+const githubCommitChecksWatchErrorSchema = z
+  .object({
+    code: z.enum(errorCodes),
+    message: z.string().min(1).max(2_000),
+  })
+  .strict();
+
+export const githubCommitChecksWatchRecordSchema = z
+  .object({
+    id: z.uuid(),
+    workspaceId: workspaceIdSchema,
+    root: rootSchema,
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    commitSha: gitShaSchema,
+    state: githubCommitChecksWatchStateSchema,
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+    deadlineAt: z.iso.datetime(),
+    completedAt: z.iso.datetime().optional(),
+    pollCount: z.number().int().nonnegative(),
+    lastChecks: githubCommitChecksResultSchema.optional(),
+    lastError: githubCommitChecksWatchErrorSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const terminal = value.state !== "watching";
+    if (terminal !== (value.completedAt !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedAt"],
+        message:
+          "completedAt must be present exactly when the watch is terminal.",
+      });
+    }
+    if (
+      value.lastChecks !== undefined &&
+      (value.lastChecks.owner !== value.owner ||
+        value.lastChecks.repository !== value.repository ||
+        value.lastChecks.commitSha !== value.commitSha)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["lastChecks"],
+        message: "lastChecks target must match the watch target.",
+      });
+    }
+    if (value.state === "error" && value.lastError === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["lastError"],
+        message: "lastError is required when the watch state is error.",
+      });
+    }
+  });
+export type GitHubCommitChecksWatchRecord = z.infer<
+  typeof githubCommitChecksWatchRecordSchema
+>;
+
+export const githubStartCommitChecksWatchInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    commitSha: gitShaSchema,
+    timeoutMs: z
+      .number()
+      .int()
+      .min(30_000)
+      .max(1_800_000)
+      .default(900_000),
+  })
+  .strict();
+export type GitHubStartCommitChecksWatchInput = z.input<
+  typeof githubStartCommitChecksWatchInputSchema
+>;
+
+export const githubStartCommitChecksWatchResultSchema = z
+  .object({
+    status: z.enum(["started", "existing"]),
+    watch: githubCommitChecksWatchRecordSchema,
+  })
+  .strict();
+export type GitHubStartCommitChecksWatchResult = z.infer<
+  typeof githubStartCommitChecksWatchResultSchema
+>;
+
+export const githubGetCommitChecksWatchesInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    ids: z.array(z.uuid()).min(1).max(20).optional(),
+    state: githubCommitChecksWatchStateSchema.optional(),
+  })
+  .strict();
+export type GitHubGetCommitChecksWatchesInput = z.infer<
+  typeof githubGetCommitChecksWatchesInputSchema
+>;
+
+export const githubGetCommitChecksWatchesResultSchema = z
+  .object({
+    watches: z.array(githubCommitChecksWatchRecordSchema).max(50),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type GitHubGetCommitChecksWatchesResult = z.infer<
+  typeof githubGetCommitChecksWatchesResultSchema
+>;
+
+export const githubWaitCommitChecksWatchInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    id: z.uuid(),
+    timeoutMs: z.number().int().positive().max(30_000).default(15_000),
+  })
+  .strict();
+export type GitHubWaitCommitChecksWatchInput = z.input<
+  typeof githubWaitCommitChecksWatchInputSchema
+>;
+
+export const githubWaitCommitChecksWatchResultSchema = z
+  .object({
+    watch: githubCommitChecksWatchRecordSchema,
+    timedOut: z.boolean(),
+  })
+  .strict();
+export type GitHubWaitCommitChecksWatchResult = z.infer<
+  typeof githubWaitCommitChecksWatchResultSchema
+>;
 
 export const githubCreateRepositoryInputSchema = z
   .object({

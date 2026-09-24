@@ -32,9 +32,9 @@ describe("stateful MCP experiment", () => {
       };
 
       expect(listed.status).toBe(200);
-      expect(listedBody.result?.tools).toHaveLength(75);
+      expect(listedBody.result?.tools).toHaveLength(79);
       expect(listedBody.result?.tools?.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch"]),
+        expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "github_get_commit_checks", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch"]),
       );
 
       const streamAbort = new AbortController();
@@ -93,7 +93,7 @@ describe("stateful MCP experiment", () => {
 
       expect(listed.status).toBe(200);
       expect(listed.headers.get("mcp-session-id")).toBeNull();
-      expect(listedBody.result?.tools).toHaveLength(75);
+      expect(listedBody.result?.tools).toHaveLength(79);
 
       const called = await postMcp(fixture.url, {
         jsonrpc: "2.0",

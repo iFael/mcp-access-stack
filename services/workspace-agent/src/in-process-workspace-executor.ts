@@ -45,13 +45,14 @@ import type {
   RunCommandResult,
   WorkspaceExecutor,
   GitRepositoryExecutor,
+  GitHubChecksWatchExecutor,
   GitHubExecutor,
   WorkspaceSummary,
 } from "@vs-code-gpt/shared";
 import type { LocalAgent } from "./local-agent.js";
 
 /** Delegates workspace operations to a LocalAgent running in the same process. */
-export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
+export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor, GitHubChecksWatchExecutor {
   constructor(private readonly agent: LocalAgent) {}
 
   listWorkspaces(context?: OperationContext): Promise<WorkspaceSummary[]> {
@@ -212,6 +213,18 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   }
   getRepository(...args: Parameters<GitHubExecutor["getRepository"]>) {
     return this.agent.githubGetRepository(...args);
+  }
+  getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
+    return this.agent.githubGetCommitChecks(...args);
+  }
+  startCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["startCommitChecksWatch"]>) {
+    return this.agent.githubStartCommitChecksWatch(...args);
+  }
+  getCommitChecksWatches(...args: Parameters<GitHubChecksWatchExecutor["getCommitChecksWatches"]>) {
+    return this.agent.githubGetCommitChecksWatches(...args);
+  }
+  waitCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["waitCommitChecksWatch"]>) {
+    return this.agent.githubWaitCommitChecksWatch(...args);
   }
   createRepository(...args: Parameters<GitHubExecutor["createRepository"]>) {
     return this.agent.githubCreateRepository(...args);

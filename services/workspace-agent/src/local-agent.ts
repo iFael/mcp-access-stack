@@ -96,6 +96,14 @@ import {
   githubCreatePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
+  githubCommitChecksResultSchema,
+  githubGetCommitChecksInputSchema,
+  githubGetCommitChecksWatchesInputSchema,
+  githubGetCommitChecksWatchesResultSchema,
+  githubStartCommitChecksWatchInputSchema,
+  githubStartCommitChecksWatchResultSchema,
+  githubWaitCommitChecksWatchInputSchema,
+  githubWaitCommitChecksWatchResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -111,7 +119,15 @@ import {
   type GitHubCreatePullRequestResult,
   type GitHubCreateRepositoryInput,
   type GitHubCreateRepositoryResult,
+  type GitHubCommitChecksResult,
   type GitHubExecutor,
+  type GitHubGetCommitChecksInput,
+  type GitHubGetCommitChecksWatchesInput,
+  type GitHubGetCommitChecksWatchesResult,
+  type GitHubStartCommitChecksWatchInput,
+  type GitHubStartCommitChecksWatchResult,
+  type GitHubWaitCommitChecksWatchInput,
+  type GitHubWaitCommitChecksWatchResult,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
   type GitHubMergePullRequestInput,
@@ -148,6 +164,7 @@ import { WorkspaceRegistry } from "./workspace-registry.js";
 import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt-store.js";
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
 import { GitHubHttpClient } from "./source-control/github-http-client.js";
+import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
 import { GitRepositoryService } from "./source-control/git-repository-service.js";
 
@@ -188,6 +205,7 @@ export class LocalAgent {
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
   private readonly releaseLifecycleService: ReleaseLifecycleService;
+  private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
   private readonly injectedGitOriginResolver: GitOriginResolver | undefined;
   private readonly injectedGitHubExecutor: GitHubExecutor | undefined;
@@ -235,6 +253,10 @@ export class LocalAgent {
       this.shellService,
       this.backgroundTaskManager,
     );
+    this.githubChecksWatchManager = new GitHubCommitChecksWatchManager({
+      stateDirectory: path.join(resolveBackgroundTaskStateDirectory(), "github-check-watches"),
+      poll: (input, context) => this.githubGetCommitChecks(input, context),
+    });
   }
 
   static async create(
@@ -258,7 +280,9 @@ export class LocalAgent {
     options: LocalAgentOptions,
   ): Promise<LocalAgent> {
     const audit = await AuditLogger.create(registry.all());
-    return new LocalAgent(registry, audit, options);
+    const agent = new LocalAgent(registry, audit, options);
+    await agent.githubChecksWatchManager.recover();
+    return agent;
   }
 
   resolveWorkspaceConcurrencyKey(workspaceId: string): string {
@@ -1052,6 +1076,111 @@ export class LocalAgent {
         );
         return githubRepositoryResultSchema.parse(
           await (await this.getGitHubExecutor()).getRepository(parsed, activeContext),
+        );
+      },
+    );
+  }
+
+  async githubGetCommitChecks(
+    input: GitHubGetCommitChecksInput,
+    context: OperationContext = {},
+  ): Promise<GitHubCommitChecksResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubGetCommitChecks",
+      githubGetCommitChecksInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource =
+          `github:${repository}:commit/${parsed.commitSha}:checks`;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.repository.read",
+          repository,
+          parsed.root ?? ".",
+          false,
+          activeContext.signal,
+        );
+        return githubCommitChecksResultSchema.parse(
+          await (await this.getGitHubExecutor()).getCommitChecks(
+            parsed,
+            activeContext,
+          ),
+        );
+      },
+    );
+  }
+
+  async githubStartCommitChecksWatch(
+    input: GitHubStartCommitChecksWatchInput,
+    context: OperationContext = {},
+  ): Promise<GitHubStartCommitChecksWatchResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubStartCommitChecksWatch",
+      githubStartCommitChecksWatchInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource =
+          `github:${repository}:commit/${parsed.commitSha}:checks-watch`;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.repository.read",
+          repository,
+          parsed.root ?? ".",
+          false,
+          activeContext.signal,
+        );
+        return githubStartCommitChecksWatchResultSchema.parse(
+          await this.githubChecksWatchManager.start(parsed, activeContext),
+        );
+      },
+    );
+  }
+
+  async githubGetCommitChecksWatches(
+    input: GitHubGetCommitChecksWatchesInput,
+    context: OperationContext = {},
+  ): Promise<GitHubGetCommitChecksWatchesResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubGetCommitChecksWatches",
+      githubGetCommitChecksWatchesInputSchema,
+      input,
+      context,
+      async (_workspace, parsed, activeContext, metadata) => {
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = "github:commit-check-watches";
+        return githubGetCommitChecksWatchesResultSchema.parse(
+          await this.githubChecksWatchManager.get(
+            parsed,
+            backgroundTaskAccess(activeContext),
+          ),
+        );
+      },
+    );
+  }
+
+  async githubWaitCommitChecksWatch(
+    input: GitHubWaitCommitChecksWatchInput,
+    context: OperationContext = {},
+  ): Promise<GitHubWaitCommitChecksWatchResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubWaitCommitChecksWatch",
+      githubWaitCommitChecksWatchInputSchema,
+      input,
+      context,
+      async (_workspace, parsed, activeContext, metadata) => {
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = `github:commit-check-watch/${parsed.id}`;
+        return githubWaitCommitChecksWatchResultSchema.parse(
+          await this.githubChecksWatchManager.wait(
+            parsed,
+            backgroundTaskAccess(activeContext),
+          ),
         );
       },
     );

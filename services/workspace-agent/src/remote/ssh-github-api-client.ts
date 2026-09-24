@@ -7,6 +7,7 @@ import type {
   GitHubApiClient,
   GitHubCreatePullRequestRequest,
   GitHubCreateRepositoryRequest,
+  GitHubCheckRunsRecord,
   GitHubCurrentUserRecord,
   GitHubMergePullRequestRequest,
   GitHubMergeRecord,
@@ -57,6 +58,23 @@ export class SshGitHubApiClient implements GitHubApiClient {
       {
         method: "GET",
         path: `/repos/${segment(owner)}/${segment(repository)}`,
+      },
+      false,
+      context,
+    );
+  }
+
+  getCommitCheckRuns(
+    owner: string,
+    repository: string,
+    commitSha: string,
+    context?: OperationContext,
+  ): Promise<GitHubCheckRunsRecord> {
+    return this.request<GitHubCheckRunsRecord>(
+      {
+        method: "GET",
+        path:
+          `/repos/${segment(owner)}/${segment(repository)}/commits/${segment(commitSha)}/check-runs?per_page=100`,
       },
       false,
       context,

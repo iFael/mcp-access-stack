@@ -104,6 +104,80 @@ class RecordingSourceControlExecutor {
     });
   }
 
+  async getCommitChecks(input: any, context?: OperationContext) {
+    this.record("getCommitChecks", input, context);
+    return this.result({
+      owner: input.owner,
+      repository: input.repository,
+      commitSha: input.commitSha,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 0,
+      successfulCount: 1,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "completed" as const,
+        conclusion: "success" as const,
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    });
+  }
+
+  async startCommitChecksWatch(input: any, context?: OperationContext) {
+    this.record("startCommitChecksWatch", input, context);
+    return this.result({
+      status: "started" as const,
+      watch: {
+        id: "11111111-1111-4111-8111-111111111111",
+        workspaceId: input.workspaceId,
+        root: input.root ?? ".",
+        owner: input.owner,
+        repository: input.repository,
+        commitSha: input.commitSha,
+        state: "watching" as const,
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+    });
+  }
+
+  async getCommitChecksWatches(input: any, context?: OperationContext) {
+    this.record("getCommitChecksWatches", input, context);
+    return this.result({
+      watches: [],
+      truncated: false,
+    });
+  }
+
+  async waitCommitChecksWatch(input: any, context?: OperationContext) {
+    this.record("waitCommitChecksWatch", input, context);
+    return this.result({
+      watch: {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        root: ".",
+        owner: "octo",
+        repository: "app",
+        commitSha: shaA,
+        state: "watching" as const,
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+      timedOut: true,
+    });
+  }
+
   async createRepository(input: any, context?: OperationContext) {
     this.record("createRepository", input, context);
     return this.result({
@@ -223,6 +297,107 @@ const cases = [
     input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app" },
     expectedInput: { workspaceId: "repo", root: "project", owner: "octo", repository: "app" },
     expectedResult: { owner: "octo", name: "app", fullName: "octo/app", defaultBranch: "main", visibility: "private", url: "https://github.com/octo/app" },
+  },
+  {
+    name: "github_get_commit_checks",
+    method: "getCommitChecks",
+    input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", commitSha: shaA },
+    expectedInput: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", commitSha: shaA },
+    expectedResult: {
+      owner: "octo",
+      repository: "app",
+      commitSha: shaA,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 0,
+      successfulCount: 1,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "completed",
+        conclusion: "success",
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    },
+  },
+  {
+    name: "github_start_commit_checks_watch",
+    method: "startCommitChecksWatch",
+    input: {
+      workspaceId: "repo",
+      root: "project",
+      owner: "octo",
+      repository: "app",
+      commitSha: shaA,
+      timeoutMs: 60_000,
+    },
+    expectedInput: {
+      workspaceId: "repo",
+      root: "project",
+      owner: "octo",
+      repository: "app",
+      commitSha: shaA,
+      timeoutMs: 60_000,
+    },
+    expectedResult: {
+      status: "started",
+      watch: {
+        id: "11111111-1111-4111-8111-111111111111",
+        workspaceId: "repo",
+        root: "project",
+        owner: "octo",
+        repository: "app",
+        commitSha: shaA,
+        state: "watching",
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+    },
+  },
+  {
+    name: "github_get_commit_checks_watches",
+    method: "getCommitChecksWatches",
+    input: { workspaceId: "repo" },
+    expectedInput: { workspaceId: "repo" },
+    expectedResult: { watches: [], truncated: false },
+  },
+  {
+    name: "github_wait_commit_checks_watch",
+    method: "waitCommitChecksWatch",
+    input: {
+      workspaceId: "repo",
+      id: "11111111-1111-4111-8111-111111111111",
+      timeoutMs: 1_000,
+    },
+    expectedInput: {
+      workspaceId: "repo",
+      id: "11111111-1111-4111-8111-111111111111",
+      timeoutMs: 1_000,
+    },
+    expectedResult: {
+      watch: {
+        id: "11111111-1111-4111-8111-111111111111",
+        workspaceId: "repo",
+        root: ".",
+        owner: "octo",
+        repository: "app",
+        commitSha: shaA,
+        state: "watching",
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+      timedOut: true,
+    },
   },
   {
     name: "github_create_repository",
@@ -422,7 +597,7 @@ describe("MCP typed source-control boundary", () => {
     });
   });
 
-  it("rejects extra backend result fields for all twelve relay-backed tools without emitting them", async () => {
+  it("rejects extra backend result fields for every relay-backed tool without emitting them", async () => {
     const executor = new RecordingSourceControlExecutor();
     const forbiddenResultFields = ["authorization", "token", "rawResponse", "stderr"] as const;
 

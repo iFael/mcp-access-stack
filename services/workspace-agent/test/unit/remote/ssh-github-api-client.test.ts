@@ -42,6 +42,7 @@ describe("SshGitHubApiClient", () => {
       ok({ login: "octo" }),
       ok({}),
       ok({}),
+      ok({ total_count: 0, check_runs: [] }),
       ok({}),
       ok({}),
       ok([]),
@@ -55,6 +56,7 @@ describe("SshGitHubApiClient", () => {
 
     await client.getCurrentUser();
     await client.getRepository("octo", "repo");
+    await client.getCommitCheckRuns("octo", "repo", "a".repeat(40));
     await client.createUserRepository({
       name: "repo",
       private: true,
@@ -88,6 +90,7 @@ describe("SshGitHubApiClient", () => {
     expect(transport.calls.map((entry) => entry.request)).toEqual([
       { method: "GET", path: "/user" },
       { method: "GET", path: "/repos/octo/repo" },
+      { method: "GET", path: `/repos/octo/repo/commits/${"a".repeat(40)}/check-runs?per_page=100` },
       {
         method: "POST",
         path: "/user/repos",

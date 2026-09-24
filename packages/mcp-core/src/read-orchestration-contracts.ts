@@ -2,7 +2,7 @@ import { z } from "zod";
 import { backgroundTaskStateSchema } from "./background-task-contracts.js";
 import { gitDiffModeSchema } from "./contracts.js";
 import { errorCodes } from "./errors.js";
-import { githubOwnerSchema, githubRepositoryNameSchema } from "./source-control-contracts.js";
+import { gitShaSchema, githubOwnerSchema, githubRepositoryNameSchema } from "./source-control-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const keySchema = z.string().trim().min(1).max(64);
@@ -21,6 +21,7 @@ export const inspectWorkspaceBatchOperationSchema = z.enum([
   "read_background_task_logs",
   "read_background_task_output",
   "github_get_repository",
+  "github_get_commit_checks",
   "github_get_pull_request",
   "get_release_state",
 ]);
@@ -50,6 +51,7 @@ const inspectWorkspaceBatchItemBaseSchema = z
     stderrOffset: z.number().int().nonnegative().optional(),
     owner: githubOwnerSchema.optional(),
     repository: githubRepositoryNameSchema.optional(),
+    commitSha: gitShaSchema.optional(),
     pullNumber: z.number().int().positive().optional(),
   })
   .strict();
@@ -96,6 +98,7 @@ const allowedFieldsByOperation: Record<
     "maxBytes",
   ]),
   github_get_repository: new Set(["key", "operation", "owner", "repository"]),
+  github_get_commit_checks: new Set(["key", "operation", "owner", "repository", "commitSha"]),
   github_get_pull_request: new Set([
     "key",
     "operation",
@@ -117,8 +120,10 @@ export const inspectWorkspaceBatchItemSchema =
             ? ["taskId"]
             : item.operation === "github_get_repository"
               ? ["owner", "repository"]
-              : item.operation === "github_get_pull_request"
-                ? ["owner", "repository", "pullNumber"]
+              : item.operation === "github_get_commit_checks"
+                ? ["owner", "repository", "commitSha"]
+                : item.operation === "github_get_pull_request"
+                  ? ["owner", "repository", "pullNumber"]
                 : [];
 
     for (const field of required) {

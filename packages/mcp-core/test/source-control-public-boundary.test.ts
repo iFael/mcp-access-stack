@@ -14,6 +14,10 @@ import {
   gitUnstagePathsInputSchema,
   githubCreatePullRequestInputSchema,
   githubCreateRepositoryInputSchema,
+  githubGetCommitChecksInputSchema,
+  githubGetCommitChecksWatchesInputSchema,
+  githubStartCommitChecksWatchInputSchema,
+  githubWaitCommitChecksWatchInputSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -35,6 +39,10 @@ const expectedPublicSourceControlNames = [
   "git_unstage_paths",
   "github_create_pull_request",
   "github_create_repository",
+  "github_get_commit_checks",
+  "github_get_commit_checks_watches",
+  "github_start_commit_checks_watch",
+  "github_wait_commit_checks_watch",
   "github_get_pull_request",
   "github_get_repository",
   "github_merge_pull_request",
@@ -149,6 +157,44 @@ const inputCases = [
     input: { workspaceId: "repo", owner: "octo", repository: "app" },
   },
   {
+    name: "github_get_commit_checks",
+    schema: githubGetCommitChecksInputSchema,
+    input: {
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "app",
+      commitSha: shaA,
+    },
+  },
+  {
+    name: "github_start_commit_checks_watch",
+    schema: githubStartCommitChecksWatchInputSchema,
+    input: {
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "app",
+      commitSha: shaA,
+      timeoutMs: 60_000,
+    },
+  },
+  {
+    name: "github_get_commit_checks_watches",
+    schema: githubGetCommitChecksWatchesInputSchema,
+    input: {
+      workspaceId: "repo",
+      ids: ["11111111-1111-4111-8111-111111111111"],
+    },
+  },
+  {
+    name: "github_wait_commit_checks_watch",
+    schema: githubWaitCommitChecksWatchInputSchema,
+    input: {
+      workspaceId: "repo",
+      id: "11111111-1111-4111-8111-111111111111",
+      timeoutMs: 1_000,
+    },
+  },
+  {
     name: "github_create_repository",
     schema: githubCreateRepositoryInputSchema,
     input: {
@@ -211,7 +257,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes exactly thirteen public tools, twelve relay operations and ten capabilities", () => {
+  it("exposes exactly seventeen public tools, sixteen relay operations and ten capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -221,7 +267,7 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(13);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(17);
     expect(sourceControlCapabilities).toHaveLength(10);
 
     for (const forbiddenName of [

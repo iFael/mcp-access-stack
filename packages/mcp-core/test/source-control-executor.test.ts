@@ -2,6 +2,7 @@ import { describe, expect, test } from "@jest/globals";
 import type {
   GitHubCreatePullRequestInput,
   GitHubCreateRepositoryInput,
+  GitHubGetCommitChecksInput,
   GitHubGetPullRequestInput,
   GitHubGetRepositoryInput,
   GitHubMergePullRequestInput,
@@ -115,7 +116,7 @@ describe("source-control executor ports", () => {
     ]);
   });
 
-  test("keeps GitHubExecutor limited to exactly five typed methods", async () => {
+  test("keeps GitHubExecutor limited to exactly six typed methods", async () => {
     const calls: string[] = [];
     const executor: GitHubExecutor = {
       async getRepository(input: GitHubGetRepositoryInput) {
@@ -127,6 +128,31 @@ describe("source-control executor ports", () => {
           defaultBranch: "main",
           visibility: "private",
           url: `https://github.com/${input.owner}/${input.repository}`,
+        };
+      },
+      async getCommitChecks(input: GitHubGetCommitChecksInput) {
+        calls.push("getCommitChecks");
+        return {
+          owner: input.owner,
+          repository: input.repository,
+          commitSha: input.commitSha,
+          totalCount: 1,
+          returnedCount: 1,
+          pendingCount: 0,
+          successfulCount: 1,
+          failingCount: 0,
+          truncated: false,
+          allCompleted: true,
+          passed: true,
+          checks: [{
+            id: 1,
+            name: "check",
+            status: "completed",
+            conclusion: "success",
+            detailsUrl: null,
+            startedAt: null,
+            completedAt: null,
+          }],
         };
       },
       async createRepository(input: GitHubCreateRepositoryInput) {
@@ -180,12 +206,14 @@ describe("source-control executor ports", () => {
     expect(Object.keys(executor).sort()).toEqual([
       "createPullRequest",
       "createRepository",
+      "getCommitChecks",
       "getPullRequest",
       "getRepository",
       "mergePullRequest",
     ]);
 
     await executor.getRepository({ workspaceId: "repo", owner: "acme", repository: "app" });
+    await executor.getCommitChecks({ workspaceId: "repo", owner: "acme", repository: "app", commitSha: shaA });
     await executor.createRepository({ workspaceId: "repo", owner: "acme", name: "app-2", visibility: "private" });
     await executor.getPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 });
     await executor.createPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", title: "Feature", head: "feature/x", base: "main" });
@@ -193,6 +221,7 @@ describe("source-control executor ports", () => {
 
     expect(calls).toEqual([
       "getRepository",
+      "getCommitChecks",
       "createRepository",
       "getPullRequest",
       "createPullRequest",

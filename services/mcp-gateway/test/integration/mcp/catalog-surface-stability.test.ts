@@ -35,12 +35,12 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(75);
+      expect(listed.tools).toHaveLength(79);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "browser_status"]),
+        expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "github_get_commit_checks", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "browser_status"]),
       );
       expect(metadata).toMatchObject({
-        toolCount: 75,
+        toolCount: 79,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);

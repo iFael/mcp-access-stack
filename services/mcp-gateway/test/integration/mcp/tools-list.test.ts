@@ -107,7 +107,7 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(75);
+      expect(names).toHaveLength(79);
       expect(names).toEqual(expect.arrayContaining([
         "patch_file",
         "patch_files",
@@ -138,6 +138,10 @@ describe("advanced browser tools list", () => {
         "git_create_branch",
         "git_push_branch",
         "github_get_repository",
+        "github_get_commit_checks",
+        "github_start_commit_checks_watch",
+        "github_get_commit_checks_watches",
+        "github_wait_commit_checks_watch",
         "github_merge_pull_request",
       ]));
 

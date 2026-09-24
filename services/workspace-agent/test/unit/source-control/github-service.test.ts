@@ -43,6 +43,7 @@ function client(overrides: Partial<GitHubApiClient> = {}): GitHubApiClient {
   return {
     getCurrentUser: jest.fn(async () => ({ login: "octo" })),
     getRepository: jest.fn(async () => repositoryRecord()),
+    getCommitCheckRuns: jest.fn(async () => ({ total_count: 0, check_runs: [] })),
     createUserRepository: jest.fn(async () => repositoryRecord()),
     createOrganizationRepository: jest.fn(async () => repositoryRecord()),
     getPullRequest: jest.fn(async () => pullRequestRecord()),
@@ -84,6 +85,91 @@ describe("GitHubService read mapping", () => {
       baseSha,
       merged: false,
     });
+  });
+});
+
+describe("GitHubService commit check mapping", () => {
+  it("aggregates pending, successful and failing checks conservatively", async () => {
+    const service = new GitHubService(client({
+      getCommitCheckRuns: jest.fn(async () => ({
+        total_count: 3,
+        check_runs: [
+          {
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            details_url: "https://github.com/octo/repo/runs/1",
+            started_at: "2026-09-23T20:00:00Z",
+            completed_at: "2026-09-23T20:01:00Z",
+          },
+          {
+            id: 2,
+            name: "lint",
+            status: "in_progress",
+            conclusion: null,
+            details_url: null,
+            started_at: null,
+            completed_at: null,
+          },
+          {
+            id: 3,
+            name: "test",
+            status: "completed",
+            conclusion: "failure",
+            details_url: null,
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      })),
+    }));
+
+    await expect(service.getCommitChecks({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      commitSha: headSha,
+    })).resolves.toMatchObject({
+      totalCount: 3,
+      returnedCount: 3,
+      pendingCount: 1,
+      successfulCount: 1,
+      failingCount: 1,
+      truncated: false,
+      allCompleted: false,
+      passed: false,
+    });
+  });
+
+  it("treats unknown completed conclusions and truncated results as non-passing", async () => {
+    const service = new GitHubService(client({
+      getCommitCheckRuns: jest.fn(async () => ({
+        total_count: 101,
+        check_runs: Array.from({ length: 101 }, (_, index) => ({
+          id: index + 1,
+          name: `check-${index + 1}`,
+          status: "completed",
+          conclusion: index === 0 ? "future_conclusion" : "success",
+          details_url: null,
+          started_at: null,
+          completed_at: null,
+        })),
+      })),
+    }));
+
+    const result = await service.getCommitChecks({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      commitSha: headSha,
+    });
+    expect(result.returnedCount).toBe(100);
+    expect(result.truncated).toBe(true);
+    expect(result.allCompleted).toBe(false);
+    expect(result.passed).toBe(false);
+    expect(result.failingCount).toBe(1);
+    expect(result.checks[0]?.conclusion).toBe("unknown");
   });
 });
 
