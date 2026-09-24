@@ -10,6 +10,7 @@ const IMPACT_KEYS = [
   "edgeGateway",
   "browserWorker",
   "windowsRuntime",
+  "linuxRuntime",
   "operationsTooling",
   "rootBroad",
 ];
@@ -116,6 +117,11 @@ function classifyPath(repositoryPath, impact) {
     impact.operationsTooling = true;
     return;
   }
+  if (projectPath.startsWith("deploy/linux/") || projectPath.startsWith("config/linux-")) {
+    impact.linuxRuntime = true;
+    impact.operationsTooling = true;
+    return;
+  }
   if (
     projectPath.startsWith("deploy/") ||
     projectPath.startsWith("operations/") ||
@@ -137,19 +143,23 @@ function expandDependencies(impact) {
     impact.mcpGateway = true;
     impact.browserWorker = true;
     impact.windowsRuntime = true;
+    impact.linuxRuntime = true;
   }
   if (impact.edgeProtocol) {
     impact.mcpGateway = true;
     impact.edgeGateway = true;
     impact.windowsRuntime = true;
+    impact.linuxRuntime = true;
   }
   if (impact.workspaceAgent) {
     impact.mcpGateway = true;
     impact.windowsRuntime = true;
+    impact.linuxRuntime = true;
   }
   if (impact.mcpGateway) {
     impact.edgeGateway = true;
     impact.windowsRuntime = true;
+    impact.linuxRuntime = true;
   }
 }
 

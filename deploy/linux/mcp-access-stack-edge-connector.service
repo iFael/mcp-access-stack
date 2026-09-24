@@ -7,13 +7,11 @@ StartLimitBurst=6
 
 [Service]
 Type=simple
-User=mcp-access-stack
-Group=mcp-access-stack
 WorkingDirectory=/srv/mcp-access-stack
 EnvironmentFile=/etc/mcp-access-stack/edge-connector.env
-ExecStart=/srv/mcp-access-stack/deploy/linux/Start-McpEdgeConnector.sh --from-environment
-Restart=on-failure
-RestartSec=60s
+ExecStart=/var/lib/mcp-access-stack/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment
+Restart=always
+RestartSec=2s
 TimeoutStopSec=30s
 KillSignal=SIGTERM
 UMask=0077
@@ -27,4 +25,4 @@ RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

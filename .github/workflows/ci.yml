@@ -27,6 +27,7 @@ jobs:
       edgeGateway: ${{ steps.impact.outputs.edgeGateway }}
       browserWorker: ${{ steps.impact.outputs.browserWorker }}
       windowsRuntime: ${{ steps.impact.outputs.windowsRuntime }}
+      linuxRuntime: ${{ steps.impact.outputs.linuxRuntime }}
       operationsTooling: ${{ steps.impact.outputs.operationsTooling }}
       rootBroad: ${{ steps.impact.outputs.rootBroad }}
       docsOnly: ${{ steps.impact.outputs.docsOnly }}
@@ -371,6 +372,25 @@ jobs:
       - name: Validate Windows distribution
         run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-WindowsDistribution.ps1
 
+  pr-linux-runtime:
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.linuxRuntime == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Validate Linux execution runtime
+        shell: bash
+        run: bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
+
   pr-runtime-assurance-core:
     needs: impact
     if: >-
@@ -431,6 +451,7 @@ jobs:
       - pr-browser-worker
       - pr-workspace-agent
       - pr-runtime-assurance
+      - pr-linux-runtime
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -443,10 +464,12 @@ jobs:
           BROWSER_WORKER_IMPACT: ${{ needs.impact.outputs.browserWorker }}
           WORKSPACE_AGENT_IMPACT: ${{ needs.impact.outputs.workspaceAgent }}
           WINDOWS_RUNTIME_IMPACT: ${{ needs.impact.outputs.windowsRuntime }}
+          LINUX_RUNTIME_IMPACT: ${{ needs.impact.outputs.linuxRuntime }}
           VALIDATION_RESULT: ${{ needs.pr-validation.result }}
           BROWSER_WORKER_RESULT: ${{ needs.pr-browser-worker.result }}
           WORKSPACE_AGENT_RESULT: ${{ needs.pr-workspace-agent.result }}
           RUNTIME_ASSURANCE_RESULT: ${{ needs.pr-runtime-assurance.result }}
+          LINUX_RUNTIME_RESULT: ${{ needs.pr-linux-runtime.result }}
         run: |
           set -euo pipefail
           test "$VALIDATION_RESULT" = "success"
@@ -465,6 +488,11 @@ jobs:
               test "$RUNTIME_ASSURANCE_RESULT" = "success"
             else
               test "$RUNTIME_ASSURANCE_RESULT" = "skipped"
+            fi
+            if [[ "$IMPACT_RESULT" != "success" || "$LINUX_RUNTIME_IMPACT" == "true" ]]; then
+              test "$LINUX_RUNTIME_RESULT" = "success"
+            else
+              test "$LINUX_RUNTIME_RESULT" = "skipped"
             fi
           fi
   main-integration:
@@ -509,6 +537,26 @@ jobs:
 
       - name: Run main integration shard
         run: npm run ci:main:${{ matrix.target }}
+
+  main-linux-runtime:
+    name: main-linux-runtime
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      (needs.impact.result != 'success' || needs.impact.outputs.linuxRuntime == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate Linux execution runtime
+        shell: bash
+        run: bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
 
   main-browser:
     name: main-browser

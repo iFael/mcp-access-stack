@@ -11,6 +11,7 @@ function pick(result) {
     edgeGateway: result.edgeGateway,
     browserWorker: result.browserWorker,
     windowsRuntime: result.windowsRuntime,
+    linuxRuntime: result.linuxRuntime,
     operationsTooling: result.operationsTooling,
     rootBroad: result.rootBroad,
     docsOnly: result.docsOnly,
@@ -30,6 +31,7 @@ test("docs-only changes do not fan out into runtime validation", () => {
     edgeGateway: false,
     browserWorker: false,
     windowsRuntime: false,
+    linuxRuntime: false,
     operationsTooling: false,
     rootBroad: false,
     docsOnly: true,
@@ -43,6 +45,7 @@ test("shared mcp-core changes fan out to known consumers", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.browserWorker, true);
   assert.equal(result.windowsRuntime, true);
+  assert.equal(result.linuxRuntime, true);
   assert.equal(result.edgeGateway, true);
   assert.equal(result.rootBroad, false);
   assert.equal(result.docsOnly, false);
@@ -55,6 +58,7 @@ test("mcp-gateway changes include the Edge parity consumer", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.edgeGateway, true);
   assert.equal(result.windowsRuntime, true);
+  assert.equal(result.linuxRuntime, true);
 });
 
 test("edge protocol changes fan out to both gateway consumers", () => {
@@ -63,6 +67,7 @@ test("edge protocol changes fan out to both gateway consumers", () => {
   assert.equal(result.mcpGateway, true);
   assert.equal(result.edgeGateway, true);
   assert.equal(result.windowsRuntime, true);
+  assert.equal(result.linuxRuntime, true);
   assert.equal(result.browserWorker, false);
 });
 
@@ -71,7 +76,16 @@ test("workspace-agent changes include the gateway that embeds it", () => {
   assert.equal(result.workspaceAgent, true);
   assert.equal(result.mcpGateway, true);
   assert.equal(result.windowsRuntime, true);
+  assert.equal(result.linuxRuntime, true);
   assert.equal(result.browserWorker, false);
+});
+
+test("Linux runtime changes stay targeted to the Linux assurance lane", () => {
+  const result = classifyChangedPaths(["deploy/linux/Start-McpEdgeConnector.sh"]);
+  assert.equal(result.linuxRuntime, true);
+  assert.equal(result.windowsRuntime, false);
+  assert.equal(result.operationsTooling, true);
+  assert.equal(result.rootBroad, false);
 });
 
 test("root dependency graph changes fail closed to broad coverage", () => {
@@ -93,5 +107,6 @@ test("unknown relevant source paths fail closed to broad coverage", () => {
   assert.equal(result.edgeGateway, true);
   assert.equal(result.browserWorker, true);
   assert.equal(result.windowsRuntime, true);
+  assert.equal(result.linuxRuntime, true);
   assert.equal(result.operationsTooling, true);
 });

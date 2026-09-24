@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "id": "mcp-access-stack",
+      "name": "MCP Access Stack GPT-only",
+      "rootPath": "/srv/mcp-access-stack",
+      "enabled": true,
+      "permissionProfile": "full-repo-write",
+      "confirmationMode": "trusted-workspace",
+      "allowedRoots": [
+        "."
+      ],
+      "blockedGlobs": [
+        "**/*.sqlite",
+        "**/*.sqlite3"
+      ],
+      "limits": {
+        "maxFileBytes": 300000,
+        "maxSearchResults": 1000,
+        "maxSearchSnippetBytes": 20000,
+        "maxDiffBytes": 2000000,
+        "maxListedFiles": 10000
+      },
+      "allowWrites": [
+        "."
+      ],
+      "allowShell": [
+        "."
+      ],
+      "allowedShells": [
+        "pwsh"
+      ],
+      "sourceControl": {
+        "capabilities": [
+          "git.branch.write",
+          "git.index.write",
+          "git.commit.write",
+          "git.merge.write",
+          "git.remote.push",
+          "github.repository.read",
+          "github.pull_request.read",
+          "github.pull_request.create",
+          "github.pull_request.merge"
+        ],
+        "accountOwners": [],
+        "additionalRepositories": []
+      }
+    }
+  ]
+}

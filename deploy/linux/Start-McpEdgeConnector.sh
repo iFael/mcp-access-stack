@@ -19,6 +19,7 @@ Required environment:
   VS_CODE_GPT_POLICY_PATH
 
 Optional environment:
+  MCP_RELEASE_ROOT
   MCP_NODE_BINARY
   MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS
   MCP_SESSION_MODE
@@ -92,6 +93,7 @@ require_value MCP_OWNER_TOKEN_FILE
 require_value VS_CODE_GPT_POLICY_PATH
 
 project_root="$(resolve_dir "$VS_CODE_GPT_STACK_ROOT")"
+release_root="$(resolve_dir "${MCP_RELEASE_ROOT:-$project_root}")"
 runtime_root="$(resolve_dir "$MCP_ACCESS_STACK_RUNTIME_ROOT")"
 policy_path="$(resolve_file "$VS_CODE_GPT_POLICY_PATH")"
 connector_token_file="$(assert_private_readable_file "$MCP_CONNECTOR_TOKEN_FILE" 'Connector token' 4096)"
@@ -122,7 +124,7 @@ node_major="${node_version%%.*}"
 [[ "$node_major" =~ ^[0-9]+$ ]] || fail 'Unable to determine Node version.'
 (( node_major >= 26 )) || fail 'Node 26 or newer is required.'
 
-edge_connector_path="$project_root/services/mcp-gateway/dist/edge-connector-cli.js"
+edge_connector_path="$release_root/services/mcp-gateway/dist/edge-connector-cli.js"
 [[ -f "$edge_connector_path" ]] || fail "Built Edge Connector was not found: $edge_connector_path"
 
 connector_token="$(read_token "$connector_token_file" 'Connector token' 32)"
@@ -134,6 +136,7 @@ owner_oauth_scopes="${OWNER_OAUTH_SCOPES:-workspaces:read}"
 if $validate_only; then
   printf 'status=validated\n'
   printf 'projectRoot=%s\n' "$project_root"
+  printf 'releaseRoot=%s\n' "$release_root"
   printf 'runtimeRoot=%s\n' "$runtime_root"
   printf 'edgeOrigin=%s\n' "$MCP_EDGE_BASE_URL"
   printf 'nodePath=%s\n' "$node_binary"
@@ -148,6 +151,7 @@ export MCP_EDGE_BASE_URL
 export MCP_CONNECTOR_TOKEN_FILE="$connector_token_file"
 export VS_CODE_GPT_POLICY_PATH="$policy_path"
 export VS_CODE_GPT_STACK_ROOT="$project_root"
+export MCP_RELEASE_ROOT="$release_root"
 export MCP_ACCESS_STACK_INSTALLATION_ROOT="${MCP_ACCESS_STACK_INSTALLATION_ROOT:-/var/lib/mcp-access-stack}"
 export MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS="$max_concurrency"
 export MCP_SESSION_MODE="$session_mode"
@@ -159,5 +163,5 @@ export ALLOWED_ORIGINS="$allowed_origins"
 export BROWSER_WORKER_ENABLED='false'
 unset BROWSER_WORKER_URL BROWSER_WORKER_TOKEN
 
-# Do not keep a second supervisor layer here. systemd owns restart policy.
+# systemd owns persistent restart policy.
 exec "$node_binary" "$edge_connector_path"

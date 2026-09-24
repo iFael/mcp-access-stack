@@ -72,18 +72,20 @@ export class ReleaseLifecycleService {
   constructor(
     private readonly shellService: ReleaseShellService,
     private readonly backgroundTaskManager: ReleaseBackgroundTaskManager,
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {}
 
   async getState(workspace: ResolvedWorkspace): Promise<GetReleaseStateResult> {
-    assertReleaseWorkspace(workspace);
+    assertReleaseWorkspace(workspace, this.platform);
     const installationRoot = resolveInstallationRoot();
     const state = await readLifecycleState(installationRoot);
     const activeReleaseId = state.active?.releaseId;
+    const bootstrap = resolveLifecycleBootstrap(this.platform);
     const updateScriptPresent = activeReleaseId
-      ? await fileExists(activeBootstrapPath(installationRoot, activeReleaseId, "Update-McpAccessStack.ps1"))
+      ? await fileExists(activeBootstrapPath(installationRoot, activeReleaseId, bootstrap.directory, bootstrap.updateScript))
       : false;
     const cutoverScriptPresent = activeReleaseId
-      ? await fileExists(activeBootstrapPath(installationRoot, activeReleaseId, "Start-McpAccessStackCutover.ps1"))
+      ? await fileExists(activeBootstrapPath(installationRoot, activeReleaseId, bootstrap.directory, bootstrap.cutoverScript))
       : false;
 
     return {
@@ -103,7 +105,7 @@ export class ReleaseLifecycleService {
     input: PrepareReleaseInput,
     context: OperationContext = {},
   ): Promise<PrepareReleaseResult> {
-    assertReleaseWorkspace(workspace);
+    assertReleaseWorkspace(workspace, this.platform);
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
       throw new AppError(
         "CAPABILITY_UNSUPPORTED",
@@ -119,30 +121,22 @@ export class ReleaseLifecycleService {
         "Release preparation requires an active execution-node release.",
       );
     }
+    const bootstrap = resolveLifecycleBootstrap(this.platform);
     const updater = activeBootstrapPath(
       installationRoot,
       state.active.releaseId,
-      "Update-McpAccessStack.ps1",
+      bootstrap.directory,
+      bootstrap.updateScript,
     );
-    await assertBootstrapPresent(updater, "Update-McpAccessStack.ps1");
+    await assertBootstrapPresent(updater, bootstrap.updateScript);
 
-    const command = [
-      "pwsh.exe",
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "AllSigned",
-      "-File",
-      quotePowerShell(updater),
-      "-Repository",
-      quotePowerShell(repository),
-      "-InstallationRoot",
-      quotePowerShell(installationRoot),
-      "-Tag",
-      quotePowerShell(input.tag),
-      "-Execute",
-    ].join(" ");
+    const command = buildPrepareCommand(
+      this.platform,
+      updater,
+      repository,
+      installationRoot,
+      input.tag,
+    );
 
     const parsed = startBackgroundTaskInputSchema.parse({
       workspaceId: workspace.id,
@@ -195,7 +189,7 @@ export class ReleaseLifecycleService {
     input: PromoteReleaseInput,
     context: OperationContext = {},
   ): Promise<PromoteReleaseResult> {
-    const projectRoot = assertReleaseWorkspace(workspace);
+    const projectRoot = assertReleaseWorkspace(workspace, this.platform);
     const installationRoot = resolveInstallationRoot();
     const state = await readLifecycleState(installationRoot);
     if (!state.active || !state.candidate) {
@@ -211,16 +205,18 @@ export class ReleaseLifecycleService {
       );
     }
 
+    const bootstrap = resolveLifecycleBootstrap(this.platform);
     const cutover = activeBootstrapPath(
       installationRoot,
       state.active.releaseId,
-      "Start-McpAccessStackCutover.ps1",
+      bootstrap.directory,
+      bootstrap.cutoverScript,
     );
-    await assertBootstrapPresent(cutover, "Start-McpAccessStackCutover.ps1");
+    await assertBootstrapPresent(cutover, bootstrap.cutoverScript);
     const config = await readEdgeRecoveryConfig(installationRoot);
     const persistedProjectRoot = path.resolve(config.projectRoot);
     const samePersistedProjectRoot =
-      process.platform === "win32"
+      this.platform === "win32"
         ? persistedProjectRoot.toLocaleLowerCase("en-US") ===
           projectRoot.toLocaleLowerCase("en-US")
         : persistedProjectRoot === projectRoot;
@@ -237,41 +233,14 @@ export class ReleaseLifecycleService {
       );
     }
 
-    const command = [
-      "pwsh.exe",
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "AllSigned",
-      "-File",
-      quotePowerShell(cutover),
-      "-InstallationRoot",
-      quotePowerShell(installationRoot),
-      "-ProjectRoot",
-      quotePowerShell(projectRoot),
-      "-ExpectedReleaseId",
-      quotePowerShell(input.releaseId),
-      "-EdgeRuntimeRoot",
-      quotePowerShell(config.runtimeRoot),
-      "-EdgeBaseUrl",
-      quotePowerShell(config.edgeBaseUrl),
-      "-ConnectorTokenFile",
-      quotePowerShell(config.connectorTokenFile),
-      "-OwnerTokenFile",
-      quotePowerShell(config.ownerTokenFile),
-      "-PolicyPath",
-      quotePowerShell(config.policyPath),
-      "-AllowedOrigins",
-      quotePowerShell(config.allowedOrigins),
-      "-OwnerOAuthScopes",
-      quotePowerShell(config.ownerOAuthScopes),
-      "-McpSessionMode",
-      quotePowerShell(config.mcpSessionMode),
-      "-EdgeTaskName",
-      quotePowerShell(config.taskName),
-      "-Execute",
-    ].join(" ");
+    const command = buildPromoteCommand(
+      this.platform,
+      cutover,
+      installationRoot,
+      projectRoot,
+      input.releaseId,
+      config,
+    );
 
     const execution = await this.shellService.runCommand(
       workspace,
@@ -302,7 +271,7 @@ export class ReleaseLifecycleService {
     if (execution.status !== "executed" || execution.exitCode !== 0) {
       throw new AppError(
         "SHELL_FAILED",
-        "Signed release cutover bootstrap did not complete successfully.",
+        "Release cutover bootstrap did not complete successfully.",
       );
     }
 
@@ -310,7 +279,7 @@ export class ReleaseLifecycleService {
     if (handover.releaseId !== input.releaseId) {
       throw new AppError(
         "EXECUTION_OUTCOME_UNKNOWN",
-        "Signed release cutover returned a different release identity.",
+        "Release cutover returned a different release identity.",
       );
     }
 
@@ -326,7 +295,10 @@ export class ReleaseLifecycleService {
   }
 }
 
-function assertReleaseWorkspace(workspace: ResolvedWorkspace): string {
+function assertReleaseWorkspace(
+  workspace: ResolvedWorkspace,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const configuredRoot = process.env.VS_CODE_GPT_STACK_ROOT?.trim();
   if (!configuredRoot) {
     throw new AppError(
@@ -337,7 +309,7 @@ function assertReleaseWorkspace(workspace: ResolvedWorkspace): string {
   const expected = path.resolve(configuredRoot);
   const actual = path.resolve(workspace.rootPath);
   const same =
-    process.platform === "win32"
+    platform === "win32"
       ? expected.toLocaleLowerCase("en-US") === actual.toLocaleLowerCase("en-US")
       : expected === actual;
   if (!same) {
@@ -407,6 +379,7 @@ async function readEdgeRecoveryConfig(installationRoot: string) {
 function activeBootstrapPath(
   installationRoot: string,
   activeReleaseId: string,
+  directory: "windows" | "linux",
   fileName: string,
 ): string {
   return path.join(
@@ -414,7 +387,7 @@ function activeBootstrapPath(
     "releases",
     activeReleaseId,
     "deploy",
-    "windows",
+    directory,
     fileName,
   );
 }
@@ -423,7 +396,7 @@ async function assertBootstrapPresent(filePath: string, name: string): Promise<v
   if (await fileExists(filePath)) return;
   throw new AppError(
     "CAPABILITY_UNSUPPORTED",
-    `Active release does not contain the signed ${name} bootstrap. One legacy promotion is required before typed release lifecycle can take over.`,
+    `Active release does not contain the required ${name} lifecycle bootstrap. One platform bootstrap is required before typed release lifecycle can take over.`,
   );
 }
 
@@ -434,6 +407,145 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+type LifecycleBootstrap = {
+  directory: "windows" | "linux";
+  updateScript: "Update-McpAccessStack.ps1" | "Update-McpAccessStack.sh";
+  cutoverScript: "Start-McpAccessStackCutover.ps1" | "Start-McpAccessStackCutover.sh";
+};
+
+export function resolveLifecycleBootstrap(platform: NodeJS.Platform): LifecycleBootstrap {
+  return platform === "win32"
+    ? {
+        directory: "windows",
+        updateScript: "Update-McpAccessStack.ps1",
+        cutoverScript: "Start-McpAccessStackCutover.ps1",
+      }
+    : {
+        directory: "linux",
+        updateScript: "Update-McpAccessStack.sh",
+        cutoverScript: "Start-McpAccessStackCutover.sh",
+      };
+}
+
+function buildPrepareCommand(
+  platform: NodeJS.Platform,
+  updater: string,
+  repository: string,
+  installationRoot: string,
+  tag: string,
+): string {
+  if (platform === "win32") {
+    return [
+      "pwsh.exe",
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "AllSigned",
+      "-File",
+      quotePowerShell(updater),
+      "-Repository",
+      quotePowerShell(repository),
+      "-InstallationRoot",
+      quotePowerShell(installationRoot),
+      "-Tag",
+      quotePowerShell(tag),
+      "-Execute",
+    ].join(" ");
+  }
+  return [
+    "bash",
+    quotePowerShell(updater),
+    "--repository",
+    quotePowerShell(repository),
+    "--installation-root",
+    quotePowerShell(installationRoot),
+    "--tag",
+    quotePowerShell(tag),
+    "--execute",
+  ].join(" ");
+}
+
+function buildPromoteCommand(
+  platform: NodeJS.Platform,
+  cutover: string,
+  installationRoot: string,
+  projectRoot: string,
+  releaseId: string,
+  config: z.infer<typeof edgeRecoveryConfigSchema>,
+): string {
+  if (platform === "win32") {
+    return [
+      "pwsh.exe",
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "AllSigned",
+      "-File",
+      quotePowerShell(cutover),
+      "-InstallationRoot",
+      quotePowerShell(installationRoot),
+      "-ProjectRoot",
+      quotePowerShell(projectRoot),
+      "-ExpectedReleaseId",
+      quotePowerShell(releaseId),
+      "-EdgeRuntimeRoot",
+      quotePowerShell(config.runtimeRoot),
+      "-EdgeBaseUrl",
+      quotePowerShell(config.edgeBaseUrl),
+      "-ConnectorTokenFile",
+      quotePowerShell(config.connectorTokenFile),
+      "-OwnerTokenFile",
+      quotePowerShell(config.ownerTokenFile),
+      "-PolicyPath",
+      quotePowerShell(config.policyPath),
+      "-AllowedOrigins",
+      quotePowerShell(config.allowedOrigins),
+      "-OwnerOAuthScopes",
+      quotePowerShell(config.ownerOAuthScopes),
+      "-McpSessionMode",
+      quotePowerShell(config.mcpSessionMode),
+      "-EdgeTaskName",
+      quotePowerShell(config.taskName),
+      "-Execute",
+    ].join(" ");
+  }
+  return [
+    "bash",
+    quotePowerShell(cutover),
+    "--installation-root",
+    quotePowerShell(installationRoot),
+    "--project-root",
+    quotePowerShell(projectRoot),
+    "--expected-release-id",
+    quotePowerShell(releaseId),
+    "--edge-runtime-root",
+    quotePowerShell(config.runtimeRoot),
+    "--edge-base-url",
+    quotePowerShell(config.edgeBaseUrl),
+    "--connector-token-file",
+    quotePowerShell(config.connectorTokenFile),
+    "--owner-token-file",
+    quotePowerShell(config.ownerTokenFile),
+    "--policy-path",
+    quotePowerShell(config.policyPath),
+    "--allowed-origins",
+    quotePowerShell(config.allowedOrigins),
+    "--owner-oauth-scopes",
+    quotePowerShell(config.ownerOAuthScopes),
+    "--mcp-session-mode",
+    quotePowerShell(config.mcpSessionMode),
+    "--edge-task-name",
+    quotePowerShell(config.taskName),
+    "--max-concurrent-requests",
+    String(config.maxConcurrentRequests),
+    "--handover-delay-seconds",
+    String(config.delaySeconds),
+    "--execute",
+  ].join(" ");
 }
 
 function quotePowerShell(value: string): string {
@@ -457,6 +569,6 @@ function parseLastJsonObject<T>(
   }
   throw new AppError(
     "EXECUTION_OUTCOME_UNKNOWN",
-    "Signed release cutover did not return a parseable handover result.",
+    "Release cutover did not return a parseable handover result.",
   );
 }

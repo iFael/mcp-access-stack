@@ -44,7 +44,7 @@ describe("ReleaseLifecycleService", () => {
 
   it("rejects release lifecycle access from a non-canonical workspace", async () => {
     await writeState({ candidate: null });
-    const service = new ReleaseLifecycleService({} as any, {} as any);
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
     const other = {
       ...workspace,
       id: "other",
@@ -61,7 +61,7 @@ describe("ReleaseLifecycleService", () => {
     await writeBootstrap("Update-McpAccessStack.ps1");
     await writeBootstrap("Start-McpAccessStackCutover.ps1");
 
-    const service = new ReleaseLifecycleService({} as any, {} as any);
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
     const result = await service.getState(workspace);
 
     expect(result.state.active?.releaseId).toBe(ACTIVE);
@@ -74,7 +74,7 @@ describe("ReleaseLifecycleService", () => {
   it("fails closed when the active release does not contain the signed updater bootstrap", async () => {
     await writeState({ candidate: null });
 
-    const service = new ReleaseLifecycleService({} as any, {} as any);
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
     await expect(
       service.prepare(
         workspace,
@@ -122,7 +122,7 @@ describe("ReleaseLifecycleService", () => {
         };
       },
     };
-    const service = new ReleaseLifecycleService(shell as any, background as any);
+    const service = new ReleaseLifecycleService(shell as any, background as any, "win32");
 
     const result = await service.prepare(
       workspace,
@@ -181,7 +181,7 @@ describe("ReleaseLifecycleService", () => {
         };
       },
     };
-    const service = new ReleaseLifecycleService(shell as any, {} as any);
+    const service = new ReleaseLifecycleService(shell as any, {} as any, "win32");
 
     const result = await service.promote(
       workspace,
@@ -213,7 +213,7 @@ describe("ReleaseLifecycleService", () => {
     await writeBootstrap("Start-McpAccessStackCutover.ps1");
     await writeRecoveryConfig(path.join(installationRoot, "legacy-project"));
 
-    const service = new ReleaseLifecycleService({} as any, {} as any);
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
     await expect(
       service.promote(
         workspace,
@@ -223,6 +223,101 @@ describe("ReleaseLifecycleService", () => {
     ).rejects.toMatchObject({
       code: "EXECUTION_STATE_INVALID",
     });
+  });
+
+  it("uses fixed Linux lifecycle bootstraps without changing the public tool contract", async () => {
+    await writeState({
+      candidate: {
+        releaseId: CANDIDATE,
+        manifestSha256: "1".repeat(64),
+        materializedAt: ISO,
+      },
+    });
+    await writeBootstrap("Update-McpAccessStack.sh", "linux");
+    await writeBootstrap("Start-McpAccessStackCutover.sh", "linux");
+    await writeRecoveryConfig();
+
+    let authorizedInput: any;
+    let executedInput: any;
+    const requestId = "123e4567-e89b-42d3-a456-426614174099";
+    const shell = {
+      authorizeBackgroundCommand: async (_workspace: ResolvedWorkspace, input: any) => {
+        authorizedInput = input;
+        return { logicalCwd: ".", absoluteCwd: workspace.rootPath };
+      },
+      runCommand: async (_workspace: ResolvedWorkspace, input: any) => {
+        executedInput = input;
+        return {
+          status: "executed" as const,
+          shell: "pwsh" as const,
+          cwd: ".",
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: "started",
+            detached: true,
+            requestId,
+            releaseId: CANDIDATE,
+            brokerTaskName: "systemd:mcp-access-stack-edge-connector",
+            requestPath: path.join(installationRoot, "state", "request.json"),
+            resultPath: path.join(installationRoot, "state", "result.json"),
+          }) + "\n",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+    const background = {
+      start_background_task: async (input: any) => ({
+        version: 1 as const,
+        id: "123e4567-e89b-42d3-a456-426614174098",
+        workspaceId: "ws",
+        operation: "prepare_release",
+        commandHash: "0".repeat(64),
+        command: input.command,
+        shell: "pwsh" as const,
+        cwd: ".",
+        state: "running" as const,
+        createdAt: ISO,
+        startedAt: ISO,
+        timeoutMs: input.timeoutMs,
+        pid: 4242,
+      }),
+    };
+    const service = new ReleaseLifecycleService(shell as any, background as any, "linux");
+
+    const state = await service.getState(workspace);
+    expect(state.activeBootstrap).toEqual({
+      updateScriptPresent: true,
+      cutoverScriptPresent: true,
+    });
+
+    await service.prepare(
+      workspace,
+      "iFael/mcp-access-stack",
+      { workspaceId: "ws", tag: "v1.1.0-beta.51" },
+      {},
+    );
+    expect(authorizedInput.command).toContain("Update-McpAccessStack.sh");
+    expect(authorizedInput.command).toContain("--repository");
+    expect(authorizedInput.command).toContain("--installation-root");
+    expect(authorizedInput.command).not.toContain("AllSigned");
+    expect(authorizedInput.command).not.toContain("pwsh.exe");
+
+    const promoted = await service.promote(
+      workspace,
+      { workspaceId: "ws", releaseId: CANDIDATE },
+      {},
+    );
+    expect(promoted).toMatchObject({
+      status: "handover_started",
+      releaseId: CANDIDATE,
+      requestId,
+    });
+    expect(executedInput.command).toContain("Start-McpAccessStackCutover.sh");
+    expect(executedInput.command).toContain("--expected-release-id");
+    expect(executedInput.command).toContain("--connector-token-file");
+    expect(executedInput.command).not.toContain("AllSigned");
+    expect(executedInput.command).not.toContain("pwsh.exe");
   });
 
   async function writeState({
@@ -255,13 +350,16 @@ describe("ReleaseLifecycleService", () => {
     );
   }
 
-  async function writeBootstrap(name: string): Promise<void> {
+  async function writeBootstrap(
+    name: string,
+    platformDirectory: "windows" | "linux" = "windows",
+  ): Promise<void> {
     const directory = path.join(
       installationRoot,
       "releases",
       ACTIVE,
       "deploy",
-      "windows",
+      platformDirectory,
     );
     await mkdir(directory, { recursive: true });
     await writeFile(path.join(directory, name), "# signed in production\n", "utf8");
