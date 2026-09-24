@@ -75,6 +75,11 @@ grep -Fq 'Test-PersistentServiceActive' "$root/deploy/linux/Invoke-McpAccessStac
 grep -Fq 'Stop-PersistentService' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 grep -Fq 'if ($persistentServiceWasActive)' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 grep -Fq 'Offline rollback selected unexpected connector' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq '$isExcluded=$Excluded -contains $id' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+if grep -Fq '$excluded=$Excluded -contains $id' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"; then
+  echo 'case-insensitive Excluded shadowing regression detected' >&2
+  exit 1
+fi
 grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"
 grep -Fq 'ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
 grep -Fq 'Restart=always' "$unit"
