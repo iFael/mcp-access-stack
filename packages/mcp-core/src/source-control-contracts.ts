@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { errorCodes } from "./errors.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const rootSchema = z.string().trim().min(1).max(4_096);
@@ -218,6 +219,8 @@ export const gitStagePathsInputSchema = z
     workspaceId: workspaceIdSchema,
     root: rootSchema.optional(),
     paths: gitPathListSchema,
+    expectedHeadSha: gitShaSchema.optional(),
+    requireCleanIndex: z.boolean().optional(),
   })
   .strict();
 export type GitStagePathsInput = z.input<typeof gitStagePathsInputSchema>;
@@ -272,6 +275,54 @@ export const gitCommitResultSchema = z
   })
   .strict();
 export type GitCommitResult = z.infer<typeof gitCommitResultSchema>;
+
+export const gitCommitPathsInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    paths: gitPathListSchema,
+    message: commitMessageSchema,
+    expectedHeadSha: gitShaSchema,
+  })
+  .strict();
+export type GitCommitPathsInput = z.input<typeof gitCommitPathsInputSchema>;
+
+const gitCommitPathsErrorSchema = z
+  .object({
+    code: z.enum(errorCodes),
+    message: z.string().min(1),
+  })
+  .strict();
+
+const gitCommitPathsCompletedResultSchema = z
+  .object({
+    status: z.literal("completed"),
+    root: rootSchema,
+    branch: gitBranchSchema,
+    previousHeadSha: gitShaSchema,
+    stagedIndexTreeSha: gitShaSchema,
+    commitSha: gitShaSchema,
+    paths: gitPathListSchema,
+  })
+  .strict();
+
+const gitCommitPathsReconciliationResultSchema = z
+  .object({
+    status: z.literal("reconciliation_required"),
+    root: rootSchema,
+    headSha: gitShaSchema,
+    indexTreeSha: gitShaSchema,
+    paths: gitPathListSchema,
+    phase: z.enum(["post_stage_head_mismatch", "commit"]),
+    error: gitCommitPathsErrorSchema,
+  })
+  .strict();
+
+export const gitCommitPathsResultSchema = z.discriminatedUnion("status", [
+  gitCommitPathsCompletedResultSchema,
+  gitCommitPathsReconciliationResultSchema,
+]);
+export type GitCommitPathsResult = z.infer<typeof gitCommitPathsResultSchema>;
 
 export const gitMergeBranchInputSchema = z
   .object({

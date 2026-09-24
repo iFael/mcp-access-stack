@@ -1501,6 +1501,9 @@ const sourceControlShaC = "c".repeat(40);
 
 class MockSourceControlExecutor {
   calls: Array<{ method: string; input: unknown; context: unknown }> = [];
+  stageHeadSha = sourceControlShaA;
+  stageError: AppError | undefined;
+  commitError: AppError | undefined;
 
   private record(method: string, input: unknown, context: unknown) {
     this.calls.push({ method, input, context });
@@ -1512,7 +1515,8 @@ class MockSourceControlExecutor {
   }
   async stagePaths(input: any, context?: unknown) {
     this.record("stagePaths", input, context);
-    return { root: input.root ?? ".", headSha: sourceControlShaA, indexTreeSha: sourceControlShaB, paths: input.paths };
+    if (this.stageError) throw this.stageError;
+    return { root: input.root ?? ".", headSha: this.stageHeadSha, indexTreeSha: sourceControlShaB, paths: input.paths };
   }
   async unstagePaths(input: any, context?: unknown) {
     this.record("unstagePaths", input, context);
@@ -1520,6 +1524,7 @@ class MockSourceControlExecutor {
   }
   async commit(input: any, context?: unknown) {
     this.record("commit", input, context);
+    if (this.commitError) throw this.commitError;
     return { root: input.root ?? ".", branch: "feature/task7", commitSha: sourceControlShaC };
   }
   async mergeBranch(input: any, context?: unknown) {
@@ -1571,6 +1576,7 @@ const expectedSourceControlAnnotations = {
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  git_commit_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   git_merge_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1581,14 +1587,127 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes exactly eleven source-control names inside the 40-tool workspace surface", () => {
-    expect(SOURCE_CONTROL_TOOL_NAMES).toEqual(sourceControlCases.map(([name]) => name));
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(40);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(40);
+  it("publishes twelve source-control tools inside the 41-tool workspace surface", () => {
+    expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
+      "git_create_branch",
+      "git_stage_paths",
+      "git_unstage_paths",
+      "git_commit",
+      "git_commit_paths",
+      "git_merge_branch",
+      "git_push_branch",
+      "github_get_repository",
+      "github_create_repository",
+      "github_get_pull_request",
+      "github_create_pull_request",
+      "github_merge_pull_request",
+    ]);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(12);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(41);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(41);
   });
 
-  it("registers exact annotations and routes each tool to exactly one typed method", async () => {
+  it("composes explicit path staging and commit without silent rollback", async () => {
+    const executor = new MockSourceControlExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerSourceControlTools(server, executor, {
+      includeTools: ["git_commit_paths"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tool = (server as unknown as {
+      _registeredTools: Record<string, RegisteredTool & { annotations?: unknown }>;
+    })._registeredTools["git_commit_paths"]!;
+    expect(tool.annotations).toMatchObject(
+      expectedSourceControlAnnotations.git_commit_paths,
+    );
+
+    const success = await tool.handler(
+      {
+        workspaceId: "ws",
+        paths: ["a.txt", "b.txt"],
+        message: "typed composite",
+        expectedHeadSha: sourceControlShaA,
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(success.isError).not.toBe(true);
+    expect(success.structuredContent).toMatchObject({
+      status: "completed",
+      previousHeadSha: sourceControlShaA,
+      stagedIndexTreeSha: sourceControlShaB,
+      commitSha: sourceControlShaC,
+      paths: ["a.txt", "b.txt"],
+    });
+    expect(executor.calls.map((call) => call.method)).toEqual([
+      "stagePaths",
+      "commit",
+    ]);
+    expect(executor.calls[0]?.input).toMatchObject({
+      expectedHeadSha: sourceControlShaA,
+      requireCleanIndex: true,
+      paths: ["a.txt", "b.txt"],
+    });
+    expect(executor.calls[1]?.input).toMatchObject({
+      expectedHeadSha: sourceControlShaA,
+      expectedIndexTreeSha: sourceControlShaB,
+      message: "typed composite",
+    });
+
+    executor.calls = [];
+    executor.commitError = new AppError("GIT_ERROR", "commit failed");
+    const failedCommit = await tool.handler(
+      {
+        workspaceId: "ws",
+        paths: ["a.txt"],
+        message: "typed composite",
+        expectedHeadSha: sourceControlShaA,
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(failedCommit.isError).not.toBe(true);
+    expect(failedCommit.structuredContent).toMatchObject({
+      status: "reconciliation_required",
+      phase: "commit",
+      headSha: sourceControlShaA,
+      indexTreeSha: sourceControlShaB,
+      error: { code: "GIT_ERROR" },
+    });
+    expect(executor.calls.map((call) => call.method)).toEqual([
+      "stagePaths",
+      "commit",
+    ]);
+    expect(executor.calls.map((call) => call.method)).not.toContain(
+      "unstagePaths",
+    );
+
+    executor.calls = [];
+    executor.commitError = undefined;
+    executor.stageHeadSha = sourceControlShaC;
+    const changedHead = await tool.handler(
+      {
+        workspaceId: "ws",
+        paths: ["a.txt"],
+        message: "typed composite",
+        expectedHeadSha: sourceControlShaA,
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(changedHead.isError).not.toBe(true);
+    expect(changedHead.structuredContent).toMatchObject({
+      status: "reconciliation_required",
+      phase: "post_stage_head_mismatch",
+      headSha: sourceControlShaC,
+      indexTreeSha: sourceControlShaB,
+      error: { code: "GIT_HEAD_MISMATCH" },
+    });
+    expect(executor.calls.map((call) => call.method)).toEqual(["stagePaths"]);
+  });
+
+  it("registers exact annotations and routes each relay-backed tool to exactly one typed method", async () => {
     const executor = new MockSourceControlExecutor();
     const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
     registerSourceControlTools(server, executor, { securitySchemes: [{ type: "noauth" }] });

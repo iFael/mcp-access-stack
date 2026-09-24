@@ -1079,6 +1079,28 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       parsed.root ?? ".",
       context.signal,
     );
+    if (parsed.expectedHeadSha !== undefined) {
+      const actualHead = await this.gitHeadSha(repository, context.signal);
+      assertGitSha(
+        "GIT_HEAD_MISMATCH",
+        parsed.expectedHeadSha,
+        actualHead,
+        "Git HEAD changed before staging.",
+      );
+    }
+    if (
+      parsed.requireCleanIndex &&
+      !(await this.gitIsClean(
+        repository,
+        ["diff", "--cached", "--quiet"],
+        context.signal,
+      ))
+    ) {
+      throw new AppError(
+        "GIT_INDEX_CHANGED",
+        "Git index must be clean before staging explicit commit paths.",
+      );
+    }
     const paths = this.authorizeGitPaths(repository, parsed.paths);
     await this.gitSuccess(
       repository,

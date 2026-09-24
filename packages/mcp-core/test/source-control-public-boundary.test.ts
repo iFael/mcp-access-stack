@@ -5,6 +5,7 @@ import {
 } from "../src/mcp-workspace-tools.js";
 import {
   gitCommitInputSchema,
+  gitCommitPathsInputSchema,
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
   gitPushBranchInputSchema,
@@ -24,6 +25,7 @@ const shaB = "b".repeat(40);
 
 const expectedPublicSourceControlNames = [
   "git_commit",
+  "git_commit_paths",
   "git_create_branch",
   "git_merge_branch",
   "git_push_branch",
@@ -35,6 +37,10 @@ const expectedPublicSourceControlNames = [
   "github_get_repository",
   "github_merge_pull_request",
 ] as const;
+
+const expectedRelaySourceControlNames = expectedPublicSourceControlNames.filter(
+  (name) => name !== "git_commit_paths",
+);
 
 const expectedSourceControlCapabilities = [
   "git.branch.write",
@@ -93,6 +99,16 @@ const inputCases = [
       message: "task 8 invariant",
       expectedHeadSha: shaA,
       expectedIndexTreeSha: shaB,
+    },
+  },
+  {
+    name: "git_commit_paths",
+    schema: gitCommitPathsInputSchema,
+    input: {
+      workspaceId: "repo",
+      paths: ["src/a.ts"],
+      message: "task 8 explicit paths",
+      expectedHeadSha: shaA,
     },
   },
   {
@@ -183,17 +199,17 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes exactly eleven public tools and exactly ten capabilities", () => {
+  it("exposes exactly twelve public tools, eleven relay operations and ten capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
     expect([...sourceControlOperationNameSchema.options].sort()).toEqual(
-      [...expectedPublicSourceControlNames].sort(),
+      [...expectedRelaySourceControlNames].sort(),
     );
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(11);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(12);
     expect(sourceControlCapabilities).toHaveLength(10);
 
     for (const forbiddenName of [

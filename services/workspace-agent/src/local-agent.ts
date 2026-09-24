@@ -821,6 +821,9 @@ export class LocalAgent {
         const targetResource = localGitRepositoryTarget(workspace.id, root);
         metadata.sourceControlCapability = "git.index.write";
         metadata.targetResource = targetResource;
+        if (parsed.expectedHeadSha !== undefined) {
+          metadata.expectedSha = parsed.expectedHeadSha;
+        }
         return this.executeSourceControlMutation({
           workspace,
           operation: "git_stage_paths",
