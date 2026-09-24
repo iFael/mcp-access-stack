@@ -132,7 +132,7 @@ export class EdgeOwnerOAuth {
   }
 
   async rotateOwnerPassword(password: string): Promise<void> {
-    if (password.length < 16 || password.length > 2048 || /[\r\n\0]/u.test(password)) {
+    if (password.length === 0 || password.length > 2048 || /[\r\n\0]/u.test(password)) {
       throw new Error("Owner password is invalid.");
     }
     const material = await deriveOwnerCredentialMaterial(password);
@@ -262,7 +262,7 @@ export class EdgeOwnerOAuth {
       try {
         await this.rotateOwnerPassword(password);
       } catch {
-        return htmlResponse(this.authorizationPage(client, fields, false, "Password must contain between 16 and 2048 characters."), 400);
+        return htmlResponse(this.authorizationPage(client, fields, false, "Password must not be empty and must contain at most 2048 characters."), 400);
       }
     } else {
       const supplied = fields.get("owner_password") ?? "";
@@ -517,7 +517,7 @@ export class EdgeOwnerOAuth {
       .join("\n");
     const credentialFields = passwordConfigured
       ? `<label>Password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
-      : `<p>One-time migration: enter the current credential and choose the shared password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New password<input name="owner_password" type="password" autocomplete="new-password" minlength="16" required></label><label>Confirm password<input name="owner_password_confirm" type="password" autocomplete="new-password" minlength="16" required></label>`;
+      : `<p>One-time migration: enter the current credential and choose the shared password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New password<input name="owner_password" type="password" autocomplete="new-password" required></label><label>Confirm password<input name="owner_password_confirm" type="password" autocomplete="new-password" required></label>`;
     return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}<button type="submit">Authorize</button></form></main></body></html>`;
   }
 }

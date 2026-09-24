@@ -12,8 +12,8 @@ describe("Edge Owner OAuth durable state", () => {
   it("uses one-shot codes, revokes access and never persists raw secrets", async () => {
     const storage = new MemoryStorage();
     const ownerSecret = "x".repeat(32);
-    const firstPassword = "shared-password-abcdefghijklmnop";
-    const secondPassword = "shared-password-qrstuvwxyz012345";
+    const firstPassword = "4$Z!";
+    const secondPassword = "§";
     const oauth = new EdgeOwnerOAuth(storage, {
       ownerSecret,
       publicBaseUrl: new URL("https://edge.example/"),
