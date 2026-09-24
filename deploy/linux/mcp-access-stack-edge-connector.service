@@ -9,7 +9,6 @@ StartLimitBurst=6
 Type=simple
 WorkingDirectory=/srv/mcp-access-stack
 EnvironmentFile=%h/edge-connector.env
-EnvironmentFile=-%h/windows-companion/edge.env
 ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment
 Restart=always
 RestartSec=2s

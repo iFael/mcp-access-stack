@@ -25,15 +25,6 @@ Optional environment:
   MCP_SESSION_MODE
   OWNER_OAUTH_SCOPES
   ALLOWED_ORIGINS
-  MCP_WINDOWS_COMPANION_ENABLED
-  MCP_WINDOWS_COMPANION_HOST
-  MCP_WINDOWS_COMPANION_PORT
-  MCP_WINDOWS_COMPANION_USERNAME
-  MCP_WINDOWS_COMPANION_PRIVATE_KEY_PATH
-  MCP_WINDOWS_COMPANION_KNOWN_HOSTS_PATH
-  MCP_WINDOWS_COMPANION_POLICY_PATH
-  MCP_WINDOWS_COMPANION_CONNECT_TIMEOUT_MS
-  MCP_WINDOWS_COMPANION_BACKGROUND_STATE_DIR
 EOF
   exit 2
 }
@@ -142,34 +133,6 @@ owner_token="$(read_token "$owner_token_file" 'Owner token' 16)"
 allowed_origins="${ALLOWED_ORIGINS:-https://chatgpt.com,https://chat.openai.com}"
 owner_oauth_scopes="${OWNER_OAUTH_SCOPES:-workspaces:read}"
 
-windows_companion_enabled="${MCP_WINDOWS_COMPANION_ENABLED:-false}"
-[[ "$windows_companion_enabled" == 'true' || "$windows_companion_enabled" == 'false' ]] ||
-  fail 'MCP_WINDOWS_COMPANION_ENABLED must be true or false.'
-if [[ "$windows_companion_enabled" == 'true' ]]; then
-  require_value MCP_WINDOWS_COMPANION_HOST
-  require_value MCP_WINDOWS_COMPANION_USERNAME
-  require_value MCP_WINDOWS_COMPANION_PRIVATE_KEY_PATH
-  require_value MCP_WINDOWS_COMPANION_KNOWN_HOSTS_PATH
-  require_value MCP_WINDOWS_COMPANION_POLICY_PATH
-  windows_companion_port="${MCP_WINDOWS_COMPANION_PORT:-22}"
-  [[ "$windows_companion_port" =~ ^[0-9]+$ ]] || fail 'MCP_WINDOWS_COMPANION_PORT must be an integer.'
-  (( windows_companion_port >= 1 && windows_companion_port <= 65535 )) ||
-    fail 'MCP_WINDOWS_COMPANION_PORT must be between 1 and 65535.'
-  windows_companion_timeout="${MCP_WINDOWS_COMPANION_CONNECT_TIMEOUT_MS:-15000}"
-  [[ "$windows_companion_timeout" =~ ^[0-9]+$ ]] || fail 'MCP_WINDOWS_COMPANION_CONNECT_TIMEOUT_MS must be an integer.'
-  (( windows_companion_timeout >= 1 && windows_companion_timeout <= 120000 )) ||
-    fail 'MCP_WINDOWS_COMPANION_CONNECT_TIMEOUT_MS must be between 1 and 120000.'
-  MCP_WINDOWS_COMPANION_PRIVATE_KEY_PATH="$(assert_private_readable_file "$MCP_WINDOWS_COMPANION_PRIVATE_KEY_PATH" 'Windows companion private key' 65536)"
-  MCP_WINDOWS_COMPANION_KNOWN_HOSTS_PATH="$(assert_private_readable_file "$MCP_WINDOWS_COMPANION_KNOWN_HOSTS_PATH" 'Windows companion known_hosts' 1048576)"
-  MCP_WINDOWS_COMPANION_POLICY_PATH="$(assert_private_readable_file "$MCP_WINDOWS_COMPANION_POLICY_PATH" 'Windows companion policy' 1048576)"
-  export MCP_WINDOWS_COMPANION_PRIVATE_KEY_PATH MCP_WINDOWS_COMPANION_KNOWN_HOSTS_PATH MCP_WINDOWS_COMPANION_POLICY_PATH
-  export MCP_WINDOWS_COMPANION_HOST MCP_WINDOWS_COMPANION_USERNAME
-  export MCP_WINDOWS_COMPANION_PORT="$windows_companion_port"
-  export MCP_WINDOWS_COMPANION_CONNECT_TIMEOUT_MS="$windows_companion_timeout"
-  export MCP_WINDOWS_COMPANION_BACKGROUND_STATE_DIR="${MCP_WINDOWS_COMPANION_BACKGROUND_STATE_DIR:-/var/lib/mcp-access-stack/windows-companion}"
-fi
-export MCP_WINDOWS_COMPANION_ENABLED="$windows_companion_enabled"
-
 if $validate_only; then
   printf 'status=validated\n'
   printf 'projectRoot=%s\n' "$project_root"
@@ -181,11 +144,6 @@ if $validate_only; then
   printf 'edgeConnectorPath=%s\n' "$edge_connector_path"
   printf 'mcpSessionMode=%s\n' "$session_mode"
   printf 'maxConcurrentRequests=%s\n' "$max_concurrency"
-  printf 'windowsCompanionEnabled=%s\n' "$windows_companion_enabled"
-  if [[ "$windows_companion_enabled" == 'true' ]]; then
-    printf 'windowsCompanionHost=%s\n' "$MCP_WINDOWS_COMPANION_HOST"
-    printf 'windowsCompanionPort=%s\n' "$MCP_WINDOWS_COMPANION_PORT"
-  fi
   exit 0
 fi
 

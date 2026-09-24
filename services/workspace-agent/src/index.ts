@@ -1,5 +1,4 @@
 export { AgentConnection } from "./connection/service.js";
-export { CompositeWorkspaceExecutor, type RoutedWorkspaceExecutor } from "./composite-workspace-executor.js";
 export { InProcessWorkspaceExecutor } from "./in-process-workspace-executor.js";
 export { LocalAgent, type LocalAgentOptions } from "./local-agent.js";
 export { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchManagerOptions } from "./source-control/github-checks-watch-manager.js";

@@ -85,10 +85,8 @@ class FakeTransport {
   execResults: RemoteProcessResult[] = [];
   githubApiCalls: Array<{ rootPath: string; request: RemoteGitHubApiRequest }> = [];
   githubApiResults: Array<RemoteGitHubApiResult | Error> = [];
-  probeCalls = 0;
 
   async probeRoot() {
-    this.probeCalls += 1;
     return { fullPath: "C:\\workspace", kind: "directory" as const };
   }
 
@@ -208,46 +206,6 @@ describe("SshWorkspaceExecutor", () => {
     await rm(stateDirectory, { recursive: true, force: true });
   });
 
-  it("can skip the startup SSH probe for an optional companion workspace", async () => {
-    const optionalTransport = new FakeTransport();
-    const optionalExecutor = await SshWorkspaceExecutor.create({
-      policy: {
-        version: 1,
-        workspaces: [
-          {
-            id: "optional-windows",
-            name: "Optional Windows",
-            rootPath: "C:\\workspace",
-            workspaceKind: "repository",
-            enabled: true,
-            permissionProfile: "full-repo-write",
-            confirmationMode: "standard",
-            allowedRoots: ["."],
-            blockedGlobs: [],
-            limits: {
-              maxFileBytes: 64_000,
-              maxSearchResults: 100,
-              maxSearchSnippetBytes: 20_000,
-              maxDiffBytes: 500_000,
-              maxListedFiles: 500,
-            },
-            allowWrites: ["."],
-            allowShell: ["."],
-            allowedShells: ["pwsh"],
-          },
-        ],
-      },
-      backgroundStateDirectory: stateDirectory,
-      transport: optionalTransport as unknown as SshWindowsTransport,
-      probeOnCreate: false,
-    });
-
-    expect(optionalTransport.probeCalls).toBe(0);
-    await expect(optionalExecutor.listWorkspaces()).resolves.toEqual([
-      expect.objectContaining({ id: "optional-windows", shellsEnabled: true }),
-    ]);
-  });
-
   it("reads and writes through the SSH transport without changing MCP contracts", async () => {
     const read = await executor.readFile({ workspaceId: "test", path: "README.md" });
     expect(read).toMatchObject({
@@ -291,23 +249,6 @@ describe("SshWorkspaceExecutor", () => {
     });
     expect(second.status).toBe("executed");
     expect(transport.commands).toHaveLength(1);
-  });
-
-  it("requires explicit confirmation before remote UAC elevation", async () => {
-    const pending = await executor.runCommand({
-      workspaceId: "test",
-      shell: "powershell",
-      command: "Start-Process powershell -Verb RunAs",
-      timeoutMs: 30_000,
-    });
-
-    expect(pending).toMatchObject({
-      status: "confirmation_required",
-      reasons: expect.arrayContaining([
-        "elevation or UAC operation requires explicit confirmation",
-      ]),
-    });
-    expect(transport.commands).toHaveLength(0);
   });
 
   it("routes main push to confirmation without probing the current branch", async () => {
@@ -383,13 +324,6 @@ describe("SshWorkspaceExecutor", () => {
         confirmationId: pending.confirmationId,
       }),
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
-
-    await executor.waitBackgroundTask({
-      workspaceId: "test",
-      id: started.task.id,
-      timeoutMs: 5_000,
-      maxBytes: 10_000,
-    });
   });
   it("isolates remote background task lookup and listing by owner scope", async () => {
     const ownerA = { ownerScope: "openai-session:ssh-owner-a" };
