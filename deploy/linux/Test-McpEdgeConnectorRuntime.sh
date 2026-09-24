@@ -83,6 +83,10 @@ fi
 grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"
 grep -Fq 'ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
 grep -Fq 'Restart=always' "$unit"
+if grep -Fq 'ProtectKernelModules=true' "$unit"; then
+  echo 'ProtectKernelModules=true is not compatible with the user-systemd execution node' >&2
+  exit 1
+fi
 grep -Fq 'WantedBy=default.target' "$unit"
 unit_fixture="$tmp/mcp-access-stack-edge-connector.service"
 cp "$unit" "$unit_fixture"
