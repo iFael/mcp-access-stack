@@ -40,6 +40,39 @@ describe("background task wait contracts", () => {
     ).toThrow();
   });
 
+  test("publishes a bounded multi-task wait contract with unique ids", () => {
+    const schema = (contracts as Record<string, unknown>)["waitBackgroundTasksToolInputSchema"] as
+      | { parse(value: unknown): unknown }
+      | undefined;
+    const secondId = "223e4567-e89b-42d3-a456-426614174000";
+
+    expect(schema).toBeDefined();
+    expect(schema?.parse({ workspaceId: "project", ids: [taskId, secondId] })).toEqual({
+      workspaceId: "project",
+      ids: [taskId, secondId],
+      timeoutMs: 15_000,
+      maxBytes: 100_000,
+    });
+    expect(() =>
+      schema?.parse({ workspaceId: "project", ids: [taskId, taskId] }),
+    ).toThrow();
+    expect(() =>
+      schema?.parse({
+        workspaceId: "project",
+        ids: Array.from({ length: 9 }, (_, index) =>
+          `123e4567-e89b-42d3-a456-4266141740${String(index).padStart(2, "0")}`,
+        ),
+      }),
+    ).toThrow();
+    expect(() =>
+      schema?.parse({
+        workspaceId: "project",
+        ids: [taskId],
+        timeoutMs: 30_001,
+      }),
+    ).toThrow();
+  });
+
   test("publishes a wait result with task, log tail and wait metadata", () => {
     const schema = (contracts as Record<string, unknown>)["backgroundTaskWaitResultSchema"] as
       | { parse(value: unknown): unknown }

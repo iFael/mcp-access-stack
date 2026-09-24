@@ -9,11 +9,13 @@ import {
   backgroundTaskResultSchema,
   backgroundTaskStdinResultSchema,
   backgroundTasksResultSchema,
+  backgroundTasksWaitResultSchema,
   backgroundTaskWaitResultSchema,
   cancelBackgroundTaskInputSchema,
   getBackgroundTaskInputSchema,
   getBackgroundTasksInputSchema,
   waitBackgroundTaskToolInputSchema,
+  waitBackgroundTasksToolInputSchema,
   listBackgroundTasksInputSchema,
   readBackgroundTaskLogsInputSchema,
   readBackgroundTaskOutputInputSchema,
@@ -187,6 +189,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "get_background_task",
   "get_background_tasks",
   "wait_background_task",
+  "wait_background_tasks",
   "list_background_tasks",
   "cancel_background_task",
   "read_background_task_logs",
@@ -1612,6 +1615,95 @@ export function registerWorkspaceTools(
       },
     );
   }
+  if (shouldInclude("wait_background_tasks", include)) {
+    server.registerTool(
+      "wait_background_tasks",
+      {
+        title: "Wait for background tasks",
+        description:
+          "Short-polls up to eight persisted background tasks concurrently for one shared window of at most 30 seconds. " +
+          "A wait timeout stops waiting only and never cancels any task. Results and technical errors are isolated per task id.",
+        inputSchema: waitBackgroundTasksToolInputSchema,
+        outputSchema: backgroundTasksWaitResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsedInput = waitBackgroundTasksToolInputSchema.parse(input);
+          const structuredContent = backgroundTasksWaitResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              parsedInput.timeoutMs,
+              async (context) => {
+                const items = await Promise.all(
+                  parsedInput.ids.map(async (id) => {
+                    try {
+                      const result = backgroundTaskWaitResultSchema.parse(
+                        await executor.waitBackgroundTask(
+                          {
+                            workspaceId: parsedInput.workspaceId,
+                            id,
+                            timeoutMs: parsedInput.timeoutMs,
+                            maxBytes: parsedInput.maxBytes,
+                          },
+                          context,
+                        ),
+                      );
+                      return {
+                        id,
+                        status: "ok" as const,
+                        result,
+                      };
+                    } catch (error) {
+                      const appError =
+                        error instanceof AppErrorClass ? error : asAppError(error);
+                      return {
+                        id,
+                        status: "error" as const,
+                        error: {
+                          code: appError.code,
+                          message: sanitizeOperationDiagnostic(appError.message),
+                        },
+                      };
+                    }
+                  }),
+                );
+                return {
+                  items,
+                  timedOutCount: items.filter(
+                    (item) =>
+                      item.status === "ok" &&
+                      item.result?.timedOut === true,
+                  ).length,
+                  errorCount: items.filter(
+                    (item) => item.status === "error",
+                  ).length,
+                };
+              },
+            ),
+          );
+          const okCount = structuredContent.items.length - structuredContent.errorCount;
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Waited for ${okCount}/${structuredContent.items.length} background task(s); timedOut=${structuredContent.timedOutCount}; errors=${structuredContent.errorCount}. Wait timeouts do not cancel tasks.`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("list_background_tasks", include)) {
     server.registerTool(
       "list_background_tasks",
