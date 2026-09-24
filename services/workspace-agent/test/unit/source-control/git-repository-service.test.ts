@@ -363,6 +363,90 @@ describe("GitRepositoryService fast-forward merge", () => {
   });
 });
 
+describe("GitRepositoryService sync", () => {
+  async function addBareOriginForSync(): Promise<string> {
+    const remoteRoot = path.join(fixture!.basePath, "sync-remote.git");
+    await mkdir(remoteRoot, { recursive: true });
+    git(remoteRoot, ["init", "--bare"]);
+    git(fixture!.workspacePath, ["remote", "add", "origin", remoteRoot]);
+    return remoteRoot;
+  }
+
+  it("switches to an existing main branch and fast-forwards only to the exact remote SHA", async () => {
+    const { service, headSha: baseSha } = await setupRepository();
+    await addBareOriginForSync();
+    git(fixture!.workspacePath, ["push", "origin", "main:refs/heads/main"]);
+
+    git(fixture!.workspacePath, ["checkout", "-b", "remote-main"]);
+    await writeWorkspaceFile(fixture!.workspacePath, "remote.txt", "remote\n");
+    git(fixture!.workspacePath, ["add", "remote.txt"]);
+    git(fixture!.workspacePath, ["commit", "-m", "remote main"]);
+    const remoteSha = head();
+    git(fixture!.workspacePath, ["push", "origin", "HEAD:refs/heads/main"]);
+
+    git(fixture!.workspacePath, ["checkout", "main"]);
+    git(fixture!.workspacePath, ["checkout", "-b", "feature/work"]);
+
+    const result = await service.syncBranch({
+      workspaceId: "test",
+      branch: "main",
+      remote: "origin",
+      expectedRemoteSha: remoteSha,
+    });
+
+    expect(result).toEqual({
+      root: ".",
+      remote: "origin",
+      branch: "main",
+      previousBranch: "feature/work",
+      previousHeadSha: baseSha,
+      previousTargetHeadSha: baseSha,
+      remoteSha,
+      headSha: remoteSha,
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    });
+    expect(currentBranch()).toBe("main");
+    expect(head()).toBe(remoteSha);
+  }, 30_000);
+
+  it("refuses synchronization when the repository has untracked files", async () => {
+    const { service, headSha } = await setupRepository();
+    await addBareOriginForSync();
+    git(fixture!.workspacePath, ["push", "origin", "main:refs/heads/main"]);
+    git(fixture!.workspacePath, ["checkout", "-b", "feature/work"]);
+    await writeWorkspaceFile(fixture!.workspacePath, "untracked.txt", "dirty\n");
+
+    await expect(
+      service.syncBranch({
+        workspaceId: "test",
+        branch: "main",
+        remote: "origin",
+        expectedRemoteSha: headSha,
+      }),
+    ).rejects.toMatchObject({ code: "GIT_MERGE_NOT_FAST_FORWARD" });
+    expect(currentBranch()).toBe("feature/work");
+  }, 30_000);
+
+  it("rejects a stale expected remote SHA before switching branches", async () => {
+    const { service } = await setupRepository();
+    await addBareOriginForSync();
+    git(fixture!.workspacePath, ["push", "origin", "main:refs/heads/main"]);
+    git(fixture!.workspacePath, ["checkout", "-b", "feature/work"]);
+
+    await expect(
+      service.syncBranch({
+        workspaceId: "test",
+        branch: "main",
+        remote: "origin",
+        expectedRemoteSha: "b".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "GIT_REMOTE_CHANGED" });
+    expect(currentBranch()).toBe("feature/work");
+  }, 30_000);
+});
+
 describe("GitRepositoryService push", () => {
   async function addBareOrigin(): Promise<string> {
     const remoteRoot = path.join(fixture!.basePath, "remote.git");

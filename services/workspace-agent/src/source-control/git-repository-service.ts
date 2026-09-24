@@ -6,6 +6,7 @@ import {
   gitCommitInputSchema,
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
+  gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
@@ -15,6 +16,8 @@ import {
   type GitCreateBranchResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
+  type GitSyncBranchInput,
+  type GitSyncBranchResult,
   type GitPushBranchInput,
   type GitPushBranchResult,
   type GitRepositoryExecutor,
@@ -204,6 +207,193 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       sourceHeadSha: sourceHead,
       fastForwarded: true,
     };
+  }
+
+  async syncBranch(
+    input: GitSyncBranchInput,
+    context?: OperationContext,
+  ): Promise<GitSyncBranchResult> {
+    const parsed = gitSyncBranchInputSchema.parse(input);
+    const repository = await this.resolveRepository(
+      parsed.workspaceId,
+      parsed.root ?? ".",
+      context?.signal,
+    );
+    if (!(await this.runner.repositoryIsClean(repository.repositoryRoot, context?.signal))) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git repository must be completely clean before branch synchronization.",
+      );
+    }
+
+    const previousBranch = await this.runner.currentBranch(
+      repository.repositoryRoot,
+      context?.signal,
+    );
+    if (previousBranch === "HEAD") {
+      throw new AppError(
+        "GIT_BRANCH_CONFLICT",
+        "Git branch synchronization requires an attached current branch.",
+      );
+    }
+    const previousHeadSha = await this.runner.headSha(
+      repository.repositoryRoot,
+      context?.signal,
+    );
+    const previousTargetHeadSha = await this.runner.branchSha(
+      repository.repositoryRoot,
+      parsed.branch,
+      context?.signal,
+    );
+    if (previousTargetHeadSha === undefined) {
+      throw new AppError(
+        "GIT_BRANCH_CONFLICT",
+        "Git synchronization target branch does not exist locally.",
+      );
+    }
+
+    const fetchedSha = await this.runner.fetchBranch(
+      repository.repositoryRoot,
+      parsed.remote,
+      parsed.branch,
+      context?.signal,
+    );
+    if (fetchedSha !== parsed.expectedRemoteSha) {
+      throw new AppError(
+        "GIT_REMOTE_CHANGED",
+        "Git remote branch changed before synchronization.",
+      );
+    }
+    const remoteSha = await this.runner.remoteBranchSha(
+      repository.repositoryRoot,
+      parsed.remote,
+      parsed.branch,
+      context?.signal,
+    );
+    if (remoteSha !== parsed.expectedRemoteSha) {
+      throw new AppError(
+        "GIT_REMOTE_CHANGED",
+        "Git remote branch changed during synchronization preflight.",
+      );
+    }
+
+    const recheckedTargetHeadSha = await this.runner.branchSha(
+      repository.repositoryRoot,
+      parsed.branch,
+      context?.signal,
+    );
+    if (recheckedTargetHeadSha !== previousTargetHeadSha) {
+      throw new AppError(
+        "GIT_HEAD_MISMATCH",
+        "Git synchronization target branch changed during preflight.",
+      );
+    }
+    if (!(await this.runner.repositoryIsClean(repository.repositoryRoot, context?.signal))) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git repository changed during synchronization preflight.",
+      );
+    }
+    if (
+      previousTargetHeadSha !== parsed.expectedRemoteSha &&
+      !(await this.runner.mergeBaseIsAncestor(
+        repository.repositoryRoot,
+        previousTargetHeadSha,
+        parsed.expectedRemoteSha,
+        context?.signal,
+      ))
+    ) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git synchronization target cannot fast-forward to the expected remote SHA.",
+      );
+    }
+
+    const switched = previousBranch !== parsed.branch;
+    const fastForwarded = previousTargetHeadSha !== parsed.expectedRemoteSha;
+    try {
+      if (switched) {
+        await this.runner.switchBranch(
+          repository.repositoryRoot,
+          parsed.branch,
+          context?.signal,
+        );
+        const switchedBranch = await this.runner.currentBranch(
+          repository.repositoryRoot,
+          context?.signal,
+        );
+        const switchedHead = await this.runner.headSha(
+          repository.repositoryRoot,
+          context?.signal,
+        );
+        if (
+          switchedBranch !== parsed.branch ||
+          switchedHead !== previousTargetHeadSha
+        ) {
+          throw new AppError(
+            "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+            "Git branch switch completed with an unexpected repository state.",
+          );
+        }
+      } else if (previousHeadSha !== previousTargetHeadSha) {
+        throw new AppError(
+          "GIT_HEAD_MISMATCH",
+          "Current Git branch HEAD changed during synchronization preflight.",
+        );
+      }
+
+      if (fastForwarded) {
+        await this.runner.mergeFastForward(
+          repository.repositoryRoot,
+          parsed.expectedRemoteSha,
+          context?.signal,
+        );
+      }
+
+      const currentBranch = await this.runner.currentBranch(
+        repository.repositoryRoot,
+        context?.signal,
+      );
+      const headSha = await this.runner.headSha(
+        repository.repositoryRoot,
+        context?.signal,
+      );
+      if (
+        currentBranch !== parsed.branch ||
+        headSha !== parsed.expectedRemoteSha ||
+        !(await this.runner.repositoryIsClean(repository.repositoryRoot, context?.signal))
+      ) {
+        throw new AppError(
+          "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+          "Git branch synchronization completed with an unexpected repository state.",
+        );
+      }
+
+      return {
+        root: repository.logicalRoot,
+        remote: parsed.remote,
+        branch: parsed.branch,
+        previousBranch,
+        previousHeadSha,
+        previousTargetHeadSha,
+        remoteSha,
+        headSha,
+        switched,
+        fastForwarded,
+        alreadyUpToDate: !fastForwarded,
+      };
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.code === "SOURCE_CONTROL_RECONCILIATION_REQUIRED"
+      ) {
+        throw error;
+      }
+      throw new AppError(
+        "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Git branch synchronization may have partially changed the repository; explicit reconciliation is required.",
+      );
+    }
   }
 
   async pushBranch(

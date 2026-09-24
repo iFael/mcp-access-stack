@@ -132,6 +132,15 @@ describe("gateway HTTP surface", () => {
         openWorldHint: true,
         idempotentHint: true,
       });
+      const syncBranchTool = body.result.tools.find(
+        (tool) => tool.name === "git_sync_branch",
+      );
+      expect(syncBranchTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
@@ -152,6 +161,7 @@ describe("gateway HTTP surface", () => {
             "git_commit",
             "git_commit_paths",
             "git_merge_branch",
+            "git_sync_branch",
             "git_push_branch",
             "github_get_repository",
             "github_create_repository",

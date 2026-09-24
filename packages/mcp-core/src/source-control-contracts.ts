@@ -163,6 +163,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_unstage_paths",
   "git_commit",
   "git_merge_branch",
+  "git_sync_branch",
   "git_push_branch",
   "github_get_repository",
   "github_create_repository",
@@ -346,6 +347,38 @@ export const gitMergeBranchResultSchema = z
   })
   .strict();
 export type GitMergeBranchResult = z.infer<typeof gitMergeBranchResultSchema>;
+
+export const gitSyncBranchInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    branch: gitBranchSchema,
+    remote: gitRemoteSchema,
+    expectedRemoteSha: gitShaSchema,
+  })
+  .strict();
+export type GitSyncBranchInput = z.input<typeof gitSyncBranchInputSchema>;
+
+export const gitSyncBranchResultSchema = z
+  .object({
+    root: rootSchema,
+    remote: gitRemoteSchema,
+    branch: gitBranchSchema,
+    previousBranch: gitBranchSchema,
+    previousHeadSha: gitShaSchema,
+    previousTargetHeadSha: gitShaSchema,
+    remoteSha: gitShaSchema,
+    headSha: gitShaSchema,
+    switched: z.boolean(),
+    fastForwarded: z.boolean(),
+    alreadyUpToDate: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (value) => value.fastForwarded !== value.alreadyUpToDate,
+    "Exactly one of fastForwarded/alreadyUpToDate must be true.",
+  );
+export type GitSyncBranchResult = z.infer<typeof gitSyncBranchResultSchema>;
 
 export const gitPushBranchInputSchema = z
   .object({

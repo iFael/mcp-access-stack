@@ -163,6 +163,9 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   mergeBranch(...args: Parameters<GitRepositoryExecutor["mergeBranch"]>) {
     return this.fallback?.mergeBranch?.(...args) ?? Promise.reject(this.notImplemented("mergeBranch"));
   }
+  syncBranch(...args: Parameters<GitRepositoryExecutor["syncBranch"]>) {
+    return this.fallback?.syncBranch?.(...args) ?? Promise.reject(this.notImplemented("syncBranch"));
+  }
   pushBranch(...args: Parameters<GitRepositoryExecutor["pushBranch"]>) {
     return this.fallback?.pushBranch?.(...args) ?? Promise.reject(this.notImplemented("pushBranch"));
   }

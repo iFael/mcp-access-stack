@@ -10,6 +10,8 @@ import {
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
+  gitSyncBranchInputSchema,
+  gitSyncBranchResultSchema,
   gitPathSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
@@ -77,13 +79,14 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes exactly eleven operation names and four confirmable operations", () => {
+  test("publishes exactly twelve operation names and four confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
       "git_merge_branch",
+      "git_sync_branch",
       "git_push_branch",
       "github_get_repository",
       "github_create_repository",
@@ -314,6 +317,79 @@ describe("source-control contracts", () => {
     })).toMatchObject({ fastForwarded: true, headSha: shaB });
   });
 
+  test("keeps branch synchronization strict, remote-SHA-pinned and free of reset/rebase/force escape hatches", () => {
+    expect(
+      gitSyncBranchInputSchema.parse({
+        workspaceId: "repo",
+        branch: "main",
+        remote: "origin",
+        expectedRemoteSha: shaB,
+      }),
+    ).toEqual({
+      workspaceId: "repo",
+      branch: "main",
+      remote: "origin",
+      expectedRemoteSha: shaB,
+    });
+
+    for (const forbidden of [
+      { force: true },
+      { reset: true },
+      { rebase: true },
+      { create: true },
+      { strategy: "ours" },
+      { argv: ["fetch", "--force"] },
+    ]) {
+      expect(() =>
+        gitSyncBranchInputSchema.parse({
+          workspaceId: "repo",
+          branch: "main",
+          remote: "origin",
+          expectedRemoteSha: shaB,
+          ...forbidden,
+        }),
+      ).toThrow();
+    }
+
+    expect(
+      gitSyncBranchResultSchema.parse({
+        root: ".",
+        remote: "origin",
+        branch: "main",
+        previousBranch: "feature/x",
+        previousHeadSha: shaA,
+        previousTargetHeadSha: shaA,
+        remoteSha: shaB,
+        headSha: shaB,
+        switched: true,
+        fastForwarded: true,
+        alreadyUpToDate: false,
+      }),
+    ).toMatchObject({
+      branch: "main",
+      remoteSha: shaB,
+      headSha: shaB,
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    });
+    expect(() =>
+      gitSyncBranchResultSchema.parse({
+        root: ".",
+        remote: "origin",
+        branch: "main",
+        previousBranch: "main",
+        previousHeadSha: shaB,
+        previousTargetHeadSha: shaB,
+        remoteSha: shaB,
+        headSha: shaB,
+        switched: false,
+        fastForwarded: false,
+        alreadyUpToDate: false,
+      }),
+    ).toThrow();
+  });
+
   test("keeps push confirmation typed and forbids force/config/env escape hatches", () => {
     expect(gitPushBranchInputSchema.parse({
       workspaceId: "repo",
@@ -449,6 +525,7 @@ describe("source-control contracts", () => {
       ["git_unstage_paths", gitUnstagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],
       ["git_commit", gitCommitInputSchema, { workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],
       ["git_merge_branch", gitMergeBranchInputSchema, { workspaceId: "repo", sourceBranch: "feature/x", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB }],
+      ["git_sync_branch", gitSyncBranchInputSchema, { workspaceId: "repo", branch: "main", remote: "origin", expectedRemoteSha: shaB }],
       ["git_push_branch", gitPushBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedLocalSha: shaA }],
       ["github_get_repository", githubGetRepositoryInputSchema, { workspaceId: "repo", owner: "acme", repository: "app" }],
       ["github_create_repository", githubCreateRepositoryInputSchema, { workspaceId: "repo", owner: "acme", name: "app", visibility: "private" }],

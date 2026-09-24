@@ -124,6 +124,19 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(),
       fastForwarded: true as const,
     })),
+    syncBranch: jest.fn<GitRepositoryExecutor["syncBranch"]>(async (input) => ({
+      root: input.root ?? ".",
+      remote: input.remote,
+      branch: input.branch,
+      previousBranch: "feature/task6",
+      previousHeadSha: SHA_A,
+      previousTargetHeadSha: SHA_A,
+      remoteSha: input.expectedRemoteSha.toLowerCase(),
+      headSha: input.expectedRemoteSha.toLowerCase(),
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    })),
     pushBranch: jest.fn<GitRepositoryExecutor["pushBranch"]>(async (input) => ({
       status: "completed" as const,
       root: input.root ?? ".",
@@ -287,6 +300,29 @@ describe("LocalAgent typed source-control authorization", () => {
       ),
     ).resolves.toMatchObject({ branch: "feature/from-main", headSha: SHA_A });
     expect(gitExecutor.createBranch).toHaveBeenCalledTimes(1);
+
+    const syncInput = {
+      workspaceId: "test",
+      branch: "main",
+      remote: "origin",
+      expectedRemoteSha: SHA_B,
+    };
+    const synced = await (agent as any).gitSyncBranch(syncInput, {
+      idempotencyKey: "sync-main",
+    });
+    expect(synced).toMatchObject({
+      branch: "main",
+      remote: "origin",
+      headSha: SHA_B,
+      fastForwarded: true,
+    });
+    expect(gitExecutor.syncBranch).toHaveBeenCalledTimes(1);
+
+    const syncReplay = await (agent as any).gitSyncBranch(syncInput, {
+      idempotencyKey: "sync-main",
+    });
+    expect(syncReplay).toEqual(synced);
+    expect(gitExecutor.syncBranch).toHaveBeenCalledTimes(1);
   });
 });
 

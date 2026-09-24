@@ -591,6 +591,75 @@ describe("SshWorkspaceExecutor", () => {
     ]);
   });
 
+  it("synchronizes an existing remote workspace branch by exact verified fast-forward", async () => {
+    queueRepository(transport);
+    transport.execResults.push(
+      remoteResult(""),
+      remoteResult("feature/work\n"),
+      remoteResult(`${SHA_A}\n`),
+      remoteResult(`${SHA_A}\n`),
+      remoteResult(),
+      remoteResult(`${SHA_B}\n`),
+      remoteResult(`${SHA_B}\trefs/heads/main\n`),
+      remoteResult(`${SHA_A}\n`),
+      remoteResult(""),
+      remoteResult("", 0),
+      remoteResult(),
+      remoteResult("main\n"),
+      remoteResult(`${SHA_A}\n`),
+      remoteResult(),
+      remoteResult("main\n"),
+      remoteResult(`${SHA_B}\n`),
+      remoteResult(""),
+    );
+
+    const result = await executor.syncBranch({
+      workspaceId: "test",
+      branch: "main",
+      remote: "origin",
+      expectedRemoteSha: SHA_B,
+    });
+
+    expect(result).toEqual({
+      root: ".",
+      remote: "origin",
+      branch: "main",
+      previousBranch: "feature/work",
+      previousHeadSha: SHA_A,
+      previousTargetHeadSha: SHA_A,
+      remoteSha: SHA_B,
+      headSha: SHA_B,
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    });
+    expect(
+      transport.execCommands.some(
+        (entry) =>
+          entry.argv[0] === "fetch" &&
+          entry.argv.includes("origin") &&
+          entry.argv.includes("refs/heads/main"),
+      ),
+    ).toBe(true);
+    expect(
+      transport.execCommands.some(
+        (entry) =>
+          entry.argv.includes("switch") && entry.argv.at(-1) === "main",
+      ),
+    ).toBe(true);
+    expect(
+      transport.execCommands.some(
+        (entry) =>
+          entry.argv.includes("merge") &&
+          entry.argv.includes("--ff-only") &&
+          entry.argv.at(-1) === SHA_B,
+      ),
+    ).toBe(true);
+    expect(
+      transport.execCommands.filter((entry) => entry.argv.includes("status")),
+    ).toHaveLength(3);
+  });
+
   it("reconciles an ambiguous remote push before reporting completion", async () => {
     queueRepository(transport);
     transport.execResults.push(

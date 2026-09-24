@@ -10,6 +10,7 @@ import {
   gitCommitInputSchema,
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
+  gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
@@ -44,6 +45,8 @@ import {
   type GitCreateBranchResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
+  type GitSyncBranchInput,
+  type GitSyncBranchResult,
   type GitPushBranchInput,
   type GitPushBranchResult,
   type GitStagePathsInput,
@@ -1264,6 +1267,186 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     };
   }
 
+  async syncBranch(
+    input: GitSyncBranchInput,
+    context: OperationContext = {},
+  ): Promise<GitSyncBranchResult> {
+    const parsed = gitSyncBranchInputSchema.parse(input);
+    assertTypedGitBranchMutationAllowed({
+      operation: "git_sync_branch",
+      branch: parsed.branch,
+    });
+    const repository = await this.resolveGitRepository(
+      parsed.workspaceId,
+      parsed.root ?? ".",
+      context.signal,
+    );
+    if (!(await this.gitRepositoryIsClean(repository, context.signal))) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git repository must be completely clean before branch synchronization.",
+      );
+    }
+
+    const previousBranch = await this.gitCurrentBranch(repository, context.signal);
+    if (previousBranch === "HEAD") {
+      throw new AppError(
+        "GIT_BRANCH_CONFLICT",
+        "Git branch synchronization requires an attached current branch.",
+      );
+    }
+    const previousHeadSha = await this.gitHeadSha(repository, context.signal);
+    const previousTargetHeadSha = await this.gitBranchSha(
+      repository,
+      parsed.branch,
+      context.signal,
+    );
+    if (previousTargetHeadSha === undefined) {
+      throw new AppError(
+        "GIT_BRANCH_CONFLICT",
+        "Git synchronization target branch does not exist locally.",
+      );
+    }
+
+    await this.gitSuccess(
+      repository,
+      ["fetch", "--no-tags", parsed.remote, `refs/heads/${parsed.branch}`],
+      context.signal,
+      120_000,
+    );
+    const fetchedSha = parseGitSha(
+      (
+        await this.gitSuccess(repository, ["rev-parse", "FETCH_HEAD"], context.signal)
+      ).trim(),
+    );
+    if (fetchedSha !== parsed.expectedRemoteSha) {
+      throw new AppError(
+        "GIT_REMOTE_CHANGED",
+        "Git remote branch changed before synchronization.",
+      );
+    }
+    const remoteSha = await this.gitRemoteBranchSha(
+      repository,
+      parsed.remote,
+      parsed.branch,
+      context.signal,
+    );
+    if (remoteSha !== parsed.expectedRemoteSha) {
+      throw new AppError(
+        "GIT_REMOTE_CHANGED",
+        "Git remote branch changed during synchronization preflight.",
+      );
+    }
+
+    const recheckedTargetHeadSha = await this.gitBranchSha(
+      repository,
+      parsed.branch,
+      context.signal,
+    );
+    if (recheckedTargetHeadSha !== previousTargetHeadSha) {
+      throw new AppError(
+        "GIT_HEAD_MISMATCH",
+        "Git synchronization target branch changed during preflight.",
+      );
+    }
+    if (!(await this.gitRepositoryIsClean(repository, context.signal))) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git repository changed during synchronization preflight.",
+      );
+    }
+    if (
+      previousTargetHeadSha !== parsed.expectedRemoteSha &&
+      !(await this.gitIsClean(
+        repository,
+        [
+          "merge-base",
+          "--is-ancestor",
+          previousTargetHeadSha,
+          parsed.expectedRemoteSha,
+        ],
+        context.signal,
+      ))
+    ) {
+      throw new AppError(
+        "GIT_MERGE_NOT_FAST_FORWARD",
+        "Git synchronization target cannot fast-forward to the expected remote SHA.",
+      );
+    }
+
+    const switched = previousBranch !== parsed.branch;
+    const fastForwarded = previousTargetHeadSha !== parsed.expectedRemoteSha;
+    try {
+      if (switched) {
+        await this.gitSuccess(
+          repository,
+          this.gitMutationArgs(repository.workspace, ["switch", parsed.branch]),
+          context.signal,
+        );
+        const switchedBranch = await this.gitCurrentBranch(
+          repository,
+          context.signal,
+        );
+        const switchedHead = await this.gitHeadSha(repository, context.signal);
+        if (
+          switchedBranch !== parsed.branch ||
+          switchedHead !== previousTargetHeadSha
+        ) {
+          throw reconciliationRequired();
+        }
+      } else if (previousHeadSha !== previousTargetHeadSha) {
+        throw new AppError(
+          "GIT_HEAD_MISMATCH",
+          "Current Git branch HEAD changed during synchronization preflight.",
+        );
+      }
+
+      if (fastForwarded) {
+        await this.gitSuccess(
+          repository,
+          this.gitMutationArgs(repository.workspace, [
+            "merge",
+            "--ff-only",
+            parsed.expectedRemoteSha,
+          ]),
+          context.signal,
+        );
+      }
+
+      const currentBranch = await this.gitCurrentBranch(repository, context.signal);
+      const headSha = await this.gitHeadSha(repository, context.signal);
+      if (
+        currentBranch !== parsed.branch ||
+        headSha !== parsed.expectedRemoteSha ||
+        !(await this.gitRepositoryIsClean(repository, context.signal))
+      ) {
+        throw reconciliationRequired();
+      }
+
+      return {
+        root: repository.logicalRoot,
+        remote: parsed.remote,
+        branch: parsed.branch,
+        previousBranch,
+        previousHeadSha,
+        previousTargetHeadSha,
+        remoteSha,
+        headSha,
+        switched,
+        fastForwarded,
+        alreadyUpToDate: !fastForwarded,
+      };
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.code === "SOURCE_CONTROL_RECONCILIATION_REQUIRED"
+      ) {
+        throw error;
+      }
+      throw reconciliationRequired();
+    }
+  }
+
   async pushBranch(
     input: GitPushBranchInput,
     context: OperationContext = {},
@@ -1491,6 +1674,19 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     signal?: AbortSignal,
   ): Promise<boolean> {
     return (await this.gitInvoke(repository, args, [0, 1], signal)).exitCode === 0;
+  }
+
+  private async gitRepositoryIsClean(
+    repository: RemoteGitRepositoryContext,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return (
+      await this.gitSuccess(
+        repository,
+        ["status", "--porcelain=v1", "--untracked-files=normal"],
+        signal,
+      )
+    ).trim().length === 0;
   }
 
   private async gitRemoteBranchSha(

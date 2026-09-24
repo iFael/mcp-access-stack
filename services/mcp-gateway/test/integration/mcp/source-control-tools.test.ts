@@ -63,6 +63,23 @@ class RecordingSourceControlExecutor {
     });
   }
 
+  async syncBranch(input: any, context?: OperationContext) {
+    this.record("syncBranch", input, context);
+    return this.result({
+      root: input.root ?? ".",
+      remote: input.remote,
+      branch: input.branch,
+      previousBranch: "feature/task8",
+      previousHeadSha: shaA,
+      previousTargetHeadSha: shaA,
+      remoteSha: input.expectedRemoteSha,
+      headSha: input.expectedRemoteSha,
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    });
+  }
+
   async pushBranch(input: any, context?: OperationContext) {
     this.record("pushBranch", input, context);
     return this.result({
@@ -173,6 +190,25 @@ const cases = [
     input: { workspaceId: "repo", root: "project", sourceBranch: "feature/source", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB },
     expectedInput: { workspaceId: "repo", root: "project", sourceBranch: "feature/source", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB },
     expectedResult: { root: "project", branch: "feature/task8", previousHeadSha: shaA, headSha: shaB, sourceHeadSha: shaB, fastForwarded: true },
+  },
+  {
+    name: "git_sync_branch",
+    method: "syncBranch",
+    input: { workspaceId: "repo", root: "project", branch: "main", remote: "origin", expectedRemoteSha: shaB },
+    expectedInput: { workspaceId: "repo", root: "project", branch: "main", remote: "origin", expectedRemoteSha: shaB },
+    expectedResult: {
+      root: "project",
+      remote: "origin",
+      branch: "main",
+      previousBranch: "feature/task8",
+      previousHeadSha: shaA,
+      previousTargetHeadSha: shaA,
+      remoteSha: shaB,
+      headSha: shaB,
+      switched: true,
+      fastForwarded: true,
+      alreadyUpToDate: false,
+    },
   },
   {
     name: "git_push_branch",
@@ -386,7 +422,7 @@ describe("MCP typed source-control boundary", () => {
     });
   });
 
-  it("rejects extra backend result fields for all eleven relay-backed tools without emitting them", async () => {
+  it("rejects extra backend result fields for all twelve relay-backed tools without emitting them", async () => {
     const executor = new RecordingSourceControlExecutor();
     const forbiddenResultFields = ["authorization", "token", "rawResponse", "stderr"] as const;
 

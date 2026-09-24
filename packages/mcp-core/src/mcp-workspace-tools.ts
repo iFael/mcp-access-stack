@@ -86,6 +86,8 @@ import {
   gitCreateBranchResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
+  gitSyncBranchInputSchema,
+  gitSyncBranchResultSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
   gitStagePathsInputSchema,
@@ -172,6 +174,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_commit",
   "git_commit_paths",
   "git_merge_branch",
+  "git_sync_branch",
   "git_push_branch",
   "github_get_repository",
   "github_create_repository",
@@ -2317,6 +2320,30 @@ const sourceControlMcpSchemas = {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), sourceBranch: mcpSourceControlBranch, expectedTargetHeadSha: mcpSourceControlSha, expectedSourceHeadSha: mcpSourceControlSha }).strict(),
     output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, previousHeadSha: mcpSourceControlSha, headSha: mcpSourceControlSha, sourceHeadSha: mcpSourceControlSha, fastForwarded: z.literal(true) }).strict(),
   },
+  git_sync_branch: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      branch: mcpSourceControlBranch,
+      remote: z.string().min(1).max(255),
+      expectedRemoteSha: mcpSourceControlSha,
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      remote: z.string().min(1).max(255),
+      branch: mcpSourceControlBranch,
+      previousBranch: mcpSourceControlBranch,
+      previousHeadSha: mcpSourceControlSha,
+      previousTargetHeadSha: mcpSourceControlSha,
+      remoteSha: mcpSourceControlSha,
+      headSha: mcpSourceControlSha,
+      switched: z.boolean(),
+      fastForwarded: z.boolean(),
+      alreadyUpToDate: z.boolean(),
+    }).strict().refine((value) => gitSyncBranchResultSchema.safeParse(value).success, {
+      message: "Invalid git_sync_branch MCP result.",
+    }),
+  },
   git_push_branch: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), branch: mcpSourceControlBranch, expectedLocalSha: mcpSourceControlSha, remote: z.string().min(1).max(255).optional(), expectedRemoteSha: mcpSourceControlSha.optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
     output: z.object({
@@ -2399,6 +2426,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_commit_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_merge_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_sync_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_create_repository: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
@@ -2648,6 +2676,40 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("git_sync_branch", include)) {
+    server.registerTool(
+      "git_sync_branch",
+      {
+        title: "Synchronize Git branch",
+        description:
+          "Fetches one explicit remote branch and synchronizes an existing local branch to the exact expected remote SHA using fast-forward only. " +
+          "Requires a completely clean repository, never creates/reset/rebases/forces branches, and can safely switch to a protected main branch because only verified fast-forward synchronization is permitted.",
+        inputSchema: sourceControlMcpSchemas.git_sync_branch.input,
+        outputSchema: sourceControlMcpSchemas.git_sync_branch.output,
+        annotations: sourceControlAnnotations.git_sync_branch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitSyncBranchInputSchema.parse(input);
+          const structuredContent = gitSyncBranchResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.syncBranch(parsed, context),
+            ),
+          );
+          return sourceControlSuccess("Git branch synchronized.", structuredContent);
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("git_push_branch", include)) {
     server.registerTool(
       "git_push_branch",
@@ -2838,6 +2900,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",
   gitMergeBranch: "git_merge_branch",
+  gitSyncBranch: "git_sync_branch",
   gitPushBranch: "git_push_branch",
   githubGetRepository: "github_get_repository",
   githubCreateRepository: "github_create_repository",
