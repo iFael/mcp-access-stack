@@ -8404,6 +8404,131 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Fetches one explicit remote branch and synchronizes an existing local branch to the exact expected remote SHA using fast-forward only. Requires a completely clean repository, never creates/reset/rebases/forces branches, and can safely switch to a protected main branch because only verified fast-forward synchronization is permitted.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedRemoteSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "remote": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "branch",
+        "remote",
+        "expectedRemoteSha"
+      ],
+      "type": "object"
+    },
+    "name": "git_sync_branch",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "alreadyUpToDate": {
+          "type": "boolean"
+        },
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "fastForwarded": {
+          "type": "boolean"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "previousBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "previousHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "previousTargetHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "remote": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "remoteSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "switched": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "root",
+        "remote",
+        "branch",
+        "previousBranch",
+        "previousHeadSha",
+        "previousTargetHeadSha",
+        "remoteSha",
+        "headSha",
+        "switched",
+        "fastForwarded",
+        "alreadyUpToDate"
+      ],
+      "type": "object"
+    },
+    "title": "Synchronize Git branch"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": true,
       "idempotentHint": true,
       "openWorldHint": false,
@@ -17183,13 +17308,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8ce917c8f257319914e7696bcaab5ae9edd5a78c569e32c51f09164ac2867f23",
-  "serverVersion": "0.4.0-catalog.c8ce917c8f257.se05fd6331573",
-  "toolCount": 74,
-  "toolSetRevision": "e05fd6331573a3c0c157e0d9c9796b6b68c9dee44741809cb4c272d9f60a9e9c"
+  "contractRevision": "a50be2f78cccfd5120733c32d7d0d1ca851dc4c0d1bdeff88f6ad1f35eec1ec0",
+  "serverVersion": "0.4.0-catalog.ca50be2f78ccc.s7a264604729b",
+  "toolCount": 75,
+  "toolSetRevision": "7a264604729bcfb378f4e3172d7256604a187539430569397e453f0caa5678a6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8ce917c8f257.se05fd6331573"
+  "version": "0.4.0-catalog.ca50be2f78ccc.s7a264604729b"
 } as const;

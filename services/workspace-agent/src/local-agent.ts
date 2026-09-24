@@ -84,6 +84,8 @@ import {
   gitCreateBranchResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
+  gitSyncBranchInputSchema,
+  gitSyncBranchResultSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
   gitStagePathsInputSchema,
@@ -118,6 +120,8 @@ import {
   type GitHubRepositoryResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
+  type GitSyncBranchInput,
+  type GitSyncBranchResult,
   type GitPushBranchInput,
   type GitPushBranchResult,
   type GitRepositoryExecutor,
@@ -935,6 +939,48 @@ export class LocalAgent {
           },
           resultSchema: gitMergeBranchResultSchema,
           backend: async () => (await this.getGitRepositoryExecutor()).mergeBranch(parsed, activeContext),
+          resultSha: (result) => result.headSha,
+        });
+      },
+    );
+  }
+
+  async gitSyncBranch(
+    input: GitSyncBranchInput,
+    context: OperationContext = {},
+  ): Promise<GitSyncBranchResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitSyncBranch",
+      gitSyncBranchInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const targetResource =
+          `${localGitRepositoryTarget(workspace.id, root)}:${parsed.remote}:refs/heads/${parsed.branch}`;
+        metadata.sourceControlCapability = "git.merge.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedRemoteSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_sync_branch",
+          capability: "git.merge.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          beforeReceipt: () => {
+            assertTypedGitBranchMutationAllowed({
+              operation: "git_sync_branch",
+              branch: parsed.branch,
+            });
+          },
+          resultSchema: gitSyncBranchResultSchema,
+          backend: async () =>
+            (await this.getGitRepositoryExecutor()).syncBranch(
+              parsed,
+              activeContext,
+            ),
           resultSha: (result) => result.headSha,
         });
       },

@@ -86,6 +86,7 @@ export type TypedGitBranchMutationOperation =
   | "git_unstage_paths"
   | "git_commit"
   | "git_merge_branch"
+  | "git_sync_branch"
   | "git_push_branch";
 
 export function assertTypedGitBranchMutationAllowed(input: {

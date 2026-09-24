@@ -16,6 +16,8 @@ import type {
   GitHubRepositoryResult,
   GitMergeBranchInput,
   GitMergeBranchResult,
+  GitSyncBranchInput,
+  GitSyncBranchResult,
   GitPushBranchInput,
   GitPushBranchResult,
   GitStagePathsInput,
@@ -45,6 +47,10 @@ export interface GitRepositoryExecutor {
     input: GitMergeBranchInput,
     context?: OperationContext,
   ): Promise<GitMergeBranchResult>;
+  syncBranch(
+    input: GitSyncBranchInput,
+    context?: OperationContext,
+  ): Promise<GitSyncBranchResult>;
   pushBranch(
     input: GitPushBranchInput,
     context?: OperationContext,

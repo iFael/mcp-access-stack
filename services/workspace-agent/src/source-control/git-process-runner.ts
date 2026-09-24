@@ -47,6 +47,9 @@ export interface GitProcessExecutor {
   writeTree(cwd: string, signal?: AbortSignal): Promise<string>;
   indexIsClean(cwd: string, signal?: AbortSignal): Promise<boolean>;
   worktreeIsClean(cwd: string, signal?: AbortSignal): Promise<boolean>;
+  repositoryIsClean(cwd: string, signal?: AbortSignal): Promise<boolean>;
+  switchBranch(cwd: string, branch: string, signal?: AbortSignal): Promise<void>;
+  fetchBranch(cwd: string, remote: string, branch: string, signal?: AbortSignal): Promise<string>;
   commit(cwd: string, message: string, signal?: AbortSignal): Promise<void>;
   mergeBaseIsAncestor(cwd: string, ancestorSha: string, descendantSha: string, signal?: AbortSignal): Promise<boolean>;
   mergeFastForward(cwd: string, sourceSha: string, signal?: AbortSignal): Promise<void>;
@@ -144,6 +147,36 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async worktreeIsClean(cwd: string, signal?: AbortSignal): Promise<boolean> {
     return (await this.invoke(cwd, ["diff", "--quiet"], signal, [0, 1])).code === 0;
+  }
+
+  async repositoryIsClean(cwd: string, signal?: AbortSignal): Promise<boolean> {
+    return (
+      await this.invokeSuccess(
+        cwd,
+        ["status", "--porcelain=v1", "--untracked-files=normal"],
+        signal,
+      )
+    ).trim().length === 0;
+  }
+
+  async switchBranch(cwd: string, branch: string, signal?: AbortSignal): Promise<void> {
+    await this.invokeSuccess(cwd, this.mutationArgs(["switch", branch]), signal);
+  }
+
+  async fetchBranch(
+    cwd: string,
+    remote: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    await this.invokeSuccess(
+      cwd,
+      ["fetch", "--no-tags", remote, `refs/heads/${branch}`],
+      signal,
+    );
+    return parseSha(
+      (await this.invokeSuccess(cwd, ["rev-parse", "FETCH_HEAD"], signal)).trim(),
+    );
   }
 
   async commit(cwd: string, message: string, signal?: AbortSignal): Promise<void> {

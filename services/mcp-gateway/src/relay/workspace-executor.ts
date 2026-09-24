@@ -50,6 +50,7 @@ import {
   gitCommitResultSchema,
   gitCreateBranchResultSchema,
   gitMergeBranchResultSchema,
+  gitSyncBranchResultSchema,
   gitPushBranchResultSchema,
   gitStagePathsResultSchema,
   gitUnstagePathsResultSchema,
@@ -68,6 +69,7 @@ import {
   type GitHubGetRepositoryInput,
   type GitHubMergePullRequestInput,
   type GitMergeBranchInput,
+  type GitSyncBranchInput,
   type GitPushBranchInput,
   type GitStagePathsInput,
   type GitUnstagePathsInput,
@@ -264,6 +266,12 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
   async mergeBranch(input: GitMergeBranchInput, context?: OperationContext) {
     return gitMergeBranchResultSchema.parse(
       await this.relay.call("gitMergeBranch", input, context),
+    );
+  }
+
+  async syncBranch(input: GitSyncBranchInput, context?: OperationContext) {
+    return gitSyncBranchResultSchema.parse(
+      await this.relay.call("gitSyncBranch", input, context),
     );
   }
 

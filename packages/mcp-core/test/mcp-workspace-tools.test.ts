@@ -1531,6 +1531,10 @@ class MockSourceControlExecutor {
     this.record("mergeBranch", input, context);
     return { root: input.root ?? ".", branch: "feature/task7", previousHeadSha: input.expectedTargetHeadSha, headSha: input.expectedSourceHeadSha, sourceHeadSha: input.expectedSourceHeadSha, fastForwarded: true as const };
   }
+  async syncBranch(input: any, context?: unknown) {
+    this.record("syncBranch", input, context);
+    return { root: input.root ?? ".", remote: input.remote, branch: input.branch, previousBranch: "feature/task7", previousHeadSha: sourceControlShaA, previousTargetHeadSha: sourceControlShaA, remoteSha: input.expectedRemoteSha, headSha: input.expectedRemoteSha, switched: true, fastForwarded: true, alreadyUpToDate: false };
+  }
   async pushBranch(input: any, context?: unknown) {
     this.record("pushBranch", input, context);
     return { status: "completed" as const, root: input.root ?? ".", remote: input.remote ?? "origin", branch: input.branch, localSha: input.expectedLocalSha, remoteSha: input.expectedLocalSha };
@@ -1563,6 +1567,7 @@ const sourceControlCases = [
   ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_merge_branch", "mergeBranch", { workspaceId: "ws", sourceBranch: "feature/source", expectedTargetHeadSha: sourceControlShaA, expectedSourceHeadSha: sourceControlShaB }],
+  ["git_sync_branch", "syncBranch", { workspaceId: "ws", branch: "main", remote: "origin", expectedRemoteSha: sourceControlShaB }],
   ["git_push_branch", "pushBranch", { workspaceId: "ws", branch: "feature/task7", expectedLocalSha: sourceControlShaA }],
   ["github_get_repository", "getRepository", { workspaceId: "ws", owner: "octo", repository: "repo" }],
   ["github_create_repository", "createRepository", { workspaceId: "ws", owner: "octo", name: "repo", visibility: "private" }],
@@ -1578,6 +1583,7 @@ const expectedSourceControlAnnotations = {
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   git_commit_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   git_merge_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_sync_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_create_repository: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1587,7 +1593,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twelve source-control tools inside the 41-tool workspace surface", () => {
+  it("publishes thirteen source-control tools inside the 42-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1595,6 +1601,7 @@ describe("registerSourceControlTools", () => {
       "git_commit",
       "git_commit_paths",
       "git_merge_branch",
+      "git_sync_branch",
       "git_push_branch",
       "github_get_repository",
       "github_create_repository",
@@ -1602,9 +1609,9 @@ describe("registerSourceControlTools", () => {
       "github_create_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(12);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(41);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(41);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(13);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(42);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(42);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

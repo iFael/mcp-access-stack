@@ -8,6 +8,7 @@ import type {
   GitCommitInput,
   GitCreateBranchInput,
   GitMergeBranchInput,
+  GitSyncBranchInput,
   GitPushBranchInput,
   GitStagePathsInput,
   GitUnstagePathsInput,
@@ -26,7 +27,7 @@ describe("source-control executor ports", () => {
     expect(sourceControlExecutorModule).toBeDefined();
   });
 
-  test("keeps GitRepositoryExecutor limited to exactly six typed methods", async () => {
+  test("keeps GitRepositoryExecutor limited to exactly seven typed methods", async () => {
     const calls: string[] = [];
     const executor: GitRepositoryExecutor = {
       async createBranch(input: GitCreateBranchInput) {
@@ -56,6 +57,22 @@ describe("source-control executor ports", () => {
           fastForwarded: true,
         };
       },
+      async syncBranch(input: GitSyncBranchInput) {
+        calls.push("syncBranch");
+        return {
+          root: input.root ?? ".",
+          remote: input.remote,
+          branch: input.branch,
+          previousBranch: "feature/x",
+          previousHeadSha: shaA,
+          previousTargetHeadSha: shaA,
+          remoteSha: input.expectedRemoteSha,
+          headSha: input.expectedRemoteSha,
+          switched: true,
+          fastForwarded: true,
+          alreadyUpToDate: false,
+        };
+      },
       async pushBranch(input: GitPushBranchInput) {
         calls.push("pushBranch");
         return {
@@ -75,6 +92,7 @@ describe("source-control executor ports", () => {
       "mergeBranch",
       "pushBranch",
       "stagePaths",
+      "syncBranch",
       "unstagePaths",
     ]);
 
@@ -83,6 +101,7 @@ describe("source-control executor ports", () => {
     await executor.unstagePaths({ workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
     await executor.commit({ workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
     await executor.mergeBranch({ workspaceId: "repo", sourceBranch: "feature/x", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB });
+    await executor.syncBranch({ workspaceId: "repo", branch: "main", remote: "origin", expectedRemoteSha: shaB });
     await executor.pushBranch({ workspaceId: "repo", branch: "feature/x", expectedLocalSha: shaB });
 
     expect(calls).toEqual([
@@ -91,6 +110,7 @@ describe("source-control executor ports", () => {
       "unstagePaths",
       "commit",
       "mergeBranch",
+      "syncBranch",
       "pushBranch",
     ]);
   });

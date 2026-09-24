@@ -65,7 +65,7 @@ describe("MCP connector catalog synchronization", () => {
         | undefined;
       const contractRevision = createMcpToolContractRevision(listed.tools);
 
-      expect(listed.tools).toHaveLength(74);
+      expect(listed.tools).toHaveLength(75);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -80,7 +80,7 @@ describe("MCP connector catalog synchronization", () => {
       expect(descriptions.get_workspace_context).toContain("project instruction files");
       expect(catalogMeta).toMatchObject({
         contractRevision,
-        toolCount: 74,
+        toolCount: 75,
       });
       expect(catalogMeta).not.toHaveProperty("descriptorRevision");
       expect(serverVersion).toEqual({
@@ -188,8 +188,8 @@ describe("MCP server instance catalog continuity", () => {
       );
       expect(secondServerVersion).toEqual(firstServerVersion);
       expect(secondCapabilities).toEqual(firstCapabilities);
-      expect(names).toHaveLength(74);
-      expect(new Set(names).size).toBe(74);
+      expect(names).toHaveLength(75);
+      expect(new Set(names).size).toBe(75);
       expect(metadata?.contractRevision).toBe(
         createMcpToolContractRevision(secondList.tools),
       );

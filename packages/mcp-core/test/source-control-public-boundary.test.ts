@@ -8,6 +8,7 @@ import {
   gitCommitPathsInputSchema,
   gitCreateBranchInputSchema,
   gitMergeBranchInputSchema,
+  gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
@@ -28,6 +29,7 @@ const expectedPublicSourceControlNames = [
   "git_commit_paths",
   "git_create_branch",
   "git_merge_branch",
+  "git_sync_branch",
   "git_push_branch",
   "git_stage_paths",
   "git_unstage_paths",
@@ -122,6 +124,16 @@ const inputCases = [
     },
   },
   {
+    name: "git_sync_branch",
+    schema: gitSyncBranchInputSchema,
+    input: {
+      workspaceId: "repo",
+      branch: "main",
+      remote: "origin",
+      expectedRemoteSha: shaB,
+    },
+  },
+  {
     name: "git_push_branch",
     schema: gitPushBranchInputSchema,
     input: {
@@ -199,7 +211,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes exactly twelve public tools, eleven relay operations and ten capabilities", () => {
+  it("exposes exactly thirteen public tools, twelve relay operations and ten capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -209,7 +221,7 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(12);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(13);
     expect(sourceControlCapabilities).toHaveLength(10);
 
     for (const forbiddenName of [

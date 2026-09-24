@@ -204,6 +204,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   mergeBranch(...args: Parameters<GitRepositoryExecutor["mergeBranch"]>) {
     return this.agent.gitMergeBranch(...args);
   }
+  syncBranch(...args: Parameters<GitRepositoryExecutor["syncBranch"]>) {
+    return this.agent.gitSyncBranch(...args);
+  }
   pushBranch(...args: Parameters<GitRepositoryExecutor["pushBranch"]>) {
     return this.agent.gitPushBranch(...args);
   }
