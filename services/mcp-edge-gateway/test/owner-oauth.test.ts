@@ -12,6 +12,8 @@ describe("Edge Owner OAuth durable state", () => {
   it("uses one-shot codes, revokes access and never persists raw secrets", async () => {
     const storage = new MemoryStorage();
     const ownerSecret = "x".repeat(32);
+    const firstPassword = "shared-password-abcdefghijklmnop";
+    const secondPassword = "shared-password-qrstuvwxyz012345";
     const oauth = new EdgeOwnerOAuth(storage, {
       ownerSecret,
       publicBaseUrl: new URL("https://edge.example/"),
@@ -44,6 +46,8 @@ describe("Edge Owner OAuth durable state", () => {
       state: "state-1",
       resource: "https://edge.example/mcp",
       owner_token: ownerSecret,
+      owner_password: firstPassword,
+      owner_password_confirm: firstPassword,
     }));
     expect(authorize?.status).toBe(302);
     const location = new URL(authorize!.headers.get("location")!);
@@ -70,18 +74,55 @@ describe("Edge Owner OAuth durable state", () => {
       headers: { authorization: `Bearer ${tokens.access_token}` },
     }))).resolves.toEqual({ subject: `owner:${client.client_id}`, scopes: ["mcp:tools"], ownerScope: "owner" });
 
+    await oauth.rotateOwnerPassword(secondPassword);
+    await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    }))).rejects.toMatchObject({ status: 401, oauthError: "invalid_token" });
+    const staleRefresh = await oauth.handle(formRequest("https://edge.example/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource: "https://edge.example/mcp",
+    }));
+    expect(staleRefresh?.status).toBe(400);
+    expect(await staleRefresh!.json()).toEqual({ error: "invalid_grant" });
+
+    const authorizeAgain = await oauth.handle(formRequest("https://edge.example/authorize", {
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: "https://chatgpt.com/connector/oauth/test-client",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      scope: "mcp:tools",
+      state: "state-2",
+      resource: "https://edge.example/mcp",
+      owner_password: secondPassword,
+    }));
+    expect(authorizeAgain?.status).toBe(302);
+    const secondCode = new URL(authorizeAgain!.headers.get("location")!).searchParams.get("code")!;
+    const secondTokenResponse = await oauth.handle(formRequest("https://edge.example/token", {
+      ...tokenFields,
+      code: secondCode,
+    }));
+    expect(secondTokenResponse?.status).toBe(200);
+    const secondTokens = await secondTokenResponse!.json() as { access_token: string; refresh_token: string };
+
     expect((await oauth.handle(formRequest("https://edge.example/revoke", {
-      token: tokens.access_token,
+      token: secondTokens.access_token,
       client_id: client.client_id,
     })))?.status).toBe(200);
     await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
-      headers: { authorization: `Bearer ${tokens.access_token}` },
+      headers: { authorization: `Bearer ${secondTokens.access_token}` },
     }))).rejects.toMatchObject({ status: 401, oauthError: "invalid_token" });
 
     const persisted = JSON.stringify([...storage.data.entries()]);
     expect(persisted).not.toContain(ownerSecret);
+    expect(persisted).not.toContain(firstPassword);
+    expect(persisted).not.toContain(secondPassword);
     expect(persisted).not.toContain(tokens.access_token);
     expect(persisted).not.toContain(tokens.refresh_token);
+    expect(persisted).not.toContain(secondTokens.access_token);
+    expect(persisted).not.toContain(secondTokens.refresh_token);
   });
 });
 
