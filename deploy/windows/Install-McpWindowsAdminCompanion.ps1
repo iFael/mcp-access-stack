@@ -211,7 +211,7 @@ fi
 marker="mcp-windows-companion-tunnel-$machine_id"
 tmp="$(mktemp)"
 awk -v marker="$marker" 'index($0, marker) == 0 { print }' "$HOME/.ssh/authorized_keys" > "$tmp"
-printf 'command="/bin/false",no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten="127.0.0.1:%s" %s\n' "$reverse_port" "$tunnel_public_key" >> "$tmp"
+printf 'command="/bin/false",no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc,permitlisten="127.0.0.1:%s",permitopen="127.0.0.1:%s" %s\n' "$reverse_port" "$reverse_port" "$tunnel_public_key" >> "$tmp"
 cat "$tmp" > "$HOME/.ssh/authorized_keys"
 rm -f "$tmp"
 chmod 600 "$HOME/.ssh/authorized_keys"
