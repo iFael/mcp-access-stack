@@ -8,11 +8,19 @@ import type {
   GitHubCreatePullRequestResult,
   GitHubCreateRepositoryInput,
   GitHubCreateRepositoryResult,
+  GitHubCommitChecksResult,
+  GitHubGetCommitChecksWatchesInput,
+  GitHubGetCommitChecksWatchesResult,
+  GitHubGetCommitChecksInput,
   GitHubGetPullRequestInput,
   GitHubGetRepositoryInput,
   GitHubMergePullRequestInput,
   GitHubMergePullRequestResult,
   GitHubPullRequestResult,
+  GitHubStartCommitChecksWatchInput,
+  GitHubStartCommitChecksWatchResult,
+  GitHubWaitCommitChecksWatchInput,
+  GitHubWaitCommitChecksWatchResult,
   GitHubRepositoryResult,
   GitMergeBranchInput,
   GitMergeBranchResult,
@@ -57,11 +65,30 @@ export interface GitRepositoryExecutor {
   ): Promise<GitPushBranchResult>;
 }
 
+export interface GitHubChecksWatchExecutor {
+  startCommitChecksWatch(
+    input: GitHubStartCommitChecksWatchInput,
+    context?: OperationContext,
+  ): Promise<GitHubStartCommitChecksWatchResult>;
+  getCommitChecksWatches(
+    input: GitHubGetCommitChecksWatchesInput,
+    context?: OperationContext,
+  ): Promise<GitHubGetCommitChecksWatchesResult>;
+  waitCommitChecksWatch(
+    input: GitHubWaitCommitChecksWatchInput,
+    context?: OperationContext,
+  ): Promise<GitHubWaitCommitChecksWatchResult>;
+}
+
 export interface GitHubExecutor {
   getRepository(
     input: GitHubGetRepositoryInput,
     context?: OperationContext,
   ): Promise<GitHubRepositoryResult>;
+  getCommitChecks(
+    input: GitHubGetCommitChecksInput,
+    context?: OperationContext,
+  ): Promise<GitHubCommitChecksResult>;
   createRepository(
     input: GitHubCreateRepositoryInput,
     context?: OperationContext,

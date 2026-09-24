@@ -713,9 +713,10 @@ describe("SshWorkspaceExecutor", () => {
     ).rejects.toMatchObject({ code: "SOURCE_CONTROL_RECONCILIATION_REQUIRED" });
   });
 
-  it("reads authorized GitHub repository and pull-request metadata through the remote API", async () => {
+  it("reads authorized GitHub repository, commit checks and pull-request metadata through the remote API", async () => {
     transport.githubApiResults.push(
       githubResponse(githubRepositoryRecord()),
+      githubResponse({ total_count: 1, check_runs: [{ id: 1, name: "ci", status: "completed", conclusion: "success", details_url: null, started_at: null, completed_at: null }] }),
       githubResponse(githubPullRequestRecord()),
     );
 
@@ -735,6 +736,20 @@ describe("SshWorkspaceExecutor", () => {
     });
 
     await expect(
+      executor.getCommitChecks({
+        workspaceId: "test",
+        owner: "octo",
+        repository: "repo",
+        commitSha: SHA_C,
+      }),
+    ).resolves.toMatchObject({
+      commitSha: SHA_C,
+      totalCount: 1,
+      passed: true,
+      allCompleted: true,
+    });
+
+    await expect(
       executor.getPullRequest({
         workspaceId: "test",
         owner: "octo",
@@ -751,8 +766,69 @@ describe("SshWorkspaceExecutor", () => {
 
     expect(transport.githubApiCalls.map((entry) => entry.request.path)).toEqual([
       "/repos/octo/repo",
+      `/repos/octo/repo/commits/${SHA_C}/check-runs?per_page=100`,
       "/repos/octo/repo/pulls/7",
     ]);
+  });
+
+  it("persists and exposes an immediately completed GitHub commit-check watch", async () => {
+    transport.githubApiResults.push(
+      githubResponse({
+        total_count: 1,
+        check_runs: [{
+          id: 1,
+          name: "ci",
+          status: "completed",
+          conclusion: "success",
+          details_url: null,
+          started_at: null,
+          completed_at: null,
+        }],
+      }),
+    );
+
+    const started = await executor.startCommitChecksWatch(
+      {
+        workspaceId: "test",
+        owner: "octo",
+        repository: "repo",
+        commitSha: SHA_C,
+        timeoutMs: 30_000,
+      },
+      { ownerScope: "owner-a" },
+    );
+    expect(started.status).toBe("started");
+    expect(started.watch).toMatchObject({
+      workspaceId: "test",
+      owner: "octo",
+      repository: "repo",
+      commitSha: SHA_C,
+      state: "passed",
+      pollCount: 1,
+    });
+
+    await expect(
+      executor.getCommitChecksWatches(
+        { workspaceId: "test", ids: [started.watch.id] },
+        { ownerScope: "owner-a" },
+      ),
+    ).resolves.toMatchObject({
+      watches: [{ id: started.watch.id, state: "passed" }],
+      truncated: false,
+    });
+    await expect(
+      executor.waitCommitChecksWatch(
+        { workspaceId: "test", id: started.watch.id, timeoutMs: 1 },
+        { ownerScope: "owner-a" },
+      ),
+    ).resolves.toMatchObject({
+      timedOut: false,
+      watch: { id: started.watch.id, state: "passed" },
+    });
+
+    expect(transport.githubApiCalls.map((entry) => entry.request.path)).toContain(
+      `/repos/octo/repo/commits/${SHA_C}/check-runs?per_page=100`,
+    );
   });
 
   it("authorizes the canonical GitHub repository resolved from the remote origin", async () => {

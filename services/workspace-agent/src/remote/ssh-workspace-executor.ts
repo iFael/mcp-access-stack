@@ -18,6 +18,14 @@ import {
   githubCreatePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
+  githubCommitChecksResultSchema,
+  githubGetCommitChecksInputSchema,
+  githubGetCommitChecksWatchesInputSchema,
+  githubGetCommitChecksWatchesResultSchema,
+  githubStartCommitChecksWatchInputSchema,
+  githubStartCommitChecksWatchResultSchema,
+  githubWaitCommitChecksWatchInputSchema,
+  githubWaitCommitChecksWatchResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -57,6 +65,14 @@ import {
   type GitHubCreatePullRequestResult,
   type GitHubCreateRepositoryInput,
   type GitHubCreateRepositoryResult,
+  type GitHubCommitChecksResult,
+  type GitHubGetCommitChecksInput,
+  type GitHubGetCommitChecksWatchesInput,
+  type GitHubGetCommitChecksWatchesResult,
+  type GitHubStartCommitChecksWatchInput,
+  type GitHubStartCommitChecksWatchResult,
+  type GitHubWaitCommitChecksWatchInput,
+  type GitHubWaitCommitChecksWatchResult,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
   type GitHubMergePullRequestInput,
@@ -97,6 +113,7 @@ import {
   type WriteBackgroundTaskStdinInput,
   type WorkspaceExecutor,
   type GitRepositoryExecutor,
+  type GitHubChecksWatchExecutor,
   type GitHubExecutor,
   type MutationReceiptStore,
   type SourceControlCapability,
@@ -122,6 +139,7 @@ import {
 } from "../shell/command-risk.js";
 import { CommandConfirmationRegistry } from "../shell/confirmation.js";
 import { FileMutationReceiptStore } from "../source-control/file-mutation-receipt-store.js";
+import { GitHubCommitChecksWatchManager } from "../source-control/github-checks-watch-manager.js";
 import { GitHubService } from "../source-control/github-service.js";
 import { BackgroundTaskManager } from "../tasks/background-task-manager.js";
 import { SshGitHubApiClient } from "./ssh-github-api-client.js";
@@ -162,7 +180,7 @@ function backgroundTaskAccess(
     : { ownerScope: context.ownerScope };
 }
 
-export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
+export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor, GitHubChecksWatchExecutor {
   private readonly workspaces: Map<string, RemoteWorkspace>;
   private readonly transport: SshWindowsTransport;
   private readonly confirmations = new CommandConfirmationRegistry();
@@ -170,6 +188,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
   private readonly mutationReceiptStores = new Map<string, MutationReceiptStore>();
   private readonly sourceControlStateDirectory: string;
   private readonly background: BackgroundTaskManager;
+  private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private ready = false;
 
   private constructor(policy: unknown, options: SshWorkspaceExecutorOptions) {
@@ -212,6 +231,13 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
         },
       },
     });
+    this.githubChecksWatchManager = new GitHubCommitChecksWatchManager({
+      stateDirectory: path.join(
+        path.resolve(options.backgroundStateDirectory),
+        "github-check-watches",
+      ),
+      poll: (input, context) => this.getCommitChecks(input, context),
+    });
   }
 
   static async create(options: SshWorkspaceExecutorOptions): Promise<SshWorkspaceExecutor> {
@@ -220,6 +246,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       JSON.parse(await readLocalFile(requirePolicyPath(options.policyPath), "utf8"));
     const executor = new SshWorkspaceExecutor(policy, options);
     await executor.probe();
+    await executor.githubChecksWatchManager.recover();
     return executor;
   }
 
@@ -1772,6 +1799,68 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       context.signal,
     );
     return this.gitHubServiceFor(workspace).getRepository(parsed, context);
+  }
+
+  async getCommitChecks(
+    input: GitHubGetCommitChecksInput,
+    context: OperationContext = {},
+  ): Promise<GitHubCommitChecksResult> {
+    const parsed = githubGetCommitChecksInputSchema.parse(input);
+    const workspace = this.workspace(parsed.workspaceId);
+    const repository = `${parsed.owner}/${parsed.repository}`;
+    await this.assertGitHubRepositoryCapability(
+      workspace,
+      "github.repository.read",
+      repository,
+      parsed.root ?? ".",
+      false,
+      context.signal,
+    );
+    return githubCommitChecksResultSchema.parse(
+      await this.gitHubServiceFor(workspace).getCommitChecks(parsed, context),
+    );
+  }
+
+  async startCommitChecksWatch(
+    input: GitHubStartCommitChecksWatchInput,
+    context: OperationContext = {},
+  ): Promise<GitHubStartCommitChecksWatchResult> {
+    const parsed = githubStartCommitChecksWatchInputSchema.parse(input);
+    const workspace = this.workspace(parsed.workspaceId);
+    const repository = `${parsed.owner}/${parsed.repository}`;
+    await this.assertGitHubRepositoryCapability(
+      workspace,
+      "github.repository.read",
+      repository,
+      parsed.root ?? ".",
+      false,
+      context.signal,
+    );
+    return githubStartCommitChecksWatchResultSchema.parse(
+      await this.githubChecksWatchManager.start(parsed, context),
+    );
+  }
+
+  async getCommitChecksWatches(
+    input: GitHubGetCommitChecksWatchesInput,
+    context: OperationContext = {},
+  ): Promise<GitHubGetCommitChecksWatchesResult> {
+    const parsed = githubGetCommitChecksWatchesInputSchema.parse(input);
+    this.workspace(parsed.workspaceId);
+    return githubGetCommitChecksWatchesResultSchema.parse(
+      await this.githubChecksWatchManager.get(parsed, backgroundTaskAccess(context)),
+    );
+  }
+
+  async waitCommitChecksWatch(
+    input: GitHubWaitCommitChecksWatchInput,
+    context: OperationContext = {},
+  ): Promise<GitHubWaitCommitChecksWatchResult> {
+    const parsed = githubWaitCommitChecksWatchInputSchema.parse(input);
+    this.workspace(parsed.workspaceId);
+    return githubWaitCommitChecksWatchResultSchema.parse(
+      await this.githubChecksWatchManager.wait(parsed, backgroundTaskAccess(context)),
+    );
   }
 
   async createRepository(

@@ -141,6 +141,33 @@ describe("gateway HTTP surface", () => {
         openWorldHint: true,
         idempotentHint: true,
       });
+      const startChecksWatchTool = body.result.tools.find(
+        (tool) => tool.name === "github_start_commit_checks_watch",
+      );
+      expect(startChecksWatchTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
+      const getChecksWatchesTool = body.result.tools.find(
+        (tool) => tool.name === "github_get_commit_checks_watches",
+      );
+      expect(getChecksWatchesTool?.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      });
+      const waitChecksWatchTool = body.result.tools.find(
+        (tool) => tool.name === "github_wait_commit_checks_watch",
+      );
+      expect(waitChecksWatchTool?.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
@@ -164,6 +191,10 @@ describe("gateway HTTP surface", () => {
             "git_sync_branch",
             "git_push_branch",
             "github_get_repository",
+            "github_get_commit_checks",
+            "github_start_commit_checks_watch",
+            "github_get_commit_checks_watches",
+            "github_wait_commit_checks_watch",
             "github_create_repository",
             "github_get_pull_request",
             "github_create_pull_request",

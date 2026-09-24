@@ -1543,6 +1543,73 @@ class MockSourceControlExecutor {
     this.record("getRepository", input, context);
     return { owner: input.owner, name: input.repository, fullName: `${input.owner}/${input.repository}`, defaultBranch: "main", visibility: "private" as const, url: `https://github.com/${input.owner}/${input.repository}` };
   }
+  async getCommitChecks(input: any, context?: unknown) {
+    this.record("getCommitChecks", input, context);
+    return {
+      owner: input.owner,
+      repository: input.repository,
+      commitSha: input.commitSha,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 0,
+      successfulCount: 1,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "completed" as const,
+        conclusion: "success" as const,
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    };
+  }
+  async startCommitChecksWatch(input: any, context?: unknown) {
+    this.record("startCommitChecksWatch", input, context);
+    return {
+      status: "started" as const,
+      watch: {
+        id: "11111111-1111-4111-8111-111111111111",
+        workspaceId: input.workspaceId,
+        root: input.root ?? ".",
+        owner: input.owner,
+        repository: input.repository,
+        commitSha: input.commitSha,
+        state: "watching" as const,
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+    };
+  }
+  async getCommitChecksWatches(input: any, context?: unknown) {
+    this.record("getCommitChecksWatches", input, context);
+    return { watches: [], truncated: false };
+  }
+  async waitCommitChecksWatch(input: any, context?: unknown) {
+    this.record("waitCommitChecksWatch", input, context);
+    return {
+      watch: {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        root: ".",
+        owner: "octo",
+        repository: "repo",
+        commitSha: sourceControlShaA,
+        state: "watching" as const,
+        createdAt: "2026-09-24T00:00:00.000Z",
+        updatedAt: "2026-09-24T00:00:00.000Z",
+        deadlineAt: "2026-09-24T00:15:00.000Z",
+        pollCount: 1,
+      },
+      timedOut: true,
+    };
+  }
   async createRepository(input: any, context?: unknown) {
     this.record("createRepository", input, context);
     return { status: "completed" as const, owner: input.owner, name: input.name, fullName: `${input.owner}/${input.name}`, defaultBranch: "main", visibility: input.visibility, url: `https://github.com/${input.owner}/${input.name}` };
@@ -1570,6 +1637,10 @@ const sourceControlCases = [
   ["git_sync_branch", "syncBranch", { workspaceId: "ws", branch: "main", remote: "origin", expectedRemoteSha: sourceControlShaB }],
   ["git_push_branch", "pushBranch", { workspaceId: "ws", branch: "feature/task7", expectedLocalSha: sourceControlShaA }],
   ["github_get_repository", "getRepository", { workspaceId: "ws", owner: "octo", repository: "repo" }],
+  ["github_get_commit_checks", "getCommitChecks", { workspaceId: "ws", owner: "octo", repository: "repo", commitSha: sourceControlShaA }],
+  ["github_start_commit_checks_watch", "startCommitChecksWatch", { workspaceId: "ws", owner: "octo", repository: "repo", commitSha: sourceControlShaA }],
+  ["github_get_commit_checks_watches", "getCommitChecksWatches", { workspaceId: "ws" }],
+  ["github_wait_commit_checks_watch", "waitCommitChecksWatch", { workspaceId: "ws", id: "11111111-1111-4111-8111-111111111111" }],
   ["github_create_repository", "createRepository", { workspaceId: "ws", owner: "octo", name: "repo", visibility: "private" }],
   ["github_get_pull_request", "getPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7 }],
   ["github_create_pull_request", "createPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", title: "typed", head: "feature/task7", base: "main" }],
@@ -1586,6 +1657,10 @@ const expectedSourceControlAnnotations = {
   git_sync_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_wait_commit_checks_watch: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_create_repository: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1593,7 +1668,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes thirteen source-control tools inside the 42-tool workspace surface", () => {
+  it("publishes seventeen source-control tools inside the 46-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1604,14 +1679,18 @@ describe("registerSourceControlTools", () => {
       "git_sync_branch",
       "git_push_branch",
       "github_get_repository",
+      "github_get_commit_checks",
+      "github_start_commit_checks_watch",
+      "github_get_commit_checks_watches",
+      "github_wait_commit_checks_watch",
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(13);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(42);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(42);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(17);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(46);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(46);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

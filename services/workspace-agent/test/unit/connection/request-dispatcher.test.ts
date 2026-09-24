@@ -35,6 +35,7 @@ const operations: RelayOperation[] = [
   "gitMergeBranch",
   "gitPushBranch",
   "githubGetRepository",
+  "githubGetCommitChecks",
   "githubCreateRepository",
   "githubGetPullRequest",
   "githubCreatePullRequest",

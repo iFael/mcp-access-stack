@@ -16,6 +16,9 @@ export const RETRYABLE_RELAY_OPERATIONS = [
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
   "githubGetRepository",
+  "githubGetCommitChecks",
+  "githubGetCommitChecksWatches",
+  "githubWaitCommitChecksWatch",
   "githubGetPullRequest",
 ] as const satisfies readonly RelayOperation[];
 

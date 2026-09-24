@@ -98,6 +98,14 @@ import {
   githubCreatePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
+  githubCommitChecksResultSchema,
+  githubGetCommitChecksInputSchema,
+  githubGetCommitChecksWatchesInputSchema,
+  githubGetCommitChecksWatchesResultSchema,
+  githubStartCommitChecksWatchInputSchema,
+  githubStartCommitChecksWatchResultSchema,
+  githubWaitCommitChecksWatchInputSchema,
+  githubWaitCommitChecksWatchResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -107,7 +115,7 @@ import {
   sourceControlOperationNameSchema,
   type SourceControlOperationName,
 } from "./source-control-contracts.js";
-import type { GitHubExecutor, GitRepositoryExecutor } from "./source-control-executor.js";
+import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor } from "./source-control-executor.js";
 import { AppError as AppErrorClass, asAppError } from "./errors.js";
 import {
   createOperationDeadline,
@@ -177,6 +185,10 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_sync_branch",
   "git_push_branch",
   "github_get_repository",
+  "github_get_commit_checks",
+  "github_start_commit_checks_watch",
+  "github_get_commit_checks_watches",
+  "github_wait_commit_checks_watch",
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
@@ -232,7 +244,7 @@ export interface RegisterWorkspaceToolsOptions {
   /** Subset of tools to expose (default: all six). */
   includeTools?: readonly WorkspaceToolName[];
   operationContextFactory?: ToolOperationContextFactory;
-  sourceControlExecutor?: Pick<GitHubExecutor, "getRepository" | "getPullRequest">;
+  sourceControlExecutor?: Pick<GitHubExecutor, "getRepository" | "getCommitChecks" | "getPullRequest">;
   auth?: {
     requiredScope: string;
     resourceMetadataUrl: URL;
@@ -850,7 +862,7 @@ export function registerWorkspaceTools(
         description:
           "Runs up to 12 independent read-only workspace inspections in one MCP call. " +
           "Prefer this over multiple separate read-only calls when inputs are already known. " +
-          "Supports roots/files/file reads/search/Git/context/background-task lookup/list/log/output, GitHub repository/PR reads and release state. " +
+          "Supports roots/files/file reads/search/Git/context/background-task lookup/list/log/output, GitHub repository/commit-check/PR reads and release state. " +
           "Each item succeeds or fails independently; writes, shell commands, validations and waits are intentionally excluded.",
         inputSchema: inspectWorkspaceBatchInputSchema,
         outputSchema: inspectWorkspaceBatchResultSchema,
@@ -1051,6 +1063,31 @@ export function registerWorkspaceTools(
                                   workspaceId: input.workspaceId,
                                   owner: item.owner,
                                   repository: item.repository,
+                                }),
+                                context,
+                              ),
+                            ),
+                          };
+                        }
+                        case "github_get_commit_checks": {
+                          const github = options.sourceControlExecutor;
+                          if (!github) {
+                            throw new AppErrorClass(
+                              "CAPABILITY_UNSUPPORTED",
+                              "GitHub read executor is unavailable.",
+                            );
+                          }
+                          return {
+                            key: item.key,
+                            operation: item.operation,
+                            status: "ok" as const,
+                            result: githubCommitChecksResultSchema.parse(
+                              await github.getCommitChecks(
+                                githubGetCommitChecksInputSchema.parse({
+                                  workspaceId: input.workspaceId,
+                                  owner: item.owner,
+                                  repository: item.repository,
+                                  commitSha: item.commitSha,
                                 }),
                                 context,
                               ),
@@ -2215,7 +2252,7 @@ async function executeCommand(
   return result;
 }
 
-export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor;
+export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor;
 
 export interface RegisterSourceControlToolsOptions {
   securitySchemes?: WorkspaceToolSecurityScheme[];
@@ -2264,6 +2301,73 @@ const mcpGitHubPullRequestResult = z.object({
   headSha: mcpSourceControlSha,
   baseSha: mcpSourceControlSha,
   merged: z.boolean(),
+}).strict();
+const mcpGitHubCheckStatus = z.enum([
+  "queued",
+  "in_progress",
+  "completed",
+  "unknown",
+]);
+const mcpGitHubCheckConclusion = z.enum([
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "action_required",
+  "stale",
+  "startup_failure",
+  "unknown",
+]).nullable();
+const mcpGitHubCommitCheck = z.object({
+  id: z.number().int().positive(),
+  name: z.string().min(1).max(256),
+  status: mcpGitHubCheckStatus,
+  conclusion: mcpGitHubCheckConclusion,
+  detailsUrl: mcpGitHubUrl.nullable(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+}).strict();
+const mcpGitHubCommitChecksResult = z.object({
+  owner: mcpGitHubOwner,
+  repository: mcpGitHubRepositoryName,
+  commitSha: mcpSourceControlSha,
+  totalCount: z.number().int().nonnegative(),
+  returnedCount: z.number().int().nonnegative().max(100),
+  pendingCount: z.number().int().nonnegative().max(100),
+  successfulCount: z.number().int().nonnegative().max(100),
+  failingCount: z.number().int().nonnegative().max(100),
+  truncated: z.boolean(),
+  allCompleted: z.boolean(),
+  passed: z.boolean(),
+  checks: z.array(mcpGitHubCommitCheck).max(100),
+}).strict();
+const mcpGitHubCommitChecksWatchState = z.enum([
+  "watching",
+  "passed",
+  "failed",
+  "timed_out",
+  "error",
+]);
+const mcpGitHubCommitChecksWatchRecord = z.object({
+  id: z.uuid(),
+  workspaceId: mcpSourceControlWorkspaceId,
+  root: mcpSourceControlRoot,
+  owner: mcpGitHubOwner,
+  repository: mcpGitHubRepositoryName,
+  commitSha: mcpSourceControlSha,
+  state: mcpGitHubCommitChecksWatchState,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  deadlineAt: z.string().datetime(),
+  completedAt: z.string().datetime().optional(),
+  pollCount: z.number().int().nonnegative(),
+  lastChecks: mcpGitHubCommitChecksResult.optional(),
+  lastError: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1).max(2_000),
+  }).strict().optional(),
 }).strict();
 
 const sourceControlMcpSchemas = {
@@ -2363,6 +2467,52 @@ const sourceControlMcpSchemas = {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName }).strict(),
     output: mcpGitHubRepositoryResult,
   },
+  github_get_commit_checks: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner,
+      repository: mcpGitHubRepositoryName,
+      commitSha: mcpSourceControlSha,
+    }).strict(),
+    output: mcpGitHubCommitChecksResult,
+  },
+  github_start_commit_checks_watch: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner,
+      repository: mcpGitHubRepositoryName,
+      commitSha: mcpSourceControlSha,
+      timeoutMs: z.number().int().min(30_000).max(1_800_000).optional(),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["started", "existing"]),
+      watch: mcpGitHubCommitChecksWatchRecord,
+    }).strict(),
+  },
+  github_get_commit_checks_watches: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      ids: z.array(z.uuid()).min(1).max(20).optional(),
+      state: mcpGitHubCommitChecksWatchState.optional(),
+    }).strict(),
+    output: z.object({
+      watches: z.array(mcpGitHubCommitChecksWatchRecord).max(50),
+      truncated: z.boolean(),
+    }).strict(),
+  },
+  github_wait_commit_checks_watch: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      id: z.uuid(),
+      timeoutMs: z.number().int().positive().max(30_000).optional(),
+    }).strict(),
+    output: z.object({
+      watch: mcpGitHubCommitChecksWatchRecord,
+      timedOut: z.boolean(),
+    }).strict(),
+  },
   github_create_repository: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, owner: mcpGitHubOwner, name: mcpGitHubRepositoryName, visibility: mcpGitHubVisibility, description: z.string().max(350).optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
     output: z.object({
@@ -2429,6 +2579,10 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_sync_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  github_wait_commit_checks_watch: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_create_repository: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
@@ -2760,6 +2914,141 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_get_commit_checks", include)) {
+    server.registerTool(
+      "github_get_commit_checks",
+      {
+        title: "Get GitHub commit checks",
+        description:
+          "Reads up to 100 GitHub check-runs for an exact commit SHA in an authorized repository and returns conservative aggregate CI state.",
+        inputSchema: sourceControlMcpSchemas.github_get_commit_checks.input,
+        outputSchema: sourceControlMcpSchemas.github_get_commit_checks.output,
+        annotations: sourceControlAnnotations.github_get_commit_checks,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubGetCommitChecksInputSchema.parse(input);
+          const structuredContent = githubCommitChecksResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.getCommitChecks(parsed, context),
+            ),
+          );
+          return sourceControlSuccess(
+            "GitHub commit checks read.",
+            structuredContent,
+          );
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("github_start_commit_checks_watch", include)) {
+    server.registerTool(
+      "github_start_commit_checks_watch",
+      {
+        title: "Start GitHub commit checks watch",
+        description:
+          "Starts or reuses a persistent owner-scoped watch for GitHub check-runs on an exact commit SHA. The watch polls GitHub without shell commands and survives agent restart.",
+        inputSchema: sourceControlMcpSchemas.github_start_commit_checks_watch.input,
+        outputSchema: sourceControlMcpSchemas.github_start_commit_checks_watch.output,
+        annotations: sourceControlAnnotations.github_start_commit_checks_watch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubStartCommitChecksWatchInputSchema.parse(input);
+          const structuredContent = githubStartCommitChecksWatchResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.startCommitChecksWatch(parsed, context),
+            ),
+          );
+          return sourceControlSuccess("GitHub commit checks watch started.", structuredContent);
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("github_get_commit_checks_watches", include)) {
+    server.registerTool(
+      "github_get_commit_checks_watches",
+      {
+        title: "Get GitHub commit checks watches",
+        description:
+          "Lists owner-scoped persistent GitHub commit-check watches by workspace, optional IDs and optional state.",
+        inputSchema: sourceControlMcpSchemas.github_get_commit_checks_watches.input,
+        outputSchema: sourceControlMcpSchemas.github_get_commit_checks_watches.output,
+        annotations: sourceControlAnnotations.github_get_commit_checks_watches,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubGetCommitChecksWatchesInputSchema.parse(input);
+          const structuredContent = githubGetCommitChecksWatchesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.getCommitChecksWatches(parsed, context),
+            ),
+          );
+          return sourceControlSuccess("GitHub commit checks watches read.", structuredContent);
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("github_wait_commit_checks_watch", include)) {
+    server.registerTool(
+      "github_wait_commit_checks_watch",
+      {
+        title: "Wait for GitHub commit checks watch",
+        description:
+          "Waits up to 30 seconds for one persistent GitHub commit-check watch to reach a terminal state. A wait timeout never cancels the watch.",
+        inputSchema: sourceControlMcpSchemas.github_wait_commit_checks_watch.input,
+        outputSchema: sourceControlMcpSchemas.github_wait_commit_checks_watch.output,
+        annotations: sourceControlAnnotations.github_wait_commit_checks_watch,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubWaitCommitChecksWatchInputSchema.parse(input);
+          const structuredContent = githubWaitCommitChecksWatchResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.waitCommitChecksWatch(parsed, context),
+            ),
+          );
+          return sourceControlSuccess("GitHub commit checks watch wait completed.", structuredContent);
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("github_create_repository", include)) {
     server.registerTool(
       "github_create_repository",
@@ -2903,6 +3192,10 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitSyncBranch: "git_sync_branch",
   gitPushBranch: "git_push_branch",
   githubGetRepository: "github_get_repository",
+  githubGetCommitChecks: "github_get_commit_checks",
+  githubStartCommitChecksWatch: "github_start_commit_checks_watch",
+  githubGetCommitChecksWatches: "github_get_commit_checks_watches",
+  githubWaitCommitChecksWatch: "github_wait_commit_checks_watch",
   githubCreateRepository: "github_create_repository",
   githubGetPullRequest: "github_get_pull_request",
   githubCreatePullRequest: "github_create_pull_request",

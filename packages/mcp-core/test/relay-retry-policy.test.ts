@@ -20,6 +20,9 @@ const retryable: RelayOperation[] = [
   "listBackgroundTasks",
   "readBackgroundTaskLogs",
   "githubGetRepository",
+  "githubGetCommitChecks",
+  "githubGetCommitChecksWatches",
+  "githubWaitCommitChecksWatch",
   "githubGetPullRequest",
 ];
 
@@ -35,6 +38,7 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "gitCommit",
   "gitMergeBranch",
   "gitPushBranch",
+  "githubStartCommitChecksWatch",
   "githubCreateRepository",
   "githubCreatePullRequest",
   "githubMergePullRequest",

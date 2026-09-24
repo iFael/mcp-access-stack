@@ -23,6 +23,21 @@ export interface GitHubRepositoryRecord {
   html_url: string;
 }
 
+export interface GitHubCheckRunRecord {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  details_url?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface GitHubCheckRunsRecord {
+  total_count: number;
+  check_runs: GitHubCheckRunRecord[];
+}
+
 export interface GitHubPullRequestRecord {
   number: number;
   state: string;
@@ -67,6 +82,12 @@ export interface GitHubApiClient {
     repository: string,
     context?: OperationContext,
   ): Promise<GitHubRepositoryRecord>;
+  getCommitCheckRuns(
+    owner: string,
+    repository: string,
+    commitSha: string,
+    context?: OperationContext,
+  ): Promise<GitHubCheckRunsRecord>;
   createUserRepository(
     request: GitHubCreateRepositoryRequest,
     context?: OperationContext,
@@ -138,6 +159,24 @@ export class GitHubHttpClient implements GitHubApiClient {
       {
         method: "GET",
         path: `/repos/${segment(owner)}/${segment(repository)}`,
+        mutation: false,
+      },
+      context,
+    );
+  }
+
+  getCommitCheckRuns(
+    owner: string,
+    repository: string,
+    commitSha: string,
+    context?: OperationContext,
+  ): Promise<GitHubCheckRunsRecord> {
+    return performGitHubRequest<GitHubCheckRunsRecord>(
+      this.#credentialProvider,
+      this.#fetchImpl,
+      {
+        method: "GET",
+        path: `/repos/${segment(owner)}/${segment(repository)}/commits/${segment(commitSha)}/check-runs?per_page=100`,
         mutation: false,
       },
       context,

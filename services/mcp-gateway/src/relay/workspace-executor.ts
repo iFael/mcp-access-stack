@@ -56,15 +56,24 @@ import {
   gitUnstagePathsResultSchema,
   githubCreatePullRequestResultSchema,
   githubCreateRepositoryResultSchema,
+  githubCommitChecksResultSchema,
+  githubGetCommitChecksWatchesResultSchema,
+  githubStartCommitChecksWatchResultSchema,
+  githubWaitCommitChecksWatchResultSchema,
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
   githubRepositoryResultSchema,
   type GitCommitInput,
+  type GitHubChecksWatchExecutor,
   type GitHubExecutor,
   type GitRepositoryExecutor,
   type GitCreateBranchInput,
   type GitHubCreatePullRequestInput,
   type GitHubCreateRepositoryInput,
+  type GitHubGetCommitChecksInput,
+  type GitHubGetCommitChecksWatchesInput,
+  type GitHubStartCommitChecksWatchInput,
+  type GitHubWaitCommitChecksWatchInput,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
   type GitHubMergePullRequestInput,
@@ -77,7 +86,7 @@ import {
 import type { AgentRelay } from "./service.js";
 
 /** Forwards workspace operations to the connected local agent through the WSS relay. */
-export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
+export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor, GitHubChecksWatchExecutor {
   constructor(private readonly relay: AgentRelay) {}
 
   async listWorkspaces(context?: OperationContext) {
@@ -284,6 +293,39 @@ export class RelayWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryE
   async getRepository(input: GitHubGetRepositoryInput, context?: OperationContext) {
     return githubRepositoryResultSchema.parse(
       await this.relay.call("githubGetRepository", input, context),
+    );
+  }
+
+  async getCommitChecks(input: GitHubGetCommitChecksInput, context?: OperationContext) {
+    return githubCommitChecksResultSchema.parse(
+      await this.relay.call("githubGetCommitChecks", input, context),
+    );
+  }
+
+  async startCommitChecksWatch(
+    input: GitHubStartCommitChecksWatchInput,
+    context?: OperationContext,
+  ) {
+    return githubStartCommitChecksWatchResultSchema.parse(
+      await this.relay.call("githubStartCommitChecksWatch", input, context),
+    );
+  }
+
+  async getCommitChecksWatches(
+    input: GitHubGetCommitChecksWatchesInput,
+    context?: OperationContext,
+  ) {
+    return githubGetCommitChecksWatchesResultSchema.parse(
+      await this.relay.call("githubGetCommitChecksWatches", input, context),
+    );
+  }
+
+  async waitCommitChecksWatch(
+    input: GitHubWaitCommitChecksWatchInput,
+    context?: OperationContext,
+  ) {
+    return githubWaitCommitChecksWatchResultSchema.parse(
+      await this.relay.call("githubWaitCommitChecksWatch", input, context),
     );
   }
 

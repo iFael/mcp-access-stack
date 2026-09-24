@@ -70,6 +70,14 @@ export async function dispatchRelayRequest(
       return agent.gitPushBranch(request.input, context);
     case "githubGetRepository":
       return agent.githubGetRepository(request.input, context);
+    case "githubGetCommitChecks":
+      return agent.githubGetCommitChecks(request.input, context);
+    case "githubStartCommitChecksWatch":
+      return agent.githubStartCommitChecksWatch(request.input, context);
+    case "githubGetCommitChecksWatches":
+      return agent.githubGetCommitChecksWatches(request.input, context);
+    case "githubWaitCommitChecksWatch":
+      return agent.githubWaitCommitChecksWatch(request.input, context);
     case "githubCreateRepository":
       return agent.githubCreateRepository(request.input, context);
     case "githubGetPullRequest":

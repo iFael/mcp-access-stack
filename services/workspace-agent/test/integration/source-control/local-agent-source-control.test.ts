@@ -158,6 +158,28 @@ function fakeGitHubExecutor(): GitHubExecutor {
       visibility: "private" as const,
       url: `https://github.com/${input.owner}/${input.repository}`,
     })),
+    getCommitChecks: jest.fn<GitHubExecutor["getCommitChecks"]>(async (input) => ({
+      owner: input.owner,
+      repository: input.repository,
+      commitSha: input.commitSha,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 0,
+      successfulCount: 1,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "completed" as const,
+        conclusion: "success" as const,
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    })),
     createRepository: jest.fn<GitHubExecutor["createRepository"]>(async (input) => ({
       status: "completed" as const,
       owner: input.owner,
@@ -580,6 +602,29 @@ describe("LocalAgent confirmation and receipt completeness", () => {
     expect(gitExecutor.stagePaths).not.toHaveBeenCalled();
   });
 });
+describe("LocalAgent GitHub commit-check watch authorization", () => {
+  it("denies watch creation before any GitHub poll when repository read is not authorized", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: [],
+      additionalRepositories: ["octo/repo"],
+    });
+
+    await expect(
+      (agent as any).githubStartCommitChecksWatch(
+        {
+          workspaceId: "test",
+          owner: "octo",
+          repository: "repo",
+          commitSha: SHA_A,
+          timeoutMs: 30_000,
+        },
+        { ownerScope: "owner-a" },
+      ),
+    ).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(githubExecutor.getCommitChecks).not.toHaveBeenCalled();
+  });
+});
+
 describe("LocalAgent canonical GitHub targets", () => {
   for (const origin of [
     "git@github.com:octo/repo.git",

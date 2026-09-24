@@ -30,6 +30,7 @@ describe("GitHubHttpClient fixed transport", () => {
 
     await client.getCurrentUser();
     await client.getRepository("octo", "repo");
+    await client.getCommitCheckRuns("octo", "repo", "a".repeat(40));
     await client.createUserRepository({ name: "repo", private: true });
     await client.createOrganizationRepository("octo-org", { name: "repo", private: false });
     await client.getPullRequest("octo", "repo", 7);
@@ -49,6 +50,7 @@ describe("GitHubHttpClient fixed transport", () => {
     const expected = [
       ["https://api.github.com/user", "GET"],
       ["https://api.github.com/repos/octo/repo", "GET"],
+      [`https://api.github.com/repos/octo/repo/commits/${"a".repeat(40)}/check-runs?per_page=100`, "GET"],
       ["https://api.github.com/user/repos", "POST"],
       ["https://api.github.com/orgs/octo-org/repos", "POST"],
       ["https://api.github.com/repos/octo/repo/pulls/7", "GET"],

@@ -1,12 +1,12 @@
-import { AppError, type GitHubExecutor, type GitRepositoryExecutor, type WorkspaceExecutor } from "@vs-code-gpt/shared";
+import { AppError, type GitHubChecksWatchExecutor, type GitHubExecutor, type GitRepositoryExecutor, type WorkspaceExecutor } from "@vs-code-gpt/shared";
 
-type SubprocessFallback = WorkspaceExecutor & Partial<GitRepositoryExecutor> & Partial<GitHubExecutor>;
+type SubprocessFallback = WorkspaceExecutor & Partial<GitRepositoryExecutor> & Partial<GitHubExecutor> & Partial<GitHubChecksWatchExecutor>;
 
 /**
  * Future offload path for heavy operations (`searchFiles`, `listFiles`, `inspectGit`).
  * PoC keeps all work in-process via {@link InProcessWorkspaceExecutor}.
  */
-export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor {
+export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExecutor, GitHubExecutor, GitHubChecksWatchExecutor {
   constructor(private readonly fallback?: SubprocessFallback) {}
 
   private notImplemented(operation: string): never {
@@ -171,6 +171,18 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   }
   getRepository(...args: Parameters<GitHubExecutor["getRepository"]>) {
     return this.fallback?.getRepository?.(...args) ?? Promise.reject(this.notImplemented("getRepository"));
+  }
+  getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
+    return this.fallback?.getCommitChecks?.(...args) ?? Promise.reject(this.notImplemented("getCommitChecks"));
+  }
+  startCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["startCommitChecksWatch"]>) {
+    return this.fallback?.startCommitChecksWatch?.(...args) ?? Promise.reject(this.notImplemented("startCommitChecksWatch"));
+  }
+  getCommitChecksWatches(...args: Parameters<GitHubChecksWatchExecutor["getCommitChecksWatches"]>) {
+    return this.fallback?.getCommitChecksWatches?.(...args) ?? Promise.reject(this.notImplemented("getCommitChecksWatches"));
+  }
+  waitCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["waitCommitChecksWatch"]>) {
+    return this.fallback?.waitCommitChecksWatch?.(...args) ?? Promise.reject(this.notImplemented("waitCommitChecksWatch"));
   }
   createRepository(...args: Parameters<GitHubExecutor["createRepository"]>) {
     return this.fallback?.createRepository?.(...args) ?? Promise.reject(this.notImplemented("createRepository"));

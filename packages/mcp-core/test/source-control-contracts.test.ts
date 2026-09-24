@@ -23,6 +23,8 @@ import {
   githubCreatePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
+  githubCommitChecksResultSchema,
+  githubGetCommitChecksInputSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -79,7 +81,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes exactly twelve operation names and four confirmable operations", () => {
+  test("publishes exactly sixteen operation names and four confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -89,6 +91,10 @@ describe("source-control contracts", () => {
       "git_sync_branch",
       "git_push_branch",
       "github_get_repository",
+      "github_get_commit_checks",
+      "github_start_commit_checks_watch",
+      "github_get_commit_checks_watches",
+      "github_wait_commit_checks_watch",
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",
@@ -467,6 +473,61 @@ describe("source-control contracts", () => {
     })).toMatchObject({ status: "confirmation_required" });
   });
 
+  test("keeps GitHub commit-check reads strict and aggregate state invariant", () => {
+    expect(githubGetCommitChecksInputSchema.parse({
+      workspaceId: "repo",
+      owner: "acme",
+      repository: "app",
+      commitSha: shaA,
+    })).toMatchObject({ commitSha: shaA });
+
+    expect(githubCommitChecksResultSchema.parse({
+      owner: "acme",
+      repository: "app",
+      commitSha: shaA,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 0,
+      successfulCount: 1,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "completed",
+        conclusion: "success",
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    })).toMatchObject({ allCompleted: true, passed: true });
+
+    expect(() => githubCommitChecksResultSchema.parse({
+      owner: "acme",
+      repository: "app",
+      commitSha: shaA,
+      totalCount: 1,
+      returnedCount: 1,
+      pendingCount: 1,
+      successfulCount: 0,
+      failingCount: 0,
+      truncated: false,
+      allCompleted: true,
+      passed: true,
+      checks: [{
+        id: 1,
+        name: "check",
+        status: "in_progress",
+        conclusion: null,
+        detailsUrl: null,
+        startedAt: null,
+        completedAt: null,
+      }],
+    })).toThrow();
+  });
+
   test("keeps GitHub pull-request operations strict and merge SHA-preconditioned", () => {
     expect(githubGetPullRequestInputSchema.parse({
       workspaceId: "repo",
@@ -528,6 +589,7 @@ describe("source-control contracts", () => {
       ["git_sync_branch", gitSyncBranchInputSchema, { workspaceId: "repo", branch: "main", remote: "origin", expectedRemoteSha: shaB }],
       ["git_push_branch", gitPushBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedLocalSha: shaA }],
       ["github_get_repository", githubGetRepositoryInputSchema, { workspaceId: "repo", owner: "acme", repository: "app" }],
+      ["github_get_commit_checks", githubGetCommitChecksInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", commitSha: shaA }],
       ["github_create_repository", githubCreateRepositoryInputSchema, { workspaceId: "repo", owner: "acme", name: "app", visibility: "private" }],
       ["github_get_pull_request", githubGetPullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 }],
       ["github_create_pull_request", githubCreatePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", title: "Ship", head: "feature/x", base: "main" }],
