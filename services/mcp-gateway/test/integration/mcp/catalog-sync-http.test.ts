@@ -9,6 +9,7 @@ import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.j
 
 const lateToolNames = [
   "patch_file",
+  "patch_files",
   "read_files",
   "search_files_batch",
   "list_workspace_roots",
@@ -73,14 +74,14 @@ describe("stateless MCP catalog identity", () => {
       const contractRevision = createMcpToolContractRevision(tools);
 
       expect(capabilities).toMatchObject({ tools: { listChanged: true } });
-      expect(tools).toHaveLength(70);
+      expect(tools).toHaveLength(71);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );
       expect(initializeCatalog).toEqual(listCatalog);
       expect(listCatalog).toMatchObject({
         contractRevision,
-        toolCount: 70,
+        toolCount: 71,
       });
       expect(listCatalog).not.toHaveProperty("descriptorRevision");
       expect(serverInfo).toEqual({

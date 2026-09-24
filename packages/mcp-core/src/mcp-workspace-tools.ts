@@ -39,6 +39,9 @@ import {
   readFilesResultSchema,
   patchFileInputSchema,
   patchFileResultSchema,
+  patchFilesInputSchema,
+  patchFilesItemResultSchema,
+  patchFilesResultSchema,
   runWorkspaceValidationInputSchema,
   runWorkspaceValidationResultSchema,
   runCommandMcpResultSchema,
@@ -166,6 +169,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "inspect_workspace_batch",
   "write_file",
   "patch_file",
+  "patch_files",
   "get_release_state",
   "prepare_release",
   "promote_release",
@@ -632,6 +636,176 @@ export function registerWorkspaceTools(
                 text: structuredContent.dryRun
                   ? `Validated patch for ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`
                   : `Patched ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`,
+              },
+            ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("patch_files", include)) {
+    server.registerTool(
+      "patch_files",
+      {
+        title: "Patch files",
+        description:
+          "Safely patches up to 8 existing text files in one MCP call. " +
+          "Every item requires expectedSha256 and exact replacement counts. " +
+          "All items are dry-run preflighted before the first write; if any preflight fails, no file is changed. " +
+          "After a successful preflight, files are applied sequentially and processing stops on the first apply error.",
+        inputSchema: patchFilesInputSchema,
+        outputSchema: patchFilesResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: true,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsedInput = patchFilesInputSchema.parse(input);
+          const structuredContent = patchFilesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              async (context) => {
+                const preflightItems = await Promise.all(
+                  parsedInput.items.map(async (item) => {
+                    try {
+                      const result = patchFileResultSchema.parse(
+                        await executor.patchFile(
+                          patchFileInputSchema.parse({
+                            workspaceId: parsedInput.workspaceId,
+                            ...item,
+                            dryRun: true,
+                          }),
+                          context,
+                        ),
+                      );
+                      return patchFilesItemResultSchema.parse({
+                        path: item.path,
+                        status: "preflight_ok",
+                        result,
+                      });
+                    } catch (error) {
+                      const appError =
+                        error instanceof AppErrorClass ? error : asAppError(error);
+                      return patchFilesItemResultSchema.parse({
+                        path: item.path,
+                        status: "preflight_error",
+                        error: {
+                          code: appError.code,
+                          message: sanitizeOperationDiagnostic(appError.message),
+                        },
+                      });
+                    }
+                  }),
+                );
+
+                if (preflightItems.some((item) => item.status === "preflight_error")) {
+                  return {
+                    workspaceId: parsedInput.workspaceId,
+                    dryRun: parsedInput.dryRun,
+                    preflightPassed: false,
+                    completed: false,
+                    partial: false,
+                    appliedCount: 0,
+                    items: preflightItems,
+                  };
+                }
+
+                if (parsedInput.dryRun) {
+                  return {
+                    workspaceId: parsedInput.workspaceId,
+                    dryRun: true,
+                    preflightPassed: true,
+                    completed: true,
+                    partial: false,
+                    appliedCount: 0,
+                    items: preflightItems.map((item) => ({
+                      ...item,
+                      status: "validated" as const,
+                    })),
+                  };
+                }
+
+                const items: Array<z.infer<typeof patchFilesItemResultSchema>> = [];
+                let appliedCount = 0;
+                let stoppedAtPath: string | undefined;
+
+                for (const item of parsedInput.items) {
+                  if (stoppedAtPath !== undefined) {
+                    items.push({
+                      path: item.path,
+                      status: "skipped_after_error",
+                    });
+                    continue;
+                  }
+
+                  try {
+                    const result = patchFileResultSchema.parse(
+                      await executor.patchFile(
+                        patchFileInputSchema.parse({
+                          workspaceId: parsedInput.workspaceId,
+                          ...item,
+                          dryRun: false,
+                        }),
+                        context,
+                      ),
+                    );
+                    appliedCount += 1;
+                    items.push({
+                      path: item.path,
+                      status: "applied",
+                      result,
+                    });
+                  } catch (error) {
+                    const appError =
+                      error instanceof AppErrorClass ? error : asAppError(error);
+                    stoppedAtPath = item.path;
+                    items.push({
+                      path: item.path,
+                      status: "apply_error",
+                      error: {
+                        code: appError.code,
+                        message: sanitizeOperationDiagnostic(appError.message),
+                      },
+                    });
+                  }
+                }
+
+                return {
+                  workspaceId: parsedInput.workspaceId,
+                  dryRun: false,
+                  preflightPassed: true,
+                  completed: stoppedAtPath === undefined,
+                  partial: stoppedAtPath !== undefined && appliedCount > 0,
+                  appliedCount,
+                  ...(stoppedAtPath === undefined ? {} : { stoppedAtPath }),
+                  items,
+                };
+              },
+            ),
+          );
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: structuredContent.preflightPassed
+                  ? structuredContent.completed
+                    ? `Patch batch completed; applied=${structuredContent.appliedCount}; dryRun=${structuredContent.dryRun}.`
+                    : `Patch batch stopped at ${structuredContent.stoppedAtPath ?? "unknown"}; applied=${structuredContent.appliedCount}; partial=${structuredContent.partial}.`
+                  : "Patch batch preflight failed; no files were changed.",
               },
             ],
             structuredContent,

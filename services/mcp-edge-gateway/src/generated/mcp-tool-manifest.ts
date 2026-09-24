@@ -883,6 +883,340 @@ export const EDGE_MCP_TOOL_MANIFEST = [
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Safely patches up to 8 existing text files in one MCP call. Every item requires expectedSha256 and exact replacement counts. All items are dry-run preflighted before the first write; if any preflight fails, no file is changed. After a successful preflight, files are applied sequentially and processing stops on the first apply error.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedSha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "replacements": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expectedCount": {
+                      "default": 1,
+                      "exclusiveMinimum": 0,
+                      "maximum": 100,
+                      "type": "integer"
+                    },
+                    "newText": {
+                      "type": "string"
+                    },
+                    "oldText": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "oldText",
+                    "newText"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "path",
+              "expectedSha256",
+              "replacements"
+            ],
+            "type": "object"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "name": "patch_files",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "appliedCount": {
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "POLICY_INVALID",
+                      "WORKSPACE_NOT_FOUND",
+                      "WORKSPACE_DISABLED",
+                      "PERMISSION_DENIED",
+                      "WRITE_NOT_ALLOWED",
+                      "SHELL_NOT_ALLOWED",
+                      "SHELL_FAILED",
+                      "SHELL_UNAVAILABLE",
+                      "COMMAND_CONFIRMATION_INVALID",
+                      "INVALID_PATH",
+                      "PATH_OUTSIDE_WORKSPACE",
+                      "PATH_OUTSIDE_ALLOWED_ROOTS",
+                      "BLOCKED_PATH",
+                      "FILE_NOT_FOUND",
+                      "NOT_A_FILE",
+                      "NOT_A_DIRECTORY",
+                      "FILE_TOO_LARGE",
+                      "INVALID_UTF8",
+                      "BINARY_FILE",
+                      "LIMIT_EXCEEDED",
+                      "NOT_GIT_REPOSITORY",
+                      "GIT_ERROR",
+                      "SOURCE_CONTROL_CAPABILITY_DENIED",
+                      "SOURCE_CONTROL_CONFIRMATION_INVALID",
+                      "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT",
+                      "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+                      "GIT_HEAD_MISMATCH",
+                      "GIT_BRANCH_CONFLICT",
+                      "GIT_INDEX_CHANGED",
+                      "GIT_REMOTE_CHANGED",
+                      "GIT_MERGE_NOT_FAST_FORWARD",
+                      "GIT_PROTECTED_BRANCH",
+                      "AUDIT_FAILED",
+                      "AGENT_UNAVAILABLE",
+                      "AGENT_BUSY",
+                      "AGENT_TIMEOUT",
+                      "OPERATION_CANCELLED",
+                      "RELAY_PROTOCOL_ERROR",
+                      "IDEMPOTENCY_KEY_CONFLICT",
+                      "EXECUTION_NOT_FOUND",
+                      "EXECUTION_STATE_INVALID",
+                      "EXECUTION_OUTCOME_UNKNOWN",
+                      "AUTHENTICATION_FAILED",
+                      "BROWSER_WORKER_UNAVAILABLE",
+                      "BROWSER_WORKER_TIMEOUT",
+                      "BROWSER_DISCONNECTED",
+                      "BROWSER_CONTEXT_RECOVERY_FAILED",
+                      "TASK_SCOPE_REQUIRED",
+                      "TASK_NOT_FOUND",
+                      "TASK_OWNERSHIP_MISMATCH",
+                      "TASK_SUSPENDED",
+                      "TASK_EXPIRED",
+                      "SITE_ACCESS_AUTHORIZATION_REQUIRED",
+                      "SITE_ACCESS_GRANT_EXPIRED",
+                      "SITE_NAVIGATION_BLOCKED",
+                      "SITE_POLICY_NOT_FOUND",
+                      "SITE_PRODUCTION_BLOCKED",
+                      "LOGIN_CREDENTIAL_UNAVAILABLE",
+                      "LOGIN_CREDENTIALS_INVALID",
+                      "LOGIN_INTERACTION_REQUIRED",
+                      "CREDENTIAL_BROKER_UNAVAILABLE",
+                      "CREDENTIAL_BROKER_PROTOCOL_MISMATCH",
+                      "CREDENTIAL_BROKER_ACCESS_DENIED",
+                      "BROWSER_CAPABILITY_UNSUPPORTED",
+                      "BROWSER_OPERATION_MODE_UNSUPPORTED",
+                      "FRAME_NOT_FOUND",
+                      "FRAME_NOT_READY",
+                      "FRAME_CROSS_ORIGIN",
+                      "LOCATOR_NOT_FOUND",
+                      "LOCATOR_AMBIGUOUS",
+                      "LOCATOR_LOW_CONFIDENCE",
+                      "NAVIGATION_TIMEOUT",
+                      "STATE_NOT_REACHED",
+                      "ACTION_BLOCKED_BY_POLICY",
+                      "CAPABILITY_UNSUPPORTED",
+                      "TAB_NOT_FOUND",
+                      "STALE_TAB_ID",
+                      "TAB_NOT_OWNED",
+                      "TAB_PROTECTED",
+                      "NAVIGATION_BLOCKED",
+                      "AUTHENTICATION_REQUIRED",
+                      "CAPTCHA_DETECTED",
+                      "ACTION_REQUIRES_CONFIRMATION",
+                      "BROWSER_CONFIRMATION_INVALID",
+                      "INVALID_ARGUMENT",
+                      "INTERNAL_ERROR"
+                    ],
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "result": {
+                "additionalProperties": false,
+                "properties": {
+                  "changed": {
+                    "type": "boolean"
+                  },
+                  "dryRun": {
+                    "type": "boolean"
+                  },
+                  "encoding": {
+                    "enum": [
+                      "utf-8",
+                      "utf-16le",
+                      "utf-16be",
+                      "windows-1252",
+                      "latin1"
+                    ],
+                    "type": "string"
+                  },
+                  "lineEnding": {
+                    "enum": [
+                      "lf",
+                      "crlf",
+                      "cr",
+                      "mixed",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "replacementsApplied": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "sha256After": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "sha256Before": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "sizeBytes": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256Before",
+                  "sha256After",
+                  "encoding",
+                  "lineEnding",
+                  "replacementsApplied",
+                  "sizeBytes",
+                  "changed",
+                  "dryRun"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "enum": [
+                  "preflight_ok",
+                  "preflight_error",
+                  "validated",
+                  "applied",
+                  "apply_error",
+                  "skipped_after_error"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "preflightPassed": {
+          "type": "boolean"
+        },
+        "stoppedAtPath": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "dryRun",
+        "preflightPassed",
+        "completed",
+        "partial",
+        "appliedCount",
+        "items"
+      ],
+      "type": "object"
+    },
+    "title": "Patch files"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": true,
       "readOnlyHint": true
     },
@@ -15677,13 +16011,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "867499ca3ac6d10337766a9f0ce4841d84b972d20f281a6f1fb1087793ced678",
-  "serverVersion": "0.4.0-catalog.c867499ca3ac6.sf15257990970",
-  "toolCount": 70,
-  "toolSetRevision": "f15257990970da918c7b855b5a1f31869b4a2d79f541374fa363529e093986ac"
+  "contractRevision": "79af8588301dd75bdfb658c354e98c33256dd540197d3b253ac5b1fad7b34dc0",
+  "serverVersion": "0.4.0-catalog.c79af8588301d.s40c875072dbc",
+  "toolCount": 71,
+  "toolSetRevision": "40c875072dbcb22985eb45df8f589576b5dee164c5f7e32ac9dda8b9d3354a61"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c867499ca3ac6.sf15257990970"
+  "version": "0.4.0-catalog.c79af8588301d.s40c875072dbc"
 } as const;

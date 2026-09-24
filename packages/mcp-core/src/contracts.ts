@@ -196,6 +196,93 @@ export const patchFileResultSchema = z
 
 export type PatchFileResult = z.infer<typeof patchFileResultSchema>;
 
+export const patchFilesItemInputSchema = z
+  .object({
+    path: relativePathSchema,
+    expectedSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    replacements: z.array(patchReplacementSchema).min(1).max(20),
+  })
+  .strict();
+
+export const patchFilesInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    items: z.array(patchFilesItemInputSchema).min(1).max(8),
+    dryRun: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine(({ items }, context) => {
+    const paths = new Set<string>();
+    for (const [index, item] of items.entries()) {
+      if (paths.has(item.path)) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "path"],
+          message: "Patch batch paths must be unique.",
+        });
+      }
+      paths.add(item.path);
+    }
+  });
+
+export type PatchFilesInput = z.input<typeof patchFilesInputSchema>;
+
+const patchFilesErrorSchema = z
+  .object({
+    code: z.enum(errorCodes),
+    message: z.string(),
+  })
+  .strict();
+
+export const patchFilesItemResultSchema = z
+  .object({
+    path: relativePathSchema,
+    status: z.enum([
+      "preflight_ok",
+      "preflight_error",
+      "validated",
+      "applied",
+      "apply_error",
+      "skipped_after_error",
+    ]),
+    result: patchFileResultSchema.optional(),
+    error: patchFilesErrorSchema.optional(),
+  })
+  .strict()
+  .superRefine((item, context) => {
+    const requiresResult = ["preflight_ok", "validated", "applied"].includes(item.status);
+    const requiresError = ["preflight_error", "apply_error"].includes(item.status);
+    if (requiresResult && item.result === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["result"],
+        message: "result is required for successful patch batch items.",
+      });
+    }
+    if (requiresError && item.error === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "error is required for failed patch batch items.",
+      });
+    }
+  });
+
+export const patchFilesResultSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    dryRun: z.boolean(),
+    preflightPassed: z.boolean(),
+    completed: z.boolean(),
+    partial: z.boolean(),
+    appliedCount: z.number().int().nonnegative().max(8),
+    stoppedAtPath: relativePathSchema.optional(),
+    items: z.array(patchFilesItemResultSchema).min(1).max(8),
+  })
+  .strict();
+
+export type PatchFilesResult = z.infer<typeof patchFilesResultSchema>;
+
 export const workspaceValidationNameSchema = z.enum([
   "diff-check",
   "legacy-format",
