@@ -42,6 +42,7 @@ foreach ($required in @(
     '-RestartCount 5',
     '-RunLevel Limited',
     'McpEdgeHost.exe',
+    "'--restart-count', '5'",
     'ProjectRoot',
     '--project-root',
     '--connector-token-file',

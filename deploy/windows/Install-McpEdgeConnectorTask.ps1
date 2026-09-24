@@ -293,7 +293,7 @@ $hostArguments = @(
     '--owner-oauth-scopes', $OwnerOAuthScopes,
     '--mcp-session-mode', $McpSessionMode,
     '--max-concurrent-requests', [string]$MaxConcurrentRequests,
-    '--restart-count', '0',
+    '--restart-count', '5',
     '--restart-interval-seconds', '60',
     '--browser-enabled', $browserEnabled
 )
