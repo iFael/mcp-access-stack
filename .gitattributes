@@ -1,0 +1,2 @@
+deploy/linux/* text eol=lf
+config/linux-* text eol=lf

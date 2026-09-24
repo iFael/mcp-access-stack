@@ -71,6 +71,10 @@ if command -v pwsh >/dev/null 2>&1; then
 fi
 grep -Fq 'Invoke-McpAccessStackCutoverBroker.ps1' "$root/deploy/linux/Start-McpAccessStackCutover.sh"
 grep -Fq 'systemd-run --user' "$root/deploy/linux/Start-McpAccessStackCutover.sh"
+grep -Fq 'Test-PersistentServiceActive' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq 'Stop-PersistentService' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq 'if ($persistentServiceWasActive)' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq 'Offline rollback selected unexpected connector' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"
 grep -Fq 'ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
 grep -Fq 'Restart=always' "$unit"

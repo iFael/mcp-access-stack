@@ -23,23 +23,29 @@ function Health([string]$Base) {
 }
 function Wait-Selected([string]$Base,[string]$Revision,[string[]]$Excluded=@(),[int]$Timeout=30) {
   $deadline=[DateTimeOffset]::UtcNow.AddSeconds($Timeout)
+  $expectedRevision=$Revision.Trim()
   $last='no health response'
   do {
     try {
       $h=Health $Base
       $r=Optional $h 'runtime'
-      $id=[string](Optional $r 'connectorInstanceId')
-      $catalog=[string](Optional $r 'catalogContractRevision')
-      $active=[string](Optional $h 'activeContractRevision')
-      $candidate=[string](Optional $h 'candidateContractRevision')
-      $ready=[bool](Optional $h 'connectorReady')
-      $execution=[bool](Optional $h 'executionPlaneReady')
-      $compatible=[bool](Optional $h 'contractCompatible')
+      $id=([string](Optional $r 'connectorInstanceId')).Trim()
+      $catalog=([string](Optional $r 'catalogContractRevision')).Trim()
+      $active=([string](Optional $h 'activeContractRevision')).Trim()
+      $candidate=([string](Optional $h 'candidateContractRevision')).Trim()
+      $ready=(Optional $h 'connectorReady') -eq $true
+      $execution=(Optional $h 'executionPlaneReady') -eq $true
+      $compatible=(Optional $h 'contractCompatible') -eq $true
       $excluded=$Excluded -contains $id
-      if ($ready -and $execution -and $compatible -and -not $excluded -and -not [string]::IsNullOrWhiteSpace($id) -and $catalog -eq $Revision -and $active -eq $Revision -and [string]::IsNullOrWhiteSpace($candidate)) {
+      $idPresent=-not [string]::IsNullOrWhiteSpace($id)
+      $catalogMatch=[StringComparer]::Ordinal.Equals($catalog,$expectedRevision)
+      $activeMatch=[StringComparer]::Ordinal.Equals($active,$expectedRevision)
+      $candidateEmpty=[string]::IsNullOrWhiteSpace($candidate)
+      $matches=$ready -and $execution -and $compatible -and -not $excluded -and $idPresent -and $catalogMatch -and $activeMatch -and $candidateEmpty
+      if ($matches) {
         return [pscustomobject]@{connectorInstanceId=$id;catalogContractRevision=$catalog;activeContractRevision=$active;executionPlaneReady=$execution;connectorReady=$ready;contractCompatible=$compatible}
       }
-      $last="execution=$execution ready=$ready compatible=$compatible active=$active candidate=$candidate catalog=$catalog id=$id excluded=$excluded"
+      $last="execution=$execution ready=$ready compatible=$compatible expected=$expectedRevision active=$active activeMatch=$activeMatch candidate=$candidate candidateEmpty=$candidateEmpty catalog=$catalog catalogMatch=$catalogMatch id=$id idPresent=$idPresent excluded=$excluded"
     } catch { $last=$_.Exception.Message }
     Start-Sleep -Milliseconds 500
   } while ([DateTimeOffset]::UtcNow -lt $deadline)
@@ -146,9 +152,17 @@ function Set-Current([string]$ReleaseRoot) {
   & /usr/bin/mv -Tf $tmp $current
   if ($LASTEXITCODE -ne 0) { throw 'Unable to replace current release symlink.' }
 }
+function Test-PersistentServiceActive([string]$ServiceName) {
+  $probe=Start-Process -FilePath '/usr/bin/systemctl' -ArgumentList @('--user','is-active','--quiet',$ServiceName) -WorkingDirectory $installationRoot -NoNewWindow -Wait -PassThru
+  return $probe.ExitCode -eq 0
+}
 function Restart-PersistentService([string]$ServiceName) {
   & /usr/bin/systemctl --user restart $ServiceName
   if ($LASTEXITCODE -ne 0) { throw "Unable to restart user service: $ServiceName" }
+}
+function Stop-PersistentService([string]$ServiceName) {
+  & /usr/bin/systemctl --user stop $ServiceName
+  if ($LASTEXITCODE -ne 0) { throw "Unable to stop user service: $ServiceName" }
 }
 
 $RequestPath=[IO.Path]::GetFullPath($RequestPath)
@@ -182,6 +196,7 @@ if ([string]$stateBefore.candidate.releaseId -ne $releaseId) { throw 'Linux cuto
 $previousReleaseId=[string]$stateBefore.active.releaseId
 $previousReleaseRoot=Join-Path $installationRoot ("releases/$previousReleaseId")
 $candidateReleaseRoot=Join-Path $installationRoot ("releases/$releaseId")
+$persistentServiceWasActive=Test-PersistentServiceActive $edgeTaskName
 
 $handover=$null
 $rollback=$null
@@ -207,6 +222,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($previousId)-or[string]::IsNullOrWhiteSpace($activeRevision)) { throw 'Current Edge health is missing active identity.' }
   $promotionRequired=-not[string]::IsNullOrWhiteSpace($candidateRevision)
 
+  $failureStage='handover-health';$failureCode='HANDOVER_HEALTH_FAILED'
   $handover=Start-Connector $candidateReleaseRoot (Join-Path $runRoot 'handover-runtime') (Join-Path $runRoot 'handover')
   if ($promotionRequired) {
     $handoverHealth=Wait-Candidate $edgeBaseUrl $activeRevision $candidateRevision $previousId
@@ -279,12 +295,21 @@ catch {
 
   if ($localCommitted) {
     try {
-      Restart-PersistentService $edgeTaskName
-      $excluded=@($previousId,$handoverId)
-      if (-not[string]::IsNullOrWhiteSpace($rollbackId)) { $excluded+=$rollbackId }
-      $null=Wait-Selected $edgeBaseUrl $activeRevision $excluded 45
-      if ($null-ne$rollback) { Stop-Connector $rollback;$rollback=$null }
-      if (-not$retainHandover) { Stop-Connector $handover;$handover=$null }
+      if ($persistentServiceWasActive) {
+        Restart-PersistentService $edgeTaskName
+        $excluded=@($previousId,$handoverId)
+        if (-not[string]::IsNullOrWhiteSpace($rollbackId)) { $excluded+=$rollbackId }
+        $null=Wait-Selected $edgeBaseUrl $activeRevision $excluded 45
+        if ($null-ne$rollback) { Stop-Connector $rollback;$rollback=$null }
+        if (-not$retainHandover) { Stop-Connector $handover;$handover=$null }
+      } else {
+        Stop-PersistentService $edgeTaskName
+        if (-not$retainRollback -and $null-ne$rollback) { Stop-Connector $rollback;$rollback=$null }
+        if (-not$retainHandover -and $null-ne$handover) { Stop-Connector $handover;$handover=$null }
+        if ($retainRollback -or $retainHandover) { throw 'Offline rollback cannot restore the external owner while a transient recovery connector must be retained.' }
+        $restored=Wait-Selected $edgeBaseUrl $activeRevision @() 45
+        if ([string]$restored.connectorInstanceId -ne $previousId) { throw "Offline rollback selected unexpected connector: $([string]$restored.connectorInstanceId)" }
+      }
     } catch {
       if ($null-ne$rollback) { $retainRollback=$true } else { $retainHandover=$true }
       $recoveryErrors.Add("persistent recovery: $($_.Exception.Message)")
