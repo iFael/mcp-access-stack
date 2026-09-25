@@ -685,6 +685,11 @@ jobs:
             services/mcp-gateway/test/unit/companion/platform-oauth-credential-store.test.ts \
             services/mcp-gateway/test/unit/companion/local-repository-manager.test.ts
 
+      - name: Test companion connector end-to-end
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
+            services/mcp-gateway/test/integration/edge/companion-connector.test.ts
+
       - name: Test native shell process runner
         run: |
           node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath \

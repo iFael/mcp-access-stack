@@ -11,7 +11,7 @@ import {
   type CompanionReadyMessage,
 } from "@mcp-access-stack/edge-protocol";
 import { AppError } from "@vs-code-gpt/shared";
-import WebSocket, { type RawData } from "ws";
+import WebSocket, { type ClientOptions, type RawData } from "ws";
 import {
   EDGE_INTERNAL_ASSERTION_HEADER,
   EDGE_INTERNAL_PRINCIPAL_HEADER,
@@ -69,6 +69,7 @@ export interface CompanionConnectorOptions {
   maxConcurrentRequests?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
+  webSocketFactory?: (url: URL, options: ClientOptions) => WebSocket;
   log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -138,12 +139,15 @@ export class CompanionConnector {
     return new Promise<boolean>((resolve) => {
       let protocolReady = false;
       let settled = false;
-      const socket = new WebSocket(this.edgeUrl, {
+      const socketOptions: ClientOptions = {
         headers: { authorization: `Bearer ${token.accessToken}` },
         maxPayload: this.maxPayloadBytes,
         perMessageDeflate: false,
         handshakeTimeout: 15_000,
-      });
+      };
+      const socket = this.options.webSocketFactory
+        ? this.options.webSocketFactory(this.edgeUrl, socketOptions)
+        : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
       const finish = () => {
         if (settled) return;
