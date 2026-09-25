@@ -135,9 +135,12 @@ jobs:
             --json > "$result_file"
           rm -f "$secrets_file"
 
-          preview_url="$(jq -r '.preview.urls[0] // .deployment.urls[0] // empty' "$result_file")"
-          if [[ ! "$preview_url" =~ ^https://[^/?#]+/?$ ]]; then
-            echo "Wrangler did not return an active R10 Preview URL." >&2
+          preview_url="$(jq -r '.preview.urls[0] // empty' "$result_file")"
+          deployment_url="$(jq -r '.deployment.urls[0] // empty' "$result_file")"
+          expected_preview_url="$(jq -r '.previews.vars.MCP_PUBLIC_BASE_URL // empty' services/mcp-edge-gateway/wrangler.jsonc)"
+          if [[ ! "$preview_url" =~ ^https://[^/?#]+/?$ ||
+                ! "$expected_preview_url" =~ ^https://[^/?#]+/?$ ]]; then
+            echo "Wrangler did not return a valid stable R10 Preview URL." >&2
             jq '{
               preview: {
                 id: .preview.id,
@@ -153,11 +156,23 @@ jobs:
             exit 1
           fi
           preview_url="${preview_url%/}/"
+          expected_preview_url="${expected_preview_url%/}/"
+          if [[ "$preview_url" != "$expected_preview_url" ]]; then
+            echo "Wrangler Preview URL does not match MCP_PUBLIC_BASE_URL." >&2
+            echo "preview_url=$preview_url" >&2
+            echo "expected_preview_url=$expected_preview_url" >&2
+            echo "deployment_url=$deployment_url" >&2
+            exit 1
+          fi
+          echo "Wrangler stable R10 Preview URL: $preview_url"
 
           health=''
-          for attempt in $(seq 1 18); do
-            if health="$(curl --fail --silent --show-error "$preview_url/health")"; then
+          for attempt in $(seq 1 72); do
+            if health="$(curl --fail --silent "$preview_url/health" 2>/dev/null)"; then
               break
+            fi
+            if (( attempt % 12 == 0 )); then
+              echo "Waiting for R10 Preview DNS/TLS/routing propagation ($((attempt * 5))s elapsed)..."
             fi
             sleep 5
           done
