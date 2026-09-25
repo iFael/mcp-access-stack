@@ -1,6 +1,9 @@
 name: Native companion candidate
 
 on:
+  push:
+    tags:
+      - "candidate/**"
   workflow_dispatch:
 
 permissions:
