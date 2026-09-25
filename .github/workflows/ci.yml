@@ -641,6 +641,29 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run build --workspace @vs-code-gpt/browser-worker
 
+      - name: Build immutable Windows local runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = (git rev-parse --verify 'HEAD^{commit}').Trim()
+          $output = Join-Path $env:RUNNER_TEMP 'mcp-v3-local-windows'
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpRelease.ps1 `
+            -ReleaseId ("0.0.0-ci.{0}" -f $env:GITHUB_RUN_ID) `
+            -SourceCommit $commit `
+            -BuildRunId ([long]$env:GITHUB_RUN_ID) `
+            -OutputDirectory $output
+          $gitleaks = Join-Path $output '.runtime-tools\gitleaks\8.30.1\gitleaks.exe'
+          $git = Join-Path $output 'runtime\git\cmd\git.exe'
+          $astConfig = Join-Path $output 'config\validation\ast-grep\sgconfig.yml'
+          if (-not (Test-Path -LiteralPath $gitleaks -PathType Leaf)) { throw 'Bundled Gitleaks is missing.' }
+          if (-not (Test-Path -LiteralPath $git -PathType Leaf)) { throw 'Bundled MinGit is missing.' }
+          if (-not (Test-Path -LiteralPath $astConfig -PathType Leaf)) { throw 'Bundled ast-grep config is missing.' }
+          & $gitleaks version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $git --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Test Windows browser, elevation and lifecycle contracts
         if: runner.os == 'Windows'
         shell: pwsh
@@ -691,6 +714,9 @@ jobs:
           test -f "$output/node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js"
           test -f "$output/deploy/unix/McpV3Local.Common.sh"
           test -f "$output/mcp-v3-local-manifest.json"
+          test -f "$output/config/validation/ast-grep/sgconfig.yml"
+          test -d "$output/node_modules/@ast-grep/cli"
+          "$output/.runtime-tools/gitleaks/8.30.1/gitleaks" version
           bash deploy/unix/Test-McpV3LocalLifecycle.sh \
             --package-root "$output" \
             --expected-edge "https://example.invalid/"
@@ -710,6 +736,24 @@ jobs:
           dpkg-deb --contents "$deb" | grep -F './usr/bin/mcp-v3'
           dpkg-deb --field "$deb" Depends | grep -F 'libsecret-tools'
 
+      - name: Fresh-install Linux native package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/mcp-v3-local.deb"
+          release="0.0.0-ci.${GITHUB_RUN_ID}"
+          sudo apt-get update
+          sudo apt-get install -y "$deb"
+          test -x /usr/bin/mcp-v3
+          test -x /usr/bin/mcp-v3-local-install
+          test -f "/usr/lib/mcp-v3/bootstrap/$release/mcp-v3-local-manifest.json"
+          test -x "/usr/lib/mcp-v3/bootstrap/$release/.runtime-tools/gitleaks/8.30.1/gitleaks"
+          test -f "/usr/lib/mcp-v3/bootstrap/$release/config/validation/ast-grep/sgconfig.yml"
+          "/usr/lib/mcp-v3/bootstrap/$release/.runtime-tools/gitleaks/8.30.1/gitleaks" version
+          git --version
+          sudo apt-get remove -y mcp-v3-local
+          test ! -e /usr/bin/mcp-v3
+
       - name: Build macOS native package
         if: runner.os == 'macOS'
         run: |
@@ -722,4 +766,26 @@ jobs:
           pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3'
           pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3-local-install'
           pkgutil --payload-files "$pkg" | grep -F 'Library/Application Support/MCP V3/Bootstrap'
+
+      - name: Fresh-install macOS native package
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/mcp-v3-local.pkg"
+          release="0.0.0-ci.${GITHUB_RUN_ID}"
+          bootstrap="/Library/Application Support/MCP V3/Bootstrap/$release"
+          cleanup() {
+            sudo rm -f /usr/local/bin/mcp-v3 /usr/local/bin/mcp-v3-local-install /usr/local/bin/mcp-v3-local-update /usr/local/bin/mcp-v3-local-uninstall
+            sudo rm -rf "$bootstrap"
+            sudo pkgutil --forget com.mcpv3.local.bootstrap >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          sudo installer -pkg "$pkg" -target /
+          test -x /usr/local/bin/mcp-v3
+          test -x /usr/local/bin/mcp-v3-local-install
+          test -f "$bootstrap/mcp-v3-local-manifest.json"
+          test -x "$bootstrap/.runtime-tools/gitleaks/8.30.1/gitleaks"
+          test -f "$bootstrap/config/validation/ast-grep/sgconfig.yml"
+          "$bootstrap/.runtime-tools/gitleaks/8.30.1/gitleaks" version
+          git --version
 

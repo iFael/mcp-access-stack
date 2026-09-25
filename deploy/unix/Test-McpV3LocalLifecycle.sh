@@ -94,6 +94,41 @@ if mcp_v3_verify_package_manifest \
   exit 1
 fi
 
+# Restore the temporary release after the intentional corruption so uninstall
+# exercises a valid installed tree without touching the source package.
+cp -- "$package_root/package.json" "$release_root/package.json"
+
+# Uninstall must remove app/state while preserving user repositories by default.
+mkdir -p "$repos_root"
+printf 'preserve-me\n' >"$repos_root/.mcp-v3-lifecycle-sentinel"
+rm -f -- "$config_path"
+fake_home="$base/home"
+mkdir -p "$fake_home"
+if [[ "$os_name" == "linux" ]]; then
+  fake_bin="$base/bin"
+  fake_config="$base/config"
+  mkdir -p "$fake_bin" "$fake_config"
+  cat >"$fake_bin/systemctl" <<'SH'
+#!/usr/bin/env sh
+exit 0
+SH
+  chmod +x "$fake_bin/systemctl"
+  HOME="$fake_home" XDG_CONFIG_HOME="$fake_config" PATH="$fake_bin:$PATH" \
+    "$package_root/deploy/linux/Uninstall-McpV3Local.sh" \
+      --app-root "$app_root" \
+      --state-root "$state_root" \
+      --repositories-root "$repos_root" >/dev/null
+else
+  HOME="$fake_home" \
+    "$package_root/deploy/macos/Uninstall-McpV3Local.sh" \
+      --app-root "$app_root" \
+      --state-root "$state_root" \
+      --repositories-root "$repos_root" >/dev/null
+fi
+[[ ! -e "$app_root" ]]
+[[ ! -e "$state_root" ]]
+[[ -f "$repos_root/.mcp-v3-lifecycle-sentinel" ]]
+
 # Removal boundaries must fail closed for HOME and filesystem root.
 if mcp_v3_assert_safe_removal "$HOME" >/dev/null 2>&1; then
   printf 'HOME was incorrectly accepted as a removal root.\n' >&2

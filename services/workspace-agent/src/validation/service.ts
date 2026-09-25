@@ -477,7 +477,7 @@ async function runSecretScan(
   if (!tool) {
     return unavailablePayload(
       "gitleaks",
-      "Gitleaks is not installed. Run npm run validation:tools:init on the host.",
+      "Gitleaks is unavailable in the MCP V3 runtime.",
     );
   }
 
