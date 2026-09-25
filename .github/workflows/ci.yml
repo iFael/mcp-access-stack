@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -49,9 +50,15 @@ jobs:
         id: impact
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node tooling/ci/resolve-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            BASE_SHA="$(git rev-parse refs/remotes/origin/main)"
+          fi
+          node tooling/ci/resolve-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Report fail-closed resolver fallback
         if: steps.impact.outputs.resolverFailed == 'true'
