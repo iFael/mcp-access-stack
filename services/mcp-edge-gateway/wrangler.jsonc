@@ -13,6 +13,25 @@
     "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS": "2592000",
     "MCP_OWNER_RESOURCE_NAME": "MCP Access Stack"
   },
+  "previews": {
+    "vars": {
+      "MCP_EDGE_ENABLED": "true",
+      "MCP_EDGE_AUTH_MODE": "owner",
+      "MCP_PUBLIC_BASE_URL": "https://r10-homologation-mcp-access-stack.rafaeldamasio77.workers.dev/",
+      "MCP_OWNER_OAUTH_SCOPES": "workspaces:read",
+      "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS": "3600",
+      "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS": "2592000",
+      "MCP_OWNER_RESOURCE_NAME": "MCP V3 R10 Homologation"
+    },
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "MCP_SESSION",
+          "class_name": "McpSession"
+        }
+      ]
+    }
+  },
   "observability": {
     "logs": {
       "enabled": true,

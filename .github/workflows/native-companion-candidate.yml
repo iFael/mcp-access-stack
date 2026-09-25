@@ -14,7 +14,107 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  edge-preview:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'candidate/r10-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: public-release
+    permissions:
+      contents: read
+    outputs:
+      preview_url: ${{ steps.preview.outputs.preview_url }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Edge protocol
+        run: npm run build --workspace @mcp-access-stack/edge-protocol
+
+      - name: Create isolated R10 Preview
+        id: preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          preview_name="r10-homologation"
+          preview_url="https://r10-homologation-mcp-access-stack.rafaeldamasio77.workers.dev/"
+          secrets_file="$RUNNER_TEMP/mcp-v3-preview-secrets.json"
+          access_file="$RUNNER_TEMP/mcp-v3-preview-access.txt"
+          result_file="$RUNNER_TEMP/mcp-v3-preview-result.json"
+
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+          owner_password="$(openssl rand -base64 36 | tr -d '\r\n')"
+          echo "::add-mask::$owner_password"
+          umask 077
+          jq -n --arg token "$owner_password" '{MCP_OWNER_TOKEN:$token}' > "$secrets_file"
+
+          npx wrangler preview             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name "$preview_name"             --tag "r10-${GITHUB_RUN_ID}"             --message "MCP V3 R10 interactive homologation"             --secrets-file "$secrets_file"             --ignore-base-config             --json > "$result_file"
+          rm -f "$secrets_file"
+
+          health=''
+          for attempt in $(seq 1 18); do
+            if health="$(curl --fail --silent --show-error "$preview_url/health")"; then
+              break
+            fi
+            sleep 5
+          done
+          service="$(jq -r '.service // empty' <<<"$health")"
+          status="$(jq -r '.status // empty' <<<"$health")"
+          control_ready="$(jq -r '.controlPlaneReady // false' <<<"$health")"
+          if [[ "$service" != "mcp-edge-gateway" || "$status" != "ok" || "$control_ready" != "true" ]]; then
+            echo "R10 Preview health did not become ready." >&2
+            exit 1
+          fi
+
+          oauth="$(curl --fail --silent --show-error "$preview_url/.well-known/oauth-authorization-server")"
+          issuer="$(jq -r '.issuer // empty' <<<"$oauth")"
+          authorize="$(jq -r '.authorization_endpoint // empty' <<<"$oauth")"
+          if [[ "$issuer" != "$preview_url" || "$authorize" != "${preview_url}authorize" ]]; then
+            echo "R10 Preview OAuth metadata does not match the isolated Preview URL." >&2
+            exit 1
+          fi
+
+          {
+            printf 'preview_url=%s\n' "$preview_url"
+            printf 'owner_password=%s\n' "$owner_password"
+            printf 'preview_name=%s\n' "$preview_name"
+            printf 'source_commit=%s\n' "$GITHUB_SHA"
+            printf 'candidate_run_id=%s\n' "$GITHUB_RUN_ID"
+          } > "$access_file"
+          chmod 600 "$access_file"
+
+          echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
+          echo "MCP V3 isolated R10 Preview is healthy."
+
+      - name: Upload Preview access artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcp-v3-preview-access-${{ github.run_id }}
+          path: ${{ runner.temp }}/mcp-v3-preview-access.txt
+          if-no-files-found: error
+          retention-days: 3
+
   windows-signed-candidate:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'candidate/r10-')
+    needs: edge-preview
     runs-on: windows-latest
     timeout-minutes: 35
     environment: public-release
@@ -44,6 +144,8 @@ jobs:
 
       - name: Resolve candidate metadata
         id: metadata
+        env:
+          PREVIEW_EDGE_BASE_URL: ${{ needs.edge-preview.outputs.preview_url }}
         run: |
           $ErrorActionPreference = 'Stop'
           $commit = (git rev-parse --verify 'HEAD^{commit}').Trim()
@@ -52,18 +154,24 @@ jobs:
           }
           $releaseId = "0.0.0-r10-candidate.$env:GITHUB_RUN_ID"
           $releaseTag = "v$releaseId"
-          $edgeConfig = Get-Content -LiteralPath 'services/mcp-edge-gateway/wrangler.jsonc' -Raw
-          if ($edgeConfig -notmatch '"MCP_PUBLIC_BASE_URL"\s*:\s*"([^"]+)"') {
-            throw 'Unable to resolve the canonical MCP V3 Edge origin.'
+          try {
+            $edgeUri = [Uri]$env:PREVIEW_EDGE_BASE_URL
           }
-          $edgeBaseUrl = [string]$Matches[1]
-          if ($edgeBaseUrl -notmatch '^https://[^/?#]+/$') {
-            throw 'Canonical MCP V3 Edge origin is invalid.'
+          catch {
+            throw 'Preview Edge base URL is invalid.'
+          }
+          if (-not $edgeUri.IsAbsoluteUri -or
+              $edgeUri.Scheme -ne 'https' -or
+              $edgeUri.AbsolutePath -ne '/' -or
+              -not [string]::IsNullOrWhiteSpace($edgeUri.UserInfo) -or
+              -not [string]::IsNullOrWhiteSpace($edgeUri.Query) -or
+              -not [string]::IsNullOrWhiteSpace($edgeUri.Fragment)) {
+            throw 'Preview Edge base URL must be a credential-free HTTPS origin.'
           }
           "commit=$commit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "release_id=$releaseId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "edge_base_url=$edgeBaseUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "edge_base_url=$($edgeUri.GetLeftPart([UriPartial]::Authority))/" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build Windows runtime
         run: npm run build
@@ -141,3 +249,64 @@ jobs:
             ${{ runner.temp }}/candidate-distribution/${{ steps.metadata.outputs.release_tag }}-windows-x64.zip.sha256
           if-no-files-found: error
           retention-days: 3
+
+  cleanup-preview-on-candidate-failure:
+    if: always() && needs.edge-preview.result == 'success' && needs.windows-signed-candidate.result != 'success'
+    needs:
+      - edge-preview
+      - windows-signed-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: public-release
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Delete failed candidate Preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler preview delete             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name r10-homologation             --worker-name mcp-access-stack             --skip-confirmation
+
+  cleanup-preview:
+    if: startsWith(github.ref_name, 'candidate/cleanup-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: public-release
+    steps:
+      - name: Checkout exact cleanup commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Delete isolated R10 Preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler preview delete             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name r10-homologation             --worker-name mcp-access-stack             --skip-confirmation
