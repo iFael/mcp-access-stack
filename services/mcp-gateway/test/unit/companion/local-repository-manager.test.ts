@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -298,7 +298,10 @@ async function createGitFixture(): Promise<{
   const repository = path.join(root, "project");
   await mkdir(repository, { recursive: true });
   await execFileAsync("git", ["init", repository]);
-  return { root, repository };
+  return {
+    root: await realpath(root),
+    repository: await realpath(repository),
+  };
 }
 
 async function createCloneRemoteFixture(): Promise<{
