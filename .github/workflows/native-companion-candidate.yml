@@ -135,10 +135,21 @@ jobs:
             --json > "$result_file"
           rm -f "$secrets_file"
 
-          preview_url="$(jq -r '.preview_urls[0] // .result.preview_urls[0] // empty' "$result_file")"
+          preview_url="$(jq -r '.preview.urls[0] // .deployment.urls[0] // empty' "$result_file")"
           if [[ ! "$preview_url" =~ ^https://[^/?#]+/?$ ]]; then
             echo "Wrangler did not return an active R10 Preview URL." >&2
-            jq '{type,version,worker_name,preview_id,preview_name,preview_slug,preview_urls,deployment_id,deployment_urls}' "$result_file" >&2 || true
+            jq '{
+              preview: {
+                id: .preview.id,
+                name: .preview.name,
+                slug: .preview.slug,
+                urls: .preview.urls
+              },
+              deployment: {
+                id: .deployment.id,
+                urls: .deployment.urls
+              }
+            }' "$result_file" >&2 || true
             exit 1
           fi
           preview_url="${preview_url%/}/"
