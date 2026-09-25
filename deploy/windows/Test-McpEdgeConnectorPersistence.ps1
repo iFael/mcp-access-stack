@@ -85,6 +85,7 @@ $edgeHost = Join-Path $releaseRoot 'native\McpEdgeHost.exe'
 $browserServer = Join-Path $releaseRoot 'services\browser-worker\dist\server.js'
 $browserLauncher = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
 $browserBroker = Join-Path $releaseRoot 'compat\McpCredentialBroker.exe'
+$elevationBroker = Join-Path $releaseRoot 'native\McpElevationBroker.exe'
 $connectorTokenFile = Join-Path $runtimeRoot 'connector-token.txt'
 $ownerTokenFile = Join-Path $runtimeRoot 'owner-token.txt'
 $browserTokenFile = Join-Path $runtimeRoot 'browser-token.txt'
@@ -110,6 +111,7 @@ try {
     [IO.File]::WriteAllText($browserServer, 'browser-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($browserLauncher, 'browser-launcher-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($browserBroker, 'browser-broker-fixture', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($elevationBroker, 'elevation-broker-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($connectorTokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($ownerTokenFile, $ownerToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($browserTokenFile, $browserToken, [Text.UTF8Encoding]::new($false))
@@ -138,15 +140,16 @@ try {
         integrityRoot = 'signed-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
-            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
             (New-FixtureArtifact -Id 'edge-host' -Owner 'edge-runtime' -Path $edgeHost -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
             (New-FixtureArtifact -Id 'edge-connector' -Owner 'edge-runtime' -Path $edgeCli -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
             (New-FixtureArtifact -Id 'edge-validation-launcher' -Owner 'edge-runtime' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
             (New-FixtureArtifact -Id 'browser-worker-server' -Owner 'browser-worker' -Path $browserServer -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-FixtureArtifact -Id 'browser-native-launcher' -Owner 'browser-worker' -Path $browserLauncher -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'node-host-launcher' -Owner 'shared' -Path $browserLauncher -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
             (New-FixtureArtifact -Id 'browser-credential-broker' -Owner 'browser-worker' -Path $browserBroker -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'elevation-broker' -Owner 'shared' -Path $elevationBroker -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $true),
             (New-FixtureArtifact -Id 'node-runtime' -Owner 'shared' -Path $nodePath -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }

@@ -17,6 +17,7 @@ internal static class McpCredentialBrokerProgram
 {
     private const int ProtocolVersion = 1;
     private const string Magic = "MCPCRD01";
+    private const string WriteMagic = "MCPCRW01";
 
     [STAThread]
     private static int Main(string[] args)
@@ -28,6 +29,15 @@ internal static class McpCredentialBrokerProgram
             if (String.Equals(mode, "read", StringComparison.OrdinalIgnoreCase))
             {
                 return RunRead(values);
+            }
+            if (String.Equals(mode, "write", StringComparison.OrdinalIgnoreCase))
+            {
+                return RunWrite(values);
+            }
+            if (String.Equals(mode, "delete", StringComparison.OrdinalIgnoreCase))
+            {
+                WindowsCredentialStore.Delete(RequireCredentialTarget(values));
+                return 0;
             }
             if (String.Equals(mode, "manage", StringComparison.OrdinalIgnoreCase))
             {
@@ -123,6 +133,116 @@ internal static class McpCredentialBrokerProgram
         }
     }
 
+    private static int RunWrite(Dictionary<string, string> values)
+    {
+        string pipeName = Require(values, "pipe");
+        string nonce = Require(values, "nonce");
+        string target = RequireCredentialTarget(values);
+        int protocol = ParseInt(Require(values, "protocol"), 1, 100);
+        int expectedClientProcessId = ParseInt(
+            Require(values, "client-pid"),
+            1,
+            Int32.MaxValue);
+        int timeoutMs = values.ContainsKey("timeout-ms")
+            ? ParseInt(values["timeout-ms"], 100, 60000)
+            : 10000;
+
+        PipeSecurity security = CurrentUserPipeSecurity();
+        using (NamedPipeServerStream pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.WriteThrough,
+            65536,
+            65536,
+            security))
+        {
+            IAsyncResult waiting = pipe.BeginWaitForConnection(null, null);
+            if (!waiting.AsyncWaitHandle.WaitOne(timeoutMs))
+            {
+                return 3;
+            }
+            pipe.EndWaitForConnection(waiting);
+
+            uint actualClientProcessId;
+            if (
+                !GetNamedPipeClientProcessId(pipe.SafePipeHandle, out actualClientProcessId) ||
+                actualClientProcessId != (uint)expectedClientProcessId
+            )
+            {
+                WriteResponse(pipe, CredentialBrokerStatus.AccessDenied, nonce, null, null);
+                return 6;
+            }
+
+            if (protocol != ProtocolVersion)
+            {
+                WriteResponse(pipe, CredentialBrokerStatus.ProtocolMismatch, nonce, null, null);
+                return 4;
+            }
+
+            byte[] userNameBytes = null;
+            byte[] passwordBytes = null;
+            try
+            {
+                using (BinaryReader reader = new BinaryReader(pipe, Encoding.UTF8, true))
+                {
+                    byte[] magic = reader.ReadBytes(Encoding.ASCII.GetByteCount(WriteMagic));
+                    if (
+                        magic.Length != Encoding.ASCII.GetByteCount(WriteMagic) ||
+                        Encoding.ASCII.GetString(magic) != WriteMagic ||
+                        reader.ReadInt32() != ProtocolVersion
+                    )
+                    {
+                        WriteResponse(pipe, CredentialBrokerStatus.ProtocolMismatch, nonce, null, null);
+                        return 4;
+                    }
+                    byte[] suppliedNonce = ReadBuffer(reader, 4096);
+                    try
+                    {
+                        if (!String.Equals(Encoding.UTF8.GetString(suppliedNonce), nonce, StringComparison.Ordinal))
+                        {
+                            WriteResponse(pipe, CredentialBrokerStatus.AccessDenied, nonce, null, null);
+                            return 6;
+                        }
+                    }
+                    finally
+                    {
+                        Array.Clear(suppliedNonce, 0, suppliedNonce.Length);
+                    }
+                    userNameBytes = ReadBuffer(reader, 4096);
+                    passwordBytes = ReadBuffer(reader, 65536);
+                }
+
+                if (userNameBytes.Length == 0 || passwordBytes.Length == 0)
+                {
+                    WriteResponse(pipe, CredentialBrokerStatus.ProtocolMismatch, nonce, null, null);
+                    return 4;
+                }
+                string userName = Encoding.UTF8.GetString(userNameBytes);
+                string password = Encoding.UTF8.GetString(passwordBytes);
+                WindowsCredentialStore.Write(target, userName, password);
+                WriteResponse(pipe, CredentialBrokerStatus.Success, nonce, null, null);
+                return 0;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                WriteResponse(pipe, CredentialBrokerStatus.AccessDenied, nonce, null, null);
+                return 6;
+            }
+            catch
+            {
+                WriteResponse(pipe, CredentialBrokerStatus.InternalError, nonce, null, null);
+                return 7;
+            }
+            finally
+            {
+                if (userNameBytes != null) Array.Clear(userNameBytes, 0, userNameBytes.Length);
+                if (passwordBytes != null) Array.Clear(passwordBytes, 0, passwordBytes.Length);
+            }
+        }
+    }
+
     private static int RunManage(Dictionary<string, string> values)
     {
         string target = RequireCredentialTarget(values);
@@ -169,6 +289,22 @@ internal static class McpCredentialBrokerProgram
         }
         writer.Write(value.Length);
         writer.Write(value);
+    }
+
+    private static byte[] ReadBuffer(BinaryReader reader, int maximum)
+    {
+        int length = reader.ReadInt32();
+        if (length < 0 || length > maximum)
+        {
+            throw new InvalidDataException("Credential broker input exceeds its protocol limit.");
+        }
+        byte[] value = reader.ReadBytes(length);
+        if (value.Length != length)
+        {
+            Array.Clear(value, 0, value.Length);
+            throw new EndOfStreamException("Credential broker input was truncated.");
+        }
+        return value;
     }
 
     private static PipeSecurity CurrentUserPipeSecurity()

@@ -380,7 +380,7 @@ internal static class Program
 
         IList services = RequireJsonList(executionManifest, "services");
         ValidateService(services, "edge-runtime", "edge-host");
-        ValidateService(services, "browser-worker", "browser-native-launcher");
+        ValidateService(services, "browser-worker", "node-host-launcher");
         if (services.Count != 2)
         {
             throw new InvalidDataException("Execution-node manifest contains an unsupported logical service.");

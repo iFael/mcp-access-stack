@@ -95,7 +95,7 @@ if (-not $inheritedSecondPass.Equals($inheritedTarget, [StringComparison]::Ordin
     throw "Task owner ACL normalization must be idempotent. first=$inheritedTarget second=$inheritedSecondPass"
 }
 
-foreach ($installerName in @('Install-McpEdgeConnectorTask.ps1', 'Install-McpBrowserWorkerTask.ps1')) {
+foreach ($installerName in @('Install-McpEdgeConnectorTask.ps1', 'Install-McpBrowserWorkerTask.ps1', 'Install-McpV3LocalTask.ps1', 'Install-McpV3LocalUpdateTask.ps1')) {
     $installerPath = Join-Path $PSScriptRoot $installerName
     $source = Get-Content -LiteralPath $installerPath -Raw
     if (-not $source.Contains('Set-McpWindowsScheduledTaskOwnerAccess')) {

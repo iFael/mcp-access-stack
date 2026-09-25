@@ -1,3 +1,5 @@
+export * from "./companion.js";
+
 export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";
 export const EDGE_RELAY_TIMEOUT_MS = 330_000;
@@ -10,6 +12,7 @@ export type AuthenticatedEdgePrincipal = {
   subject: string;
   scopes: string[];
   ownerScope?: string;
+  userId?: string;
 };
 
 export type EdgeHelloMessage = {
@@ -257,9 +260,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseAuthenticatedEdgePrincipal(value: unknown): AuthenticatedEdgePrincipal | null {
   if (!isRecord(value)) return null;
   const keys = Object.keys(value).sort();
-  const allowedKeys = value.ownerScope === undefined
-    ? ["scopes", "subject"]
-    : ["ownerScope", "scopes", "subject"];
+  const allowedKeys = [
+    ...(value.ownerScope === undefined ? [] : ["ownerScope"]),
+    "scopes",
+    "subject",
+    ...(value.userId === undefined ? [] : ["userId"]),
+  ].sort();
   if (keys.length !== allowedKeys.length || keys.some((key, index) => key !== allowedKeys[index])) return null;
   if (typeof value.subject !== "string" || value.subject.length === 0 || value.subject.length > 512) return null;
   if (
@@ -274,10 +280,15 @@ export function parseAuthenticatedEdgePrincipal(value: unknown): AuthenticatedEd
     value.ownerScope !== undefined &&
     (typeof value.ownerScope !== "string" || value.ownerScope.length === 0 || value.ownerScope.length > 256)
   ) return null;
+  if (
+    value.userId !== undefined &&
+    (typeof value.userId !== "string" || !/^usr_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.userId))
+  ) return null;
   return {
     subject: value.subject,
     scopes: [...scopes],
     ...(value.ownerScope === undefined ? {} : { ownerScope: value.ownerScope as string }),
+    ...(value.userId === undefined ? {} : { userId: value.userId as string }),
   };
 }
 

@@ -407,6 +407,16 @@ async function resolveShellSpec(
         executable: "cmd.exe",
         args: ["/d", "/s", "/c", command],
       };
+    case "sh":
+      return {
+        executable: "sh",
+        args: ["-lc", command],
+      };
+    case "bash":
+      return {
+        executable: "bash",
+        args: ["-lc", command],
+      };
     case "wsl":
       return {
         executable: "wsl.exe",

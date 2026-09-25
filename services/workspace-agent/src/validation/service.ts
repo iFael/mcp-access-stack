@@ -53,6 +53,7 @@ const SKIPPED_DIRECTORIES = new Set([
 function resolveProjectRoot(): string {
   const executablePath = process.argv[1]?.trim();
   const candidates = [
+    process.env.MCP_V3_RELEASE_ROOT?.trim(),
     process.env.VS_CODE_GPT_STACK_ROOT?.trim(),
     process.cwd(),
     executablePath

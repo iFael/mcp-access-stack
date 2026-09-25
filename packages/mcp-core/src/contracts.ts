@@ -473,6 +473,7 @@ const commandExecutionCommonSchema = z
     workspaceId: workspaceIdSchema,
     cwd: relativePathSchema.optional(),
     timeoutMs: routableCommandTimeoutMsSchema,
+    elevated: z.boolean().optional(),
     confirmationId: z.string().min(1).max(128).optional(),
   })
   .strict();

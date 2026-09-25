@@ -374,7 +374,7 @@ function Assert-McpWindowsExecutionNodeRelease {
     $nodeRecord = $null
     if ($executionVersion -eq 2) {
         $services = @($executionManifest.services)
-        $requiredServices = @('edge-runtime', 'browser-worker')
+        $requiredServices = @('edge-runtime', 'browser-worker', 'local-companion')
         foreach ($serviceId in $requiredServices) {
             $records = @($services | Where-Object { [string]$_.id -eq $serviceId })
             if ($records.Count -ne 1) {
@@ -405,8 +405,8 @@ function Assert-McpWindowsExecutionNodeRelease {
             if ($entry.Count -ne 1) {
                 throw "Execution-node service entry artifact is missing: $serviceId/$entryId"
             }
-            if ([string]$entry[0].owner -ne $serviceId) {
-                throw "Execution-node service entry artifact must be owned by $serviceId"
+            if ([string]$entry[0].owner -notin @($serviceId, 'shared')) {
+                throw "Execution-node service entry artifact must be owned by $serviceId or shared"
             }
             if ($entry[0].authenticodeRequired -ne $true) {
                 throw "Execution-node service entry artifact must require Authenticode: $serviceId"
@@ -418,8 +418,10 @@ function Assert-McpWindowsExecutionNodeRelease {
             'edge-connector' = @('edge-runtime', 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js', $false)
             'edge-validation-launcher' = @('edge-runtime', 'deploy/windows/Start-McpEdgeConnector.ps1', $true)
             'browser-worker-server' = @('browser-worker', 'services/browser-worker/dist/server.js', $false)
-            'browser-native-launcher' = @('browser-worker', 'compat/McpNodeHostLauncher.exe', $true)
+            'local-companion-runtime' = @('shared', 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js', $false)
+            'node-host-launcher' = @('shared', 'compat/McpNodeHostLauncher.exe', $true)
             'browser-credential-broker' = @('browser-worker', 'compat/McpCredentialBroker.exe', $true)
+            'elevation-broker' = @('shared', 'native/McpElevationBroker.exe', $true)
             'node-runtime' = @('shared', 'runtime/node/node.exe', $false)
         }
         foreach ($artifactId in $requiredArtifacts.Keys) {

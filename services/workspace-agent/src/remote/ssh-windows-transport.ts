@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { AppError } from "@vs-code-gpt/shared";
+import { AppError, type ShellName } from "@vs-code-gpt/shared";
 import { buildWindowsSshRpcScript } from "./windows-ssh-rpc-script.js";
 
 export interface SshWindowsTransportConfig {
@@ -182,11 +182,17 @@ export class SshWindowsTransport {
   async runShell(
     rootPath: string,
     logicalCwd: string,
-    shell: "powershell" | "pwsh" | "cmd" | "wsl" | "git-bash",
+    shell: ShellName,
     command: string,
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<RemoteProcessResult> {
+    if (shell === "sh" || shell === "bash") {
+      throw new AppError(
+        "CAPABILITY_UNSUPPORTED",
+        "POSIX shells are not available through the legacy Windows SSH transport.",
+      );
+    }
     return this.invoke<RemoteProcessResult>(
       "runShell",
       { rootPath, logicalCwd, shell, command, timeoutMs },

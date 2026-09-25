@@ -24,6 +24,7 @@
     "@mcp-access-stack/edge-protocol": "0.1.0"
   },
   "bin": {
-    "mcp-edge-connector": "./dist/edge-connector-cli.js"
+    "mcp-edge-connector": "./dist/edge-connector-cli.js",
+    "mcp-v3-local": "./dist/companion-cli.js"
   }
 }

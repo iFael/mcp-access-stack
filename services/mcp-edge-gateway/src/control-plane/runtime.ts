@@ -5,6 +5,7 @@ import {
 import {
   createMcpControlPlane,
   type EdgeExecutionTransport,
+  type EdgeLocalMcpToolHandler,
   type EdgeMcpCatalog,
   type EdgeMcpControlPlane,
 } from "./mcp-control-plane.js";
@@ -63,6 +64,7 @@ export function createEdgeControlPlaneRuntime(
   storage: OwnerOAuthStorage,
   execution: EdgeExecutionTransport,
   catalog: EdgeMcpCatalog = EDGE_BUILD_MCP_CATALOG,
+  localTools?: EdgeLocalMcpToolHandler,
 ): EdgeControlPlaneRuntime {
   const publicBaseUrl = parsePublicBaseUrl(requireValue(env.MCP_PUBLIC_BASE_URL, "MCP_PUBLIC_BASE_URL"));
   const mode = requireValue(env.MCP_EDGE_AUTH_MODE, "MCP_EDGE_AUTH_MODE");
@@ -124,6 +126,7 @@ export function createEdgeControlPlaneRuntime(
     manifest: catalog.manifest,
     catalogMetadata: catalog.catalogMetadata,
     serverIdentity: catalog.serverIdentity,
+    ...(localTools === undefined ? {} : { localTools }),
   });
   const router = createMcpSessionRouter({ oauth, controlPlane });
   return { authenticator, oauth, controlPlane, router };

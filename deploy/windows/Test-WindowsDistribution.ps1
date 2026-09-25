@@ -86,7 +86,9 @@ Assert-ContainsAll -Label 'Native artifact builder' -Source $artifactBuilder -To
     'McpNodeHostLauncher.cs',
     'McpNodeHostLauncher.exe',
     'McpCredentialBroker.cs',
-    'McpCredentialBroker.exe'
+    'McpCredentialBroker.exe',
+    'McpElevationBroker.cs',
+    'McpElevationBroker.exe'
 )
 Assert-ContainsNone -Label 'Native artifact builder' -Source $artifactBuilder -Tokens @(
     'McpHost.cs',
@@ -103,6 +105,12 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'execution-node-manifest.json',
     'McpEdgeHost.exe',
     'Install-McpAccessStack.ps1',
+    'Install-McpV3Local.ps1',
+    'Install-McpV3LocalTask.ps1',
+    'Install-McpV3LocalUpdateTask.ps1',
+    'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'Update-McpV3Local.ps1',
+    'Uninstall-McpV3Local.ps1',
     'Start-McpAccessStackCutover.ps1',
     'Invoke-McpAccessStackCutoverBroker.ps1',
     'Stage-McpWindowsExecutionNodeCandidate.ps1',
@@ -113,7 +121,9 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
     "-Id 'edge-connector'",
     "-Id 'edge-host'",
-    "-Id 'browser-native-launcher'",
+    "-Id 'node-host-launcher'",
+    "-Id 'local-companion-runtime'",
+    "-Id 'elevation-broker'",
     "-Id 'node-runtime'",
     "-Owner 'edge-runtime'",
     "-Owner 'browser-worker'",
@@ -137,8 +147,9 @@ Assert-ContainsAll -Label 'Execution-node verifier' -Source $executionCommon -To
     '$requiredServices',
     "'edge-runtime'",
     "'browser-worker'",
+    "'local-companion'",
     "'edge-host'",
-    "'browser-native-launcher'",
+    "'node-host-launcher'",
     'Historical execution-node manifest must contain exactly the eight-role split-owner contract.'
 )
 Assert-ContainsNone -Label 'Execution-node verifier' -Source $executionCommon -Tokens @(

@@ -1128,7 +1128,7 @@ function openApiSchemas(workspaceIds: readonly string[]): Record<string, unknown
       ...commandProperties,
       shell: {
         type: "string",
-        enum: ["powershell", "pwsh", "cmd", "wsl", "git-bash"],
+        enum: ["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"],
       },
     }),
     CommandResult: {

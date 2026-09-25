@@ -5,6 +5,7 @@ import { z } from "zod";
 import * as c from "./browser-contracts.js";
 import * as l from "./legacy-browser-contracts.js";
 import { AppError, asAppError } from "./errors.js";
+import { deviceIdSchema } from "./repository-contracts.js";
 import type { BrowserExecutor } from "./browser-executor.js";
 import type { WorkspaceExecutor } from "./workspace-executor.js";
 import type { OperationContext } from "./contracts.js";
@@ -220,7 +221,7 @@ export function registerBrowserTools(
       {
         title: definition.name,
         description: definition.description,
-        inputSchema: definition.input,
+        inputSchema: withBrowserDeviceSelector(definition.input),
         outputSchema: definition.output,
         annotations: {
           readOnlyHint: definition.readOnly,
@@ -234,7 +235,9 @@ export function registerBrowserTools(
         const authError = validateAuthentication(options, extra.authInfo);
         if (authError) return authError;
         try {
-          const parsedInputResult = definition.input.safeParse(input);
+          const parsedInputResult = definition.input.safeParse(
+            stripBrowserDeviceSelector(input),
+          );
           if (!parsedInputResult.success) {
             throw new AppError(
               "INVALID_ARGUMENT",
@@ -611,6 +614,24 @@ function d(
   destructive = false,
 ): Definition {
   return { name, description, input, output, readOnly, destructive, run };
+}
+
+function withBrowserDeviceSelector(schema: z.ZodType): z.ZodType {
+  const extendable = schema as z.ZodType & {
+    safeExtend?: (shape: { deviceId: z.ZodOptional<typeof deviceIdSchema> }) => z.ZodType;
+  };
+  if (typeof extendable.safeExtend !== "function") {
+    throw new Error("Browser MCP input schema must support safeExtend for device routing.");
+  }
+  return extendable.safeExtend({ deviceId: deviceIdSchema.optional() });
+}
+
+function stripBrowserDeviceSelector(input: unknown): unknown {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return input;
+  }
+  const { deviceId: _deviceId, ...rest } = input as Record<string, unknown>;
+  return rest;
 }
 
 function validateAuthentication(

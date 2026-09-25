@@ -348,7 +348,12 @@ export async function authorizeTrustedWorkspaceCommand(
       return await authorizeCmdMutation(input, executable, argv);
     }
 
-    if (input.shell === "wsl" || input.shell === "git-bash") {
+    if (
+      input.shell === "sh" ||
+      input.shell === "bash" ||
+      input.shell === "wsl" ||
+      input.shell === "git-bash"
+    ) {
       return await authorizePosixMutation(input, executable, argv);
     }
   } catch (error) {

@@ -13,6 +13,7 @@ import {
   type ShellName,
 } from "@vs-code-gpt/shared";
 import { CommandConfirmationRegistry } from "./confirmation.js";
+import type { ElevationBroker } from "./elevation-broker.js";
 import {
   classifyCommandRisk,
   classifyGitPushIntent,
@@ -41,6 +42,8 @@ interface CommandAuthorizationScope {
 export class ShellService {
   private readonly confirmations = new CommandConfirmationRegistry();
 
+  constructor(private readonly elevationBroker?: ElevationBroker) {}
+
   async runCommand(
     workspace: ResolvedWorkspace,
     input: DirectRunCommandInput,
@@ -54,12 +57,32 @@ export class ShellService {
       { executionContext: "foreground", operation: "run_command" },
     );
     if ("status" in prepared) return prepared;
+    const timeoutMs = remainingOperationTimeMs(deadline);
+    if (input.elevated) {
+      if (!this.elevationBroker) {
+        throw new AppError(
+          "CAPABILITY_UNSUPPORTED",
+          "Elevated command execution is not available on this runtime.",
+        );
+      }
+      return this.elevationBroker.run(
+        {
+          shell: input.shell,
+          command: input.command,
+          absoluteCwd: prepared.absoluteCwd,
+          logicalCwd: prepared.logicalCwd,
+          timeoutMs,
+          deadline,
+        },
+        context.signal,
+      );
+    }
     return runShellCommand(
       input.shell,
       input.command,
       prepared.absoluteCwd,
       prepared.logicalCwd,
-      remainingOperationTimeMs(deadline),
+      timeoutMs,
       context.signal,
       deadline,
     );
@@ -107,7 +130,7 @@ export class ShellService {
 
   private async prepareCommand(
     workspace: ResolvedWorkspace,
-    input: DirectRunCommandInput,
+    input: DirectRunCommandInput | ParsedStartBackgroundTaskInput,
     signal: AbortSignal | undefined,
     scope: CommandAuthorizationScope,
   ): Promise<AuthorizedCommandExecution | CommandConfirmationRequiredResult> {
@@ -119,6 +142,7 @@ export class ShellService {
     const cwd = await resolveShellCwd(workspace, input.cwd);
     enforceGitPushPolicy(input.shell, input.command);
     const risk = classifyCommandRisk(input.shell, input.command);
+    const elevated = "elevated" in input && input.elevated === true;
     const authorization = await decideCommandAuthorization({
       workspace,
       shell: input.shell,
@@ -126,8 +150,10 @@ export class ShellService {
       logicalCwd: cwd.logicalPath,
       absoluteCwd: cwd.absolutePath,
       directRisk: risk,
-      currentRequiresConfirmation: risk.destructive,
-      fallbackReasons: risk.reasons,
+      currentRequiresConfirmation: risk.destructive || elevated,
+      fallbackReasons: elevated
+        ? [...risk.reasons, "elevated command requires explicit confirmation"]
+        : risk.reasons,
     });
     if (authorization.disposition === "blocked") {
       throw new AppError(authorization.code, authorization.reason);
@@ -139,6 +165,7 @@ export class ShellService {
       command: input.command,
       executionContext: scope.executionContext,
       operation: scope.operation,
+      elevated,
       ...(scope.interactive ? { interactive: true as const } : {}),
     };
 

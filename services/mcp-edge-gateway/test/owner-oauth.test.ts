@@ -48,6 +48,9 @@ describe("Edge Owner OAuth durable state", () => {
       owner_token: ownerSecret,
       owner_password: firstPassword,
       owner_password_confirm: firstPassword,
+      user_name: "Rafael",
+      user_password: "profile-password-1",
+      user_password_confirm: "profile-password-1",
     }));
     expect(authorize?.status).toBe(302);
     const location = new URL(authorize!.headers.get("location")!);
@@ -70,9 +73,12 @@ describe("Edge Owner OAuth durable state", () => {
     expect(replay?.status).toBe(400);
     expect(await replay!.json()).toEqual({ error: "invalid_grant" });
 
-    await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
+    const authenticated = await oauth.authenticate(new Request("https://edge.example/mcp", {
       headers: { authorization: `Bearer ${tokens.access_token}` },
-    }))).resolves.toEqual({ subject: `owner:${client.client_id}`, scopes: ["mcp:tools"], ownerScope: "owner" });
+    }));
+    expect(authenticated).toMatchObject({ scopes: ["mcp:tools"], ownerScope: "owner" });
+    expect(authenticated.userId).toMatch(/^usr_[0-9a-f-]{36}$/iu);
+    expect(authenticated.subject).toBe(`user:${authenticated.userId}`);
 
     await oauth.rotateOwnerPassword(secondPassword);
     await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
@@ -97,6 +103,8 @@ describe("Edge Owner OAuth durable state", () => {
       state: "state-2",
       resource: "https://edge.example/mcp",
       owner_password: secondPassword,
+      user_name: "Rafael",
+      user_password: "profile-password-1",
     }));
     expect(authorizeAgain?.status).toBe(302);
     const secondCode = new URL(authorizeAgain!.headers.get("location")!).searchParams.get("code")!;

@@ -1459,7 +1459,8 @@ export function registerWorkspaceTools(
           "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. " +
           "Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. " +
           "Commands classified as potentially destructive return confirmation_required before execution. " +
-          "Commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open.",
+          "Set elevated=true only when Windows administrator rights are required; elevated commands always require bound confirmation and stay foreground. " +
+          "Non-elevated commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open.",
         inputSchema: runCommandTransportInputSchema,
         outputSchema: runCommandMcpResultSchema,
         annotations: {
@@ -2231,6 +2232,7 @@ async function executeCommand(
   const direct = directRunCommandInputSchema.safeParse(input);
   if (
     !direct.success ||
+    direct.data.elevated ||
     direct.data.timeoutMs <= QUICK_OPERATION_TIMEOUT_MS
   ) {
     return executor.runCommand(input, context);

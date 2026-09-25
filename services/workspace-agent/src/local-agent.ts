@@ -154,6 +154,7 @@ import type { ResolvedWorkspace } from "./internal-types.js";
 import { FileService } from "./filesystem/service.js";
 import { GitService } from "./git/service.js";
 import { ShellService } from "./shell/service.js";
+import type { ElevationBroker } from "./shell/elevation-broker.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
@@ -188,6 +189,7 @@ export interface LocalAgentOptions {
   githubExecutor?: GitHubExecutor;
   typedConfirmationRegistry?: TypedConfirmationRegistry;
   mutationReceiptStore?: MutationReceiptStore;
+  elevationBroker?: ElevationBroker;
 }
 
 function backgroundTaskAccess(
@@ -201,7 +203,7 @@ function backgroundTaskAccess(
 export class LocalAgent {
   private readonly fileService = new FileService();
   private readonly gitService = new GitService();
-  private readonly shellService = new ShellService();
+  private readonly shellService: ShellService;
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
   private readonly releaseLifecycleService: ReleaseLifecycleService;
@@ -220,6 +222,7 @@ export class LocalAgent {
     private readonly audit: AuditLogger,
     options: LocalAgentOptions = {},
   ) {
+    this.shellService = new ShellService(options.elevationBroker);
     this.injectedGitRepositoryExecutor = options.gitRepositoryExecutor;
     this.injectedGitOriginResolver = options.gitOriginResolver;
     this.injectedGitHubExecutor = options.githubExecutor;
@@ -274,6 +277,7 @@ export class LocalAgent {
     const registry = await WorkspaceRegistry.fromPolicy(policy);
     return LocalAgent.createFromRegistry(registry, options);
   }
+
 
   private static async createFromRegistry(
     registry: WorkspaceRegistry,

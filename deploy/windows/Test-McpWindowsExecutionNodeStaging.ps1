@@ -49,6 +49,7 @@ function New-TestDistribution {
         'native\McpEdgeHost.exe',
         'compat\McpNodeHostLauncher.exe',
         'compat\McpCredentialBroker.exe',
+        'native\McpElevationBroker.exe',
         'services\browser-worker\dist\server.js',
         'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js',
         'deploy\windows\Start-McpEdgeConnector.ps1',
@@ -88,15 +89,16 @@ function New-TestDistribution {
         integrityRoot = 'signed-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
-            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
             (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $true),
             (New-ArtifactRecord 'edge-connector' 'edge-runtime' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' $false),
             (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
             (New-ArtifactRecord 'browser-worker-server' 'browser-worker' 'services/browser-worker/dist/server.js' $false),
-            (New-ArtifactRecord 'browser-native-launcher' 'browser-worker' 'compat/McpNodeHostLauncher.exe' $true),
+            (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $true),
             (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $true),
+            (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $true),
             (New-ArtifactRecord 'node-runtime' 'shared' 'runtime/node/node.exe' $false)
         )
     }

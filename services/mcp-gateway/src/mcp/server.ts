@@ -5,15 +5,22 @@ import {
   MCP_SERVER_NAME,
   MCP_TOOL_CATALOG_META_KEY,
   registerBrowserTools,
+  registerRepositoryTools,
   registerSourceControlTools,
   registerWorkspaceTools,
+  unavailableRepositoryExecutor,
   type BrowserExecutor,
   type McpToolCatalogMetadata,
+  type RepositoryExecutor,
   type SourceControlExecutor,
   type WorkspaceExecutor,
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
+import {
+  registerCompanionInternalRepositoryTools,
+  type CompanionRepositoryBinder,
+} from "../companion/internal-repository-tools.js";
 
 const catalogMetadataByServer = new WeakMap<McpServer, McpToolCatalogMetadata>();
 
@@ -25,6 +32,8 @@ export interface McpServerAuthOptions {
 export interface McpServerOptions {
   workspaceExecutor: WorkspaceExecutor;
   sourceControlExecutor: SourceControlExecutor;
+  repositoryExecutor?: RepositoryExecutor | undefined;
+  companionRepositoryBinder?: CompanionRepositoryBinder | undefined;
   browser?: BrowserExecutor | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
@@ -62,6 +71,13 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     sourceControlExecutor: options.sourceControlExecutor,
   });
 
+  registerRepositoryTools(server, options.repositoryExecutor ?? unavailableRepositoryExecutor(), {
+    securitySchemes,
+    ...(options.operationContextFactory === undefined
+      ? {}
+      : { operationContextFactory: options.operationContextFactory }),
+  });
+
   registerSourceControlTools(server, options.sourceControlExecutor, {
     ...(options.auth === undefined ? {} : { auth: options.auth }),
     securitySchemes,
@@ -78,6 +94,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       ? {}
       : { operationContextFactory: options.operationContextFactory }),
   });
+
+  if (options.companionRepositoryBinder) {
+    registerCompanionInternalRepositoryTools(server, options.companionRepositoryBinder);
+  }
 
   const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);
   Object.assign(catalog, finalizedCatalog);

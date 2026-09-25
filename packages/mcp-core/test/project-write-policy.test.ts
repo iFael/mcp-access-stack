@@ -43,7 +43,7 @@ describe("auto write policy", () => {
 
     expect(upgraded.permissionProfile).toBe("full-repo-write");
     expect(upgraded.allowWrites).toEqual(["."]);
-    expect(upgraded.allowedShells).toEqual(["powershell", "pwsh", "cmd", "wsl", "git-bash"]);
+    expect(upgraded.allowedShells).toEqual(["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"]);
   });
 
   it("upgrades workspaces under the project root", () => {
@@ -58,7 +58,7 @@ describe("auto write policy", () => {
 
     expect(upgraded.permissionProfile).toBe("full-repo-write");
     expect(upgraded.allowWrites).toEqual(["."]);
-    expect(upgraded.allowedShells).toEqual(["powershell", "pwsh", "cmd", "wsl", "git-bash"]);
+    expect(upgraded.allowedShells).toEqual(["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"]);
     expect(upgraded.workspaceKind).toBeUndefined();
   });
 

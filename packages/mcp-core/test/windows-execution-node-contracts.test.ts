@@ -19,7 +19,7 @@ function createBundledNodeManifest() {
     integrityRoot: "signed-distribution-manifest" as const,
     services: [
       { id: "edge-runtime" as const, entryArtifactId: "edge-host" },
-      { id: "browser-worker" as const, entryArtifactId: "browser-native-launcher" },
+      { id: "browser-worker" as const, entryArtifactId: "node-host-launcher" },
     ],
     artifacts: [
       {
@@ -55,8 +55,8 @@ function createBundledNodeManifest() {
         authenticodeRequired: false,
       },
       {
-        id: "browser-native-launcher",
-        owner: "browser-worker" as const,
+        id: "node-host-launcher",
+        owner: "shared" as const,
         path: "compat/McpNodeHostLauncher.exe",
         sha256,
         sizeBytes: 60,
@@ -105,14 +105,14 @@ describe("Windows Edge execution contracts", () => {
     expect(windowsExecutionReleaseManifestSchema.parse(manifest).artifacts).toHaveLength(initialArtifactCount + 1);
   });
 
-  it("requires every service entry artifact to exist, belong to that service and be signed", () => {
+  it("requires every service entry artifact to exist, be service-owned or shared, and be signed", () => {
     const missing = createBundledNodeManifest();
     missing.services[0]!.entryArtifactId = "missing-entry";
     expect(() => windowsExecutionReleaseManifestSchema.parse(missing)).toThrow(/entry artifact/u);
 
     const wrongOwner = createBundledNodeManifest();
     wrongOwner.artifacts[0]!.owner = "browser-worker";
-    expect(() => windowsExecutionReleaseManifestSchema.parse(wrongOwner)).toThrow(/owned by edge-runtime/u);
+    expect(() => windowsExecutionReleaseManifestSchema.parse(wrongOwner)).toThrow(/owned by edge-runtime or shared/u);
 
     const unsigned = createBundledNodeManifest();
     unsigned.artifacts[0]!.authenticodeRequired = false;

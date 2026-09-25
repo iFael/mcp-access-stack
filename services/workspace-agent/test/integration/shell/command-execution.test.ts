@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { afterEach, describe, expect, test, jest } from "@jest/globals";
-import { LocalAgent } from "../../../src/index.js";
+import { LocalAgent, type ElevationBroker } from "../../../src/index.js";
 import { CommandConfirmationRegistry } from "../../../src/shell/confirmation.js";
 import { classifyCommandRisk } from "../../../src/shell/command-risk.js";
 import {
@@ -116,6 +116,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
     };
     const confirmation = registry.create(binding);
 
@@ -134,6 +135,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
     };
     const confirmation = registry.create(binding);
 
@@ -155,6 +157,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "background",
       operation: "cleanup",
+      elevated: false,
     } as const;
     const confirmation = registry.create(backgroundBinding);
 
@@ -186,6 +189,7 @@ describe("command confirmations", () => {
         command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
       };
       const confirmation = registry.create(binding);
       jest.advanceTimersByTime(1_001);
@@ -274,6 +278,83 @@ describe("run command", () => {
         timeoutMs: 30_000,
       }),
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+  });
+
+  test("binds elevation to confirmation and executes only through the injected broker", async () => {
+    fixture = await createWritableShellFixture();
+    const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
+      status: "executed",
+      shell: request.shell,
+      cwd: request.logicalCwd,
+      exitCode: 0,
+      stdout: "elevated-ok\n",
+      stderr: "",
+      timedOut: false,
+    }));
+    const agent = await LocalAgent.create(fixture.policyPath, {
+      elevationBroker: { run },
+    });
+    const command = "Remove-Item 'danger.txt' -Force";
+
+    const normalConfirmation = await agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: false,
+      timeoutMs: 30_000,
+    });
+    if (normalConfirmation.status !== "confirmation_required") {
+      throw new Error("Expected normal confirmation.");
+    }
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      confirmationId: normalConfirmation.confirmationId,
+      timeoutMs: 30_000,
+    })).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+    expect(run).not.toHaveBeenCalled();
+
+    const elevatedConfirmation = await agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      timeoutMs: 30_000,
+    });
+    expect(elevatedConfirmation).toMatchObject({
+      status: "confirmation_required",
+      reasons: expect.arrayContaining([
+        "elevated command requires explicit confirmation",
+      ]),
+    });
+    if (elevatedConfirmation.status !== "confirmation_required") {
+      throw new Error("Expected elevated confirmation.");
+    }
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      confirmationId: elevatedConfirmation.confirmationId,
+      timeoutMs: 30_000,
+    })).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      stdout: "elevated-ok\n",
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: "powershell",
+        command,
+        logicalCwd: ".",
+      }),
+      undefined,
+    );
   });
 
   test("requires confirmation for main push and hard-blocks -C/mirror forms", async () => {

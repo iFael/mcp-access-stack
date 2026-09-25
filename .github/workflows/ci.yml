@@ -594,3 +594,132 @@ jobs:
       - name: Run main browser integration
         run: npm run ci:main:browser
 
+  companion-portability:
+    name: companion-portability-${{ matrix.os }}
+    needs: impact
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+        shell: bash
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build companion portability graph
+        run: |
+          npm run build --workspace @vs-code-gpt/shared
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @vs-code-gpt/local-agent
+          npm run build --workspace @vs-code-gpt/remote-mcp-gateway
+
+      - name: Build Windows browser capability
+        if: runner.os == 'Windows'
+        run: npm run build --workspace @vs-code-gpt/browser-worker
+
+      - name: Test Windows browser, elevation and lifecycle contracts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/unit/companion/local-browser-worker.test.ts
+          node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/shell/elevation-broker.test.ts
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalLifecycle.ps1
+
+      - name: Test platform secure store and repository policy
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
+            services/mcp-gateway/test/unit/companion/platform-oauth-credential-store.test.ts \
+            services/mcp-gateway/test/unit/companion/local-repository-manager.test.ts
+
+      - name: Test native shell process runner
+        run: |
+          node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath \
+            services/workspace-agent/test/integration/shell/process-runner.test.ts
+
+      - name: Validate Unix lifecycle scripts
+        if: runner.os != 'Windows'
+        run: |
+          bash -n deploy/unix/McpV3Local.Common.sh
+          bash -n deploy/linux/Install-McpV3Local.sh
+          bash -n deploy/linux/Update-McpV3Local.sh
+          bash -n deploy/linux/Uninstall-McpV3Local.sh
+          bash -n deploy/macos/Install-McpV3Local.sh
+          bash -n deploy/macos/Update-McpV3Local.sh
+          bash -n deploy/macos/Uninstall-McpV3Local.sh
+          node --check tooling/release/New-McpV3LocalPackage.mjs
+          node --check tooling/release/Verify-McpV3LocalPackage.mjs
+          node --check tooling/release/New-McpV3LinuxDeb.mjs
+          node --check tooling/release/New-McpV3MacPkg.mjs
+
+      - name: Build immutable Unix local package
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify HEAD^{commit})"
+          output="$RUNNER_TEMP/mcp-v3-local-package"
+          node tooling/release/New-McpV3LocalPackage.mjs \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --source-commit "$source_commit" \
+            --edge-base-url "https://example.invalid/" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --output "$output"
+          "$output/runtime/node/node" --version
+          test -f "$output/node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js"
+          test -f "$output/deploy/unix/McpV3Local.Common.sh"
+          test -f "$output/mcp-v3-local-manifest.json"
+          bash deploy/unix/Test-McpV3LocalLifecycle.sh \
+            --package-root "$output" \
+            --expected-edge "https://example.invalid/"
+
+      - name: Build Linux native package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/mcp-v3-local.deb"
+          node tooling/release/New-McpV3LinuxDeb.mjs \
+            --package-root "$RUNNER_TEMP/mcp-v3-local-package" \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --compression-level 1 \
+            --output "$deb"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" | grep -E '^-rw-r--r-- .*\./usr/share/applications/mcp-v3\.desktop$'
+          dpkg-deb --contents "$deb" | grep -F './usr/bin/mcp-v3'
+          dpkg-deb --field "$deb" Depends | grep -F 'libsecret-tools'
+
+      - name: Build macOS native package
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/mcp-v3-local.pkg"
+          node tooling/release/New-McpV3MacPkg.mjs \
+            --package-root "$RUNNER_TEMP/mcp-v3-local-package" \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --output "$pkg"
+          pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3'
+          pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3-local-install'
+          pkgutil --payload-files "$pkg" | grep -F 'Library/Application Support/MCP V3/Bootstrap'
+

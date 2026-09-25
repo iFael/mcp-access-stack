@@ -18,6 +18,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExecutionNodeNativeDirectory,
 
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^https://')]
+    [string]$EdgeBaseUrl,
+
     [ValidateRange(0, 9223372036854775807)]
     [long]$BuildRunId = 0
 )
@@ -28,6 +32,21 @@ $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $executionNodeNative = [System.IO.Path]::GetFullPath($ExecutionNodeNativeDirectory)
+try {
+    $edgeUri = [Uri]$EdgeBaseUrl
+}
+catch {
+    throw 'EdgeBaseUrl must be a valid HTTPS origin.'
+}
+if (-not $edgeUri.IsAbsoluteUri -or
+    $edgeUri.Scheme -ne 'https' -or
+    -not [string]::IsNullOrWhiteSpace($edgeUri.UserInfo) -or
+    -not [string]::IsNullOrWhiteSpace($edgeUri.Query) -or
+    -not [string]::IsNullOrWhiteSpace($edgeUri.Fragment) -or
+    $edgeUri.AbsolutePath -ne '/') {
+    throw 'EdgeBaseUrl must be a credential-free HTTPS origin with no path, query or fragment.'
+}
+$edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority) + '/'
 $publicCommonPath = Join-Path $root 'deploy\windows\PublicDistribution.Common.ps1'
 . $publicCommonPath
 $publicSignerCertificatePath = Join-Path $root 'deploy\windows\mcp-access-stack-code-signing.cer'
@@ -118,6 +137,12 @@ $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
     'deploy\windows\Install-McpAccessStack.ps1',
+    'deploy\windows\Install-McpV3Local.ps1',
+    'deploy\windows\Install-McpV3LocalTask.ps1',
+    'deploy\windows\Install-McpV3LocalUpdateTask.ps1',
+    'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1',
+    'deploy\windows\Update-McpV3Local.ps1',
+    'deploy\windows\Uninstall-McpV3Local.ps1',
     'deploy\windows\Start-McpAccessStackCutover.ps1',
     'deploy\windows\Invoke-McpAccessStackCutoverBroker.ps1',
     'deploy\windows\PublicDistribution.Common.ps1',
@@ -153,6 +178,12 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeOwnerOAuthBoo
 Copy-Item -LiteralPath $edgeOwnerOAuthBootstrapSource -Destination $edgeOwnerOAuthBootstrapTarget
 $edgeRecoveryReleaseFiles = @(
     'Repair-McpEdgeConnectorTask.ps1',
+    'Install-McpV3Local.ps1',
+    'Install-McpV3LocalTask.ps1',
+    'Install-McpV3LocalUpdateTask.ps1',
+    'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'Update-McpV3Local.ps1',
+    'Uninstall-McpV3Local.ps1',
     'Update-McpAccessStack.ps1',
     'Start-McpAccessStackCutover.ps1',
     'Invoke-McpAccessStackCutoverBroker.ps1',
@@ -180,7 +211,8 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
 $expectedNativeArtifacts = @(
     'McpEdgeHost.exe',
     'McpNodeHostLauncher.exe',
-    'McpCredentialBroker.exe'
+    'McpCredentialBroker.exe',
+    'McpElevationBroker.exe'
 )
 foreach ($name in $expectedNativeArtifacts) {
     $source = Join-Path $executionNodeNative $name
@@ -195,6 +227,7 @@ New-Item -ItemType Directory -Force -Path $nativeTarget, $compatTarget | Out-Nul
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpEdgeHost.exe') -Destination (Join-Path $nativeTarget 'McpEdgeHost.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpNodeHostLauncher.exe') -Destination (Join-Path $compatTarget 'McpNodeHostLauncher.exe')
 Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpCredentialBroker.exe') -Destination (Join-Path $compatTarget 'McpCredentialBroker.exe')
+Copy-Item -LiteralPath (Join-Path $executionNodeNative 'McpElevationBroker.exe') -Destination (Join-Path $nativeTarget 'McpElevationBroker.exe')
 
 $nodeVersion = [string]$releaseManifest.nodeVersion
 if ($nodeVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
@@ -263,7 +296,8 @@ try {
     $edgeHostExecutablePath = Join-Path $releaseTarget 'native\McpEdgeHost.exe'
     $compatLauncherPath = Join-Path $releaseTarget 'compat\McpNodeHostLauncher.exe'
     $compatBrokerPath = Join-Path $releaseTarget 'compat\McpCredentialBroker.exe'
-    foreach ($nativeExecutable in @($edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath)) {
+    $elevationBrokerPath = Join-Path $releaseTarget 'native\McpElevationBroker.exe'
+    foreach ($nativeExecutable in @($edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath, $elevationBrokerPath)) {
         Sign-Script -Path $nativeExecutable -Certificate $certificate
     }
 
@@ -310,15 +344,18 @@ try {
         integrityRoot = 'signed-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
-            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'browser-native-launcher' }
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },
+            [ordered]@{ id = 'local-companion'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
             (New-ExecutionNodeArtifactRecord -Id 'edge-host' -Owner 'edge-runtime' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Id 'edge-connector' -Owner 'edge-runtime' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Id 'edge-validation-launcher' -Owner 'edge-runtime' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Id 'browser-worker-server' -Owner 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Id 'browser-native-launcher' -Owner 'browser-worker' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'local-companion-runtime' -Owner 'shared' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Id 'node-host-launcher' -Owner 'shared' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Id 'browser-credential-broker' -Owner 'browser-worker' -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'elevation-broker' -Owner 'shared' -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $true),
             (New-ExecutionNodeArtifactRecord -Id 'node-runtime' -Owner 'shared' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }
@@ -386,6 +423,7 @@ try {
         releaseId = $ReleaseId
         version = $ReleaseId
         commit = $SourceCommit
+        edgeBaseUrl = $edgeOrigin
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         files = $distributionFiles
     }
