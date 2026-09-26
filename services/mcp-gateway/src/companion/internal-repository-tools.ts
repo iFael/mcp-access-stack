@@ -74,6 +74,18 @@ export interface CompanionRepositoryBinder {
   }>;
 }
 
+function toBoundRepository(value: {
+  repositoryId: string;
+  workspaceId: string;
+  path: string;
+}): z.infer<typeof boundRepositorySchema> {
+  return {
+    repositoryId: value.repositoryId,
+    workspaceId: value.workspaceId,
+    path: value.path,
+  };
+}
+
 export function registerCompanionInternalRepositoryTools(
   server: McpServer,
   binder: CompanionRepositoryBinder,
@@ -99,7 +111,9 @@ export function registerCompanionInternalRepositoryTools(
         input.dryRun,
         input.mode,
       );
-      const structuredContent = bindRepositoriesResultSchema.parse({ bound });
+      const structuredContent = bindRepositoriesResultSchema.parse({
+        bound: bound.map(toBoundRepository),
+      });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }],
         structuredContent,
@@ -134,7 +148,7 @@ export function registerCompanionInternalRepositoryTools(
         input.dryRun,
       );
       const structuredContent = materializeRepositoryResultSchema.parse({
-        materialization,
+        materialization: toBoundRepository(materialization),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }],

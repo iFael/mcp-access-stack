@@ -1,7 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, jest } from "@jest/globals";
-import { COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL } from "@mcp-access-stack/edge-protocol";
+import {
+  COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL,
+  COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+} from "@mcp-access-stack/edge-protocol";
 import {
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolContractRevision,
@@ -65,11 +68,31 @@ describe("MCP public catalog stability", () => {
       repositoryId: binding.repositoryId,
       workspaceId: binding.workspaceId,
       path: binding.path,
+      name: "fixture",
+      remoteUrls: ["https://example.invalid/fixture.git"],
+      managed: false,
     })));
+    const materializeRepositoryFromCloud = jest.fn(async (input: {
+      repositoryId: string;
+      name: string;
+      remoteUrls: string[];
+      targetName?: string;
+      workspaceId?: string;
+    }) => ({
+      repositoryId: input.repositoryId,
+      workspaceId: input.workspaceId ?? "fixture",
+      path: "C:/managed/fixture",
+      name: input.name,
+      remoteUrls: input.remoteUrls,
+      managed: true,
+    }));
     const server = createMcpServer({
       workspaceExecutor: executor,
       sourceControlExecutor: executor,
-      companionRepositoryBinder: { bindRepositories },
+      companionRepositoryBinder: {
+        bindRepositories,
+        materializeRepositoryFromCloud,
+      },
     });
     const client = new Client(
       { name: "companion-internal-catalog", version: "0.0.0" },
@@ -85,6 +108,7 @@ describe("MCP public catalog stability", () => {
       const listed = await client.listTools();
       expect(listed.tools).toHaveLength(89);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL)).toBe(false);
+      expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL)).toBe(false);
 
       const repositoryId = "repo_11111111-1111-4111-8111-111111111111";
       const result = await client.callTool({
@@ -108,6 +132,26 @@ describe("MCP public catalog stability", () => {
           workspaceId: "fixture",
           path: "C:/fixture",
         }],
+      });
+
+      const materialized = await client.callTool({
+        name: COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+        arguments: {
+          repositoryId,
+          name: "fixture",
+          remoteUrls: ["https://example.invalid/fixture.git"],
+          workspaceId: "fixture",
+          dryRun: true,
+        },
+      });
+
+      expect(materializeRepositoryFromCloud).toHaveBeenCalledTimes(1);
+      expect(materialized.structuredContent).toEqual({
+        materialization: {
+          repositoryId,
+          workspaceId: "fixture",
+          path: "C:/managed/fixture",
+        },
       });
     } finally {
       await client.close().catch(() => undefined);
