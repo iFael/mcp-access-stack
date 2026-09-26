@@ -682,7 +682,7 @@ jobs:
       - name: Test real Windows native launcher through Task Scheduler
         if: runner.os == 'Windows'
         shell: pwsh
-        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -DirectFirst
 
       - name: Test platform secure store and repository policy
         run: |

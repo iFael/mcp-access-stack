@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$LauncherPath,
-    [string]$NodePath
+    [string]$NodePath,
+    [switch]$DirectFirst
 )
 
 Set-StrictMode -Version Latest
@@ -12,8 +13,14 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 }
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$taskName = 'MCP V3 CI native launcher smoke'
-$testRoot = Join-Path $env:RUNNER_TEMP 'MCP V3 native launcher smoke'
+$taskName = 'MCP V3 native launcher smoke'
+$tempBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    [IO.Path]::GetTempPath()
+}
+else {
+    [IO.Path]::GetFullPath($env:RUNNER_TEMP)
+}
+$testRoot = Join-Path $tempBase 'MCP V3 native launcher smoke'
 $nativeOutput = Join-Path $testRoot 'native'
 $workingDirectory = Join-Path $testRoot 'release root with spaces'
 $logsRoot = Join-Path $testRoot 'logs'
@@ -134,6 +141,62 @@ try {
         '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$markerPath")),
         '--', (Quote-TestArgument $scriptPath)
     ) -join ' '
+
+    if ($DirectFirst) {
+        $directMarkerPath = Join-Path $testRoot 'direct-child-started.txt'
+        $directStdoutLog = Join-Path $logsRoot 'direct-launcher.stdout.log'
+        $directStderrLog = Join-Path $logsRoot 'direct-launcher.stderr.log'
+        $directArguments = @(
+            '--node', (Quote-TestArgument $nodeUnderTest),
+            '--stdout-log', (Quote-TestArgument $directStdoutLog),
+            '--stderr-log', (Quote-TestArgument $directStderrLog),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$directMarkerPath")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+
+        $directProcess = Start-Process             -FilePath $launcherUnderTest             -ArgumentList $directArguments             -WorkingDirectory $workingDirectory             -PassThru
+        $directDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ([DateTime]::UtcNow -lt $directDeadline) {
+            if (Test-Path -LiteralPath $directMarkerPath -PathType Leaf) {
+                break
+            }
+            if ($directProcess.HasExited) {
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        }
+
+        if (-not (Test-Path -LiteralPath $directMarkerPath -PathType Leaf)) {
+            foreach ($log in @($directStdoutLog, $directStderrLog)) {
+                if (Test-Path -LiteralPath $log -PathType Leaf) {
+                    Write-Output ('DIRECT_LOG_BEGIN={0}' -f $log)
+                    Get-Content -LiteralPath $log -Tail 80
+                    Write-Output ('DIRECT_LOG_END={0}' -f $log)
+                }
+            }
+            $directExit = if ($directProcess.HasExited) { [string]$directProcess.ExitCode } else { 'running' }
+            throw "Direct McpNodeHostLauncher smoke did not start its child process. exit=$directExit"
+        }
+
+        $directStderr = if (Test-Path -LiteralPath $directStderrLog -PathType Leaf) {
+            Get-Content -LiteralPath $directStderrLog -Raw
+        }
+        else {
+            ''
+        }
+        if (-not $directStderr.Contains('native_launcher_starting') -or
+            -not $directStderr.Contains('native_launcher_child_started')) {
+            throw 'Direct native launcher did not write the expected startup evidence.'
+        }
+
+        Write-Output 'MCP V3 direct native launcher smoke passed.'
+        if (-not $directProcess.HasExited) {
+            Stop-Process -Id $directProcess.Id -Force -ErrorAction SilentlyContinue
+            Wait-Process -Id $directProcess.Id -ErrorAction SilentlyContinue
+        }
+    }
 
     $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     if ([string]::IsNullOrWhiteSpace($userId)) {

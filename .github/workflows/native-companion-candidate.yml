@@ -381,7 +381,8 @@ jobs:
           Write-Output ("SIGNED_LAUNCHER_SIGNER={0}" -f [string]$signature.SignerCertificate.Thumbprint)
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 `
             -LauncherPath $launcher `
-            -NodePath $node
+            -NodePath $node `
+            -DirectFirst
 
       - name: Validate signed candidate
         env:
