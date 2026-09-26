@@ -23,7 +23,8 @@ $tempBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 else {
     [IO.Path]::GetFullPath($env:RUNNER_TEMP)
 }
-$testRoot = Join-Path $tempBase 'MCP V3 native launcher smoke'
+$testRoot = Join-Path $tempBase ("MCP V3 native launcher smoke {0}" -f $PID)
+Write-Output ('TEST_ROOT={0}' -f $testRoot)
 $nativeOutput = Join-Path $testRoot 'native'
 $workingDirectory = Join-Path $testRoot 'release root with spaces'
 $logsRoot = Join-Path $testRoot 'logs'
@@ -209,6 +210,14 @@ function Invoke-DiagnosticScheduledCase {
     }
     finally {
         Stop-ScheduledTask -TaskName $caseTaskName -ErrorAction SilentlyContinue
+        $stopDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while ([DateTime]::UtcNow -lt $stopDeadline) {
+            $stoppingTask = Get-ScheduledTask -TaskName $caseTaskName -ErrorAction SilentlyContinue
+            if (-not $stoppingTask -or $stoppingTask.State -ne 'Running') {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
         Unregister-ScheduledTask -TaskName $caseTaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
 }
@@ -681,6 +690,25 @@ try {
 }
 finally {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $mainStopDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ([DateTime]::UtcNow -lt $mainStopDeadline) {
+        $mainStoppingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if (-not $mainStoppingTask -or $mainStoppingTask.State -ne 'Running') {
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+    for ($cleanupAttempt = 0; $cleanupAttempt -lt 20; $cleanupAttempt++) {
+        try {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction Stop
+            break
+        }
+        catch {
+            if ($cleanupAttempt -eq 19) {
+                throw
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
