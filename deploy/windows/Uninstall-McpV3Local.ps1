@@ -36,11 +36,7 @@ Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
-if ([string]::IsNullOrWhiteSpace([string]$env:LOCALAPPDATA)) {
-    throw 'LOCALAPPDATA is required for the per-user MCP V3 local uninstall.'
-}
-
-$defaultStateRoot = Join-Path $env:LOCALAPPDATA 'MCP V3'
+$defaultStateRoot = Get-McpV3LocalDefaultStateRoot
 $state = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($StateRoot)) { $defaultStateRoot } else { $StateRoot }))
 $installation = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($InstallationRoot)) { Join-Path $state 'App' } else { $InstallationRoot }))
 $managedRoot = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($ManagedRepositoriesRoot)) { Join-Path (Join-Path $HOME 'MCP V3') 'Repositórios' } else { $ManagedRepositoriesRoot }))

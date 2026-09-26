@@ -43,11 +43,7 @@ Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
-if ([string]::IsNullOrWhiteSpace([string]$env:LOCALAPPDATA)) {
-    throw 'LOCALAPPDATA is required for the per-user MCP V3 local installation.'
-}
-
-$defaultStateRoot = Join-Path $env:LOCALAPPDATA 'MCP V3'
+$defaultStateRoot = Get-McpV3LocalDefaultStateRoot
 $state = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($StateRoot)) { $defaultStateRoot } else { $StateRoot }))
 $installation = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($InstallationRoot)) { Join-Path $state 'App' } else { $InstallationRoot }))
 
@@ -131,6 +127,24 @@ if ($activeReleaseId -ne $releaseId -and $candidateReleaseId -ne $releaseId) {
     }
     $staged = $true
 }
+
+$targetReleaseRoot = Join-Path $installation ("releases\$releaseId")
+$targetVerification = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $targetReleaseRoot -ExpectedReleaseId $releaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$targetManifest = $targetVerification.executionManifest
+$launcherRecord = @($targetManifest.artifacts | Where-Object { [string]$_.id -eq 'node-host-launcher' })
+$nodeRecord = @($targetManifest.artifacts | Where-Object { [string]$_.id -eq 'node-runtime' })
+if ($launcherRecord.Count -ne 1 -or $nodeRecord.Count -ne 1) {
+    throw 'MCP V3 local visibility preflight could not resolve launcher and Node artifacts.'
+}
+$launcherPath = Resolve-McpPublicChildPath -Root $targetReleaseRoot -RelativePath ([string]$launcherRecord[0].path)
+$nodePath = Resolve-McpPublicChildPath -Root $targetReleaseRoot -RelativePath ([string]$nodeRecord[0].path)
+Assert-McpWindowsScheduledTaskPathVisibility -Paths @(
+    $state,
+    $installation,
+    $targetReleaseRoot,
+    $launcherPath,
+    $nodePath
+) -TaskNamePrefix "$TaskName visibility preflight"
 
 $switchResult = & $switchScript -InstallationRoot $installation -StateRoot $state -TargetReleaseId $releaseId -TaskName $TaskName -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ([string]$switchResult.status -ne 'active' -or [string]$switchResult.releaseId -ne $releaseId) {

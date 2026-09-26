@@ -68,6 +68,10 @@ Assert-ContainsAll -Label 'MCP V3 local installer' -Source $installer -Tokens @(
     'Stage-McpWindowsExecutionNodeCandidate.ps1',
     'Invoke-McpV3LocalReleaseSwitch.ps1',
     'Install-McpV3LocalUpdateTask.ps1',
+    'Get-McpV3LocalDefaultStateRoot',
+    'Assert-McpWindowsScheduledTaskPathVisibility',
+    "Where-Object { [string]$_.id -eq 'node-host-launcher' }",
+    "Where-Object { [string]$_.id -eq 'node-runtime' }",
     '[string]$distribution.edgeBaseUrl',
     'edgeBaseUrl = $edgeOrigin',
     'No connector token or manual workspace policy is required.'
@@ -76,7 +80,8 @@ Assert-ContainsNone -Label 'MCP V3 local installer' -Source $installer -Tokens @
     'ConnectorTokenFile',
     'OwnerTokenFile',
     'PolicyPath',
-    'MCP_CONNECTOR_TOKEN'
+    'MCP_CONNECTOR_TOKEN',
+    "Join-Path $env:LOCALAPPDATA 'MCP V3'"
 )
 
 $switch = Read-ProjectFile 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'
@@ -93,6 +98,7 @@ $updater = Read-ProjectFile 'deploy\windows\Update-McpV3Local.ps1'
 Assert-ContainsAll -Label 'MCP V3 local updater' -Source $updater -Tokens @(
     'Update-McpAccessStack.ps1',
     'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'Get-McpV3LocalDefaultStateRoot',
     "status = 'up-to-date'",
     "status = 'updated'"
 )
@@ -115,6 +121,7 @@ Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -
 $uninstaller = Read-ProjectFile 'deploy\windows\Uninstall-McpV3Local.ps1'
 Assert-ContainsAll -Label 'MCP V3 local uninstaller' -Source $uninstaller -Tokens @(
     'Test-McpWindowsAccountIdentityEquivalent',
+    'Get-McpV3LocalDefaultStateRoot',
     '--mode delete --target $target',
     '[switch]$PurgeRepositories',
     'repositoriesPreserved = -not [bool]$PurgeRepositories',
@@ -138,6 +145,10 @@ Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -To
 
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'
 Assert-ContainsAll -Label 'MCP V3 execution manifest verifier' -Source $executionCommon -Tokens @(
+    'Get-McpV3LocalDefaultStateRoot',
+    "Join-Path (Join-Path $profileRoot 'MCP V3') 'Local'",
+    'Assert-McpWindowsScheduledTaskPathVisibility',
+    'Filesystem redirection or virtualization is active.',
     "'edge-runtime', 'browser-worker', 'local-companion'",
     "'local-companion-runtime'",
     'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js'

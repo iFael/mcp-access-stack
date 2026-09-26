@@ -4,6 +4,119 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-McpV3LocalDefaultStateRoot {
+    $profileRoot = [string]$env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($profileRoot)) {
+        $profileRoot = [string]$HOME
+    }
+    if ([string]::IsNullOrWhiteSpace($profileRoot)) {
+        throw 'USERPROFILE or HOME is required for the per-user MCP V3 local root.'
+    }
+    return [IO.Path]::GetFullPath((Join-Path (Join-Path $profileRoot 'MCP V3') 'Local'))
+}
+
+function Assert-McpWindowsScheduledTaskPathVisibility {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Paths,
+        [string]$TaskNamePrefix = 'MCP V3 path visibility preflight',
+        [ValidateRange(1, 60)][int]$WaitSeconds = 15
+    )
+
+    if ($Paths.Count -eq 0) {
+        throw 'Scheduled Task path visibility preflight requires at least one path.'
+    }
+
+    $resolvedPaths = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in $Paths) {
+        if ([string]::IsNullOrWhiteSpace([string]$path)) {
+            throw 'Scheduled Task path visibility preflight received an empty path.'
+        }
+        $resolved = [IO.Path]::GetFullPath([string]$path)
+        if (-not (Test-Path -LiteralPath $resolved)) {
+            throw "MCP V3 path is missing before Scheduled Task visibility preflight: $resolved"
+        }
+        $resolvedPaths.Add($resolved)
+    }
+
+    $profileRoot = [string]$env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($profileRoot)) {
+        $profileRoot = [string]$HOME
+    }
+    if ([string]::IsNullOrWhiteSpace($profileRoot)) {
+        throw 'USERPROFILE or HOME is required for Scheduled Task path visibility preflight.'
+    }
+    $profileRoot = [IO.Path]::GetFullPath($profileRoot)
+
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
+        throw "Windows PowerShell was not found for Scheduled Task path visibility preflight: $powershell"
+    }
+
+    $probeId = [guid]::NewGuid().ToString('N')
+    $taskName = "$TaskNamePrefix $probeId"
+    $resultPath = Join-Path $profileRoot (".mcp-v3-path-visibility-$probeId.json")
+    $payload = [ordered]@{
+        paths = @($resolvedPaths)
+        resultPath = $resultPath
+    } | ConvertTo-Json -Compress
+    $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    $probeScript = @(
+        ('$payload=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(''{0}''))|ConvertFrom-Json' -f $payloadBase64),
+        '$results=@($payload.paths|ForEach-Object{[pscustomobject]@{path=[string]$_;visible=[bool](Test-Path -LiteralPath ([string]$_))}})',
+        '[IO.File]::WriteAllText([string]$payload.resultPath,(($results|ConvertTo-Json -Compress)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))',
+        'if(@($results|Where-Object{-not $_.visible}).Count -gt 0){exit 3}else{exit 0}'
+    ) -join ';'
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeScript))
+    $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -EncodedCommand $encodedCommand"
+
+    $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if ([string]::IsNullOrWhiteSpace($userId)) {
+        throw 'Current Windows user identity could not be resolved for Scheduled Task path visibility preflight.'
+    }
+
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $profileRoot
+    $task = New-ScheduledTask -Action $action -Principal $principal -Settings $settings -Description 'Verifies MCP V3 installation paths from the external Scheduled Task context.'
+
+    try {
+        Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+        Start-ScheduledTask -TaskName $taskName
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds($WaitSeconds)
+        do {
+            if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+                break
+            }
+            $taskState = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($taskState -and $taskInfo -and
+                [string]$taskState.State -eq 'Ready' -and
+                [int64]$taskInfo.LastTaskResult -ne 267009) {
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+        if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+            $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+            $lastTaskResult = if ($taskInfo) { [string][int64]$taskInfo.LastTaskResult } else { 'unavailable' }
+            throw "MCP V3 Scheduled Task path visibility preflight produced no evidence. LastTaskResult=$lastTaskResult"
+        }
+
+        $results = @(Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json)
+        $invisible = @($results | Where-Object { $_.visible -ne $true })
+        if ($invisible.Count -gt 0) {
+            $missing = ($invisible | ForEach-Object { [string]$_.path }) -join '; '
+            throw "MCP V3 installation path is not visible from Scheduled Task context: $missing. Filesystem redirection or virtualization is active."
+        }
+    }
+    finally {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-McpWindowsExecutionNodeSignature {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
