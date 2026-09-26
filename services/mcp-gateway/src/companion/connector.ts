@@ -145,7 +145,7 @@ export class CompanionConnector {
       token = await this.options.oauth.getAccessToken(signal);
     } catch (error) {
       this.log({ event: "local_runtime_auth_failed", reason: errorName(error) });
-      return {};
+      return false;
     }
 
     return new Promise<boolean>((resolve) => {
