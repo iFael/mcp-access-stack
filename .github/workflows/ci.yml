@@ -694,6 +694,17 @@ jobs:
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -RelocationMatrix
 
+      - name: Diagnose Windows Scheduled Task path prefix matrix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nodePath = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $releaseRoot = Join-Path $env:LOCALAPPDATA 'MCP V3\App\releases\0.0.0-ci.path-prefix'
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 `
+            -NodePath $nodePath `
+            -PathPrefixMatrix `
+            -PathPrefixReleaseRoot $releaseRoot
+
       - name: Test platform secure store and repository policy
         run: |
           node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
