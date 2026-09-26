@@ -70,8 +70,8 @@ Assert-ContainsAll -Label 'MCP V3 local installer' -Source $installer -Tokens @(
     'Install-McpV3LocalUpdateTask.ps1',
     'Get-McpV3LocalDefaultStateRoot',
     'Assert-McpWindowsScheduledTaskPathVisibility',
-    "Where-Object { [string]$_.id -eq 'node-host-launcher' }",
-    "Where-Object { [string]$_.id -eq 'node-runtime' }",
+    'Where-Object { [string]$_.id -eq ''node-host-launcher'' }',
+    'Where-Object { [string]$_.id -eq ''node-runtime'' }',
     '[string]$distribution.edgeBaseUrl',
     'edgeBaseUrl = $edgeOrigin',
     'No connector token or manual workspace policy is required.'
@@ -146,7 +146,7 @@ Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -To
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'
 Assert-ContainsAll -Label 'MCP V3 execution manifest verifier' -Source $executionCommon -Tokens @(
     'Get-McpV3LocalDefaultStateRoot',
-    "Join-Path (Join-Path $profileRoot 'MCP V3') 'Local'",
+    'Join-Path (Join-Path $profileRoot ''MCP V3'') ''Local''',
     'Assert-McpWindowsScheduledTaskPathVisibility',
     'Filesystem redirection or virtualization is active.',
     "'edge-runtime', 'browser-worker', 'local-companion'",
