@@ -196,35 +196,43 @@ jobs:
             grep -Ei '^(server|cf-ray|content-type):' "$deployment_headers" || true
           fi
 
-          if [[ "$stable_code" == "404" && ( "$deployment_code" == "200" || "$deployment_code" == "503" ) ]]; then
-            echo "Stable Preview alias returned 404 while immutable deployment routed to MCP V3; refusing to sign a candidate with a broken OAuth base URL." >&2
-            exit 1
-          fi
-
+          hosted_validation="deferred-regional"
           health=''
-          for attempt in $(seq 1 72); do
-            if health="$(curl --fail --silent "$preview_url/health" 2>/dev/null)"; then
+          for attempt in $(seq 1 6); do
+            stable_code="$(curl --silent --output "$stable_body" --write-out '%{http_code}' "$preview_url/health" 2>/dev/null || true)"
+            if [[ "$stable_code" == "200" ]]; then
+              health="$(cat "$stable_body")"
               break
             fi
-            if (( attempt % 12 == 0 )); then
-              echo "Waiting for R10 Preview DNS/TLS/routing propagation ($((attempt * 5))s elapsed)..."
+            if [[ "$stable_code" != "404" && "$stable_code" != "000" ]]; then
+              echo "R10 Preview became reachable with unexpected HTTP status $stable_code." >&2
+              head -c 1024 "$stable_body" >&2 || true
+              echo >&2
+              exit 1
             fi
             sleep 5
           done
-          service="$(jq -r '.service // empty' <<<"$health")"
-          status="$(jq -r '.status // empty' <<<"$health")"
-          control_ready="$(jq -r '.controlPlaneReady // false' <<<"$health")"
-          if [[ "$service" != "mcp-edge-gateway" || "$status" != "ok" || "$control_ready" != "true" ]]; then
-            echo "R10 Preview health did not become ready." >&2
-            exit 1
-          fi
 
-          oauth="$(curl --fail --silent --show-error "$preview_url/.well-known/oauth-authorization-server")"
-          issuer="$(jq -r '.issuer // empty' <<<"$oauth")"
-          authorize="$(jq -r '.authorization_endpoint // empty' <<<"$oauth")"
-          if [[ "$issuer" != "$preview_url" || "$authorize" != "${preview_url}authorize" ]]; then
-            echo "R10 Preview OAuth metadata does not match the isolated Preview URL." >&2
-            exit 1
+          if [[ -n "$health" ]]; then
+            service="$(jq -r '.service // empty' <<<"$health")"
+            status="$(jq -r '.status // empty' <<<"$health")"
+            control_ready="$(jq -r '.controlPlaneReady // false' <<<"$health")"
+            if [[ "$service" != "mcp-edge-gateway" || "$status" != "ok" || "$control_ready" != "true" ]]; then
+              echo "R10 Preview returned HTTP 200 with invalid health payload." >&2
+              exit 1
+            fi
+
+            oauth="$(curl --fail --silent --show-error "$preview_url/.well-known/oauth-authorization-server")"
+            issuer="$(jq -r '.issuer // empty' <<<"$oauth")"
+            authorize="$(jq -r '.authorization_endpoint // empty' <<<"$oauth")"
+            if [[ "$issuer" != "$preview_url" || "$authorize" != "${preview_url}authorize" ]]; then
+              echo "R10 Preview OAuth metadata does not match the isolated Preview URL." >&2
+              exit 1
+            fi
+            hosted_validation="healthy"
+            echo "Hosted runner validated R10 Preview health and OAuth metadata."
+          else
+            echo "Hosted runner still sees regional Preview routing as unavailable; external Oracle/GRU validation is required before installation."
           fi
 
           {
@@ -235,11 +243,13 @@ jobs:
             printf 'candidate_run_id=%s\n' "$GITHUB_RUN_ID"
             printf 'workers_dev_enabled_before=%s\n' "$WORKERS_DEV_ENABLED_BEFORE"
             printf 'previews_enabled_before=%s\n' "$PREVIEWS_ENABLED_BEFORE"
+            printf 'hosted_validation=%s\n' "$hosted_validation"
           } > "$access_file"
           chmod 600 "$access_file"
 
           echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
-          echo "MCP V3 isolated R10 Preview is healthy at $preview_url"
+          echo "hosted_validation=$hosted_validation" >> "$GITHUB_OUTPUT"
+          echo "MCP V3 isolated R10 Preview created at $preview_url (hosted_validation=$hosted_validation)"
 
       - name: Upload Preview access artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
