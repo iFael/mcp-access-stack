@@ -217,6 +217,8 @@ describe("CompanionConnector end-to-end", () => {
       displayName: "Integration Device",
       reconnectMinMs: 10,
       reconnectMaxMs: 20,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 120_000,
       webSocketFactory: (url, options) => {
         requestedEdgeUrl = url.href;
         return new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options);
@@ -330,4 +332,104 @@ describe("CompanionConnector end-to-end", () => {
     controller.abort();
     await withTimeout(runPromise, "connector shutdown");
   }, 20_000);
+
+  it("reconnects when a registered companion socket stops acknowledging heartbeats", async () => {
+    const temporaryRoot = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-heartbeat-")),
+    );
+    temporaryRoots.push(temporaryRoot);
+    const repositories = await LocalRepositoryManager.create({
+      stateDirectory: path.join(temporaryRoot, "state"),
+      managedRoot: path.join(temporaryRoot, "managed"),
+      homeDirectory: temporaryRoot,
+    });
+
+    let storedCredential: DesktopOAuthRefreshCredential | null = {
+      clientId: "client-heartbeat",
+      scope: "workspaces:read",
+      refreshToken: "refresh-heartbeat",
+    };
+    const oauth = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: {
+        read: async () => storedCredential ? { ...storedCredential } : null,
+        write: async (value) => { storedCredential = { ...value }; },
+        clear: async () => { storedCredential = null; },
+      },
+      fetchImpl: async () => Response.json({
+        access_token: "access-token-heartbeat",
+        refresh_token: "refresh-heartbeat",
+        expires_in: 3600,
+        token_type: "Bearer",
+        scope: "workspaces:read",
+      }),
+      now: () => 1_000,
+    });
+
+    const edgeHttp = createServer();
+    const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/companion" });
+    const edgePort = await listen(edgeHttp);
+    servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
+
+    let connectionCount = 0;
+    let secondConnected!: () => void;
+    const secondConnectedPromise = new Promise<void>((resolve) => { secondConnected = resolve; });
+    edgeWss.on("connection", (socket) => {
+      const connectionNumber = ++connectionCount;
+      socket.send(JSON.stringify({
+        type: "companion-hello",
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+      }));
+      socket.on("message", (data) => {
+        const message = JSON.parse(data.toString("utf8")) as Record<string, unknown>;
+        if (message.type === "companion-ready") {
+          socket.send(JSON.stringify({
+            type: "companion-registered",
+            protocolVersion: COMPANION_PROTOCOL_VERSION,
+            deviceId: DEVICE_ID,
+          }));
+          if (connectionNumber === 2) secondConnected();
+          return;
+        }
+        if (message.type === "companion-heartbeat" && connectionNumber > 1) {
+          socket.send(JSON.stringify({
+            type: "companion-heartbeat-ack",
+            protocolVersion: COMPANION_PROTOCOL_VERSION,
+            heartbeatId: message.heartbeatId,
+          }));
+        }
+      });
+    });
+
+    const logEntries: Array<Record<string, unknown>> = [];
+    const controller = new AbortController();
+    controllers.push(controller);
+    const connector = new CompanionConnector({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      oauth,
+      internalAssertion: INTERNAL_ASSERTION,
+      localBaseUrl: new URL("http://127.0.0.1:1/"),
+      repositories,
+      displayName: "Heartbeat Device",
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+      heartbeatIntervalMs: 20,
+      heartbeatTimeoutMs: 40,
+      webSocketFactory: (_url, options) =>
+        new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options),
+      log: (entry) => { logEntries.push(entry); },
+    });
+
+    const runPromise = connector.run(controller.signal);
+    await withTimeout(secondConnectedPromise, "companion heartbeat reconnect");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(connectionCount).toBe(2);
+    expect(logEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "local_runtime_heartbeat_timeout" }),
+    ]));
+
+    controller.abort();
+    await withTimeout(runPromise, "heartbeat connector shutdown");
+  }, 10_000);
 });

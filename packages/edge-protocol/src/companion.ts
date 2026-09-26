@@ -43,6 +43,18 @@ export type CompanionRegisteredMessage = {
   deviceId: string;
 };
 
+export type CompanionHeartbeatMessage = {
+  type: "companion-heartbeat";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  heartbeatId: string;
+};
+
+export type CompanionHeartbeatAckMessage = {
+  type: "companion-heartbeat-ack";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  heartbeatId: string;
+};
+
 export type CompanionReadyMessage = {
   type: "companion-ready";
   protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
@@ -81,11 +93,13 @@ export type CompanionHttpCancelMessage = {
 export type EdgeToCompanionMessage =
   | CompanionHelloMessage
   | CompanionRegisteredMessage
+  | CompanionHeartbeatAckMessage
   | CompanionHttpRequestMessage
   | CompanionHttpCancelMessage;
 
 export type CompanionToEdgeMessage =
   | CompanionReadyMessage
+  | CompanionHeartbeatMessage
   | CompanionHttpResponseMessage;
 
 export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessage | null {
@@ -102,6 +116,14 @@ export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessa
       registration,
       workspaces,
       materializations,
+    };
+  }
+  if (parsed.type === "companion-heartbeat") {
+    if (!isHeartbeatId(parsed.heartbeatId)) return null;
+    return {
+      type: "companion-heartbeat",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: parsed.heartbeatId,
     };
   }
   if (parsed.type !== "http-response") return null;
@@ -126,6 +148,14 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
   if (parsed.type === "companion-registered") {
     if (!isPrefixedUuid(parsed.deviceId, "dev")) return null;
     return { type: "companion-registered", protocolVersion: COMPANION_PROTOCOL_VERSION, deviceId: parsed.deviceId };
+  }
+  if (parsed.type === "companion-heartbeat-ack") {
+    if (!isHeartbeatId(parsed.heartbeatId)) return null;
+    return {
+      type: "companion-heartbeat-ack",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: parsed.heartbeatId,
+    };
   }
   if (parsed.type === "http-cancel") {
     if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0 || parsed.requestId.length > 128) return null;
@@ -228,6 +258,9 @@ function parsePrincipal(value: unknown): AuthenticatedEdgePrincipal | null {
 function isPrefixedUuid(value: unknown, prefix: "usr" | "repo" | "dev"): value is string {
   return typeof value === "string" &&
     new RegExp(`^${prefix}_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`, "iu").test(value);
+}
+function isHeartbeatId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64 && /^[A-Za-z0-9._-]+$/u.test(value);
 }
 function isMethod(value: unknown): value is EdgeHttpMethod { return value === "GET" || value === "POST" || value === "DELETE"; }
 function isPlatform(value: unknown): value is CompanionPlatform { return value === "windows" || value === "linux" || value === "macos" || value === "unknown"; }

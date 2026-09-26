@@ -43,6 +43,32 @@ describe("MCP V3 companion protocol", () => {
     expect(parseCompanionToEdgeMessage(duplicate)).toBeNull();
   });
 
+  it("parses companion heartbeat envelopes strictly", () => {
+    expect(parseCompanionToEdgeMessage(JSON.stringify({
+      type: "companion-heartbeat",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: "42",
+    }))).toEqual({
+      type: "companion-heartbeat",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: "42",
+    });
+    expect(parseEdgeToCompanionMessage(JSON.stringify({
+      type: "companion-heartbeat-ack",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: "42",
+    }))).toEqual({
+      type: "companion-heartbeat-ack",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: "42",
+    });
+    expect(parseCompanionToEdgeMessage(JSON.stringify({
+      type: "companion-heartbeat",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      heartbeatId: "bad heartbeat",
+    }))).toBeNull();
+  });
+
   it("keeps authenticated principals strict on companion execution requests", () => {
     const base = {
       type: "http-request",

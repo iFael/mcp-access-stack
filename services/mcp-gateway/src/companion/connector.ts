@@ -25,6 +25,8 @@ const DEFAULT_MAX_PAYLOAD_BYTES = 24 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 8;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 45_000;
 
 export const DEFAULT_COMPANION_CAPABILITIES = [
   "repositories",
@@ -69,6 +71,8 @@ export interface CompanionConnectorOptions {
   maxConcurrentRequests?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
   webSocketFactory?: (url: URL, options: ClientOptions) => WebSocket;
   log?: (entry: Record<string, unknown>) => void;
 }
@@ -80,6 +84,8 @@ export class CompanionConnector {
   private readonly maxConcurrentRequests: number;
   private readonly reconnectMinMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
   private readonly activeRequests = new Map<string, AbortController>();
   private socket: WebSocket | undefined;
   private stopped = false;
@@ -92,6 +98,12 @@ export class CompanionConnector {
     this.maxConcurrentRequests = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
     this.reconnectMinMs = options.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS;
     this.reconnectMaxMs = options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    if (!Number.isInteger(this.heartbeatIntervalMs) || this.heartbeatIntervalMs <= 0 ||
+        !Number.isInteger(this.heartbeatTimeoutMs) || this.heartbeatTimeoutMs <= 0) {
+      throw new AppError("INVALID_ARGUMENT", "Companion heartbeat intervals must be positive integers.");
+    }
     assertValidEdgeInternalAssertion(options.internalAssertion);
   }
 
@@ -133,12 +145,16 @@ export class CompanionConnector {
       token = await this.options.oauth.getAccessToken(signal);
     } catch (error) {
       this.log({ event: "local_runtime_auth_failed", reason: errorName(error) });
-      return false;
+      return {};
     }
 
     return new Promise<boolean>((resolve) => {
       let protocolReady = false;
       let settled = false;
+      let heartbeatSequence = 0;
+      let pendingHeartbeatId: string | undefined;
+      let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
+      let heartbeatDeadline: ReturnType<typeof setTimeout> | undefined;
       const socketOptions: ClientOptions = {
         headers: { authorization: `Bearer ${token.accessToken}` },
         maxPayload: this.maxPayloadBytes,
@@ -149,9 +165,42 @@ export class CompanionConnector {
         ? this.options.webSocketFactory(this.edgeUrl, socketOptions)
         : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
+      const clearHeartbeat = () => {
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
+        heartbeatInterval = undefined;
+        heartbeatDeadline = undefined;
+        pendingHeartbeatId = undefined;
+      };
+      const startHeartbeat = () => {
+        if (heartbeatInterval) return;
+        heartbeatInterval = setInterval(() => {
+          if (socket.readyState !== WebSocket.OPEN || pendingHeartbeatId !== undefined) return;
+          const heartbeatId = String(++heartbeatSequence);
+          pendingHeartbeatId = heartbeatId;
+          try {
+            socket.send(JSON.stringify({
+              type: "companion-heartbeat",
+              protocolVersion: COMPANION_PROTOCOL_VERSION,
+              heartbeatId,
+            }));
+          } catch {
+            socket.terminate();
+            return;
+          }
+          heartbeatDeadline = setTimeout(() => {
+            if (pendingHeartbeatId !== heartbeatId || socket.readyState !== WebSocket.OPEN) return;
+            this.log({ event: "local_runtime_heartbeat_timeout", heartbeatId });
+            socket.terminate();
+          }, this.heartbeatTimeoutMs);
+          heartbeatDeadline.unref?.();
+        }, this.heartbeatIntervalMs);
+        heartbeatInterval.unref?.();
+      };
       const finish = () => {
         if (settled) return;
         settled = true;
+        clearHeartbeat();
         signal?.removeEventListener("abort", abort);
         if (this.socket === socket) this.socket = undefined;
         resolve(protocolReady);
@@ -162,8 +211,14 @@ export class CompanionConnector {
       signal?.addEventListener("abort", abort, { once: true });
 
       socket.on("message", (data, isBinary) => {
-        void this.handleMessage(socket, data, isBinary).then((ready) => {
-          if (ready) protocolReady = true;
+        void this.handleMessage(socket, data, isBinary).then((result) => {
+          if (result.protocolReady) protocolReady = true;
+          if (result.registered) startHeartbeat();
+          if (result.heartbeatAckId !== undefined && result.heartbeatAckId === pendingHeartbeatId) {
+            pendingHeartbeatId = undefined;
+            if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
+            heartbeatDeadline = undefined;
+          }
         }).catch((error) => {
           this.log({ event: "local_runtime_message_failed", reason: errorName(error) });
           if (socket.readyState === WebSocket.OPEN) socket.close(1011, "local runtime message failed");
@@ -178,38 +233,45 @@ export class CompanionConnector {
     });
   }
 
-  private async handleMessage(socket: WebSocket, data: RawData, isBinary: boolean): Promise<boolean> {
+  private async handleMessage(
+    socket: WebSocket,
+    data: RawData,
+    isBinary: boolean,
+  ): Promise<{ protocolReady?: boolean; registered?: boolean; heartbeatAckId?: string }> {
     if (isBinary) {
       socket.close(1003, "binary messages are not supported");
-      return false;
+      return {};
     }
     const buffer = toBuffer(data);
     if (buffer.byteLength > this.maxPayloadBytes) {
       socket.close(1009, "message too large");
-      return false;
+      return {};
     }
     const message = parseEdgeToCompanionMessage(buffer.toString("utf8"));
     if (!message) {
       socket.close(1008, "invalid companion message");
-      return false;
+      return {};
     }
 
     if (message.type === "companion-hello") {
       await this.sendReady(socket);
-      return true;
+      return { protocolReady: true };
     }
     if (message.type === "companion-registered") {
       await this.options.repositories.setDeviceId(message.deviceId);
       this.log({ event: "local_runtime_registered", deviceId: message.deviceId });
-      return true;
+      return { protocolReady: true, registered: true };
+    }
+    if (message.type === "companion-heartbeat-ack") {
+      return { protocolReady: true, heartbeatAckId: message.heartbeatId };
     }
     if (message.type === "http-cancel") {
       this.activeRequests.get(message.requestId)?.abort(message.reason);
-      return true;
+      return { protocolReady: true };
     }
     if (this.activeRequests.has(message.requestId)) {
       socket.close(1008, "duplicate request id");
-      return true;
+      return { protocolReady: true };
     }
     if (this.activeRequests.size >= this.maxConcurrentRequests) {
       this.sendResponse(socket, {
@@ -220,7 +282,7 @@ export class CompanionConnector {
         headers: { "content-type": "application/json; charset=utf-8", "retry-after": "1" },
         body: JSON.stringify({ error: "local_runtime_busy" }),
       });
-      return true;
+      return { protocolReady: true };
     }
 
     const controller = new AbortController();
@@ -230,7 +292,7 @@ export class CompanionConnector {
     } finally {
       this.activeRequests.delete(message.requestId);
     }
-    return true;
+    return { protocolReady: true };
   }
 
   private async sendReady(socket: WebSocket): Promise<void> {

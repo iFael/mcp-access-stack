@@ -1631,6 +1631,19 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-heartbeat") {
+      if (!attachment.ready || !attachment.deviceId) {
+        webSocket.close(1008, "Companion heartbeat before registration");
+        return;
+      }
+      webSocket.send(JSON.stringify({
+        type: "companion-heartbeat-ack",
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+        heartbeatId: parsed.heartbeatId,
+      }));
+      return;
+    }
+
     if (parsed.type === "companion-ready") {
       let device;
       try {
