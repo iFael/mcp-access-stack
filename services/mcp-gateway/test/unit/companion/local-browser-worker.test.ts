@@ -47,7 +47,11 @@ describe("LocalBrowserWorker", () => {
       credentialBrokerPath: brokerPath,
       browserChannel: "chrome",
       startupTimeoutMs: 1_000,
-      spawnProcess: ((file, args, options) => {
+      spawnProcess: ((
+        file: string,
+        args: readonly string[] | undefined,
+        options: SpawnOptions | undefined,
+      ) => {
         capturedFile = String(file);
         capturedArgs = (args ?? []).map(String);
         capturedOptions = options;
