@@ -46,6 +46,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -2018,6 +2020,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -2053,6 +2057,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "powershell",
                 "pwsh",
                 "cmd",
+                "sh",
+                "bash",
                 "wsl",
                 "git-bash"
               ],
@@ -2959,6 +2965,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "powershell",
             "pwsh",
             "cmd",
+            "sh",
+            "bash",
             "wsl",
             "git-bash"
           ],
@@ -3087,6 +3095,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "powershell",
             "pwsh",
             "cmd",
+            "sh",
+            "bash",
             "wsl",
             "git-bash"
           ],
@@ -3307,6 +3317,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -3342,6 +3354,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "powershell",
                 "pwsh",
                 "cmd",
+                "sh",
+                "bash",
                 "wsl",
                 "git-bash"
               ],
@@ -3455,6 +3469,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "powershell",
             "pwsh",
             "cmd",
+            "sh",
+            "bash",
             "wsl",
             "git-bash"
           ],
@@ -3507,6 +3523,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "powershell",
             "pwsh",
             "cmd",
+            "sh",
+            "bash",
             "wsl",
             "git-bash"
           ],
@@ -3720,6 +3738,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -3755,6 +3775,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "powershell",
                 "pwsh",
                 "cmd",
+                "sh",
+                "bash",
                 "wsl",
                 "git-bash"
               ],
@@ -4061,6 +4083,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                         "powershell",
                         "pwsh",
                         "cmd",
+                        "sh",
+                        "bash",
                         "wsl",
                         "git-bash"
                       ],
@@ -4096,6 +4120,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -4421,6 +4447,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                               "powershell",
                               "pwsh",
                               "cmd",
+                              "sh",
+                              "bash",
                               "wsl",
                               "git-bash"
                             ],
@@ -4456,6 +4484,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                           "powershell",
                           "pwsh",
                           "cmd",
+                          "sh",
+                          "bash",
                           "wsl",
                           "git-bash"
                         ],
@@ -4838,6 +4868,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                         "powershell",
                         "pwsh",
                         "cmd",
+                        "sh",
+                        "bash",
                         "wsl",
                         "git-bash"
                       ],
@@ -4873,6 +4905,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -5378,6 +5412,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                                   "powershell",
                                   "pwsh",
                                   "cmd",
+                                  "sh",
+                                  "bash",
                                   "wsl",
                                   "git-bash"
                                 ],
@@ -5413,6 +5449,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                               "powershell",
                               "pwsh",
                               "cmd",
+                              "sh",
+                              "bash",
                               "wsl",
                               "git-bash"
                             ],
@@ -5764,6 +5802,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                       "powershell",
                       "pwsh",
                       "cmd",
+                      "sh",
+                      "bash",
                       "wsl",
                       "git-bash"
                     ],
@@ -5799,6 +5839,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "powershell",
                   "pwsh",
                   "cmd",
+                  "sh",
+                  "bash",
                   "wsl",
                   "git-bash"
                 ],
@@ -6107,6 +6149,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                         "powershell",
                         "pwsh",
                         "cmd",
+                        "sh",
+                        "bash",
                         "wsl",
                         "git-bash"
                       ],
@@ -6142,6 +6186,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -6575,6 +6621,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                         "powershell",
                         "pwsh",
                         "cmd",
+                        "sh",
+                        "bash",
                         "wsl",
                         "git-bash"
                       ],
@@ -6610,6 +6658,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -7023,6 +7073,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                         "powershell",
                         "pwsh",
                         "cmd",
+                        "sh",
+                        "bash",
                         "wsl",
                         "git-bash"
                       ],
@@ -7058,6 +7110,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "powershell",
                     "pwsh",
                     "cmd",
+                    "sh",
+                    "bash",
                     "wsl",
                     "git-bash"
                   ],
@@ -20010,13 +20064,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "969a27467618b8aa2fbcc918a18cd5787a2b5353dfc8d686fdfe21a2e728ddd4",
-  "serverVersion": "0.4.0-catalog.c969a27467618.s0b82ee333aef",
+  "contractRevision": "8d8ecbb02397cc2841a279a74d35e5d03ce446c345e3b4dc99477262dd9c2aac",
+  "serverVersion": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef",
   "toolCount": 89,
   "toolSetRevision": "0b82ee333aefde809950518d251e6a214e3e9288b9df6975e01c43e4d61458f6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c969a27467618.s0b82ee333aef"
+  "version": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef"
 } as const;
