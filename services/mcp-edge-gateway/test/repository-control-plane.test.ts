@@ -1,5 +1,9 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import { EdgeAccountStore, type AccountStorage } from "../src/control-plane/account-store.js";
+import {
+  ACCOUNT_PASSWORD_PBKDF2_ITERATIONS,
+  EdgeAccountStore,
+  type AccountStorage,
+} from "../src/control-plane/account-store.js";
 import { EdgeRepositoryControlPlane } from "../src/control-plane/repository-control-plane.js";
 
 class MemoryStorage implements AccountStorage {
@@ -10,6 +14,18 @@ class MemoryStorage implements AccountStorage {
 }
 
 describe("Repository identity and ACL control plane", () => {
+  it("keeps account password PBKDF2 within the Cloudflare runtime limit", async () => {
+    expect(ACCOUNT_PASSWORD_PBKDF2_ITERATIONS).toBe(100_000);
+
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    await accounts.createUser("Rafael", "rafael-pass");
+
+    await expect(accounts.authenticateUser("Rafael", "rafael-pass")).resolves.toMatchObject({
+      displayName: "Rafael",
+    });
+  });
+
   it("keeps private repositories isolated by individual user identity", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
