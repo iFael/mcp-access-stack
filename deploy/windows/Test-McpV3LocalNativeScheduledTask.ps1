@@ -4,7 +4,8 @@ param(
     [string]$NodePath,
     [switch]$DirectFirst,
     [switch]$UseLauncherInPlace,
-    [switch]$DiagnosticMatrix
+    [switch]$DiagnosticMatrix,
+    [switch]$RelocationMatrix
 )
 
 Set-StrictMode -Version Latest
@@ -211,6 +212,21 @@ function Invoke-DiagnosticScheduledCase {
         Unregister-ScheduledTask -TaskName $caseTaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
 }
+
+function Write-DiagnosticLogs {
+    param(
+        [Parameter(Mandatory = $true)][string]$CaseName,
+        [Parameter(Mandatory = $true)][string[]]$Paths
+    )
+
+    foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Write-Host ("MATRIX_LOG_BEGIN={0}|{1}" -f $CaseName, $path)
+            Get-Content -LiteralPath $path -Tail 80 | ForEach-Object { Write-Host $_ }
+            Write-Host ("MATRIX_LOG_END={0}|{1}" -f $CaseName, $path)
+        }
+    }
+}
 try {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -282,6 +298,141 @@ try {
         '--', (Quote-TestArgument $scriptPath)
     ) -join ' '
 
+    if ($RelocationMatrix) {
+        $relocationResults = [System.Collections.Generic.List[object]]::new()
+        $userName = [string][Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        $nodeCopy = Join-Path $nativeOutput 'relocation node copy\node.exe'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nodeCopy) | Out-Null
+        Copy-Item -LiteralPath $nodeUnderTest -Destination $nodeCopy -Force
+        $nodeSourceHash = (Get-FileHash -LiteralPath $nodeUnderTest -Algorithm SHA256).Hash
+        $nodeCopyHash = (Get-FileHash -LiteralPath $nodeCopy -Algorithm SHA256).Hash
+        Write-Host ("RELOCATION_HASH=node-source|{0}|{1}" -f $nodeSourceHash, $nodeUnderTest)
+        Write-Host ("RELOCATION_HASH=node-copy|{0}|{1}" -f $nodeCopyHash, $nodeCopy)
+        if ($nodeSourceHash -ne $nodeCopyHash) {
+            throw 'Node relocation copy hash mismatch.'
+        }
+
+        $nodeCopyMarker = Join-Path $testRoot 'relocation-node-copy-marker.txt'
+        $nodeCopyArgs = (Quote-TestArgument $scriptPath) + ' ' + (Quote-TestArgument $nodeCopyMarker)
+        $nodeCopyResult = Invoke-DiagnosticScheduledCase `
+            -CaseName 'node-temp-copy' `
+            -Execute $nodeCopy `
+            -Arguments $nodeCopyArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $nodeCopyMarker
+        $relocationResults.Add($nodeCopyResult)
+
+        $copiedLauncher = Join-Path $nativeOutput 'relocation launcher copy\McpNodeHostLauncher.exe'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $copiedLauncher) | Out-Null
+        Copy-Item -LiteralPath $launcherUnderTest -Destination $copiedLauncher -Force
+        $launcherSourceHash = (Get-FileHash -LiteralPath $launcherUnderTest -Algorithm SHA256).Hash
+        $launcherCopyHash = (Get-FileHash -LiteralPath $copiedLauncher -Algorithm SHA256).Hash
+        Write-Host ("RELOCATION_HASH=launcher-source|{0}|{1}" -f $launcherSourceHash, $launcherUnderTest)
+        Write-Host ("RELOCATION_HASH=launcher-copy|{0}|{1}" -f $launcherCopyHash, $copiedLauncher)
+        if ($launcherSourceHash -ne $launcherCopyHash) {
+            throw 'Launcher relocation copy hash mismatch.'
+        }
+
+        $bothCopyMarker = Join-Path $testRoot 'relocation-both-copy-marker.txt'
+        $bothCopyStdout = Join-Path $logsRoot 'relocation-both-copy.stdout.log'
+        $bothCopyStderr = Join-Path $logsRoot 'relocation-both-copy.stderr.log'
+        $bothCopyArgs = @(
+            '--node', (Quote-TestArgument $nodeCopy),
+            '--stdout-log', (Quote-TestArgument $bothCopyStdout),
+            '--stderr-log', (Quote-TestArgument $bothCopyStderr),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$bothCopyMarker")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+        $bothCopyResult = Invoke-DiagnosticScheduledCase `
+            -CaseName 'launcher-temp-copy-node-temp-copy' `
+            -Execute $copiedLauncher `
+            -Arguments $bothCopyArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $bothCopyMarker
+        $relocationResults.Add($bothCopyResult)
+        if (-not $bothCopyResult.Pass) {
+            Write-DiagnosticLogs -CaseName 'launcher-temp-copy-node-temp-copy' -Paths @($bothCopyStdout, $bothCopyStderr)
+        }
+
+        $testRootDrive = [IO.Path]::GetPathRoot($testRoot)
+        $nodeDrive = [IO.Path]::GetPathRoot($nodeUnderTest)
+        if ([string]::Equals($testRootDrive, $nodeDrive, [StringComparison]::OrdinalIgnoreCase)) {
+            $nodeHardLink = Join-Path $nativeOutput 'relocation node hardlink\node.exe'
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nodeHardLink) | Out-Null
+            try {
+                New-Item -ItemType HardLink -Path $nodeHardLink -Target $nodeUnderTest -ErrorAction Stop | Out-Null
+                $nodeHardLinkHash = (Get-FileHash -LiteralPath $nodeHardLink -Algorithm SHA256).Hash
+                Write-Host ("RELOCATION_HASH=node-hardlink|{0}|{1}" -f $nodeHardLinkHash, $nodeHardLink)
+                $nodeHardLinkMarker = Join-Path $testRoot 'relocation-node-hardlink-marker.txt'
+                $nodeHardLinkArgs = (Quote-TestArgument $scriptPath) + ' ' + (Quote-TestArgument $nodeHardLinkMarker)
+                $nodeHardLinkResult = Invoke-DiagnosticScheduledCase `
+                    -CaseName 'node-temp-hardlink' `
+                    -Execute $nodeHardLink `
+                    -Arguments $nodeHardLinkArgs `
+                    -WorkingDirectory $workingDirectory `
+                    -PrincipalUserId $userName `
+                    -ExpectedMarker $nodeHardLinkMarker
+                $relocationResults.Add($nodeHardLinkResult)
+            }
+            catch {
+                Write-Host ("MATRIX_SKIP=node-temp-hardlink|{0}" -f $_.Exception.Message)
+            }
+        }
+        else {
+            Write-Host ("MATRIX_SKIP=node-temp-hardlink|cross-volume source={0} temp={1}" -f $nodeDrive, $testRootDrive)
+        }
+
+        $launcherDrive = [IO.Path]::GetPathRoot($launcherUnderTest)
+        if ([string]::Equals($testRootDrive, $launcherDrive, [StringComparison]::OrdinalIgnoreCase)) {
+            $launcherHardLink = Join-Path $nativeOutput 'relocation launcher hardlink\McpNodeHostLauncher.exe'
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcherHardLink) | Out-Null
+            try {
+                New-Item -ItemType HardLink -Path $launcherHardLink -Target $launcherUnderTest -ErrorAction Stop | Out-Null
+                $launcherHardLinkHash = (Get-FileHash -LiteralPath $launcherHardLink -Algorithm SHA256).Hash
+                Write-Host ("RELOCATION_HASH=launcher-hardlink|{0}|{1}" -f $launcherHardLinkHash, $launcherHardLink)
+                $launcherHardMarker = Join-Path $testRoot 'relocation-launcher-hardlink-marker.txt'
+                $launcherHardStdout = Join-Path $logsRoot 'relocation-launcher-hardlink.stdout.log'
+                $launcherHardStderr = Join-Path $logsRoot 'relocation-launcher-hardlink.stderr.log'
+                $launcherHardArgs = @(
+                    '--node', (Quote-TestArgument $nodeCopy),
+                    '--stdout-log', (Quote-TestArgument $launcherHardStdout),
+                    '--stderr-log', (Quote-TestArgument $launcherHardStderr),
+                    '--runner-restart-count', '0',
+                    '--runner-restart-interval-seconds', '60',
+                    '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$launcherHardMarker")),
+                    '--', (Quote-TestArgument $scriptPath)
+                ) -join ' '
+                $launcherHardResult = Invoke-DiagnosticScheduledCase `
+                    -CaseName 'launcher-temp-hardlink-node-temp-copy' `
+                    -Execute $launcherHardLink `
+                    -Arguments $launcherHardArgs `
+                    -WorkingDirectory $workingDirectory `
+                    -PrincipalUserId $userName `
+                    -ExpectedMarker $launcherHardMarker
+                $relocationResults.Add($launcherHardResult)
+                if (-not $launcherHardResult.Pass) {
+                    Write-DiagnosticLogs -CaseName 'launcher-temp-hardlink-node-temp-copy' -Paths @($launcherHardStdout, $launcherHardStderr)
+                }
+            }
+            catch {
+                Write-Host ("MATRIX_SKIP=launcher-temp-hardlink-node-temp-copy|{0}" -f $_.Exception.Message)
+            }
+        }
+        else {
+            Write-Host ("MATRIX_SKIP=launcher-temp-hardlink-node-temp-copy|cross-volume source={0} temp={1}" -f $launcherDrive, $testRootDrive)
+        }
+
+        $relocationSummary = $relocationResults | ForEach-Object {
+            "{0}:{1}:{2}" -f $_.Case, $(if ($_.Pass) { 'PASS' } else { 'FAIL' }), [string]$_.LastTaskResult
+        }
+        Write-Output ('RELOCATION_SUMMARY=' + ($relocationSummary -join ','))
+        return
+    }
     if ($DiagnosticMatrix) {
         $matrixResults = [System.Collections.Generic.List[object]]::new()
         $userIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
