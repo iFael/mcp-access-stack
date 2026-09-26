@@ -292,7 +292,7 @@ try {
         '  process.exitCode = 41;',
         '} else {',
         '  fs.writeFileSync(marker, "started\\n", "utf8");',
-        '  setTimeout(() => process.exit(0), 20000);',
+        '  setTimeout(() => process.exit(0), 2000);',
         '}'
     ) -join [Environment]::NewLine
     [IO.File]::WriteAllText($scriptPath, $childScript, [Text.UTF8Encoding]::new($false))
