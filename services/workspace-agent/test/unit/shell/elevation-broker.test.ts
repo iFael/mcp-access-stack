@@ -83,7 +83,7 @@ describe("WindowsElevationBroker", () => {
       absoluteCwd: root,
       logicalCwd: ".",
       timeoutMs: 30_000,
-      deadline: createOperationDeadline(30_000),
+      deadline: createOperationDeadline(30_000, undefined),
     });
 
     expect(result).toMatchObject({

@@ -52,7 +52,7 @@ describe("LocalBrowserWorker", () => {
         capturedArgs = (args ?? []).map(String);
         capturedOptions = options;
         return child as never;
-      }) as typeof import("node:child_process").spawn,
+      }) as unknown as typeof import("node:child_process").spawn,
       fetchImpl: jest.fn(async () =>
         new Response(JSON.stringify({ status: "live" }), { status: 200 }),
       ) as unknown as typeof fetch,
