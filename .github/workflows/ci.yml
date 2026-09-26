@@ -684,6 +684,11 @@ jobs:
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -DirectFirst
 
+      - name: Diagnose Windows Scheduled Task execution matrix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -DiagnosticMatrix
+
       - name: Test platform secure store and repository policy
         run: |
           node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \

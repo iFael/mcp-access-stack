@@ -3,7 +3,8 @@ param(
     [string]$LauncherPath,
     [string]$NodePath,
     [switch]$DirectFirst,
-    [switch]$UseLauncherInPlace
+    [switch]$UseLauncherInPlace,
+    [switch]$DiagnosticMatrix
 )
 
 Set-StrictMode -Version Latest
@@ -81,6 +82,135 @@ function Get-TaskFailureEvidence {
     }
 }
 
+function Invoke-DiagnosticScheduledCase {
+    param(
+        [Parameter(Mandatory = $true)][string]$CaseName,
+        [Parameter(Mandatory = $true)][string]$Execute,
+        [AllowEmptyString()][string]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$PrincipalUserId,
+        [string]$ExpectedMarker
+    )
+
+    $caseTaskName = "MCP V3 diagnostic $CaseName"
+    $startedAt = [DateTime]::Now
+    $result = [ordered]@{
+        Case = $CaseName
+        Pass = $false
+        LastTaskResult = $null
+        State = $null
+    }
+
+    try {
+        Unregister-ScheduledTask -TaskName $caseTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedMarker)) {
+            Remove-Item -LiteralPath $ExpectedMarker -Force -ErrorAction SilentlyContinue
+        }
+
+        $caseAction = New-ScheduledTaskAction `
+            -Execute $Execute `
+            -Argument $Arguments `
+            -WorkingDirectory $WorkingDirectory
+        $casePrincipal = New-ScheduledTaskPrincipal `
+            -UserId $PrincipalUserId `
+            -LogonType Interactive `
+            -RunLevel Limited
+        $caseSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable `
+            -MultipleInstances IgnoreNew `
+            -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $caseTask = New-ScheduledTask `
+            -Action $caseAction `
+            -Principal $casePrincipal `
+            -Settings $caseSettings `
+            -Description "MCP V3 diagnostic case $CaseName"
+
+        Register-ScheduledTask -TaskName $caseTaskName -InputObject $caseTask -Force | Out-Null
+
+        Write-Host ("MATRIX_CASE={0}" -f $CaseName)
+        Write-Host ("MATRIX_PRINCIPAL={0}" -f $PrincipalUserId)
+        Write-Host ("MATRIX_EXECUTE={0}" -f $Execute)
+        Write-Host ("MATRIX_ARGUMENTS={0}" -f $Arguments)
+        Write-Host ("MATRIX_WORKING_DIRECTORY={0}" -f $WorkingDirectory)
+
+        Start-ScheduledTask -TaskName $caseTaskName
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedMarker) -and
+                (Test-Path -LiteralPath $ExpectedMarker -PathType Leaf)) {
+                $result.Pass = $true
+                break
+            }
+
+            $caseInfo = Get-ScheduledTaskInfo -TaskName $caseTaskName -ErrorAction SilentlyContinue
+            $caseTaskState = Get-ScheduledTask -TaskName $caseTaskName -ErrorAction SilentlyContinue
+            if ($caseInfo -and $caseTaskState -and
+                $caseInfo.LastRunTime -ge $startedAt.AddSeconds(-2) -and
+                $caseTaskState.State -eq 'Ready' -and
+                [int64]$caseInfo.LastTaskResult -ne 267009) {
+                if ([string]::IsNullOrWhiteSpace($ExpectedMarker) -and
+                    [int64]$caseInfo.LastTaskResult -eq 0) {
+                    $result.Pass = $true
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        }
+
+        $finalTask = Get-ScheduledTask -TaskName $caseTaskName -ErrorAction SilentlyContinue
+        $finalInfo = Get-ScheduledTaskInfo -TaskName $caseTaskName -ErrorAction SilentlyContinue
+        if ($finalTask) {
+            $result.State = [string]$finalTask.State
+        }
+        if ($finalInfo) {
+            $result.LastTaskResult = [int64]$finalInfo.LastTaskResult
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedMarker) -and
+            (Test-Path -LiteralPath $ExpectedMarker -PathType Leaf)) {
+            $result.Pass = $true
+        }
+
+        Write-Host ("MATRIX_RESULT={0}|{1}|LastTaskResult={2}|State={3}" -f
+            $CaseName,
+            $(if ($result.Pass) { 'PASS' } else { 'FAIL' }),
+            [string]$result.LastTaskResult,
+            [string]$result.State)
+
+        if (-not $result.Pass) {
+            try {
+                Get-WinEvent -FilterHashtable @{
+                    LogName = 'Microsoft-Windows-TaskScheduler/Operational'
+                    StartTime = $startedAt.AddSeconds(-2)
+                    Id = 101, 102, 110, 129, 200, 201, 203
+                } -ErrorAction Stop |
+                    Where-Object { $_.Message -like "*$caseTaskName*" } |
+                    Select-Object -First 20 |
+                    ForEach-Object {
+                        Write-Host ("MATRIX_EVENT={0}|{1:o}|{2}|{3}" -f
+                            $CaseName,
+                            $_.TimeCreated,
+                            $_.Id,
+                            ($_.Message -replace '[\r\n]+', ' '))
+                    }
+            }
+            catch {
+                Write-Host ("MATRIX_EVENT_READ_ERROR={0}|{1}" -f $CaseName, $_.Exception.Message)
+            }
+        }
+
+        return [pscustomobject]$result
+    }
+    catch {
+        Write-Host ("MATRIX_EXCEPTION={0}|{1}" -f $CaseName, $_.Exception.Message)
+        return [pscustomobject]$result
+    }
+    finally {
+        Stop-ScheduledTask -TaskName $caseTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $caseTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+}
 try {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -132,7 +262,7 @@ try {
 
     $childScript = @(
         'const fs = require("node:fs");',
-        'const marker = process.env.MCP_V3_NATIVE_TASK_MARKER;',
+        'const marker = process.env.MCP_V3_NATIVE_TASK_MARKER || process.argv[2];',
         'if (!marker) {',
         '  process.exitCode = 41;',
         '} else {',
@@ -152,6 +282,131 @@ try {
         '--', (Quote-TestArgument $scriptPath)
     ) -join ' '
 
+    if ($DiagnosticMatrix) {
+        $matrixResults = [System.Collections.Generic.List[object]]::new()
+        $userIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $userName = [string]$userIdentity.Name
+        $userSid = [string]$userIdentity.User.Value
+        $comSpec = [Environment]::ExpandEnvironmentVariables('%SystemRoot%\System32\cmd.exe')
+        if (-not (Test-Path -LiteralPath $comSpec -PathType Leaf)) {
+            throw "cmd.exe was not found: $comSpec"
+        }
+
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'cmd-baseline' `
+            -Execute $comSpec `
+            -Arguments '/d /s /c exit 0' `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName))
+
+        $nodeMarker = Join-Path $testRoot 'matrix-node-marker.txt'
+        $nodeArgs = (Quote-TestArgument $scriptPath) + ' ' + (Quote-TestArgument $nodeMarker)
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'node-release-path' `
+            -Execute $nodeUnderTest `
+            -Arguments $nodeArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $nodeMarker))
+
+        $copiedLauncher = Join-Path $nativeOutput 'matrix copied launcher\McpNodeHostLauncher.exe'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $copiedLauncher) | Out-Null
+        Copy-Item -LiteralPath $launcherUnderTest -Destination $copiedLauncher -Force
+
+        $copyMarker = Join-Path $testRoot 'matrix-launcher-copy-marker.txt'
+        $copyStdout = Join-Path $logsRoot 'matrix-launcher-copy.stdout.log'
+        $copyStderr = Join-Path $logsRoot 'matrix-launcher-copy.stderr.log'
+        $copyArgs = @(
+            '--node', (Quote-TestArgument $nodeUnderTest),
+            '--stdout-log', (Quote-TestArgument $copyStdout),
+            '--stderr-log', (Quote-TestArgument $copyStderr),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$copyMarker")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'launcher-temp-copy' `
+            -Execute $copiedLauncher `
+            -Arguments $copyArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $copyMarker))
+
+        $inPlaceMarker = Join-Path $testRoot 'matrix-launcher-inplace-marker.txt'
+        $inPlaceStdout = Join-Path $logsRoot 'matrix-launcher-inplace.stdout.log'
+        $inPlaceStderr = Join-Path $logsRoot 'matrix-launcher-inplace.stderr.log'
+        $inPlaceArgs = @(
+            '--node', (Quote-TestArgument $nodeUnderTest),
+            '--stdout-log', (Quote-TestArgument $inPlaceStdout),
+            '--stderr-log', (Quote-TestArgument $inPlaceStderr),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$inPlaceMarker")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'launcher-inplace-name-principal' `
+            -Execute $launcherUnderTest `
+            -Arguments $inPlaceArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $inPlaceMarker))
+
+        $sidMarker = Join-Path $testRoot 'matrix-launcher-sid-marker.txt'
+        $sidStdout = Join-Path $logsRoot 'matrix-launcher-sid.stdout.log'
+        $sidStderr = Join-Path $logsRoot 'matrix-launcher-sid.stderr.log'
+        $sidArgs = @(
+            '--node', (Quote-TestArgument $nodeUnderTest),
+            '--stdout-log', (Quote-TestArgument $sidStdout),
+            '--stderr-log', (Quote-TestArgument $sidStderr),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$sidMarker")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'launcher-inplace-sid-principal' `
+            -Execute $launcherUnderTest `
+            -Arguments $sidArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userSid `
+            -ExpectedMarker $sidMarker))
+
+        $wrapperMarker = Join-Path $testRoot 'matrix-cmd-wrapper-marker.txt'
+        $wrapperStdout = Join-Path $logsRoot 'matrix-cmd-wrapper.stdout.log'
+        $wrapperStderr = Join-Path $logsRoot 'matrix-cmd-wrapper.stderr.log'
+        $wrapperArgs = @(
+            '--node', (Quote-TestArgument $nodeUnderTest),
+            '--stdout-log', (Quote-TestArgument $wrapperStdout),
+            '--stderr-log', (Quote-TestArgument $wrapperStderr),
+            '--runner-restart-count', '0',
+            '--runner-restart-interval-seconds', '60',
+            '--env', (Quote-TestArgument ("MCP_V3_NATIVE_TASK_MARKER=$wrapperMarker")),
+            '--', (Quote-TestArgument $scriptPath)
+        ) -join ' '
+        $wrapperPath = Join-Path $testRoot 'launch-wrapper.cmd'
+        $wrapperContent = @(
+            '@echo off',
+            ('"' + $launcherUnderTest + '" ' + $wrapperArgs),
+            'exit /b %ERRORLEVEL%'
+        ) -join [Environment]::NewLine
+        [IO.File]::WriteAllText($wrapperPath, $wrapperContent, [Text.Encoding]::ASCII)
+        $cmdWrapperArgs = '/d /s /c ""' + $wrapperPath + '""'
+        $matrixResults.Add((Invoke-DiagnosticScheduledCase `
+            -CaseName 'cmd-wrapper-launcher' `
+            -Execute $comSpec `
+            -Arguments $cmdWrapperArgs `
+            -WorkingDirectory $workingDirectory `
+            -PrincipalUserId $userName `
+            -ExpectedMarker $wrapperMarker))
+
+        $summary = $matrixResults | ForEach-Object {
+            "{0}:{1}:{2}" -f $_.Case, $(if ($_.Pass) { 'PASS' } else { 'FAIL' }), [string]$_.LastTaskResult
+        }
+        Write-Output ('MATRIX_SUMMARY=' + ($summary -join ','))
+        return
+    }
     if ($DirectFirst) {
         $directMarkerPath = Join-Path $testRoot 'direct-child-started.txt'
         $directStdoutLog = Join-Path $logsRoot 'direct-launcher.stdout.log'
