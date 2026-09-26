@@ -58,7 +58,7 @@ export type MaterializationUpsertInput = Omit<
 > & { id?: string };
 
 const USER_IDS_KEY = "account:user-ids:v1";
-const PBKDF2_ITERATIONS = 120_000;
+export const ACCOUNT_PASSWORD_PBKDF2_ITERATIONS = 100_000;
 const MAX_USERS = 1024;
 const MAX_REPOSITORIES_PER_USER = 4096;
 const MAX_DEVICES_PER_USER = 256;
@@ -494,7 +494,7 @@ async function derivePasswordVerifier(password: string, salt: Uint8Array): Promi
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt: toArrayBuffer(salt), iterations: PBKDF2_ITERATIONS },
+    { name: "PBKDF2", hash: "SHA-256", salt: toArrayBuffer(salt), iterations: ACCOUNT_PASSWORD_PBKDF2_ITERATIONS },
     key,
     256,
   );
