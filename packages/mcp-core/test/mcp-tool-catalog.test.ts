@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   MCP_FULL_TOOL_CATALOG_NAMES,
+  MCP_REPOSITORY_TOOL_NAMES,
   createMcpServerVersion,
   createMcpToolCatalogMetadata,
   createMcpToolSetRevision,
@@ -8,8 +9,11 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(79);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(79);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(89);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(89);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
+      expect.arrayContaining([...MCP_REPOSITORY_TOOL_NAMES]),
+    );
   });
 
   it("changes diagnostic tool-set identity when a tool name disappears", () => {

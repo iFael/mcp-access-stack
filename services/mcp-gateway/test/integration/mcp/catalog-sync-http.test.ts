@@ -1,6 +1,7 @@
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "@jest/globals";
 import {
+  MCP_FULL_TOOL_CATALOG_NAMES,
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
@@ -81,14 +82,14 @@ describe("stateless MCP catalog identity", () => {
       const contractRevision = createMcpToolContractRevision(tools);
 
       expect(capabilities).toMatchObject({ tools: { listChanged: true } });
-      expect(tools).toHaveLength(79);
+      expect(tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
       expect(tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...lateToolNames]),
       );
       expect(initializeCatalog).toEqual(listCatalog);
       expect(listCatalog).toMatchObject({
         contractRevision,
-        toolCount: 79,
+        toolCount: MCP_FULL_TOOL_CATALOG_NAMES.length,
       });
       expect(listCatalog).not.toHaveProperty("descriptorRevision");
       expect(serverInfo).toEqual({

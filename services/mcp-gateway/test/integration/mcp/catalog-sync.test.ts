@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
 import {
+  MCP_FULL_TOOL_CATALOG_NAMES,
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
@@ -69,7 +70,7 @@ describe("MCP connector catalog synchronization", () => {
         | undefined;
       const contractRevision = createMcpToolContractRevision(listed.tools);
 
-      expect(listed.tools).toHaveLength(79);
+      expect(listed.tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([...expectedLateTools]),
       );
@@ -84,7 +85,7 @@ describe("MCP connector catalog synchronization", () => {
       expect(descriptions.get_workspace_context).toContain("project instruction files");
       expect(catalogMeta).toMatchObject({
         contractRevision,
-        toolCount: 79,
+        toolCount: MCP_FULL_TOOL_CATALOG_NAMES.length,
       });
       expect(catalogMeta).not.toHaveProperty("descriptorRevision");
       expect(serverVersion).toEqual({
@@ -192,8 +193,8 @@ describe("MCP server instance catalog continuity", () => {
       );
       expect(secondServerVersion).toEqual(firstServerVersion);
       expect(secondCapabilities).toEqual(firstCapabilities);
-      expect(names).toHaveLength(79);
-      expect(new Set(names).size).toBe(79);
+      expect(names).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
+      expect(new Set(names).size).toBe(MCP_FULL_TOOL_CATALOG_NAMES.length);
       expect(metadata?.contractRevision).toBe(
         createMcpToolContractRevision(secondList.tools),
       );
