@@ -5,7 +5,9 @@ param(
     [switch]$DirectFirst,
     [switch]$UseLauncherInPlace,
     [switch]$DiagnosticMatrix,
-    [switch]$RelocationMatrix
+    [switch]$RelocationMatrix,
+    [switch]$PathPrefixMatrix,
+    [string]$PathPrefixReleaseRoot
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +30,8 @@ Write-Output ('TEST_ROOT={0}' -f $testRoot)
 $nativeOutput = Join-Path $testRoot 'native'
 $workingDirectory = Join-Path $testRoot 'release root with spaces'
 $logsRoot = Join-Path $testRoot 'logs'
+$pathPrefixProbeRoots = [System.Collections.Generic.List[string]]::new()
+$pathPrefixCleanupRoot = $null
 $stdoutLog = Join-Path $logsRoot 'launcher.stdout.log'
 $stderrLog = Join-Path $logsRoot 'launcher.stderr.log'
 $markerPath = Join-Path $testRoot 'child-started.txt'
@@ -491,6 +495,83 @@ try {
         Write-Output ('RELOCATION_SUMMARY=' + ($relocationSummary -join ','))
         return
     }
+    if ($PathPrefixMatrix) {
+        if ([string]::IsNullOrWhiteSpace($NodePath)) {
+            throw '-PathPrefixMatrix requires -NodePath so every probe is a hardlink to the exact source Node file.'
+        }
+        if ([string]::IsNullOrWhiteSpace($PathPrefixReleaseRoot)) {
+            throw '-PathPrefixMatrix requires -PathPrefixReleaseRoot.'
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$env:LOCALAPPDATA)) {
+            throw '-PathPrefixMatrix requires LOCALAPPDATA.'
+        }
+
+        $localAppData = [IO.Path]::GetFullPath([string]$env:LOCALAPPDATA).TrimEnd('\')
+        $mcpRoot = Join-Path $localAppData 'MCP V3'
+        $appRoot = Join-Path $mcpRoot 'App'
+        $releasesRoot = Join-Path $appRoot 'releases'
+        $prefixReleaseRoot = [IO.Path]::GetFullPath($PathPrefixReleaseRoot).TrimEnd('\')
+        $expectedReleasePrefix = [IO.Path]::GetFullPath($releasesRoot).TrimEnd('\') + '\'
+        if (-not $prefixReleaseRoot.StartsWith($expectedReleasePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw '-PathPrefixReleaseRoot must be a child of %LOCALAPPDATA%\MCP V3\App\releases.'
+        }
+
+        $nodeDrive = [IO.Path]::GetPathRoot($nodeUnderTest)
+        $localAppDataDrive = [IO.Path]::GetPathRoot($localAppData)
+        if (-not [string]::Equals($nodeDrive, $localAppDataDrive, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Path-prefix hardlink matrix requires NodePath and LOCALAPPDATA on the same volume. node=$nodeDrive localAppData=$localAppDataDrive"
+        }
+
+        foreach ($managedRoot in @($mcpRoot, $appRoot, $releasesRoot, $prefixReleaseRoot)) {
+            if ($null -eq $pathPrefixCleanupRoot -and -not (Test-Path -LiteralPath $managedRoot)) {
+                $pathPrefixCleanupRoot = $managedRoot
+            }
+        }
+        $runtimeRoot = Join-Path $prefixReleaseRoot 'runtime'
+        $nodeRoot = Join-Path $runtimeRoot 'node'
+        New-Item -ItemType Directory -Force -Path $nodeRoot | Out-Null
+
+        $prefixResults = [System.Collections.Generic.List[object]]::new()
+        $userName = [string][Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $probeCases = @(
+            [pscustomobject]@{ Case = 'prefix-mcp-root'; Parent = $mcpRoot },
+            [pscustomobject]@{ Case = 'prefix-app-root'; Parent = $appRoot },
+            [pscustomobject]@{ Case = 'prefix-releases-root'; Parent = $releasesRoot },
+            [pscustomobject]@{ Case = 'prefix-release-root'; Parent = $prefixReleaseRoot },
+            [pscustomobject]@{ Case = 'prefix-runtime-root'; Parent = $runtimeRoot },
+            [pscustomobject]@{ Case = 'prefix-node-root'; Parent = $nodeRoot }
+        )
+
+        foreach ($probeCase in $probeCases) {
+            $probeRoot = Join-Path ([string]$probeCase.Parent) (".r10-path-prefix-probe-{0}" -f $PID)
+            New-Item -ItemType Directory -Force -Path $probeRoot | Out-Null
+            $pathPrefixProbeRoots.Add($probeRoot)
+            $probeNode = Join-Path $probeRoot 'node.exe'
+            New-Item -ItemType HardLink -Path $probeNode -Target $nodeUnderTest -ErrorAction Stop | Out-Null
+            $probeHash = (Get-FileHash -LiteralPath $probeNode -Algorithm SHA256).Hash
+            $sourceHash = (Get-FileHash -LiteralPath $nodeUnderTest -Algorithm SHA256).Hash
+            if ($probeHash -ne $sourceHash) {
+                throw "Path-prefix hardlink hash mismatch: $($probeCase.Case)"
+            }
+
+            Write-Host ("PATH_PREFIX_PROBE={0}|{1}|{2}" -f $probeCase.Case, $probeHash, $probeNode)
+            $probeMarker = Join-Path $testRoot ("path-prefix-{0}-marker.txt" -f $probeCase.Case)
+            $probeArgs = (Quote-TestArgument $scriptPath) + ' ' + (Quote-TestArgument $probeMarker)
+            $prefixResults.Add((Invoke-DiagnosticScheduledCase `
+                -CaseName ([string]$probeCase.Case) `
+                -Execute $probeNode `
+                -Arguments $probeArgs `
+                -WorkingDirectory $workingDirectory `
+                -PrincipalUserId $userName `
+                -ExpectedMarker $probeMarker))
+        }
+
+        $prefixSummary = $prefixResults | ForEach-Object {
+            "{0}:{1}:{2}" -f $_.Case, $(if ($_.Pass) { 'PASS' } else { 'FAIL' }), [string]$_.LastTaskResult
+        }
+        Write-Output ('PATH_PREFIX_SUMMARY=' + ($prefixSummary -join ','))
+        return
+    }
     if ($DiagnosticMatrix) {
         $matrixResults = [System.Collections.Generic.List[object]]::new()
         $userIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -749,6 +830,12 @@ finally {
     }
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Stop-TestRootProcesses
+    foreach ($probeRoot in @($pathPrefixProbeRoots)) {
+        Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($pathPrefixCleanupRoot -and (Test-Path -LiteralPath $pathPrefixCleanupRoot)) {
+        Remove-Item -LiteralPath $pathPrefixCleanupRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     for ($cleanupAttempt = 0; $cleanupAttempt -lt 20; $cleanupAttempt++) {
         try {
             Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction Stop
