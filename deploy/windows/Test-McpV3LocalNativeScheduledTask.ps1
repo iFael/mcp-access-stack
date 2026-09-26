@@ -2,7 +2,8 @@
 param(
     [string]$LauncherPath,
     [string]$NodePath,
-    [switch]$DirectFirst
+    [switch]$DirectFirst,
+    [switch]$UseLauncherInPlace
 )
 
 Set-StrictMode -Version Latest
@@ -101,14 +102,23 @@ try {
         if (-not (Test-Path -LiteralPath $sourceLauncher -PathType Leaf)) {
             throw "Provided native launcher was not found: $sourceLauncher"
         }
-        $signedTarget = Join-Path $nativeOutput 'signed launcher with spaces\McpNodeHostLauncher.exe'
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $signedTarget) | Out-Null
-        Copy-Item -LiteralPath $sourceLauncher -Destination $signedTarget -Force
-        $launcherUnderTest = $signedTarget
+        if ($UseLauncherInPlace) {
+            $launcherUnderTest = $sourceLauncher
+        }
+        else {
+            $signedTarget = Join-Path $nativeOutput 'signed launcher with spaces\McpNodeHostLauncher.exe'
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $signedTarget) | Out-Null
+            Copy-Item -LiteralPath $sourceLauncher -Destination $signedTarget -Force
+            $launcherUnderTest = $signedTarget
+        }
+    }
+    if ($UseLauncherInPlace -and [string]::IsNullOrWhiteSpace($LauncherPath)) {
+        throw '-UseLauncherInPlace requires -LauncherPath.'
     }
     if (-not (Test-Path -LiteralPath $launcherUnderTest -PathType Leaf)) {
         throw "Native launcher was not materialized: $launcherUnderTest"
     }
+    Write-Output ('LAUNCHER_UNDER_TEST={0}' -f $launcherUnderTest)
 
     if ([string]::IsNullOrWhiteSpace($NodePath)) {
         $nodeUnderTest = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
