@@ -366,6 +366,23 @@ jobs:
             -EdgeBaseUrl $env:EDGE_BASE_URL `
             -OutputDirectory (Join-Path $env:RUNNER_TEMP 'candidate-distribution')
 
+      - name: Test signed native launcher through Task Scheduler
+        env:
+          RELEASE_ID: ${{ steps.metadata.outputs.release_id }}
+        run: |
+          $releaseRoot = Join-Path $env:RUNNER_TEMP "candidate-distribution\stage\releases\$env:RELEASE_ID"
+          $launcher = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
+          $node = Join-Path $releaseRoot 'runtime\node\node.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $launcher
+          if (-not $signature.SignerCertificate) {
+            throw 'Signed candidate launcher does not expose a signer certificate.'
+          }
+          Write-Output ("SIGNED_LAUNCHER_STATUS={0}" -f [string]$signature.Status)
+          Write-Output ("SIGNED_LAUNCHER_SIGNER={0}" -f [string]$signature.SignerCertificate.Thumbprint)
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 `
+            -LauncherPath $launcher `
+            -NodePath $node
+
       - name: Validate signed candidate
         env:
           RELEASE_ID: ${{ steps.metadata.outputs.release_id }}

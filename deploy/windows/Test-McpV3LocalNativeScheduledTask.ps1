@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$LauncherPath,
+    [string]$NodePath
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -75,23 +78,39 @@ try {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $nativeOutput, $workingDirectory, $logsRoot | Out-Null
 
-    $commit = (git -C $root rev-parse --verify HEAD).Trim()
-    & $buildScript `
-        -ReleaseId '0.0.0-ci.native-task-smoke' `
-        -SourceCommit $commit `
-        -OutputDirectory $nativeOutput | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Native artifact build failed.'
+    if ([string]::IsNullOrWhiteSpace($LauncherPath)) {
+        $commit = (git -C $root rev-parse --verify HEAD).Trim()
+        & $buildScript `
+            -ReleaseId '0.0.0-ci.native-task-smoke' `
+            -SourceCommit $commit `
+            -OutputDirectory $nativeOutput | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Native artifact build failed.'
+        }
+        $launcherUnderTest = Join-Path $nativeOutput 'McpNodeHostLauncher.exe'
+    }
+    else {
+        $sourceLauncher = [IO.Path]::GetFullPath($LauncherPath)
+        if (-not (Test-Path -LiteralPath $sourceLauncher -PathType Leaf)) {
+            throw "Provided native launcher was not found: $sourceLauncher"
+        }
+        $signedTarget = Join-Path $nativeOutput 'signed launcher with spaces\McpNodeHostLauncher.exe'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $signedTarget) | Out-Null
+        Copy-Item -LiteralPath $sourceLauncher -Destination $signedTarget -Force
+        $launcherUnderTest = $signedTarget
+    }
+    if (-not (Test-Path -LiteralPath $launcherUnderTest -PathType Leaf)) {
+        throw "Native launcher was not materialized: $launcherUnderTest"
     }
 
-    $launcherPath = Join-Path $nativeOutput 'McpNodeHostLauncher.exe'
-    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
-        throw "Native launcher was not built: $launcherPath"
+    if ([string]::IsNullOrWhiteSpace($NodePath)) {
+        $nodeUnderTest = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     }
-
-    $nodePath = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) {
-        throw "Node.js executable was not found: $nodePath"
+    else {
+        $nodeUnderTest = [IO.Path]::GetFullPath($NodePath)
+    }
+    if (-not (Test-Path -LiteralPath $nodeUnderTest -PathType Leaf)) {
+        throw "Node.js executable was not found: $nodeUnderTest"
     }
 
     $childScript = @(
@@ -107,7 +126,7 @@ try {
     [IO.File]::WriteAllText($scriptPath, $childScript, [Text.UTF8Encoding]::new($false))
 
     $arguments = @(
-        '--node', (Quote-TestArgument $nodePath),
+        '--node', (Quote-TestArgument $nodeUnderTest),
         '--stdout-log', (Quote-TestArgument $stdoutLog),
         '--stderr-log', (Quote-TestArgument $stderrLog),
         '--runner-restart-count', '0',
@@ -122,7 +141,7 @@ try {
     }
 
     $action = New-ScheduledTaskAction `
-        -Execute $launcherPath `
+        -Execute $launcherUnderTest `
         -Argument $arguments `
         -WorkingDirectory $workingDirectory
     $principal = New-ScheduledTaskPrincipal `
@@ -146,7 +165,7 @@ try {
     $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
     $registeredAction = @($registered.Actions)
     if ($registeredAction.Count -ne 1 -or
-        [IO.Path]::GetFullPath([string]$registeredAction[0].Execute) -ne [IO.Path]::GetFullPath($launcherPath) -or
+        [IO.Path]::GetFullPath([string]$registeredAction[0].Execute) -ne [IO.Path]::GetFullPath($launcherUnderTest) -or
         [IO.Path]::GetFullPath([string]$registeredAction[0].WorkingDirectory) -ne [IO.Path]::GetFullPath($workingDirectory) -or
         [string]$registeredAction[0].Arguments -ne $arguments) {
         throw 'Registered Scheduled Task action does not match the native launcher smoke contract.'
