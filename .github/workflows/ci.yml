@@ -679,6 +679,11 @@ jobs:
           node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/shell/elevation-broker.test.ts
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalLifecycle.ps1
 
+      - name: Test real Windows native launcher through Task Scheduler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1
+
       - name: Test platform secure store and repository policy
         run: |
           node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
