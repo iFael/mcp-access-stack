@@ -236,6 +236,55 @@ function Write-DiagnosticLogs {
         }
     }
 }
+
+function Stop-TestRootProcesses {
+    $rootPath = [IO.Path]::GetFullPath($testRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $rootPrefix = $rootPath + [IO.Path]::DirectorySeparatorChar
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $matching = [System.Collections.Generic.List[object]]::new()
+        foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
+            $processPath = $null
+            try {
+                $processPath = [string]$process.Path
+            }
+            catch {
+                continue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($processPath) -and
+                $processPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $matching.Add($process)
+            }
+        }
+
+        if ($matching.Count -eq 0) {
+            return
+        }
+
+        foreach ($process in $matching) {
+            Write-Host ("CLEANUP_PROCESS_STOP={0}|{1}|{2}" -f $process.Id, $process.ProcessName, $process.Path)
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 200
+    }
+
+    $remaining = @(
+        Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            try {
+                $path = [string]$_.Path
+                -not [string]::IsNullOrWhiteSpace($path) -and
+                    $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+            }
+            catch {
+                $false
+            }
+        }
+    )
+    if ($remaining.Count -gt 0) {
+        throw ('Temporary smoke processes did not terminate: ' + (($remaining | ForEach-Object { "{0}:{1}" -f $_.Id, $_.ProcessName }) -join ', '))
+    }
+}
 try {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -699,6 +748,7 @@ finally {
         Start-Sleep -Milliseconds 100
     }
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    Stop-TestRootProcesses
     for ($cleanupAttempt = 0; $cleanupAttempt -lt 20; $cleanupAttempt++) {
         try {
             Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction Stop
