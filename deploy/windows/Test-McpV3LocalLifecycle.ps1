@@ -90,6 +90,10 @@ Assert-ContainsAll -Label 'MCP V3 local release switch' -Source $switch -Tokens 
     'Invoke-McpWindowsExecutionNodeCutover.ps1',
     'Install-McpV3LocalTask.ps1',
     'Restore-McpV3LocalTask',
+    'Stop-McpV3LocalCompanionLaunchers',
+    'McpNodeHostLauncher.exe',
+    'companion-cli.js',
+    'taskkill.exe',
     'Write-McpWindowsExecutionNodeState -Path $statePath -Value $stateBefore',
     'Start-ScheduledTask -TaskName $TaskName'
 )

@@ -40,9 +40,14 @@ interface CommandAuthorizationScope {
 }
 
 export class ShellService {
-  private readonly confirmations = new CommandConfirmationRegistry();
+  private readonly confirmations: CommandConfirmationRegistry;
 
-  constructor(private readonly elevationBroker?: ElevationBroker) {}
+  constructor(
+    private readonly elevationBroker?: ElevationBroker,
+    confirmations: CommandConfirmationRegistry = new CommandConfirmationRegistry(),
+  ) {
+    this.confirmations = confirmations;
+  }
 
   async runCommand(
     workspace: ResolvedWorkspace,

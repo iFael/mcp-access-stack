@@ -9,6 +9,7 @@ import { createGatewayApplication } from "./app.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
 import { LocalBrowserWorker } from "./companion/local-browser-worker.js";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
+import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
@@ -35,6 +36,10 @@ type CompanionRuntimeConfig = {
 
 async function main(): Promise<void> {
   const runtime = await loadCompanionRuntimeConfig(process.env);
+  const instanceLock = await acquireCompanionInstanceLock({
+    stateRoot: runtime.stateRoot,
+    releaseRoot: runtime.releaseRoot,
+  });
   configureBundledRuntimeTools(runtime.releaseRoot, process.env);
   const internalAssertion = randomBytes(32).toString("base64url");
   const elevationBroker =
@@ -169,6 +174,7 @@ async function main(): Promise<void> {
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
     await browserWorker?.close();
+    await instanceLock.release();
     writeLog({ event: "mcp_v3_local_stopped" });
   }
 }

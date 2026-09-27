@@ -1,13 +1,32 @@
-import { AppError, type PolicyFile, type SourceControlExecutor, type WorkspaceExecutor } from "@vs-code-gpt/shared";
-import { InProcessWorkspaceExecutor, LocalAgent, type LocalAgentOptions } from "@vs-code-gpt/local-agent";
+import {
+  AppError,
+  TypedConfirmationRegistry,
+  type PolicyFile,
+  type SourceControlExecutor,
+  type WorkspaceExecutor,
+} from "@vs-code-gpt/shared";
+import {
+  CommandConfirmationRegistry,
+  InProcessWorkspaceExecutor,
+  LocalAgent,
+  type LocalAgentOptions,
+} from "@vs-code-gpt/local-agent";
 
 export class ReloadableLocalAgent {
   private current: InProcessWorkspaceExecutor | null = null;
   private generation = 0;
+  private readonly options: LocalAgentOptions;
   readonly workspaceExecutor: WorkspaceExecutor;
   readonly sourceControlExecutor: SourceControlExecutor;
 
-  constructor(private readonly options: LocalAgentOptions = {}) {
+  constructor(options: LocalAgentOptions = {}) {
+    this.options = {
+      ...options,
+      commandConfirmationRegistry:
+        options.commandConfirmationRegistry ?? new CommandConfirmationRegistry(),
+      typedConfirmationRegistry:
+        options.typedConfirmationRegistry ?? new TypedConfirmationRegistry(),
+    };
     const proxy = new Proxy({} as InProcessWorkspaceExecutor, {
       get: (_target, property) => {
         if (property === "listWorkspaces" && this.current === null) {

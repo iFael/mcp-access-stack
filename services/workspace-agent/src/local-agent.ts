@@ -153,6 +153,7 @@ import { AuditLogger } from "./audit-log.js";
 import type { ResolvedWorkspace } from "./internal-types.js";
 import { FileService } from "./filesystem/service.js";
 import { GitService } from "./git/service.js";
+import { CommandConfirmationRegistry } from "./shell/confirmation.js";
 import { ShellService } from "./shell/service.js";
 import type { ElevationBroker } from "./shell/elevation-broker.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
@@ -187,6 +188,7 @@ export interface LocalAgentOptions {
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
+  commandConfirmationRegistry?: CommandConfirmationRegistry;
   typedConfirmationRegistry?: TypedConfirmationRegistry;
   mutationReceiptStore?: MutationReceiptStore;
   elevationBroker?: ElevationBroker;
@@ -222,7 +224,10 @@ export class LocalAgent {
     private readonly audit: AuditLogger,
     options: LocalAgentOptions = {},
   ) {
-    this.shellService = new ShellService(options.elevationBroker);
+    this.shellService = new ShellService(
+      options.elevationBroker,
+      options.commandConfirmationRegistry,
+    );
     this.injectedGitRepositoryExecutor = options.gitRepositoryExecutor;
     this.injectedGitOriginResolver = options.gitOriginResolver;
     this.injectedGitHubExecutor = options.githubExecutor;
