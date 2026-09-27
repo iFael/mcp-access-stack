@@ -20,12 +20,16 @@ describe("WindowsElevationBroker", () => {
   });
 
   it("keeps command content out of the UAC command line and validates the nonce-bound response", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-elevation-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp v3 elevation-"));
     temporaryRoots.push(root);
     const brokerPath = path.join(root, "McpElevationBroker.exe");
     await writeFile(brokerPath, "fixture", "utf8");
 
-    const captured: { file?: string; args?: readonly string[] } = {};
+    const captured: {
+      file?: string;
+      args?: readonly string[];
+      requestPath?: string;
+    } = {};
     const spawnProcess = ((file: string, args: readonly string[]) => {
       captured.file = file;
       captured.args = [...args];
@@ -43,6 +47,7 @@ describe("WindowsElevationBroker", () => {
           );
           if (!requestName) throw new Error("request fixture was not created");
           const requestPath = path.join(directory, requestName);
+          captured.requestPath = requestPath;
           const request = JSON.parse(await readFile(requestPath, "utf8")) as {
             nonce: string;
             command: string;
@@ -97,9 +102,13 @@ describe("WindowsElevationBroker", () => {
     expect(encodedIndex).toBeGreaterThanOrEqual(0);
     const encoded = captured.args?.[encodedIndex + 1] ?? "";
     const decoded = Buffer.from(encoded, "base64").toString("utf16le");
-    expect(decoded).toContain("--request");
+    expect(root).toContain("mcp v3 elevation-");
+    expect(decoded).toContain("$ProgressPreference='SilentlyContinue'");
+    expect(decoded).toContain("-ArgumentList $brokerArgs");
+    expect(decoded).toContain(`--request "${captured.requestPath}"`);
     expect(decoded).toContain("--sha256");
     expect(decoded).toContain("--nonce");
+    expect(decoded).not.toContain("$args=@(");
     expect(decoded).not.toContain("SECRET_COMMAND_MARKER");
 
     const leftovers = await readdir(path.join(root, "private", "elevation"));

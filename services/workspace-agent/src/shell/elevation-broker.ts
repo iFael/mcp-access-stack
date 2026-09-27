@@ -219,12 +219,21 @@ export class WindowsElevationBroker implements ElevationBroker {
     nonce: string,
   ): Promise<void> {
     const broker = path.resolve(this.options.brokerExecutablePath);
+    const brokerArguments = [
+      "--request",
+      quoteWindowsCommandLineArgument(requestPath),
+      "--sha256",
+      sha256,
+      "--nonce",
+      nonce,
+    ].join(" ");
     const script = [
       "$ErrorActionPreference='Stop'",
+      "$ProgressPreference='SilentlyContinue'",
       `$file='${escapePowerShellLiteral(broker)}'`,
-      `$args=@('--request','${escapePowerShellLiteral(requestPath)}','--sha256','${sha256}','--nonce','${nonce}')`,
+      `$brokerArgs='${escapePowerShellLiteral(brokerArguments)}'`,
       "try {",
-      "  $p=Start-Process -FilePath $file -ArgumentList $args -Verb RunAs -Wait -PassThru",
+      "  $p=Start-Process -FilePath $file -ArgumentList $brokerArgs -Verb RunAs -Wait -PassThru",
       "  exit [int]$p.ExitCode",
       "} catch {",
       "  [Console]::Error.Write($_.Exception.Message)",
@@ -314,6 +323,10 @@ async function readBrokerResponse(
 
 function escapePowerShellLiteral(value: string): string {
   return value.replaceAll("'", "''");
+}
+
+function quoteWindowsCommandLineArgument(value: string): string {
+  return `"${value.replaceAll('"', '\\"')}"`;
 }
 
 function delay(ms: number): Promise<void> {
