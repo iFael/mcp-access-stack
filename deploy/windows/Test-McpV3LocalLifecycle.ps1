@@ -113,6 +113,7 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     'state.active.releaseId',
     'Invoke-McpV3LocalUpdateTask.ps1',
     'Get-Command pwsh.exe -CommandType Application -ErrorAction Stop',
+    '-ExecutionTimeLimit (New-TimeSpan -Minutes 45)',
     '-UpdaterTaskName',
     '-LogonType Interactive',
     '-RunLevel Limited',
