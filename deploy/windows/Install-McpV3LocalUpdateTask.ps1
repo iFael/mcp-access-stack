@@ -61,13 +61,14 @@ $script = @(
     ('$state=Get-Content -LiteralPath {0} -Raw | ConvertFrom-Json' -f (ConvertTo-McpSingleQuotedLiteral $statePath)),
     'if($null -eq $state.active){throw ''MCP V3 active release is unavailable.''}',
     ('$releaseRoot=Join-Path {0} ([string]$state.active.releaseId)' -f (ConvertTo-McpSingleQuotedLiteral (Join-Path $installation 'releases'))),
-    '$updater=Join-Path $releaseRoot ''deploy\windows\Update-McpV3Local.ps1''',
-    'if(-not (Test-Path -LiteralPath $updater -PathType Leaf)){throw ''MCP V3 local updater is missing from the active release.''}',
-    ('& $updater -Repository {0} -InstallationRoot {1} -StateRoot {2} -TaskName {3} -Execute' -f
+    '$runner=Join-Path $releaseRoot ''deploy\windows\Invoke-McpV3LocalUpdateTask.ps1''',
+    'if(-not (Test-Path -LiteralPath $runner -PathType Leaf)){throw ''MCP V3 local updater task runner is missing from the active release.''}',
+    ('& $runner -Repository {0} -InstallationRoot {1} -StateRoot {2} -CompanionTaskName {3} -UpdaterTaskName {4} -Execute' -f
         (ConvertTo-McpSingleQuotedLiteral $Repository),
         (ConvertTo-McpSingleQuotedLiteral $installation),
         (ConvertTo-McpSingleQuotedLiteral $state),
-        (ConvertTo-McpSingleQuotedLiteral $CompanionTaskName)),
+        (ConvertTo-McpSingleQuotedLiteral $CompanionTaskName),
+        (ConvertTo-McpSingleQuotedLiteral $TaskName)),
     'if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}'
 ) -join '; '
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))

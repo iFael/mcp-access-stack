@@ -107,7 +107,8 @@ $updateTask = Read-ProjectFile 'deploy\windows\Install-McpV3LocalUpdateTask.ps1'
 Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @(
     '-ExecutionPolicy AllSigned',
     'state.active.releaseId',
-    'Update-McpV3Local.ps1',
+    'Invoke-McpV3LocalUpdateTask.ps1',
+    '-UpdaterTaskName',
     '-LogonType Interactive',
     '-RunLevel Limited',
     'Set-McpWindowsScheduledTaskOwnerAccess'
@@ -116,6 +117,31 @@ Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -
     'ExecutionPolicy Bypass',
     'RunLevel Highest',
     'MCP_CONNECTOR_TOKEN'
+)
+
+$updateHandoff = Read-ProjectFile 'deploy\windows\Start-McpV3LocalUpdate.ps1'
+Assert-ContainsAll -Label 'MCP V3 local update handoff' -Source $updateHandoff -Tokens @(
+    'update-request.v1.json',
+    'Install-McpV3LocalUpdateTask.ps1',
+    'Start-ScheduledTask -TaskName $UpdaterTaskName',
+    "status = 'accepted'",
+    'restoreEnabled',
+    'resultPath'
+)
+Assert-ContainsNone -Label 'MCP V3 local update handoff' -Source $updateHandoff -Tokens @(
+    'RunLevel Highest',
+    'LocalSystem',
+    'ExecutionPolicy Bypass'
+)
+
+$updateRunner = Read-ProjectFile 'deploy\windows\Invoke-McpV3LocalUpdateTask.ps1'
+Assert-ContainsAll -Label 'MCP V3 local update task runner' -Source $updateRunner -Tokens @(
+    'update-request.v1.json',
+    'Update-McpV3Local.ps1',
+    "status = 'succeeded'",
+    "status = 'failed'",
+    'Disable-ScheduledTask -TaskName $UpdaterTaskName',
+    'result-$operationId.json'
 )
 
 $uninstaller = Read-ProjectFile 'deploy\windows\Uninstall-McpV3Local.ps1'
@@ -135,6 +161,8 @@ Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -To
     'Install-McpV3LocalTask.ps1',
     'Install-McpV3LocalUpdateTask.ps1',
     'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'Invoke-McpV3LocalUpdateTask.ps1',
+    'Start-McpV3LocalUpdate.ps1',
     'Update-McpV3Local.ps1',
     'Uninstall-McpV3Local.ps1',
     "id = 'local-companion'",

@@ -266,7 +266,7 @@ jobs:
     timeout-minutes: 35
     environment: public-release
     permissions:
-      contents: read
+      contents: write
     defaults:
       run:
         working-directory: .
@@ -414,6 +414,23 @@ jobs:
             ${{ runner.temp }}/candidate-distribution/${{ steps.metadata.outputs.release_tag }}-windows-x64.zip.sha256
           if-no-files-found: error
           retention-days: 3
+
+      - name: Publish signed candidate prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = Join-Path $env:RUNNER_TEMP "candidate-distribution\$env:RELEASE_TAG-windows-x64.zip"
+          $checksum = "$asset.sha256"
+          $title = "MCP V3 R10 candidate $env:GITHUB_RUN_ID"
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG $asset $checksum --clobber --repo $env:GITHUB_REPOSITORY
+          }
+          else {
+            gh release create $env:RELEASE_TAG $asset $checksum --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --prerelease --title $title --notes "Signed MCP V3 R10 homologation candidate for run $env:GITHUB_RUN_ID."
+          }
 
   cleanup-preview-on-candidate-failure:
     if: always() && needs.edge-preview.result != 'skipped' && (needs.edge-preview.result != 'success' || needs.windows-signed-candidate.result != 'success')
