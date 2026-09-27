@@ -13,12 +13,15 @@ describe("ReleaseLifecycleService", () => {
   let installationRoot: string;
   let previousInstallationRoot: string | undefined;
   let previousStackRoot: string | undefined;
+  let previousLocalReleaseRoot: string | undefined;
   let workspace: ResolvedWorkspace;
 
   beforeEach(async () => {
     installationRoot = await mkdtemp(path.join(os.tmpdir(), "mcp-release-service-"));
     previousInstallationRoot = process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
     previousStackRoot = process.env.VS_CODE_GPT_STACK_ROOT;
+    previousLocalReleaseRoot = process.env.MCP_V3_RELEASE_ROOT;
+    delete process.env.MCP_V3_RELEASE_ROOT;
     process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT = installationRoot;
     workspace = {
       id: "ws",
@@ -39,6 +42,11 @@ describe("ReleaseLifecycleService", () => {
     } else {
       process.env.VS_CODE_GPT_STACK_ROOT = previousStackRoot;
     }
+    if (previousLocalReleaseRoot === undefined) {
+      delete process.env.MCP_V3_RELEASE_ROOT;
+    } else {
+      process.env.MCP_V3_RELEASE_ROOT = previousLocalReleaseRoot;
+    }
     await rm(installationRoot, { recursive: true, force: true });
   });
 
@@ -54,6 +62,48 @@ describe("ReleaseLifecycleService", () => {
     await expect(service.getState(other)).rejects.toMatchObject({
       code: "PERMISSION_DENIED",
     });
+  });
+
+  it("reads R10 local lifecycle state without the legacy stack root", async () => {
+    delete process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
+    delete process.env.VS_CODE_GPT_STACK_ROOT;
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    await writeState({ candidate: null });
+    await writeBootstrap("Update-McpAccessStack.ps1");
+    await writeBootstrap("Start-McpAccessStackCutover.ps1");
+
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
+    const result = await service.getState(workspace);
+
+    expect(result.installationRoot).toBe(path.resolve(installationRoot));
+    expect(result.state.active?.releaseId).toBe(ACTIVE);
+    expect(result.activeBootstrap).toEqual({
+      updateScriptPresent: true,
+      cutoverScriptPresent: true,
+    });
+  });
+
+  it("keeps mutating legacy lifecycle operations fail-closed in R10 local mode", async () => {
+    delete process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
+    delete process.env.VS_CODE_GPT_STACK_ROOT;
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+
+    const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
+    await expect(
+      service.prepare(
+        workspace,
+        "iFael/mcp-access-stack",
+        { workspaceId: "ws", tag: "v1.1.0-beta.51" },
+        {},
+      ),
+    ).rejects.toMatchObject({ code: "CAPABILITY_UNSUPPORTED" });
+    await expect(
+      service.promote(
+        workspace,
+        { workspaceId: "ws", releaseId: CANDIDATE },
+        {},
+      ),
+    ).rejects.toMatchObject({ code: "CAPABILITY_UNSUPPORTED" });
   });
 
   it("reports whether the active release contains signed lifecycle bootstraps", async () => {
