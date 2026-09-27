@@ -280,6 +280,44 @@ describe("run command", () => {
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
   });
 
+  test("uses native elevation directly for safe commands without MCP confirmation", async () => {
+    fixture = await createWritableShellFixture();
+    const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
+      status: "executed",
+      shell: request.shell,
+      cwd: request.logicalCwd,
+      exitCode: 0,
+      stdout: "uac-ok\n",
+      stderr: "",
+      timedOut: false,
+    }));
+    const agent = await LocalAgent.create(fixture.policyPath, {
+      elevationBroker: { run },
+    });
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command: "Write-Output 'uac-ok'",
+      elevated: true,
+      timeoutMs: 30_000,
+    })).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      stdout: "uac-ok\n",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: "powershell",
+        command: "Write-Output 'uac-ok'",
+        logicalCwd: ".",
+      }),
+      undefined,
+    );
+  });
+
   test("binds elevation to confirmation and executes only through the injected broker", async () => {
     fixture = await createWritableShellFixture();
     const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
@@ -326,9 +364,6 @@ describe("run command", () => {
     });
     expect(elevatedConfirmation).toMatchObject({
       status: "confirmation_required",
-      reasons: expect.arrayContaining([
-        "elevated command requires explicit confirmation",
-      ]),
     });
     if (elevatedConfirmation.status !== "confirmation_required") {
       throw new Error("Expected elevated confirmation.");

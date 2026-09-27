@@ -150,10 +150,8 @@ export class ShellService {
       logicalCwd: cwd.logicalPath,
       absoluteCwd: cwd.absolutePath,
       directRisk: risk,
-      currentRequiresConfirmation: risk.destructive || elevated,
-      fallbackReasons: elevated
-        ? [...risk.reasons, "elevated command requires explicit confirmation"]
-        : risk.reasons,
+      currentRequiresConfirmation: risk.destructive,
+      fallbackReasons: risk.reasons,
     });
     if (authorization.disposition === "blocked") {
       throw new AppError(authorization.code, authorization.reason);
