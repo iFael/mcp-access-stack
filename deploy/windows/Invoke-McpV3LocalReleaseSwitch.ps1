@@ -90,6 +90,44 @@ function Stop-McpV3LocalTask {
     throw "MCP V3 local task did not stop before replacement: $Name"
 }
 
+function Get-McpV3LocalCompanionLaunchers {
+    param([Parameter(Mandatory = $true)][string]$InstallationRoot)
+
+    $releasesRoot = ([IO.Path]::GetFullPath((Join-Path $InstallationRoot 'releases'))).TrimEnd('\') + '\'
+    return @(
+        Get-CimInstance Win32_Process -Filter "Name='McpNodeHostLauncher.exe'" -ErrorAction Stop |
+            Where-Object {
+                $commandLine = [string]$_.CommandLine
+                -not [string]::IsNullOrWhiteSpace($commandLine) -and
+                $commandLine.IndexOf($releasesRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $commandLine.IndexOf('companion-cli.js', [StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+    )
+}
+
+function Stop-McpV3LocalCompanionLaunchers {
+    param([Parameter(Mandatory = $true)][string]$InstallationRoot)
+
+    $launchers = @(Get-McpV3LocalCompanionLaunchers -InstallationRoot $InstallationRoot)
+    foreach ($launcher in $launchers) {
+        $pidValue = [int]$launcher.ProcessId
+        & taskkill.exe /PID ([string]$pidValue) /T /F *> $null
+        if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) {
+            throw "MCP V3 local companion launcher could not be stopped: pid=$pidValue"
+        }
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
+    do {
+        if (@(Get-McpV3LocalCompanionLaunchers -InstallationRoot $InstallationRoot).Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw 'MCP V3 local companion launcher remained alive after task stop.'
+}
+
 function Restore-McpV3LocalTask {
     param([AllowNull()][object]$Snapshot)
     $current = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -97,6 +135,7 @@ function Restore-McpV3LocalTask {
         if ([string]$current.State -eq 'Running') {
             Stop-McpV3LocalTask -Name $TaskName
         }
+        Stop-McpV3LocalCompanionLaunchers -InstallationRoot $installation
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
     if ($null -eq $Snapshot) {
@@ -119,6 +158,7 @@ try {
     if ($existingTask -and [string]$existingTask.State -eq 'Running') {
         Stop-McpV3LocalTask -Name $TaskName
     }
+    Stop-McpV3LocalCompanionLaunchers -InstallationRoot $installation
 
     if (-not $alreadyActive) {
         $cutoverScript = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'

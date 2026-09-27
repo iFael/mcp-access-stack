@@ -280,6 +280,44 @@ describe("run command", () => {
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
   });
 
+  test("preserves risky-command confirmation across LocalAgent recreation when the registry is shared", async () => {
+    fixture = await createWritableShellFixture();
+    await writeWorkspaceFile(fixture.workspacePath, "danger-reload.txt", "remove me");
+    const confirmations = new CommandConfirmationRegistry(60_000);
+    const command = "Remove-Item 'danger-reload.txt' -Force";
+
+    const firstAgent = await LocalAgent.create(fixture.policyPath, {
+      commandConfirmationRegistry: confirmations,
+    });
+    const first = await firstAgent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      timeoutMs: 30_000,
+    });
+    expect(first.status).toBe("confirmation_required");
+    if (first.status !== "confirmation_required") {
+      throw new Error("Expected confirmation_required");
+    }
+
+    const reloadedAgent = await LocalAgent.create(fixture.policyPath, {
+      commandConfirmationRegistry: confirmations,
+    });
+    await expect(
+      reloadedAgent.runCommand({
+        workspaceId: "test",
+        shell: "powershell",
+        command,
+        confirmationId: first.confirmationId,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+
+    await expect(access(`${fixture.workspacePath}/danger-reload.txt`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   test("uses native elevation directly for safe commands without MCP confirmation", async () => {
     fixture = await createWritableShellFixture();
     const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
