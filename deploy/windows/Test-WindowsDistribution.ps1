@@ -109,6 +109,8 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'Install-McpV3LocalTask.ps1',
     'Install-McpV3LocalUpdateTask.ps1',
     'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'Invoke-McpV3LocalUpdateTask.ps1',
+    'Start-McpV3LocalUpdate.ps1',
     'Update-McpV3Local.ps1',
     'Uninstall-McpV3Local.ps1',
     'Start-McpAccessStackCutover.ps1',
