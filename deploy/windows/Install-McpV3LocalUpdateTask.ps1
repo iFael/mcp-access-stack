@@ -73,9 +73,10 @@ $script = @(
 ) -join '; '
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
 $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -EncodedCommand $encoded"
-$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
-    throw "Windows PowerShell was not found: $powershell"
+$pwshCommand = Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+$pwsh = [IO.Path]::GetFullPath([string]$pwshCommand.Source)
+if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {
+    throw "PowerShell 7 was not found: $pwsh"
 }
 
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -84,7 +85,7 @@ $alreadyInstalled = $false
 if ($existing) {
     $actions = @($existing.Actions)
     $matches = $actions.Count -eq 1 -and
-        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq [IO.Path]::GetFullPath($powershell) -and
+        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq $pwsh -and
         [string]$actions[0].Arguments -eq $arguments -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
         [string]$existing.Principal.LogonType -in @('Interactive', 'InteractiveToken') -and
@@ -103,7 +104,7 @@ if ($existing) {
 if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -Hidden
-    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $state
+    $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $state
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour))
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Checks for and atomically activates signed MCP V3 local releases.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
