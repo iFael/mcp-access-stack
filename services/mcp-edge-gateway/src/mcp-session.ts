@@ -13,6 +13,7 @@ import {
 import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import {
   isCompanionEligibleForUser,
+  retireReplacedCompanion,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "./control-plane/companion-routing.js";
@@ -1673,6 +1674,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         if (candidate === webSocket) continue;
         const current = this.readCompanionAttachment(candidate);
         if (current?.deviceId === device.id && candidate.readyState === WebSocket.OPEN) {
+          candidate.serializeAttachment(retireReplacedCompanion(current));
           try { candidate.close(4000, "device reconnected"); } catch { /* already closing */ }
         }
       }

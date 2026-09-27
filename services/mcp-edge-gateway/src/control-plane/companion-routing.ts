@@ -11,6 +11,12 @@ export type CompanionEligibility = {
   deviceId?: string;
 };
 
+export function retireReplacedCompanion<T extends { ready: boolean }>(
+  attachment: T,
+): T {
+  return { ...attachment, ready: false };
+}
+
 export function isCompanionEligibleForUser(
   candidate: CompanionEligibility,
   userId: string,

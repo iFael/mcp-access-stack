@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   isCompanionEligibleForUser,
+  retireReplacedCompanion,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "../src/control-plane/companion-routing.js";
@@ -34,6 +35,24 @@ describe("companion routing", () => {
     expect(isCompanionEligibleForUser({ ...base, online: false }, "usr-a")).toBe(false);
     expect(isCompanionEligibleForUser({ ...base, ready: false }, "usr-a")).toBe(false);
     expect(isCompanionEligibleForUser({ ...base, deviceId: undefined }, "usr-a")).toBe(false);
+  });
+
+  it("makes a replaced companion immediately ineligible before socket close completes", () => {
+    const active = {
+      online: true,
+      ready: true,
+      userId: "usr-a",
+      deviceId: "dev-a",
+      capabilities: ["browser"],
+    };
+    const retired = retireReplacedCompanion(active);
+
+    expect(retired).toEqual({
+      ...active,
+      ready: false,
+    });
+    expect(isCompanionEligibleForUser(retired, "usr-a", "dev-a")).toBe(false);
+    expect(isCompanionEligibleForUser(active, "usr-a", "dev-a")).toBe(true);
   });
 
   it("requires device selection only when more than one eligible device exists", () => {
