@@ -17,6 +17,34 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     );
   });
 
+  it("skips broken .git markers and continues repository discovery", async () => {
+    const root = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "mcp-v3-repository-discovery-")),
+    );
+    temporaryRoots.push(root);
+    const valid = path.join(root, "valid");
+    const broken = path.join(root, "broken");
+    await mkdir(valid, { recursive: true });
+    await mkdir(broken, { recursive: true });
+    await execFileAsync("git", ["init", valid]);
+    await writeFile(path.join(broken, ".git"), "gitdir: missing\n", "utf8");
+
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(root, "state"),
+      managedRoot: path.join(root, "managed"),
+      homeDirectory: root,
+    });
+
+    const discovered = await manager.discoverLocalRepositories({
+      root,
+      maxDepth: 3,
+    });
+
+    expect(discovered.repositories.map((repository) => repository.path)).toEqual([
+      await realpath(valid),
+    ]);
+  });
+
   it("validates bindings in dry-run mode without persisting state", async () => {
     const fixture = await createGitFixture();
     const onChanged = jest.fn(async () => undefined);

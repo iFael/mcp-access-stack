@@ -454,8 +454,16 @@ export class LocalRepositoryManager implements RepositoryExecutor {
       }
 
       if (await isGitRepositoryDirectory(current.directory)) {
-        repositories.push(await this.inspectRepository(current.directory, context?.signal));
-        continue;
+        const validation = await this.runGit(
+          current.directory,
+          ["rev-parse", "--is-inside-work-tree"],
+          context?.signal,
+          true,
+        );
+        if (validation.exitCode === 0 && validation.stdout.trim() === "true") {
+          repositories.push(await this.inspectRepository(current.directory, context?.signal));
+          continue;
+        }
       }
       if (current.depth >= maxDepth) continue;
 
