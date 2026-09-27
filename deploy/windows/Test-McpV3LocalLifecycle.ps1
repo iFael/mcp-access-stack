@@ -124,6 +124,7 @@ Assert-ContainsAll -Label 'MCP V3 local update handoff' -Source $updateHandoff -
     'update-request.v1.json',
     'Install-McpV3LocalUpdateTask.ps1',
     'Start-ScheduledTask -TaskName $UpdaterTaskName',
+    '[IO.FileMode]::CreateNew',
     "status = 'accepted'",
     'restoreEnabled',
     'resultPath'
