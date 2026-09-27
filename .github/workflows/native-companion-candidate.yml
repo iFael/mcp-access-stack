@@ -567,3 +567,5 @@ jobs:
             echo "Failed to restore Worker Preview URL state from cleanup tag." >&2
             exit 1
           fi
+
+# temporary candidate dispatch pulse: dfceb7f-2
