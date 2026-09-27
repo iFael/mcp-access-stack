@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "candidate/**"
+    branches:
+      - "candidate/r10-*"
   workflow_dispatch:
 
 permissions:
