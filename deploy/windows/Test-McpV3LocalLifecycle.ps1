@@ -108,6 +108,7 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     '-ExecutionPolicy AllSigned',
     'state.active.releaseId',
     'Invoke-McpV3LocalUpdateTask.ps1',
+    'Get-Command pwsh.exe -CommandType Application -ErrorAction Stop',
     '-UpdaterTaskName',
     '-LogonType Interactive',
     '-RunLevel Limited',
@@ -116,6 +117,7 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
 Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @(
     'ExecutionPolicy Bypass',
     'RunLevel Highest',
+    'WindowsPowerShell\v1.0\powershell.exe',
     'MCP_CONNECTOR_TOKEN'
 )
 
