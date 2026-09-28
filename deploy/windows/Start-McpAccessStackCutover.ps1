@@ -153,7 +153,13 @@ $request = [ordered]@{
 
 $requestJson = ($request | ConvertTo-Json -Depth 12) + [Environment]::NewLine
 $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestJson)
-$requestSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($requestBytes)).ToLowerInvariant()
+$requestHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $requestSha256 = ([BitConverter]::ToString($requestHasher.ComputeHash($requestBytes))).Replace('-', '').ToLowerInvariant()
+}
+finally {
+    $requestHasher.Dispose()
+}
 
 $pwsh = (Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $executionPolicy = if ($AllowUnsignedDevelopment) { 'Bypass' } else { 'AllSigned' }

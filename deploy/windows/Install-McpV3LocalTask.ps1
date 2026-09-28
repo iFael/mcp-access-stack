@@ -15,6 +15,13 @@ param(
     [ValidateRange(0, 300)]
     [int]$DelaySeconds = 5,
 
+    [ValidateSet('IgnoreNew', 'Parallel')]
+    [string]$MultipleInstances = 'IgnoreNew',
+
+    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')]
+    [string]$HandoverFromInstanceId,
+
+    [switch]$AllowRunningReplacement,
     [switch]$Execute,
     [switch]$Force,
     [switch]$Activate,
@@ -104,11 +111,16 @@ foreach ($value in @(
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_STATE_ROOT=$state")),
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_CONFIG_PATH=$configPath")),
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_CREDENTIAL_BROKER_PATH=$credentialBrokerPath")),
-    '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_ELEVATION_BROKER_PATH=$elevationBrokerPath")),
-    '--', (Quote-McpV3LocalTaskArgument $companionPath)
+    '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_ELEVATION_BROKER_PATH=$elevationBrokerPath"))
 )) {
     $arguments.Add([string]$value)
 }
+if (-not [string]::IsNullOrWhiteSpace($HandoverFromInstanceId)) {
+    $arguments.Add('--env')
+    $arguments.Add((Quote-McpV3LocalTaskArgument ("MCP_V3_HANDOVER_FROM_INSTANCE_ID=$HandoverFromInstanceId")))
+}
+$arguments.Add('--')
+$arguments.Add((Quote-McpV3LocalTaskArgument $companionPath))
 $argumentText = $arguments -join ' '
 
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -124,6 +136,7 @@ if ($existing) {
         [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq [IO.Path]::GetFullPath($launcherPath) -and
         [string]$actions[0].Arguments -eq $argumentText -and
         [string]$actions[0].WorkingDirectory -eq $releaseRoot -and
+        [string]$existing.Settings.MultipleInstances -eq $MultipleInstances -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
         [string]$existing.Principal.LogonType -in @('Interactive', 'InteractiveToken') -and
         [string]$existing.Principal.RunLevel -eq 'Limited'
@@ -133,14 +146,14 @@ if ($existing) {
     elseif (-not $Force) {
         throw "Scheduled Task exists with a different MCP V3 local contract: $TaskName"
     }
-    elseif ([string]$existing.State -eq 'Running') {
-        throw "Scheduled Task is running and must be stopped before replacement: $TaskName"
+    elseif ([string]$existing.State -eq 'Running' -and -not $AllowRunningReplacement) {
+        throw "Scheduled Task is running and must be stopped before replacement unless handover replacement is explicitly allowed: $TaskName"
     }
 }
 
 if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -Hidden
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances $MultipleInstances -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -Hidden
     $action = New-ScheduledTaskAction -Execute $launcherPath -Argument $argumentText -WorkingDirectory $releaseRoot
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
     if ($DelaySeconds -gt 0) {
@@ -169,4 +182,6 @@ else {
     runLevel = 'Limited'
     logonType = 'Interactive'
     stateRoot = $state
+    multipleInstances = $MultipleInstances
+    handover = -not [string]::IsNullOrWhiteSpace($HandoverFromInstanceId)
 } | ConvertTo-Json -Compress

@@ -55,6 +55,46 @@ describe("companion routing", () => {
     expect(isCompanionEligibleForUser(active, "usr-a", "dev-a")).toBe(true);
   });
 
+  it("keeps one eligible owner throughout same-device handover", () => {
+    const oldAttachment = {
+      online: true,
+      ready: true,
+      userId: "usr-a",
+      deviceId: "dev-a",
+    };
+    const pendingNewAttachment = {
+      online: true,
+      ready: false,
+      userId: "usr-a",
+      deviceId: "dev-a",
+    };
+
+    const beforeReady = [oldAttachment, pendingNewAttachment]
+      .filter((attachment) => isCompanionEligibleForUser(attachment, "usr-a", "dev-a"))
+      .map((attachment, index) => ({
+        target: index === 0 ? "old" : "new",
+        deviceId: attachment.deviceId!,
+        workspaceIds: ["repo-a"],
+      }));
+    expect(selectCompanionDevice(beforeReady, "dev-a")).toMatchObject({
+      kind: "selected",
+      candidate: { target: "old" },
+    });
+
+    const afterReady = [retireReplacedCompanion(oldAttachment), { ...pendingNewAttachment, ready: true }]
+      .filter((attachment) => isCompanionEligibleForUser(attachment, "usr-a", "dev-a"))
+      .map((attachment) => ({
+        target: attachment.ready && attachment === oldAttachment ? "old" : "new",
+        deviceId: attachment.deviceId!,
+        workspaceIds: ["repo-a"],
+      }));
+    expect(afterReady).toHaveLength(1);
+    expect(selectCompanionDevice(afterReady, "dev-a")).toMatchObject({
+      kind: "selected",
+      candidate: { target: "new" },
+    });
+  });
+
   it("requires device selection only when more than one eligible device exists", () => {
     expect(selectCompanionDevice(candidates)).toEqual({ kind: "ambiguous" });
     expect(selectCompanionDevice(candidates, "dev-a")).toEqual({

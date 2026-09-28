@@ -91,6 +91,13 @@ Assert-ContainsAll -Label 'MCP V3 local release switch' -Source $switch -Tokens 
     'Install-McpV3LocalTask.ps1',
     'Restore-McpV3LocalTask',
     'Stop-McpV3LocalCompanionLaunchers',
+    'Wait-McpV3LocalHandover',
+    'companion-instance.v1.json',
+    '-MultipleInstances Parallel',
+    '-HandoverFromInstanceId',
+    '-AllowRunningReplacement',
+    '-MultipleInstances IgnoreNew',
+    'zeroGapHandover = $usedZeroGapHandover',
     'McpNodeHostLauncher.exe',
     'companion-cli.js',
     'taskkill.exe',
@@ -119,6 +126,14 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     '-RunLevel Limited',
     'Set-McpWindowsScheduledTaskOwnerAccess'
 )
+$localTaskInstaller = Read-ProjectFile 'deploy\windows\Install-McpV3LocalTask.ps1'
+Assert-ContainsAll -Label 'MCP V3 local task handover contract' -Source $localTaskInstaller -Tokens @(
+    "[ValidateSet('IgnoreNew', 'Parallel')]",
+    'MCP_V3_HANDOVER_FROM_INSTANCE_ID',
+    'AllowRunningReplacement',
+    '-MultipleInstances $MultipleInstances'
+)
+
 Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @(
     'ExecutionPolicy Bypass',
     'RunLevel Highest',

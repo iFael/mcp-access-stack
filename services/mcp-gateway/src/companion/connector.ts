@@ -228,6 +228,10 @@ export class CompanionConnector {
       socket.once("close", (code) => {
         for (const controller of this.activeRequests.values()) controller.abort(`socket_closed_${code}`);
         this.activeRequests.clear();
+        if (code === 4000) {
+          this.stopped = true;
+          this.log({ event: "local_runtime_superseded" });
+        }
         finish();
       });
     });

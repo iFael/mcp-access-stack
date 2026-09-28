@@ -4,6 +4,19 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-McpWindowsRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $resolvedPath = [IO.Path]::GetFullPath($Path)
+    if (-not $resolvedPath.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path must stay below its root. root=$resolvedRoot path=$resolvedPath"
+    }
+    return $resolvedPath.Substring($resolvedRoot.Length)
+}
+
 function Get-McpV3LocalDefaultStateRoot {
     $profileRoot = [string]$env:USERPROFILE
     if ([string]::IsNullOrWhiteSpace($profileRoot)) {
@@ -337,7 +350,7 @@ function Assert-McpWindowsExecutionNodeDistributionCompleteness {
         Get-ChildItem -LiteralPath $resolvedRoot -Recurse -Force -File |
             Where-Object { $_.FullName -ne (Join-Path $resolvedRoot 'distribution-manifest.ps1') } |
             ForEach-Object {
-                [System.IO.Path]::GetRelativePath($resolvedRoot, $_.FullName).Replace('\', '/')
+                (Get-McpWindowsRelativePath -Root $resolvedRoot -Path $_.FullName).Replace('\', '/')
             }
     )
     if ($actual.Count -ne $expected.Count) {
@@ -388,7 +401,7 @@ function Assert-McpWindowsExecutionNodeMaterializedRelease {
     $actual = @(
         Get-ChildItem -LiteralPath $resolvedRelease -Recurse -Force -File |
             ForEach-Object {
-                [System.IO.Path]::GetRelativePath($resolvedRelease, $_.FullName).Replace('\', '/')
+                (Get-McpWindowsRelativePath -Root $resolvedRelease -Path $_.FullName).Replace('\', '/')
             }
     )
     if ($actual.Count -ne $expected.Count) {
@@ -651,7 +664,7 @@ function Enter-McpWindowsExecutionNodeOperationMutex {
     try {
         $bytes = [Text.Encoding]::UTF8.GetBytes($resolvedRoot)
         $hashBytes = $sha.ComputeHash($bytes)
-        $hash = ([Convert]::ToHexString($hashBytes)).ToLowerInvariant()
+        $hash = ([BitConverter]::ToString($hashBytes)).Replace('-', '').ToLowerInvariant()
     }
     finally {
         $sha.Dispose()
@@ -740,7 +753,12 @@ function Write-McpWindowsExecutionNodeState {
             (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
             [Text.UTF8Encoding]::new($false)
         )
-        [IO.File]::Move($temporaryPath, $resolvedPath, $true)
+        if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
+            [IO.File]::Replace($temporaryPath, $resolvedPath, $null)
+        }
+        else {
+            [IO.File]::Move($temporaryPath, $resolvedPath)
+        }
     }
     finally {
         if (Test-Path -LiteralPath $temporaryPath) {

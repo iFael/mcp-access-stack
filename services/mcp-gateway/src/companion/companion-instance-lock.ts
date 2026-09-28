@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { AppError } from "@vs-code-gpt/shared";
@@ -18,6 +18,7 @@ export interface CompanionInstanceLockOptions {
   pid?: number;
   now?: () => Date;
   processAlive?: (pid: number) => boolean;
+  handoverFromInstanceId?: string;
 }
 
 export interface CompanionInstanceLease {
@@ -54,16 +55,7 @@ export async function acquireCompanionInstanceLock(
       } finally {
         await handle.close();
       }
-      return {
-        lockPath,
-        instanceId,
-        release: async () => {
-          const current = await readCompanionInstanceRecord(lockPath);
-          if (current?.instanceId === instanceId) {
-            await rm(lockPath, { force: true });
-          }
-        },
-      };
+      return createLease(lockPath, instanceId);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
@@ -74,6 +66,27 @@ export async function acquireCompanionInstanceLock(
       existing = await readCompanionInstanceRecord(lockPath);
     }
     if (existing && processAlive(existing.pid)) {
+      if (
+        options.handoverFromInstanceId !== undefined &&
+        existing.instanceId === options.handoverFromInstanceId
+      ) {
+        const handoverPath = `${lockPath}.${instanceId}.handover`;
+        await writeFile(handoverPath, `${JSON.stringify(record)}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+        try {
+          const current = await readCompanionInstanceRecord(lockPath);
+          if (current?.instanceId !== options.handoverFromInstanceId) {
+            continue;
+          }
+          await rename(handoverPath, lockPath);
+          return createLease(lockPath, instanceId);
+        } finally {
+          await rm(handoverPath, { force: true });
+        }
+      }
       throw new AppError(
         "AGENT_BUSY",
         `Another MCP V3 local companion instance is already active. pid=${existing.pid}`,
@@ -86,6 +99,19 @@ export async function acquireCompanionInstanceLock(
     "AGENT_BUSY",
     "MCP V3 local companion could not acquire its single-instance lock.",
   );
+}
+
+function createLease(lockPath: string, instanceId: string): CompanionInstanceLease {
+  return {
+    lockPath,
+    instanceId,
+    release: async () => {
+      const current = await readCompanionInstanceRecord(lockPath);
+      if (current?.instanceId === instanceId) {
+        await rm(lockPath, { force: true });
+      }
+    },
+  };
 }
 
 async function readCompanionInstanceRecord(

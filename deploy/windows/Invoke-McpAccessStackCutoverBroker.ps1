@@ -104,7 +104,12 @@ function Write-McpEdgeTaskRecoveryConfig {
             (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
             [Text.UTF8Encoding]::new($false)
         )
-        [IO.File]::Move($temporary, $Path, $true)
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [IO.File]::Replace($temporary, $Path, $null)
+        }
+        else {
+            [IO.File]::Move($temporary, $Path)
+        }
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
@@ -443,7 +448,12 @@ function Write-McpCutoverBrokerResult {
             (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine),
             [Text.UTF8Encoding]::new($false)
         )
-        [IO.File]::Move($temporary, $resultPath, $true)
+        if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+            [IO.File]::Replace($temporary, $resultPath, $null)
+        }
+        else {
+            [IO.File]::Move($temporary, $resultPath)
+        }
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue

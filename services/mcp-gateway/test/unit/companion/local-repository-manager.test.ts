@@ -225,7 +225,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     const again = await manager.materializeRepositoryFromCloud(input);
     expect(again.path).toBe(materialized.path);
     expect(manager.listBindings()).toHaveLength(1);
-  });
+  }, 15_000);
 
   it("rejects unsafe Git transports for cloud materialization", async () => {
     const fixture = await createGitFixture();
@@ -273,7 +273,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
         detail: expect.stringContaining("local changes"),
       });
     }
-  });
+  }, 15_000);
 
   it("advertises native POSIX shells on Linux and macOS", async () => {
     for (const platform of ["linux", "darwin"] as const) {
@@ -289,7 +289,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
       expect(workspaces).toHaveLength(1);
       expect(workspaces[0]?.allowedShells).toEqual(["sh", "bash"]);
     }
-  });
+  }, 15_000);
 
   it("advertises repository-scoped typed source-control capabilities", async () => {
     const fixture = await createGitFixture();

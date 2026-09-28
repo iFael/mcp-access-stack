@@ -58,6 +58,50 @@ describe("companion single-instance lock", () => {
     await first.release();
   });
 
+  it("transfers a live lock only when the expected instance authorizes handover", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-lock-"));
+    temporaryRoots.push(root);
+
+    const first = await acquireCompanionInstanceLock({
+      stateRoot: root,
+      releaseRoot: path.join(root, "release-a"),
+      pid: 101,
+      processAlive: (pid) => pid === 101 || pid === 202,
+    });
+
+    await expect(
+      acquireCompanionInstanceLock({
+        stateRoot: root,
+        releaseRoot: path.join(root, "release-b"),
+        pid: 202,
+        processAlive: (pid) => pid === 101 || pid === 202,
+        handoverFromInstanceId: "wrong-instance",
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_BUSY" });
+
+    const second = await acquireCompanionInstanceLock({
+      stateRoot: root,
+      releaseRoot: path.join(root, "release-b"),
+      pid: 202,
+      processAlive: (pid) => pid === 101 || pid === 202,
+      handoverFromInstanceId: first.instanceId,
+    });
+    const persisted = JSON.parse(await readFile(second.lockPath, "utf8")) as {
+      pid: number;
+      instanceId: string;
+      releaseRoot: string;
+    };
+    expect(persisted.pid).toBe(202);
+    expect(persisted.instanceId).toBe(second.instanceId);
+    expect(path.basename(persisted.releaseRoot)).toBe("release-b");
+
+    await first.release();
+    expect(JSON.parse(await readFile(second.lockPath, "utf8"))).toMatchObject({
+      instanceId: second.instanceId,
+    });
+    await second.release();
+  });
+
   it("recovers a stale lock left by a dead companion", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-lock-"));
     temporaryRoots.push(root);
