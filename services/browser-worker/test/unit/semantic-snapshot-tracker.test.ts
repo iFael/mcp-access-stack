@@ -70,6 +70,16 @@ describe("SemanticSnapshotTracker", () => {
     });
     expect(navigated.update.kind).toBe("full");
     expect(navigated.update.documentId).not.toBe(documentId);
+    expect(navigated.update.revision).toBeGreaterThan(eventOnly.update.revision);
+
+    const sameClientRevisionAfterNavigation = await tracker.capture(page, {
+      knownRevision: eventOnly.update.revision,
+      snapshot: async () => '- heading "New page"',
+    });
+    expect(sameClientRevisionAfterNavigation.update.kind).toBe("full");
+    expect(sameClientRevisionAfterNavigation.update.documentId).toBe(
+      navigated.update.documentId,
+    );
   });
 
   it("uses tracked deltas only for a current revision and preserves forceFull", async () => {

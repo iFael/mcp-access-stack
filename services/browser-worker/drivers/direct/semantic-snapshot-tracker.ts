@@ -49,7 +49,7 @@ export class SemanticSnapshotTracker {
     const existing = this.pages.get(page);
     this.pages.set(page, {
       documentId: randomUUID(),
-      revision: 0,
+      revision: existing?.revision ?? 0,
       history: [],
       events: existing?.events.slice(-this.eventLimit) ?? [],
       nextEventSequence: existing?.nextEventSequence ?? 0,
