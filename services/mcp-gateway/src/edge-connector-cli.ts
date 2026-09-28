@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
 import path from "node:path";
-import type { Express } from "express";
 import {
   InProcessWorkspaceExecutor,
   LocalAgent,
@@ -13,6 +11,7 @@ import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { EdgeConnector } from "./edge/connector.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
+import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
 
 interface ConnectorRuntimeConfig {
@@ -56,12 +55,8 @@ async function main(): Promise<void> {
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
   });
-  const localServer = await startLoopbackGateway(gateway.app);
-  const localAddress = localServer.address();
-  if (!localAddress || typeof localAddress === "string") {
-    throw new AppError("AGENT_UNAVAILABLE", "Loopback Gateway did not expose a TCP address.");
-  }
-  const localBaseUrl = new URL(`http://127.0.0.1:${localAddress.port}/`);
+  const loopback = await startLoopbackGateway(gateway.app);
+  const localBaseUrl = loopback.baseUrl;
   const connector = new EdgeConnector({
     edgeUrl: runtime.connectorUrl,
     token: connectorToken,
@@ -114,7 +109,7 @@ async function main(): Promise<void> {
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
     await gateway.close();
-    await closeServer(localServer);
+    await closeLoopbackGateway(loopback.server);
     writeLog({ event: "edge_connector_process_stopped" });
   }
 }
@@ -153,31 +148,6 @@ async function readConnectorToken(filePath: string): Promise<string> {
     throw new AppError("POLICY_INVALID", "Connector token file contains an invalid token.");
   }
   return token;
-}
-
-async function startLoopbackGateway(app: Express): Promise<Server> {
-  const server = createServer(app);
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(0, "127.0.0.1");
-  });
-  return server;
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve) => {
-    server.close(() => resolve());
-    server.closeIdleConnections();
-  });
 }
 
 function requireValue(value: string | undefined, name: string): string {

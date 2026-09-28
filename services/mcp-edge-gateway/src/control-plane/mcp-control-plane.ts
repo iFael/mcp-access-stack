@@ -48,9 +48,18 @@ export interface EdgeMcpCatalog {
   serverIdentity: Readonly<{ name: string; version: string }>;
 }
 
+export interface EdgeLocalMcpToolHandler {
+  handle(
+    body: unknown,
+    principal: AuthenticatedEdgePrincipal,
+    request?: Request,
+  ): Promise<Response | null>;
+}
+
 export interface EdgeMcpControlPlaneOptions extends EdgeMcpCatalog {
   authenticator: EdgeAuthenticator;
   execution: EdgeExecutionTransport;
+  localTools?: EdgeLocalMcpToolHandler;
 }
 
 export interface EdgeMcpControlPlane {
@@ -103,6 +112,11 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
         });
         attachCatalogDiagnostic(response, options);
         return response;
+      }
+
+      if (parsed.method === "tools/call" && options.localTools) {
+        const localResponse = await options.localTools.handle(parsed.raw, principal, request);
+        if (localResponse) return localResponse;
       }
 
       if (!options.execution.isReady()) {

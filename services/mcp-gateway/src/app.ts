@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type {
   BrowserExecutor,
+  RepositoryExecutor,
   SourceControlExecutor,
   ToolOperationContextFactory,
   WorkspaceExecutor,
@@ -42,6 +43,7 @@ import {
   mountOwnerOAuth,
 } from "./auth/owner-mount.js";
 import { mountGptActions } from "./actions/service.js";
+import type { CompanionRepositoryBinder } from "./companion/internal-repository-tools.js";
 import {
   createEdgeTrustedAuthenticationMiddleware,
   type EdgeTrustConfig,
@@ -71,6 +73,8 @@ export interface GatewayApplicationDependencies {
   browser?: BrowserExecutor;
   workspaceExecutor?: WorkspaceExecutor;
   sourceControlExecutor?: SourceControlExecutor;
+  repositoryExecutor?: RepositoryExecutor;
+  companionRepositoryBinder?: CompanionRepositoryBinder;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
 }
@@ -324,6 +328,8 @@ export function createGatewayApplication(
       const server = createMcpServer({
         workspaceExecutor,
         sourceControlExecutor,
+        ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),
+        ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
         ...(browser === undefined ? {} : { browser }),
         auth: mcpAuth,
         operationContextFactory: statefulOperationContextFactory,
@@ -558,6 +564,8 @@ export function createGatewayApplication(
     const server = createMcpServer({
       workspaceExecutor,
       sourceControlExecutor,
+      ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),
+      ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
       ...(browser === undefined ? {} : { browser }),
       auth: mcpAuth,
       operationContextFactory,

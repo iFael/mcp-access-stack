@@ -702,6 +702,12 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
     context: OperationContext = {},
   ): Promise<RunCommandResult> {
     const workspace = this.workspace(input.workspaceId);
+    if (input.elevated) {
+      throw new AppError(
+        "CAPABILITY_UNSUPPORTED",
+        "Elevated command execution is available only on an MCP V3 local Windows runtime.",
+      );
+    }
     const shell = resolveShell(input.shell, workspace.allowedShells);
     const cwd = this.authorizeShellCwd(workspace, input.cwd ?? ".");
     const authorization = this.authorizeCommandExecution({
@@ -952,6 +958,7 @@ export class SshWorkspaceExecutor implements WorkspaceExecutor, GitRepositoryExe
       command: input.command,
       executionContext: input.executionContext,
       operation: input.operation,
+      elevated: false,
     };
     if (risk.destructive) {
       if (!input.confirmationId) {

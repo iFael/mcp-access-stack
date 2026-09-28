@@ -17,6 +17,10 @@ import {
 let fixture: Fixture | undefined;
 let outputDirectory: string | undefined;
 
+const isWindows = process.platform === "win32";
+const nativeShell = isWindows ? "cmd" as const : "sh" as const;
+const sleepShell = isWindows ? "powershell" as const : "sh" as const;
+
 afterEach(async () => {
   await fixture?.cleanup();
   fixture = undefined;
@@ -27,9 +31,10 @@ afterEach(async () => {
 }, 30_000);
 
 describe("shell process runner", () => {
-  test("resolves pwsh natively on Windows and Linux", () => {
+  test("resolves pwsh natively on Windows and Unix", () => {
     expect(resolvePwshExecutable("win32")).toBe("pwsh.exe");
     expect(resolvePwshExecutable("linux")).toBe("pwsh");
+    expect(resolvePwshExecutable("darwin")).toBe("pwsh");
   });
 
   test("executes a shell without using Node shell mode", async () => {
@@ -37,7 +42,7 @@ describe("shell process runner", () => {
 
     await expect(
       runShellCommand(
-        "cmd",
+        nativeShell,
         "echo runner-ok",
         fixture.workspacePath,
         ".",
@@ -45,7 +50,7 @@ describe("shell process runner", () => {
       ),
     ).resolves.toMatchObject({
       status: "executed",
-      shell: "cmd",
+      shell: nativeShell,
       cwd: ".",
       exitCode: 0,
       stdout: expect.stringContaining("runner-ok"),
@@ -56,8 +61,8 @@ describe("shell process runner", () => {
   test("does not convert a completed child into a timeout when the event loop is delayed", async () => {
     fixture = await createFixture();
     const execution = runShellCommand(
-      "cmd",
-      "ping -n 3 127.0.0.1 >NUL",
+      nativeShell,
+      delayCommand(2),
       fixture.workspacePath,
       ".",
       3_000,
@@ -78,15 +83,15 @@ describe("shell process runner", () => {
 
     await expect(
       runShellCommand(
-        "powershell",
-        "Start-Sleep -Seconds 10",
+        sleepShell,
+        longSleepCommand(),
         fixture.workspacePath,
         ".",
         100,
       ),
     ).resolves.toMatchObject({
       status: "executed",
-      shell: "powershell",
+      shell: sleepShell,
       cwd: ".",
       exitCode: null,
       timedOut: true,
@@ -100,14 +105,12 @@ describe("shell process runner", () => {
   test("terminates descendants and leaves no orphan after timeout", async () => {
     fixture = await createFixture();
     const pidPath = path.join(fixture.workspacePath, "child.pid");
-    const escapedPidPath = pidPath.replaceAll("'", "''");
+    const command = isWindows
+      ? windowsDescendantCommand(pidPath)
+      : posixDescendantCommand(pidPath);
     const result = await runShellCommand(
-      "powershell",
-      [
-        "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30' -PassThru",
-        `Set-Content -LiteralPath '${escapedPidPath}' -Value $child.Id`,
-        "Start-Sleep -Seconds 30",
-      ].join("; "),
+      sleepShell,
+      command,
       fixture.workspacePath,
       ".",
       20_000,
@@ -126,8 +129,8 @@ describe("shell process runner", () => {
     fixture = await createFixture();
     const controller = new AbortController();
     const execution = runShellCommand(
-      "powershell",
-      "Start-Sleep -Seconds 10",
+      sleepShell,
+      longSleepCommand(),
       fixture.workspacePath,
       ".",
       10_000,
@@ -148,13 +151,20 @@ describe("shell process runner", () => {
     const stderrPath = path.join(outputDirectory, "stderr.log");
 
     const result = await runShellCommandToFiles(
-      "powershell",
-      [
-        "[Console]::Out.Write('token=runner-')",
-        "Start-Sleep -Milliseconds 100",
-        "[Console]::Out.WriteLine('secret')",
-        "[Console]::Error.WriteLine('password: runner-pass')",
-      ].join("; "),
+      isWindows ? "powershell" : "sh",
+      isWindows
+        ? [
+            "[Console]::Out.Write('token=runner-')",
+            "Start-Sleep -Milliseconds 100",
+            "[Console]::Out.WriteLine('secret')",
+            "[Console]::Error.WriteLine('password: runner-pass')",
+          ].join("; ")
+        : [
+            "printf 'token=runner-'",
+            "sleep 0.1",
+            "printf 'secret\\n'",
+            "printf 'password: runner-pass\\n' >&2",
+          ].join("; "),
       fixture.workspacePath,
       ".",
       30_000,
@@ -187,8 +197,10 @@ describe("shell process runner", () => {
     let stdinControl: ShellStdinControl | undefined;
 
     const execution = runShellCommandToFiles(
-      "powershell",
-      "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine(('stdin:' + $line))",
+      isWindows ? "powershell" : "sh",
+      isWindows
+        ? "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine(('stdin:' + $line))"
+        : "IFS= read -r line; printf 'stdin:%s\\n' \"$line\"",
       fixture.workspacePath,
       ".",
       30_000,
@@ -228,8 +240,8 @@ describe("shell process runner", () => {
     const stdoutPath = path.join(outputDirectory, "stdout.log");
     const stderrPath = path.join(outputDirectory, "stderr.log");
     const execution = runShellCommandToFiles(
-      "cmd",
-      "ping -n 3 127.0.0.1 >NUL",
+      nativeShell,
+      delayCommand(2),
       fixture.workspacePath,
       ".",
       3_000,
@@ -246,6 +258,30 @@ describe("shell process runner", () => {
     });
   }, 60_000);
 });
+
+function delayCommand(seconds: number): string {
+  return isWindows
+    ? `ping -n ${seconds + 1} 127.0.0.1 >NUL`
+    : `sleep ${seconds}`;
+}
+
+function longSleepCommand(): string {
+  return isWindows ? "Start-Sleep -Seconds 10" : "sleep 10";
+}
+
+function windowsDescendantCommand(pidPath: string): string {
+  const escapedPidPath = pidPath.replaceAll("'", "''");
+  return [
+    "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30' -PassThru",
+    `Set-Content -LiteralPath '${escapedPidPath}' -Value $child.Id`,
+    "Start-Sleep -Seconds 30",
+  ].join("; ");
+}
+
+function posixDescendantCommand(pidPath: string): string {
+  const escaped = "'" + pidPath.replaceAll("'", "'\\''") + "'";
+  return `sleep 30 & child=$!; printf '%s\\n' "$child" > ${escaped}; wait "$child"`;
+}
 
 async function expectProcessToExit(pid: number, timeoutMs = 20_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

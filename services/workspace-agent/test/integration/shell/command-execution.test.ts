@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { afterEach, describe, expect, test, jest } from "@jest/globals";
-import { LocalAgent } from "../../../src/index.js";
+import { LocalAgent, type ElevationBroker } from "../../../src/index.js";
 import { CommandConfirmationRegistry } from "../../../src/shell/confirmation.js";
 import { classifyCommandRisk } from "../../../src/shell/command-risk.js";
 import {
@@ -116,6 +116,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
     };
     const confirmation = registry.create(binding);
 
@@ -134,6 +135,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
     };
     const confirmation = registry.create(binding);
 
@@ -155,6 +157,7 @@ describe("command confirmations", () => {
       command: "Remove-Item file.txt",
       executionContext: "background",
       operation: "cleanup",
+      elevated: false,
     } as const;
     const confirmation = registry.create(backgroundBinding);
 
@@ -186,6 +189,7 @@ describe("command confirmations", () => {
         command: "Remove-Item file.txt",
       executionContext: "foreground" as const,
       operation: "run_command",
+      elevated: false,
       };
       const confirmation = registry.create(binding);
       jest.advanceTimersByTime(1_001);
@@ -274,6 +278,156 @@ describe("run command", () => {
         timeoutMs: 30_000,
       }),
     ).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+  });
+
+  test("preserves risky-command confirmation across LocalAgent recreation when the registry is shared", async () => {
+    fixture = await createWritableShellFixture();
+    await writeWorkspaceFile(fixture.workspacePath, "danger-reload.txt", "remove me");
+    const confirmations = new CommandConfirmationRegistry(60_000);
+    const command = "Remove-Item 'danger-reload.txt' -Force";
+
+    const firstAgent = await LocalAgent.create(fixture.policyPath, {
+      commandConfirmationRegistry: confirmations,
+    });
+    const first = await firstAgent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      timeoutMs: 30_000,
+    });
+    expect(first.status).toBe("confirmation_required");
+    if (first.status !== "confirmation_required") {
+      throw new Error("Expected confirmation_required");
+    }
+
+    const reloadedAgent = await LocalAgent.create(fixture.policyPath, {
+      commandConfirmationRegistry: confirmations,
+    });
+    await expect(
+      reloadedAgent.runCommand({
+        workspaceId: "test",
+        shell: "powershell",
+        command,
+        confirmationId: first.confirmationId,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+
+    await expect(access(`${fixture.workspacePath}/danger-reload.txt`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("uses native elevation directly for safe commands without MCP confirmation", async () => {
+    fixture = await createWritableShellFixture();
+    const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
+      status: "executed",
+      shell: request.shell,
+      cwd: request.logicalCwd,
+      exitCode: 0,
+      stdout: "uac-ok\n",
+      stderr: "",
+      timedOut: false,
+    }));
+    const agent = await LocalAgent.create(fixture.policyPath, {
+      elevationBroker: { run },
+    });
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command: "Write-Output 'uac-ok'",
+      elevated: true,
+      timeoutMs: 30_000,
+    })).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      stdout: "uac-ok\n",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: "powershell",
+        command: "Write-Output 'uac-ok'",
+        logicalCwd: ".",
+      }),
+      undefined,
+    );
+  });
+
+  test("binds elevation to confirmation and executes only through the injected broker", async () => {
+    fixture = await createWritableShellFixture();
+    const run = jest.fn<ElevationBroker["run"]>(async (request) => ({
+      status: "executed",
+      shell: request.shell,
+      cwd: request.logicalCwd,
+      exitCode: 0,
+      stdout: "elevated-ok\n",
+      stderr: "",
+      timedOut: false,
+    }));
+    const agent = await LocalAgent.create(fixture.policyPath, {
+      elevationBroker: { run },
+    });
+    const command = "Remove-Item 'danger.txt' -Force";
+
+    const normalConfirmation = await agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: false,
+      timeoutMs: 30_000,
+    });
+    if (normalConfirmation.status !== "confirmation_required") {
+      throw new Error("Expected normal confirmation.");
+    }
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      confirmationId: normalConfirmation.confirmationId,
+      timeoutMs: 30_000,
+    })).rejects.toMatchObject({ code: "COMMAND_CONFIRMATION_INVALID" });
+    expect(run).not.toHaveBeenCalled();
+
+    const elevatedConfirmation = await agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      timeoutMs: 30_000,
+    });
+    expect(elevatedConfirmation).toMatchObject({
+      status: "confirmation_required",
+    });
+    if (elevatedConfirmation.status !== "confirmation_required") {
+      throw new Error("Expected elevated confirmation.");
+    }
+
+    await expect(agent.runCommand({
+      workspaceId: "test",
+      shell: "powershell",
+      command,
+      elevated: true,
+      confirmationId: elevatedConfirmation.confirmationId,
+      timeoutMs: 30_000,
+    })).resolves.toMatchObject({
+      status: "executed",
+      exitCode: 0,
+      stdout: "elevated-ok\n",
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: "powershell",
+        command,
+        logicalCwd: ".",
+      }),
+      undefined,
+    );
   });
 
   test("requires confirmation for main push and hard-blocks -C/mirror forms", async () => {

@@ -53,7 +53,10 @@ function Assert-McpPublicAdministrator {
 }
 
 function Assert-McpPublicWindowsX64 {
-    if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
+    $isWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [Runtime.InteropServices.OSPlatform]::Windows
+    )
+    if (-not $isWindowsPlatform -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
         throw 'This distribution supports Windows x64 only.'
     }
 }

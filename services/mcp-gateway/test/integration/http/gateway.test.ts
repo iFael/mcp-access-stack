@@ -168,10 +168,56 @@ describe("gateway HTTP surface", () => {
         openWorldHint: true,
         idempotentHint: true,
       });
+      for (const name of [
+        "create_repository",
+        "import_repositories",
+        "materialize_repository",
+        "sync_repository",
+      ]) {
+        const tool = body.result.tools.find((entry) => entry.name === name);
+        expect(tool?.annotations).toEqual({
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: false,
+        });
+        expect(typeof tool?.inputSchema).toBe("object");
+        expect(typeof tool?.outputSchema).toBe("object");
+        expect(tool?.securitySchemes).toEqual([
+          { type: "oauth2", scopes: ["workspaces:read"] },
+        ]);
+        expect(tool?._meta).toEqual({
+          securitySchemes: [{ type: "oauth2", scopes: ["workspaces:read"] }],
+        });
+      }
+
+      const revokeDeviceTool = body.result.tools.find(
+        (entry) => entry.name === "revoke_device",
+      );
+      expect(revokeDeviceTool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+        idempotentHint: false,
+      });
+      expect(typeof revokeDeviceTool?.inputSchema).toBe("object");
+      expect(typeof revokeDeviceTool?.outputSchema).toBe("object");
+      expect(revokeDeviceTool?.securitySchemes).toEqual([
+        { type: "oauth2", scopes: ["workspaces:read"] },
+      ]);
+      expect(revokeDeviceTool?._meta).toEqual({
+        securitySchemes: [{ type: "oauth2", scopes: ["workspaces:read"] }],
+      });
+
       for (const tool of body.result.tools.filter(
         (entry) =>
           !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
           ![
+            "create_repository",
+            "import_repositories",
+            "materialize_repository",
+            "sync_repository",
+            "revoke_device",
             "write_file",
             "patch_file",
             "patch_files",

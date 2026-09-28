@@ -231,6 +231,45 @@ describe("Edge MCP control plane availability", () => {
     expect(execution.forwardedCalls[0]?.principal).toEqual(principal);
   });
 
+  it("runs local tool handlers before execution readiness", async () => {
+    const execution = new FakeExecutionTransport();
+    let receivedRequest = false;
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest,
+      catalogMetadata,
+      serverIdentity,
+      localTools: {
+        handle: async (body, caller, request) => {
+          receivedRequest = request instanceof Request;
+          expect(caller).toEqual(principal);
+          expect(body).toMatchObject({
+            method: "tools/call",
+            params: { name: "list_workspaces" },
+          });
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id: 9,
+            result: { content: [{ type: "text", text: "local" }] },
+          });
+        },
+      },
+    });
+
+    const response = await controlPlane.handle(mcpRequest(jsonRpc(9, "tools/call", {
+      name: "list_workspaces",
+      arguments: {},
+    })));
+
+    expect(receivedRequest).toBe(true);
+    expect(execution.waitUntilReadyCalls).toBe(0);
+    expect(execution.forwardedCalls).toHaveLength(0);
+    expect(await response.json()).toMatchObject({
+      result: { content: [{ text: "local" }] },
+    });
+  });
+
   it("keeps ping and notifications/initialized local while execution is offline", async () => {
     const execution = new FakeExecutionTransport();
     const controlPlane = createMcpControlPlane({

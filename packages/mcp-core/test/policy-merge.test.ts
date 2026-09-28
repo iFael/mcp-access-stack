@@ -257,7 +257,7 @@ describe("policy-merge", () => {
 
     expect(result.policy.workspaces[0]?.permissionProfile).toBe("full-repo-write");
     expect(result.policy.workspaces[0]?.allowWrites).toEqual(["."]);
-    expect(result.policy.workspaces[0]?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "wsl", "git-bash"]);
+    expect(result.policy.workspaces[0]?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"]);
   });
 
   it("enables project writes for folders under projectRootPath", () => {
@@ -291,7 +291,7 @@ describe("policy-merge", () => {
 
     expect(inside?.permissionProfile).toBe("full-repo-write");
     expect(inside?.allowWrites).toEqual(["."]);
-    expect(inside?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "wsl", "git-bash"]);
+    expect(inside?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"]);
     expect(outside?.permissionProfile).toBe("planning-readonly");
     expect(outside?.allowWrites).toEqual([]);
   });
@@ -381,6 +381,6 @@ describe("policy-merge", () => {
 
     expect(result.policy.workspaces[0]?.permissionProfile).toBe("full-repo-write");
     expect(result.policy.workspaces[0]?.allowWrites).toEqual(["."]);
-    expect(result.policy.workspaces[0]?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "wsl", "git-bash"]);
+    expect(result.policy.workspaces[0]?.allowedShells).toEqual(["powershell", "pwsh", "cmd", "sh", "bash", "wsl", "git-bash"]);
   });
 });

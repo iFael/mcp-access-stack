@@ -203,8 +203,8 @@ $release = Assert-McpWindowsExecutionNodeRelease `
 $manifestSha256 = [string]$release.executionManifestSha256
 $nodePath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'node-runtime' -ReleaseRoot $releaseRoot
 $browserWorkerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-worker-server' -ReleaseRoot $releaseRoot
-$nativeLauncherPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-native-launcher' -ReleaseRoot $releaseRoot
-$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'browser-native-launcher' })
+$nativeLauncherPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'node-host-launcher' -ReleaseRoot $releaseRoot
+$nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'node-host-launcher' })
 if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $true) {
     throw 'Browser Worker native launcher must be a signed critical release artifact.'
 }

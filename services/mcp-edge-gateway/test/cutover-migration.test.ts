@@ -149,6 +149,9 @@ describe("Owner OAuth v2 -> Edge v3 cutover migration", () => {
       owner_token: ownerSecret,
       owner_password: migratedPassword,
       owner_password_confirm: migratedPassword,
+      user_name: "Rafael",
+      user_password: "profile-password-cutover",
+      user_password_confirm: "profile-password-cutover",
     }));
     expect(authorized?.status).toBe(302);
   });

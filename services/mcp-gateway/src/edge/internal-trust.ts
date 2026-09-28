@@ -79,6 +79,7 @@ export function createEdgeTrustedAuthenticationMiddleware(config: EdgeTrustConfi
       extra: {
         subject: principal.subject,
         ...(principal.ownerScope === undefined ? {} : { ownerScope: principal.ownerScope }),
+        ...(principal.userId === undefined ? {} : { userId: principal.userId }),
       },
     };
     next();

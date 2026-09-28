@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { COMPANION_INTERNAL_TOOL_PREFIX } from "@mcp-access-stack/edge-protocol";
 import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -42,7 +43,7 @@ export function buildPublishedTools(
     _registeredTools: Record<string, RegisteredTool>;
   };
   return Object.entries(internals._registeredTools)
-    .filter(([, tool]) => tool.enabled)
+    .filter(([name, tool]) => tool.enabled && !name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX))
     .map(([name, tool]): PublishedTool => {
       const definition: PublishedTool = {
         name,

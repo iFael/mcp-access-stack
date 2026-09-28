@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
-import type { BrowserExecutor } from "@vs-code-gpt/shared";
+import { MCP_FULL_TOOL_CATALOG_NAMES, type BrowserExecutor } from "@vs-code-gpt/shared";
 import type { AgentRelay } from "../../../src/relay/service.js";
 import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import { createMcpServer } from "../../../src/mcp/server.js";
@@ -107,7 +107,7 @@ describe("advanced browser tools list", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((tool) => tool.name);
 
-      expect(names).toHaveLength(79);
+      expect(names).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
       expect(names).toEqual(expect.arrayContaining([
         "patch_file",
         "patch_files",

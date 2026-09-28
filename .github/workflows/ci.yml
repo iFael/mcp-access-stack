@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -49,9 +50,15 @@ jobs:
         id: impact
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node tooling/ci/resolve-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            BASE_SHA="$(git rev-parse refs/remotes/origin/main)"
+          fi
+          node tooling/ci/resolve-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Report fail-closed resolver fallback
         if: steps.impact.outputs.resolverFailed == 'true'
@@ -593,4 +600,230 @@ jobs:
 
       - name: Run main browser integration
         run: npm run ci:main:browser
+
+  companion-portability:
+    name: companion-portability-${{ matrix.os }}
+    needs: impact
+    if: >-
+      always() &&
+      (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+        shell: bash
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build companion portability graph
+        run: |
+          npm run build --workspace @vs-code-gpt/shared
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @vs-code-gpt/local-agent
+          npm run build --workspace @vs-code-gpt/remote-mcp-gateway
+
+      - name: Build Windows browser capability
+        if: runner.os == 'Windows'
+        run: npm run build --workspace @vs-code-gpt/browser-worker
+
+      - name: Build immutable Windows local runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = (git rev-parse --verify 'HEAD^{commit}').Trim()
+          $output = Join-Path $env:RUNNER_TEMP 'mcp-v3-local-windows'
+          pwsh -NoLogo -NoProfile -File deploy/windows/New-McpRelease.ps1 `
+            -ReleaseId ("0.0.0-ci.{0}" -f $env:GITHUB_RUN_ID) `
+            -SourceCommit $commit `
+            -BuildRunId ([long]$env:GITHUB_RUN_ID) `
+            -OutputDirectory $output
+          $gitleaks = Join-Path $output '.runtime-tools\gitleaks\8.30.1\gitleaks.exe'
+          $git = Join-Path $output 'runtime\git\cmd\git.exe'
+          $astConfig = Join-Path $output 'config\validation\ast-grep\sgconfig.yml'
+          if (-not (Test-Path -LiteralPath $gitleaks -PathType Leaf)) { throw 'Bundled Gitleaks is missing.' }
+          if (-not (Test-Path -LiteralPath $git -PathType Leaf)) { throw 'Bundled MinGit is missing.' }
+          if (-not (Test-Path -LiteralPath $astConfig -PathType Leaf)) { throw 'Bundled ast-grep config is missing.' }
+          & $gitleaks version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $git --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test Windows browser, elevation and lifecycle contracts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/unit/companion/local-browser-worker.test.ts
+          node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/shell/elevation-broker.test.ts
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalLifecycle.ps1
+
+      - name: Test real Windows native launcher through Task Scheduler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -DirectFirst
+
+      - name: Diagnose Windows Scheduled Task execution matrix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -DiagnosticMatrix
+
+      - name: Diagnose Windows Scheduled Task relocation matrix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 -RelocationMatrix
+
+      - name: Diagnose Windows Scheduled Task path prefix matrix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nodePath = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $releaseRoot = Join-Path $env:LOCALAPPDATA 'MCP V3\App\releases\0.0.0-ci.path-prefix'
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalNativeScheduledTask.ps1 `
+            -NodePath $nodePath `
+            -PathPrefixMatrix `
+            -PathPrefixReleaseRoot $releaseRoot
+
+      - name: Test platform secure store and repository policy
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
+            services/mcp-gateway/test/unit/companion/platform-oauth-credential-store.test.ts \
+            services/mcp-gateway/test/unit/companion/local-repository-manager.test.ts
+
+      - name: Test companion connector end-to-end
+        run: |
+          node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath \
+            services/mcp-gateway/test/integration/edge/companion-connector.test.ts
+
+      - name: Test native shell process runner
+        run: |
+          node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath \
+            services/workspace-agent/test/integration/shell/process-runner.test.ts
+
+      - name: Validate Unix lifecycle scripts
+        if: runner.os != 'Windows'
+        run: |
+          bash -n deploy/unix/McpV3Local.Common.sh
+          bash -n deploy/linux/Install-McpV3Local.sh
+          bash -n deploy/linux/Update-McpV3Local.sh
+          bash -n deploy/linux/Uninstall-McpV3Local.sh
+          bash -n deploy/macos/Install-McpV3Local.sh
+          bash -n deploy/macos/Update-McpV3Local.sh
+          bash -n deploy/macos/Uninstall-McpV3Local.sh
+          node --check tooling/release/New-McpV3LocalPackage.mjs
+          node --check tooling/release/Verify-McpV3LocalPackage.mjs
+          node --check tooling/release/New-McpV3LinuxDeb.mjs
+          node --check tooling/release/New-McpV3MacPkg.mjs
+
+      - name: Build immutable Unix local package
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify HEAD^{commit})"
+          output="$RUNNER_TEMP/mcp-v3-local-package"
+          node tooling/release/New-McpV3LocalPackage.mjs \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --source-commit "$source_commit" \
+            --edge-base-url "https://example.invalid/" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --output "$output"
+          "$output/runtime/node/node" --version
+          test -f "$output/node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js"
+          test -f "$output/deploy/unix/McpV3Local.Common.sh"
+          test -f "$output/mcp-v3-local-manifest.json"
+          test -f "$output/config/validation/ast-grep/sgconfig.yml"
+          test -d "$output/node_modules/@ast-grep/cli"
+          "$output/.runtime-tools/gitleaks/8.30.1/gitleaks" version
+          bash deploy/unix/Test-McpV3LocalLifecycle.sh \
+            --package-root "$output" \
+            --expected-edge "https://example.invalid/"
+
+      - name: Build Linux native package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/mcp-v3-local.deb"
+          node tooling/release/New-McpV3LinuxDeb.mjs \
+            --package-root "$RUNNER_TEMP/mcp-v3-local-package" \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --compression-level 1 \
+            --output "$deb"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" | grep -E '^-rw-r--r-- .*\./usr/share/applications/mcp-v3\.desktop$'
+          dpkg-deb --contents "$deb" | grep -F './usr/bin/mcp-v3'
+          dpkg-deb --field "$deb" Depends | grep -F 'libsecret-tools'
+
+      - name: Fresh-install Linux native package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/mcp-v3-local.deb"
+          release="0.0.0-ci.${GITHUB_RUN_ID}"
+          sudo apt-get update
+          sudo apt-get install -y "$deb"
+          test -x /usr/bin/mcp-v3
+          test -x /usr/bin/mcp-v3-local-install
+          test -f "/usr/lib/mcp-v3/bootstrap/$release/mcp-v3-local-manifest.json"
+          test -x "/usr/lib/mcp-v3/bootstrap/$release/.runtime-tools/gitleaks/8.30.1/gitleaks"
+          test -f "/usr/lib/mcp-v3/bootstrap/$release/config/validation/ast-grep/sgconfig.yml"
+          "/usr/lib/mcp-v3/bootstrap/$release/.runtime-tools/gitleaks/8.30.1/gitleaks" version
+          git --version
+          sudo apt-get remove -y mcp-v3-local
+          test ! -e /usr/bin/mcp-v3
+
+      - name: Build macOS native package
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/mcp-v3-local.pkg"
+          node tooling/release/New-McpV3MacPkg.mjs \
+            --package-root "$RUNNER_TEMP/mcp-v3-local-package" \
+            --release-id "0.0.0-ci.${GITHUB_RUN_ID}" \
+            --output "$pkg"
+          pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3'
+          pkgutil --payload-files "$pkg" | grep -F 'usr/local/bin/mcp-v3-local-install'
+          pkgutil --payload-files "$pkg" | grep -F 'Library/Application Support/MCP V3/Bootstrap'
+
+      - name: Fresh-install macOS native package
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/mcp-v3-local.pkg"
+          release="0.0.0-ci.${GITHUB_RUN_ID}"
+          bootstrap="/Library/Application Support/MCP V3/Bootstrap/$release"
+          cleanup() {
+            sudo rm -f /usr/local/bin/mcp-v3 /usr/local/bin/mcp-v3-local-install /usr/local/bin/mcp-v3-local-update /usr/local/bin/mcp-v3-local-uninstall
+            sudo rm -rf "$bootstrap"
+            sudo pkgutil --forget com.mcpv3.local.bootstrap >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          sudo installer -pkg "$pkg" -target /
+          test -x /usr/local/bin/mcp-v3
+          test -x /usr/local/bin/mcp-v3-local-install
+          test -f "$bootstrap/mcp-v3-local-manifest.json"
+          test -x "$bootstrap/.runtime-tools/gitleaks/8.30.1/gitleaks"
+          test -f "$bootstrap/config/validation/ast-grep/sgconfig.yml"
+          "$bootstrap/.runtime-tools/gitleaks/8.30.1/gitleaks" version
+          git --version
 

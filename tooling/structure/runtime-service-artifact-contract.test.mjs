@@ -56,7 +56,7 @@ test("current Windows runtime consumers resolve artifacts by id, never by role",
   const expectations = new Map([
     ["deploy/windows/Start-McpEdgeConnector.ps1", ["node-runtime", "edge-connector", "edge-validation-launcher"]],
     ["deploy/windows/Install-McpEdgeConnectorTask.ps1", ["edge-host", "edge-validation-launcher"]],
-    ["deploy/windows/Install-McpBrowserWorkerTask.ps1", ["node-runtime", "browser-worker-server", "browser-native-launcher", "browser-credential-broker"]],
+    ["deploy/windows/Install-McpBrowserWorkerTask.ps1", ["node-runtime", "browser-worker-server", "node-host-launcher", "browser-credential-broker"]],
   ]);
   for (const [relativePath, artifactIds] of expectations) {
     const source = read(relativePath);

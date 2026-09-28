@@ -5,6 +5,8 @@ export const supportedShells = [
   "powershell",
   "pwsh",
   "cmd",
+  "sh",
+  "bash",
   "wsl",
   "git-bash",
 ] as const;

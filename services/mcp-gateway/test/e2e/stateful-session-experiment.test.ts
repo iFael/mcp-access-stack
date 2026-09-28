@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { Writable } from "node:stream";
 import { describe, expect, it } from "@jest/globals";
+import { MCP_FULL_TOOL_CATALOG_NAMES } from "@vs-code-gpt/shared";
 import pino, { type Logger } from "pino";
 import { AgentConnection } from "../../../workspace-agent/src/connection/service.js";
 import type { LocalAgent } from "../../../workspace-agent/src/local-agent.js";
@@ -32,7 +33,7 @@ describe("stateful MCP experiment", () => {
       };
 
       expect(listed.status).toBe(200);
-      expect(listedBody.result?.tools).toHaveLength(79);
+      expect(listedBody.result?.tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
       expect(listedBody.result?.tools?.map((tool) => tool.name)).toEqual(
         expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "github_get_commit_checks", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch"]),
       );
@@ -93,7 +94,7 @@ describe("stateful MCP experiment", () => {
 
       expect(listed.status).toBe(200);
       expect(listed.headers.get("mcp-session-id")).toBeNull();
-      expect(listedBody.result?.tools).toHaveLength(79);
+      expect(listedBody.result?.tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
 
       const called = await postMcp(fixture.url, {
         jsonrpc: "2.0",
