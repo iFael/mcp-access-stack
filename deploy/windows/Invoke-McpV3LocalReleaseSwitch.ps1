@@ -72,6 +72,27 @@ if ($existingTask) {
     }
 }
 
+$handoverSource = $null
+if ($existingTask -and [string]$existingTask.State -eq 'Running' -and -not $alreadyActive) {
+    $lockPath = Join-Path $stateRoot 'state\companion-instance.v1.json'
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw 'MCP V3 local running companion is missing its single-instance lock; refusing a gap-producing cutover.'
+    }
+    $lockRecord = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$lockRecord.instanceId) -or
+        [int]$lockRecord.pid -le 0 -or
+        [string]::IsNullOrWhiteSpace([string]$lockRecord.releaseRoot) -or
+        -not (Get-Process -Id ([int]$lockRecord.pid) -ErrorAction SilentlyContinue)) {
+        throw 'MCP V3 local companion lock is not a live handover source.'
+    }
+    $handoverSource = [pscustomobject]@{
+        instanceId = [string]$lockRecord.instanceId
+        pid = [int]$lockRecord.pid
+        releaseRoot = [IO.Path]::GetFullPath([string]$lockRecord.releaseRoot)
+        lockPath = $lockPath
+    }
+}
+
 function Stop-McpV3LocalTask {
     param([Parameter(Mandatory = $true)][string]$Name)
     $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
@@ -103,6 +124,41 @@ function Get-McpV3LocalCompanionLaunchers {
                 $commandLine.IndexOf('companion-cli.js', [StringComparison]::OrdinalIgnoreCase) -ge 0
             }
     )
+}
+
+function Wait-McpV3LocalHandover {
+    param(
+        [Parameter(Mandatory = $true)][object]$Source,
+        [Parameter(Mandatory = $true)][string]$TargetReleaseRoot,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+
+    $target = [IO.Path]::GetFullPath($TargetReleaseRoot)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $record = $null
+        if (Test-Path -LiteralPath ([string]$Source.lockPath) -PathType Leaf) {
+            try {
+                $record = Get-Content -LiteralPath ([string]$Source.lockPath) -Raw | ConvertFrom-Json
+            }
+            catch {
+                $record = $null
+            }
+        }
+        $newOwnerReady = $null -ne $record -and
+            -not [string]::IsNullOrWhiteSpace([string]$record.instanceId) -and
+            [string]$record.instanceId -ne [string]$Source.instanceId -and
+            [int]$record.pid -gt 0 -and
+            (Get-Process -Id ([int]$record.pid) -ErrorAction SilentlyContinue) -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$record.releaseRoot), $target, [StringComparison]::OrdinalIgnoreCase)
+        $oldOwnerExited = -not (Get-Process -Id ([int]$Source.pid) -ErrorAction SilentlyContinue)
+        if ($newOwnerReady -and $oldOwnerExited) {
+            return $record
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    throw 'MCP V3 local handover did not transfer readiness before timeout.'
 }
 
 function Stop-McpV3LocalCompanionLaunchers {
@@ -154,11 +210,14 @@ function Restore-McpV3LocalTask {
 }
 
 $promoted = $false
+$usedZeroGapHandover = $null -ne $handoverSource
 try {
-    if ($existingTask -and [string]$existingTask.State -eq 'Running') {
-        Stop-McpV3LocalTask -Name $TaskName
+    if (-not $usedZeroGapHandover) {
+        if ($existingTask -and [string]$existingTask.State -eq 'Running') {
+            Stop-McpV3LocalTask -Name $TaskName
+        }
+        Stop-McpV3LocalCompanionLaunchers -InstallationRoot $installation
     }
-    Stop-McpV3LocalCompanionLaunchers -InstallationRoot $installation
 
     if (-not $alreadyActive) {
         $cutoverScript = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
@@ -172,12 +231,49 @@ try {
 
     $taskInstaller = Join-Path $targetReleaseRoot 'deploy\windows\Install-McpV3LocalTask.ps1'
     Assert-McpPublicSignature -Path $taskInstaller -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-    $taskResult = & $taskInstaller -InstallationRoot $installation -ReleaseId $TargetReleaseId -StateRoot $stateRoot -TaskName $TaskName -Execute -Force -Activate -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
-    if ([string]$taskResult.releaseId -ne $TargetReleaseId -or $taskResult.activated -ne $true) {
-        throw 'MCP V3 local task installer returned unexpected evidence.'
+    if ($usedZeroGapHandover) {
+        $handoverResult = & $taskInstaller `
+            -InstallationRoot $installation `
+            -ReleaseId $TargetReleaseId `
+            -StateRoot $stateRoot `
+            -TaskName $TaskName `
+            -MultipleInstances Parallel `
+            -HandoverFromInstanceId ([string]$handoverSource.instanceId) `
+            -AllowRunningReplacement `
+            -Execute -Force -Activate `
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+        if ([string]$handoverResult.releaseId -ne $TargetReleaseId -or
+            $handoverResult.activated -ne $true -or
+            [string]$handoverResult.multipleInstances -ne 'Parallel' -or
+            $handoverResult.handover -ne $true) {
+            throw 'MCP V3 local handover task installer returned unexpected evidence.'
+        }
+        Start-ScheduledTask -TaskName $TaskName
+        $null = Wait-McpV3LocalHandover `
+            -Source $handoverSource `
+            -TargetReleaseRoot $targetReleaseRoot `
+            -TimeoutSeconds $StartupWaitSeconds
+        $taskResult = & $taskInstaller `
+            -InstallationRoot $installation `
+            -ReleaseId $TargetReleaseId `
+            -StateRoot $stateRoot `
+            -TaskName $TaskName `
+            -MultipleInstances IgnoreNew `
+            -AllowRunningReplacement `
+            -Execute -Force -Activate `
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+    }
+    else {
+        $taskResult = & $taskInstaller -InstallationRoot $installation -ReleaseId $TargetReleaseId -StateRoot $stateRoot -TaskName $TaskName -Execute -Force -Activate -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+        Start-ScheduledTask -TaskName $TaskName
+    }
+    if ([string]$taskResult.releaseId -ne $TargetReleaseId -or
+        $taskResult.activated -ne $true -or
+        [string]$taskResult.multipleInstances -ne 'IgnoreNew' -or
+        $taskResult.handover -ne $false) {
+        throw 'MCP V3 local task installer returned unexpected final evidence.'
     }
 
-    Start-ScheduledTask -TaskName $TaskName
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($StartupWaitSeconds)
     $running = $false
     do {
@@ -196,6 +292,7 @@ try {
         status = 'active'
         releaseId = $TargetReleaseId
         promoted = $promoted
+        zeroGapHandover = $usedZeroGapHandover
         taskName = $TaskName
         taskRunning = $true
         executionManifestSha256 = [string]$targetVerification.executionManifestSha256

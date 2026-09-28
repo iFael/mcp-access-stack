@@ -39,6 +39,9 @@ async function main(): Promise<void> {
   const instanceLock = await acquireCompanionInstanceLock({
     stateRoot: runtime.stateRoot,
     releaseRoot: runtime.releaseRoot,
+    ...(process.env.MCP_V3_HANDOVER_FROM_INSTANCE_ID?.trim()
+      ? { handoverFromInstanceId: process.env.MCP_V3_HANDOVER_FROM_INSTANCE_ID.trim() }
+      : {}),
   });
   configureBundledRuntimeTools(runtime.releaseRoot, process.env);
   const internalAssertion = randomBytes(32).toString("base64url");

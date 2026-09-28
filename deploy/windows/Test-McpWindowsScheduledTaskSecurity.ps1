@@ -29,8 +29,8 @@ function Assert-DaclOnly {
     param([Parameter(Mandatory = $true)][string]$Sddl)
 
     if (-not $Sddl.StartsWith('D:', [StringComparison]::Ordinal) -or
-        $Sddl.Contains('O:', [StringComparison]::Ordinal) -or
-        $Sddl.Contains('G:', [StringComparison]::Ordinal)) {
+        $Sddl.IndexOf('O:', [StringComparison]::Ordinal) -ge 0 -or
+        $Sddl.IndexOf('G:', [StringComparison]::Ordinal) -ge 0) {
         throw "Task owner ACL normalization must return DACL-only SDDL. sddl=$Sddl"
     }
 }
@@ -51,7 +51,7 @@ if ($explicitOnlyUserAces.Count -ne 1) {
     throw "Task without inherited Full Access must contain exactly one user ACE. count=$($explicitOnlyUserAces.Count)"
 }
 if ([int]$explicitOnlyUserAces[0].AccessMask -ne $fullAccessMask -or
-    ($explicitOnlyUserAces[0].AceFlags -band [Security.AccessControl.AceFlags]::Inherited)) {
+    ([int]$explicitOnlyUserAces[0].AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited)) {
     throw 'Task without inherited Full Access must normalize to one explicit Full Access ACE.'
 }
 
@@ -64,17 +64,17 @@ $inheritedTarget = Get-McpWindowsScheduledTaskOwnerSddl `
 Assert-DaclOnly -Sddl $inheritedTarget
 $inheritedUserAces = @(Get-TestUserAces -Sddl $inheritedTarget -UserSid $userSid)
 $inheritedFull = @($inheritedUserAces | Where-Object {
-    ($_.AceFlags -band [Security.AccessControl.AceFlags]::Inherited) -and
+    ([int]$_.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited) -and
     [string]$_.AceQualifier -eq 'AccessAllowed' -and
     [int]$_.AccessMask -eq $fullAccessMask
 })
 $explicitFull = @($inheritedUserAces | Where-Object {
-    -not ($_.AceFlags -band [Security.AccessControl.AceFlags]::Inherited) -and
+    -not ([int]$_.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited) -and
     [string]$_.AceQualifier -eq 'AccessAllowed' -and
     [int]$_.AccessMask -eq $fullAccessMask
 })
 $explicitRead = @($inheritedUserAces | Where-Object {
-    -not ($_.AceFlags -band [Security.AccessControl.AceFlags]::Inherited) -and
+    -not ([int]$_.AceFlags -band [int][Security.AccessControl.AceFlags]::Inherited) -and
     [string]$_.AceQualifier -eq 'AccessAllowed' -and
     [int]$_.AccessMask -eq $readMask
 })

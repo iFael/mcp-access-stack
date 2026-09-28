@@ -170,12 +170,8 @@ function Resolve-McpPublicChildPath {
     }
     $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
     $resolved = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $RelativePath))
-    $relative = [System.IO.Path]::GetRelativePath($resolvedRoot, $resolved)
-    if (
-        $relative -eq '..' -or
-        $relative.StartsWith('..' + [System.IO.Path]::DirectorySeparatorChar) -or
-        $relative.StartsWith('..' + [System.IO.Path]::AltDirectorySeparatorChar)
-    ) {
+    $rootPrefix = $resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Distribution path escapes its root: $RelativePath"
     }
     return $resolved

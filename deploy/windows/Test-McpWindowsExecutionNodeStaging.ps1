@@ -6,6 +6,19 @@ $ErrorActionPreference = 'Stop'
 
 $stager = Join-Path $PSScriptRoot 'Stage-McpWindowsExecutionNodeCandidate.ps1'
 
+function Get-TestRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $resolvedPath = [IO.Path]::GetFullPath($Path)
+    if (-not $resolvedPath.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Test path must stay below root. root=$resolvedRoot path=$resolvedPath"
+    }
+    return $resolvedPath.Substring($resolvedRoot.Length)
+}
+
 function Write-TestUtf8 {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -116,7 +129,7 @@ function New-TestDistribution {
             Sort-Object FullName |
             ForEach-Object {
                 [ordered]@{
-                    path = [IO.Path]::GetRelativePath($release, $_.FullName).Replace('\', '/')
+                    path = (Get-TestRelativePath -Root $release -Path $_.FullName).Replace('\', '/')
                     sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
@@ -155,7 +168,7 @@ function New-TestDistribution {
             Sort-Object FullName |
             ForEach-Object {
                 [ordered]@{
-                    path = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
+                    path = (Get-TestRelativePath -Root $Root -Path $_.FullName).Replace('\', '/')
                     sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }

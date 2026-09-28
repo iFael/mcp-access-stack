@@ -108,19 +108,20 @@ describe("shell process runner", () => {
     const command = isWindows
       ? windowsDescendantCommand(pidPath)
       : posixDescendantCommand(pidPath);
-    const result = await runShellCommand(
+    const execution = runShellCommand(
       sleepShell,
       command,
       fixture.workspacePath,
       ".",
-      20_000,
+      30_000,
     );
+    const childPid = await waitForPidFile(pidPath, 20_000);
 
+    const result = await execution;
     expect(result).toMatchObject({
       timedOut: true,
       lifecycle: { terminatedBy: "child_process", reason: "timeout" },
     });
-    const childPid = Number((await readFile(pidPath, "utf8")).trim());
     expect(Number.isSafeInteger(childPid)).toBe(true);
     await expectProcessToExit(childPid);
   }, 90_000);
@@ -272,15 +273,29 @@ function longSleepCommand(): string {
 function windowsDescendantCommand(pidPath: string): string {
   const escapedPidPath = pidPath.replaceAll("'", "''");
   return [
-    "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30' -PassThru",
+    "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru",
     `Set-Content -LiteralPath '${escapedPidPath}' -Value $child.Id`,
-    "Start-Sleep -Seconds 30",
+    "Start-Sleep -Seconds 60",
   ].join("; ");
 }
 
 function posixDescendantCommand(pidPath: string): string {
   const escaped = "'" + pidPath.replaceAll("'", "'\\''") + "'";
-  return `sleep 30 & child=$!; printf '%s\\n' "$child" > ${escaped}; wait "$child"`;
+  return `sleep 60 & child=$!; printf '%s\\n' "$child" > ${escaped}; wait "$child"`;
+}
+
+async function waitForPidFile(pidPath: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = Number((await readFile(pidPath, "utf8")).trim());
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await delay(25);
+  }
+  throw new Error(`Descendant PID marker was not created within ${timeoutMs}ms.`);
 }
 
 async function expectProcessToExit(pid: number, timeoutMs = 20_000): Promise<void> {
