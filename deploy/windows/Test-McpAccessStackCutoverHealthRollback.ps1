@@ -312,6 +312,7 @@ else { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
         'compat\McpCredentialBroker.exe',
         'native\McpElevationBroker.exe',
         'services\browser-worker\dist\server.js',
+        'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\companion-cli.js',
         'node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js',
         'deploy\windows\Start-McpEdgeConnector.ps1',
         'runtime\node\node.exe'
@@ -349,13 +350,15 @@ else { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
         integrityRoot = 'signed-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
-            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' }
+            [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },
+            [ordered]@{ id = 'local-companion'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
             (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $true),
             (New-ArtifactRecord 'edge-connector' 'edge-runtime' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' $false),
             (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
             (New-ArtifactRecord 'browser-worker-server' 'browser-worker' 'services/browser-worker/dist/server.js' $false),
+            (New-ArtifactRecord 'local-companion-runtime' 'shared' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js' $false),
             (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $true),
             (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $true),
             (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $true),
@@ -371,7 +374,7 @@ else { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
             Sort-Object FullName |
             ForEach-Object {
                 [ordered]@{
-                    path = [IO.Path]::GetRelativePath($release, $_.FullName).Replace('\', '/')
+                    path = (Get-McpWindowsRelativePath -Root $release -Path $_.FullName).Replace('\', '/')
                     sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
@@ -775,8 +778,15 @@ try {
         '-BrokerTaskName', $brokerTaskName,
         '-AllowUnsignedDevelopment'
     )
-    $brokerOutput = (& $pwsh @brokerArgs 2>&1 | Out-String).Trim()
-    $brokerExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $brokerOutput = (& $pwsh @brokerArgs 2>&1 | Out-String).Trim()
+        $brokerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $resultPath = Join-Path $stateRoot "access-stack-cutover-runs\$requestId\result.json"
     if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
         throw 'Broker completion did not persist result.json.'
