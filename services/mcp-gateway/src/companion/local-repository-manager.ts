@@ -27,6 +27,7 @@ import {
   type RevokeDeviceInput,
   type RevokeDeviceResult,
   type SyncRepositoryInput,
+  type SourceControlCapability,
   type SyncRepositoryResult,
   type WorkspaceSummary,
 } from "@vs-code-gpt/shared";
@@ -35,6 +36,17 @@ const STATE_VERSION = 1 as const;
 const MAX_DISCOVERY_DIRECTORIES = 2_000;
 const DEFAULT_DISCOVERY_DEPTH = 4;
 const MAX_GIT_OUTPUT_BYTES = 1_000_000;
+const LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES = [
+  "git.branch.write",
+  "git.index.write",
+  "git.commit.write",
+  "git.merge.write",
+  "git.remote.push",
+  "github.repository.read",
+  "github.pull_request.read",
+  "github.pull_request.create",
+  "github.pull_request.merge",
+] as const satisfies readonly SourceControlCapability[];
 
 type LocalRepositoryRecord = {
   repositoryId: string;
@@ -398,6 +410,11 @@ export class LocalRepositoryManager implements RepositoryExecutor {
         allowedShells: this.platform === "win32"
           ? ["powershell" as const, "cmd" as const]
           : ["sh" as const, "bash" as const],
+        sourceControl: {
+          capabilities: [...LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES],
+          accountOwners: [],
+          additionalRepositories: [],
+        },
       })),
     };
   }
