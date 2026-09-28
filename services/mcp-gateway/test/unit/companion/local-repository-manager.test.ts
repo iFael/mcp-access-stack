@@ -291,6 +291,36 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     }
   });
 
+  it("advertises repository-scoped typed source-control capabilities", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+    });
+    await manager.bindRepositories([repositoryBinding(fixture.repository)]);
+
+    const policy = await manager.buildPolicy();
+    expect(policy?.workspaces[0]?.sourceControl).toEqual({
+      capabilities: [
+        "git.branch.write",
+        "git.index.write",
+        "git.commit.write",
+        "git.merge.write",
+        "git.remote.push",
+        "github.repository.read",
+        "github.pull_request.read",
+        "github.pull_request.create",
+        "github.pull_request.merge",
+      ],
+      accountOwners: [],
+      additionalRepositories: [],
+    });
+    expect(policy?.workspaces[0]?.sourceControl?.capabilities).not.toContain(
+      "github.repository.create",
+    );
+  });
+
   it("restores the previous persisted state when runtime reload fails", async () => {
     const fixture = await createGitFixture();
     const onChanged = jest.fn(async () => {
