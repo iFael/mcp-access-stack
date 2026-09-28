@@ -144,6 +144,15 @@ Assert-ContainsNone -Label 'Public distribution builder' -Source $distributionBu
     'deploy\docker'
 )
 
+$publicCommon = Read-ProjectFile 'deploy\windows\PublicDistribution.Common.ps1'
+Assert-ContainsAll -Label 'Public distribution platform detection' -Source $publicCommon -Tokens @(
+    '[Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(',
+    '[Runtime.InteropServices.OSPlatform]::Windows'
+)
+Assert-ContainsNone -Label 'Public distribution platform detection' -Source $publicCommon -Tokens @(
+    '$IsWindows'
+)
+
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'
 Assert-ContainsAll -Label 'Execution-node verifier' -Source $executionCommon -Tokens @(
     '$requiredServices',
