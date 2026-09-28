@@ -171,6 +171,7 @@ async function executeCommand(agent: LocalAgent, args: ParsedArguments): Promise
         workspaceId: requireValue(workspaceId, "--workspace"),
         shell: requireValue(getString(args.options, "shell"), "--shell") as never,
         command: requireValue(getString(args.options, "command"), "--command"),
+        elevated: false,
         timeoutMs: readCommandTimeout(args.options),
         ...optionalString(args.options, "cwd"),
         ...optionalString(args.options, "confirmation-id"),

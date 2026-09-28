@@ -53,6 +53,7 @@ const SKIPPED_DIRECTORIES = new Set([
 function resolveProjectRoot(): string {
   const executablePath = process.argv[1]?.trim();
   const candidates = [
+    process.env.MCP_V3_RELEASE_ROOT?.trim(),
     process.env.VS_CODE_GPT_STACK_ROOT?.trim(),
     process.cwd(),
     executablePath
@@ -476,7 +477,7 @@ async function runSecretScan(
   if (!tool) {
     return unavailablePayload(
       "gitleaks",
-      "Gitleaks is not installed. Run npm run validation:tools:init on the host.",
+      "Gitleaks is unavailable in the MCP V3 runtime.",
     );
   }
 

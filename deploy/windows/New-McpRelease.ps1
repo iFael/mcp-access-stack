@@ -157,6 +157,28 @@ function Write-Utf8NoBom {
     [IO.File]::WriteAllText([IO.Path]::GetFullPath($Path), $Content, [Text.UTF8Encoding]::new($false))
 }
 
+function Install-VerifiedZipArchive {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{64}$')][string]$Sha256,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $archive = Join-Path $staging (".download-" + [guid]::NewGuid().ToString('N') + ".zip")
+    try {
+        Invoke-WebRequest -Uri $Uri -OutFile $archive -UseBasicParsing
+        $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $Sha256) {
+            throw "$Label failed SHA-256 verification."
+        }
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+        Expand-Archive -LiteralPath $archive -DestinationPath $Destination -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+    }
+}
 try {
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'package.json') -Destination $staging
@@ -187,6 +209,47 @@ try {
         throw 'Bundled Node.js runtime failed version verification.'
     }
 
+    $validationConfigSource = Join-Path $root 'config\validation'
+    $validationConfigTarget = Join-Path $staging 'config\validation'
+    if (-not (Test-Path -LiteralPath (Join-Path $validationConfigSource 'ast-grep\sgconfig.yml') -PathType Leaf)) {
+        throw 'Validation configuration is missing from the release source.'
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $validationConfigTarget) | Out-Null
+    Copy-Item -LiteralPath $validationConfigSource -Destination $validationConfigTarget -Recurse
+
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        throw 'MCP V3 Windows local runtime requires a 64-bit operating system.'
+    }
+
+    $gitleaksRoot = Join-Path $staging '.runtime-tools\gitleaks\8.30.1'
+    Install-VerifiedZipArchive `
+        -Uri 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip' `
+        -Sha256 'd29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e' `
+        -Destination $gitleaksRoot `
+        -Label 'Gitleaks 8.30.1'
+    $gitleaksExecutable = Join-Path $gitleaksRoot 'gitleaks.exe'
+    if (-not (Test-Path -LiteralPath $gitleaksExecutable -PathType Leaf)) {
+        throw 'Verified Gitleaks archive did not contain gitleaks.exe.'
+    }
+    $gitleaksVersion = @(& $gitleaksExecutable version)
+    if ($LASTEXITCODE -ne 0 -or (($gitleaksVersion | Out-String) -notmatch '8\.30\.1')) {
+        throw 'Bundled Gitleaks failed version verification.'
+    }
+
+    $gitRoot = Join-Path $staging 'runtime\git'
+    Install-VerifiedZipArchive `
+        -Uri 'https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip' `
+        -Sha256 'f48e2d2dc74a24454adc6d8fd0ac25bf9c2386f19cfb06202b9465aaad4f9f05' `
+        -Destination $gitRoot `
+        -Label 'MinGit 2.55.0.3'
+    $gitExecutable = Join-Path $gitRoot 'cmd\git.exe'
+    if (-not (Test-Path -LiteralPath $gitExecutable -PathType Leaf)) {
+        throw 'Verified MinGit archive did not contain cmd\git.exe.'
+    }
+    $gitVersion = @(& $gitExecutable --version)
+    if ($LASTEXITCODE -ne 0 -or (($gitVersion | Out-String) -notmatch 'git version 2\.55\.0\.windows\.3')) {
+        throw 'Bundled MinGit failed version verification.'
+    }
     $fileHashes = @(
         Get-ChildItem -LiteralPath $staging -Recurse -File |
             Where-Object {

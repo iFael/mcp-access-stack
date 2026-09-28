@@ -10,6 +10,7 @@ export interface CommandConfirmationBinding {
   command: string;
   executionContext: "foreground" | "background";
   operation: string;
+  elevated?: boolean;
   interactive?: true;
 }
 
@@ -74,6 +75,7 @@ function sameBinding(
     safeEqual(left.command, right.command) &&
     left.executionContext === right.executionContext &&
     safeEqual(left.operation, right.operation) &&
+    Boolean(left.elevated) === Boolean(right.elevated) &&
     left.interactive === right.interactive
   );
 }

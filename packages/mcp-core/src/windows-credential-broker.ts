@@ -6,6 +6,7 @@ import path from "node:path";
 import { AppError } from "./errors.js";
 
 const BROKER_MAGIC = Buffer.from("MCPCRD01", "ascii");
+const BROKER_WRITE_MAGIC = Buffer.from("MCPCRW01", "ascii");
 const BROKER_PROTOCOL_VERSION = 1;
 const MAX_BROKER_PAYLOAD_BYTES = 140_000;
 
@@ -24,6 +25,18 @@ export type CredentialBrokerReadResult =
         | "protocol-mismatch"
         | "broker-unavailable";
     };
+
+export interface CredentialBrokerWriteRequest {
+  siteId: string;
+  accountId: string;
+  username: Buffer;
+  password: Buffer;
+  signal?: AbortSignal;
+}
+
+export type CredentialBrokerWriteResult = {
+  status: "success" | "access-denied" | "protocol-mismatch" | "broker-unavailable";
+};
 
 export interface BrowserCredentialBroker {
   read(request: CredentialBrokerReadRequest): Promise<CredentialBrokerReadResult>;
@@ -65,6 +78,79 @@ export class WindowsCredentialBrokerClient implements BrowserCredentialBroker {
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.platform = options.platform ?? process.platform;
     this.spawnProcess = options.spawnProcess ?? spawn;
+  }
+
+  async write(
+    request: CredentialBrokerWriteRequest,
+  ): Promise<CredentialBrokerWriteResult> {
+    const executablePath = this.options.executablePath;
+    if (
+      this.platform !== "win32" ||
+      !executablePath ||
+      !path.isAbsolute(executablePath) ||
+      !existsSync(executablePath)
+    ) {
+      return { status: "broker-unavailable" };
+    }
+    if (request.username.length === 0 || request.username.length > 4_096 ||
+        request.password.length === 0 || request.password.length > 65_536) {
+      return { status: "protocol-mismatch" };
+    }
+
+    const pipeName = `mcp-credential-write-${process.pid}-${randomBytes(16).toString("hex")}`;
+    const pipePath = `\\\\.\\pipe\\${pipeName}`;
+    const nonce = randomBytes(32).toString("base64url");
+    const target = credentialTargetName(this.options.privateDirectory, request.siteId, request.accountId);
+    let launchError: Error | undefined;
+    const child = this.spawnProcess(
+      executablePath,
+      [
+        "--mode", "write",
+        "--pipe", pipeName,
+        "--nonce", nonce,
+        "--target", target,
+        "--protocol", String(BROKER_PROTOCOL_VERSION),
+        "--client-pid", String(process.pid),
+        "--timeout-ms", String(this.timeoutMs),
+      ],
+      { windowsHide: true, stdio: "ignore" },
+    );
+    child.once("error", (error) => { launchError = error; });
+    let socket: Socket | undefined;
+    let payload: Buffer | undefined;
+    try {
+      const deadline = Date.now() + this.timeoutMs;
+      socket = this.options.connectPipe
+        ? await this.options.connectPipe(pipePath)
+        : await connectNamedPipe(pipePath, deadline, child, request.signal, () => launchError);
+      payload = createWritePayload(nonce, request.username, request.password);
+      socket.write(payload);
+      const response = await readSocketPayload(socket, deadline, request.signal);
+      return parseBrokerStatusPayload(response, nonce, child.pid);
+    } catch {
+      return { status: "broker-unavailable" };
+    } finally {
+      payload?.fill(0);
+      socket?.destroy();
+      terminateChild(child);
+    }
+  }
+
+  async delete(siteId: string, accountId: string): Promise<void> {
+    const executablePath = this.options.executablePath;
+    if (
+      this.platform !== "win32" ||
+      !executablePath ||
+      !path.isAbsolute(executablePath) ||
+      !existsSync(executablePath)
+    ) return;
+    const target = credentialTargetName(this.options.privateDirectory, siteId, accountId);
+    const child = this.spawnProcess(
+      executablePath,
+      ["--mode", "delete", "--target", target],
+      { windowsHide: true, stdio: "ignore" },
+    );
+    await waitForChildExit(child, this.timeoutMs).catch(() => undefined);
   }
 
   async read(
@@ -264,6 +350,118 @@ async function connectNamedPipe(
     "CREDENTIAL_BROKER_UNAVAILABLE",
     "Credential broker pipe was not available before the deadline.",
   );
+}
+
+function createWritePayload(nonce: string, username: Buffer, password: Buffer): Buffer {
+  const nonceBytes = Buffer.from(nonce, "utf8");
+  const total = BROKER_WRITE_MAGIC.length + 4 + 4 + nonceBytes.length + 4 + username.length + 4 + password.length;
+  const payload = Buffer.allocUnsafe(total);
+  let offset = 0;
+  BROKER_WRITE_MAGIC.copy(payload, offset);
+  offset += BROKER_WRITE_MAGIC.length;
+  payload.writeInt32LE(BROKER_PROTOCOL_VERSION, offset);
+  offset += 4;
+  offset = writeBuffer(payload, offset, nonceBytes);
+  offset = writeBuffer(payload, offset, username);
+  writeBuffer(payload, offset, password);
+  nonceBytes.fill(0);
+  return payload;
+}
+
+function writeBuffer(target: Buffer, offset: number, value: Buffer): number {
+  target.writeInt32LE(value.length, offset);
+  offset += 4;
+  value.copy(target, offset);
+  return offset + value.length;
+}
+
+async function readSocketPayload(
+  socket: Socket,
+  deadline: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      socket.removeListener("data", onData);
+      socket.removeListener("end", onEnd);
+      socket.removeListener("error", onError);
+      if (error) reject(error);
+      else resolve(Buffer.concat(chunks, total));
+    };
+    const abort = () => finish(new AppError("OPERATION_CANCELLED", "Credential broker request was cancelled."));
+    const onData = (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_BROKER_PAYLOAD_BYTES) {
+        finish(new AppError("CREDENTIAL_BROKER_PROTOCOL_MISMATCH", "Credential broker payload exceeded its protocol limit."));
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    };
+    const onEnd = () => finish();
+    const onError = (error: Error) => finish(error);
+    const timer = setTimeout(
+      () => finish(new AppError("CREDENTIAL_BROKER_UNAVAILABLE", "Credential broker response timed out.")),
+      Math.max(1, deadline - Date.now()),
+    );
+    timer.unref?.();
+    signal?.addEventListener("abort", abort, { once: true });
+    socket.on("data", onData);
+    socket.once("end", onEnd);
+    socket.once("error", onError);
+  });
+}
+
+function parseBrokerStatusPayload(
+  payload: Buffer,
+  expectedNonce: string,
+  expectedProcessId: number | undefined,
+): CredentialBrokerWriteResult {
+  try {
+    let offset = 0;
+    requireBytes(payload, offset, BROKER_MAGIC.length);
+    const magic = payload.subarray(offset, offset + BROKER_MAGIC.length);
+    offset += BROKER_MAGIC.length;
+    if (!timingSafeEqual(magic, BROKER_MAGIC)) return { status: "protocol-mismatch" };
+    const version = readInt32(payload, offset); offset += 4;
+    const status = readInt32(payload, offset); offset += 4;
+    const processId = readInt32(payload, offset); offset += 4;
+    const nonce = readBuffer(payload, offset, 4_096); offset = nonce.nextOffset;
+    const username = readBuffer(payload, offset, 65_536); offset = username.nextOffset;
+    const password = readBuffer(payload, offset, 65_536); offset = password.nextOffset;
+    username.value.fill(0);
+    password.value.fill(0);
+    const expected = Buffer.from(expectedNonce, "utf8");
+    const matches = nonce.value.length === expected.length && timingSafeEqual(nonce.value, expected);
+    nonce.value.fill(0);
+    expected.fill(0);
+    if (offset !== payload.length || version !== BROKER_PROTOCOL_VERSION || !matches ||
+        (expectedProcessId !== undefined && processId !== expectedProcessId)) {
+      return { status: "protocol-mismatch" };
+    }
+    if (status === 0) return { status: "success" };
+    if (status === 2) return { status: "access-denied" };
+    if (status === 3) return { status: "protocol-mismatch" };
+    return { status: "broker-unavailable" };
+  } finally {
+    payload.fill(0);
+  }
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+    timer.unref?.();
+    child.once("exit", () => { clearTimeout(timer); resolve(); });
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 function parseBrokerPayload(

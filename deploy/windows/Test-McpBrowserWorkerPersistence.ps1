@@ -14,7 +14,7 @@ foreach ($required in @(
     'MCP Access Stack production browser-worker',
     "'browser-worker-server'",
     "'node-runtime'",
-    "'browser-native-launcher'",
+    "'node-host-launcher'",
     "'browser-credential-broker'",
 
     '--env-file',

@@ -5,6 +5,7 @@ import {
   parseScopes,
   readBearerToken,
 } from "./auth.js";
+import { EdgeAccountStore } from "./account-store.js";
 
 const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
 const MAX_CLIENTS = 256;
@@ -43,6 +44,7 @@ type AuthorizationCodeRecord = {
   scopes: string[];
   resource: string;
   expiresAtMs: number;
+  userId?: string;
 };
 
 type RefreshTokenRecord = {
@@ -51,6 +53,7 @@ type RefreshTokenRecord = {
   resource: string;
   expiresAt: number;
   credentialVersion?: string;
+  userId?: string;
 };
 
 type RevokedAccessRecord = { expiresAt: number };
@@ -71,6 +74,7 @@ type OwnerAccessClaims = {
   scope: string;
   client_id: string;
   owner_scope: "owner";
+  user_id?: string;
   iat: number;
   exp: number;
   jti: string;
@@ -81,6 +85,7 @@ export class EdgeOwnerOAuth {
   private readonly resourceMetadataUrl: URL;
   private readonly requiredScope: string;
   private readonly challenge: string;
+  private readonly accounts: EdgeAccountStore;
   private hmacKeyPromise: Promise<CryptoKey> | undefined;
 
   constructor(
@@ -93,6 +98,7 @@ export class EdgeOwnerOAuth {
     this.resourceMetadataUrl = new URL(`/.well-known/oauth-protected-resource${config.mcpPath}`, config.publicBaseUrl);
     this.requiredScope = config.scopes[0] ?? "mcp:tools";
     this.challenge = createBearerChallenge(this.resourceMetadataUrl, this.requiredScope);
+    this.accounts = new EdgeAccountStore(storage);
   }
 
   async authenticate(request: Request): Promise<AuthenticatedEdgePrincipal> {
@@ -112,7 +118,12 @@ export class EdgeOwnerOAuth {
       if (!scopes.includes(this.requiredScope)) {
         throw new EdgeAuthenticationError(403, "insufficient_scope", this.challenge);
       }
-      return { subject: claims.sub, scopes, ownerScope: "owner" };
+      return {
+        subject: claims.sub,
+        scopes,
+        ownerScope: "owner",
+        ...(claims.user_id === undefined ? {} : { userId: claims.user_id }),
+      };
     }
 
     const legacy = await this.storage.get<LegacyAccessTokenRecord>(legacyAccessKey(await sha256Base64Url(token)));
@@ -271,6 +282,29 @@ export class EdgeOwnerOAuth {
       }
     }
 
+    const userName = fields.get("user_name") ?? "";
+    const userPassword = fields.get("user_password") ?? "";
+    if (!userName.trim() || !userPassword) {
+      return htmlResponse(this.authorizationPage(client, fields, true, "User profile name and personal password are required."), 400);
+    }
+    let user = await this.accounts.findUserByName(userName);
+    if (user) {
+      user = await this.accounts.authenticateUser(userName, userPassword);
+      if (!user) {
+        return htmlResponse(this.authorizationPage(client, fields, true, "User profile credentials were not accepted."), 401);
+      }
+    } else {
+      const confirmation = fields.get("user_password_confirm") ?? "";
+      if (userPassword !== confirmation) {
+        return htmlResponse(this.authorizationPage(client, fields, true, "Personal passwords do not match."), 400);
+      }
+      try {
+        user = await this.accounts.createUser(userName, userPassword);
+      } catch (error) {
+        return htmlResponse(this.authorizationPage(client, fields, true, error instanceof Error ? error.message : "User profile could not be created."), 400);
+      }
+    }
+
     const code = `code-${randomToken()}`;
     await this.storage.put(codeKey(await sha256Base64Url(code)), {
       clientId,
@@ -279,6 +313,7 @@ export class EdgeOwnerOAuth {
       scopes,
       resource,
       expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS,
+      userId: user.id,
     } satisfies AuthorizationCodeRecord);
     const target = new URL(redirectUri);
     target.searchParams.set("code", code);
@@ -303,7 +338,7 @@ export class EdgeOwnerOAuth {
       const verifier = fields.get("code_verifier") ?? "";
       if ((await sha256Base64Url(verifier)) !== record.codeChallenge) return oauthError("invalid_grant", 400);
       await this.storage.delete(key);
-      return jsonResponse(await this.issueTokens(clientId, record.scopes, record.resource));
+      return jsonResponse(await this.issueTokens(clientId, record.scopes, record.resource, record.userId));
     }
 
     if (grantType === "refresh_token") {
@@ -318,7 +353,7 @@ export class EdgeOwnerOAuth {
       const requested = parseScopes(fields.get("scope") ?? record.scopes.join(" "));
       if (!requested.every((scope) => record.scopes.includes(scope))) return oauthError("invalid_scope", 400);
       await this.storage.delete(key);
-      return jsonResponse(await this.issueTokens(clientId, requested, record.resource));
+      return jsonResponse(await this.issueTokens(clientId, requested, record.resource, record.userId));
     }
 
     return oauthError("unsupported_grant_type", 400);
@@ -340,15 +375,16 @@ export class EdgeOwnerOAuth {
     return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
   }
 
-  private async issueTokens(clientId: string, scopes: string[], resource: string): Promise<Record<string, unknown>> {
+  private async issueTokens(clientId: string, scopes: string[], resource: string, userId?: string): Promise<Record<string, unknown>> {
     const now = nowSeconds();
     const claims: OwnerAccessClaims = {
       iss: this.config.publicBaseUrl.href,
       aud: resource,
-      sub: `owner:${clientId}`,
+      sub: userId ? `user:${userId}` : `owner:${clientId}`,
       scope: scopes.join(" "),
       client_id: clientId,
       owner_scope: "owner",
+      ...(userId === undefined ? {} : { user_id: userId }),
       iat: now,
       exp: now + this.config.accessTokenTtlSeconds,
       jti: crypto.randomUUID(),
@@ -362,6 +398,7 @@ export class EdgeOwnerOAuth {
       resource,
       expiresAt: now + this.config.refreshTokenTtlSeconds,
       ...(credentialVersion === undefined ? {} : { credentialVersion }),
+      ...(userId === undefined ? {} : { userId }),
     } satisfies RefreshTokenRecord);
     return {
       access_token: accessToken,
@@ -512,13 +549,14 @@ export class EdgeOwnerOAuth {
 
   private authorizationPage(client: OwnerClient, fields: URLSearchParams, passwordConfigured: boolean, error?: string): string {
     const hidden = [...fields.entries()]
-      .filter(([name]) => name !== "owner_password" && name !== "owner_password_confirm" && name !== "owner_token")
+      .filter(([name]) => !["owner_password", "owner_password_confirm", "owner_token", "user_name", "user_password", "user_password_confirm"].includes(name))
       .map(([name, value]) => `<input type="hidden" name="${htmlEscape(name)}" value="${htmlEscape(value)}">`)
       .join("\n");
     const credentialFields = passwordConfigured
-      ? `<label>Password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
-      : `<p>One-time migration: enter the current credential and choose the shared password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New password<input name="owner_password" type="password" autocomplete="new-password" required></label><label>Confirm password<input name="owner_password_confirm" type="password" autocomplete="new-password" required></label>`;
-    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}<button type="submit">Authorize</button></form></main></body></html>`;
+      ? `<label>Shared account password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
+      : `<p>One-time migration: enter the current credential and choose the shared account password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New shared password<input name="owner_password" type="password" autocomplete="new-password" required></label><label>Confirm shared password<input name="owner_password_confirm" type="password" autocomplete="new-password" required></label>`;
+    const profileFields = `<fieldset><legend>User profile</legend><p>Use an existing profile or choose a new profile name. A new profile is created when the name does not exist.</p><label>Profile name<input name="user_name" autocomplete="username" required></label><label>Personal password<input name="user_password" type="password" autocomplete="current-password" required></label><label>Confirm personal password (required only for a new profile)<input name="user_password_confirm" type="password" autocomplete="new-password"></label></fieldset>`;
+    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}${profileFields}<button type="submit">Authorize</button></form></main></body></html>`;
   }
 }
 
@@ -572,7 +610,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }function readStringArray(value: unknown, fallback: string[]): string[] { return value === undefined ? fallback : Array.isArray(value) && value.every((entry) => typeof entry === "string") ? [...value] : []; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-function isOwnerClaims(value: unknown): value is OwnerAccessClaims { return isRecord(value) && typeof value.iss === "string" && typeof value.aud === "string" && typeof value.sub === "string" && typeof value.scope === "string" && typeof value.client_id === "string" && value.owner_scope === "owner" && typeof value.iat === "number" && typeof value.exp === "number" && typeof value.jti === "string"; }
+function isOwnerClaims(value: unknown): value is OwnerAccessClaims { return isRecord(value) && typeof value.iss === "string" && typeof value.aud === "string" && typeof value.sub === "string" && typeof value.scope === "string" && typeof value.client_id === "string" && value.owner_scope === "owner" && (value.user_id === undefined || (typeof value.user_id === "string" && /^usr_[0-9a-f-]{36}$/iu.test(value.user_id))) && typeof value.iat === "number" && typeof value.exp === "number" && typeof value.jti === "string"; }
 function htmlEscape(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
 function jsonResponse(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } }); }
 function htmlResponse(body: string, status = 200): Response { return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }); }

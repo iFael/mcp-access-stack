@@ -75,10 +75,12 @@ function Invoke-CSharpBuild {
 $edgeHostSource = Join-Path $root 'tooling\windows-edge-host\McpEdgeHost.cs'
 $launcherSource = Join-Path $root 'tooling\windows-host-launcher\McpNodeHostLauncher.cs'
 $brokerSource = Join-Path $root 'tooling\windows-credential-broker\McpCredentialBroker.cs'
+$elevationBrokerSource = Join-Path $root 'tooling\windows-elevation-broker\McpElevationBroker.cs'
 
 $edgeHostPath = Join-Path $output 'McpEdgeHost.exe'
 $launcherPath = Join-Path $output 'McpNodeHostLauncher.exe'
 $brokerPath = Join-Path $output 'McpCredentialBroker.exe'
+$elevationBrokerPath = Join-Path $output 'McpElevationBroker.exe'
 
 Invoke-CSharpBuild -SourcePath $edgeHostSource -TargetPath $edgeHostPath -TargetType winexe -References @('System.Web.Extensions.dll')
 Invoke-CSharpBuild -SourcePath $launcherSource -TargetPath $launcherPath -TargetType winexe
@@ -87,8 +89,13 @@ Invoke-CSharpBuild `
     -TargetPath $brokerPath `
     -TargetType winexe `
     -References @('System.Windows.Forms.dll', 'System.Drawing.dll')
+Invoke-CSharpBuild `
+    -SourcePath $elevationBrokerSource `
+    -TargetPath $elevationBrokerPath `
+    -TargetType winexe `
+    -References @('System.Web.Extensions.dll')
 
-$artifacts = foreach ($file in @($edgeHostPath, $launcherPath, $brokerPath)) {
+$artifacts = foreach ($file in @($edgeHostPath, $launcherPath, $brokerPath, $elevationBrokerPath)) {
     $item = Get-Item -LiteralPath $file
     [ordered]@{
         name = $item.Name

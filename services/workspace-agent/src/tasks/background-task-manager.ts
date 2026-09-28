@@ -406,6 +406,7 @@ export class BackgroundTaskManager {
           command,
           shell: current.shell,
           cwd: current.cwd,
+          elevated: false,
           timeoutMs: current.timeoutMs,
         },
         controller.signal,

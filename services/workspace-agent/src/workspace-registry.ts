@@ -56,6 +56,7 @@ export class WorkspaceRegistry {
     return new WorkspaceRegistry(await resolveWorkspaces(parsed.data));
   }
 
+
   listEnabled(): WorkspaceSummary[] {
     return [...this.workspaces.values()]
       .filter((workspace) => workspace.enabled)

@@ -76,7 +76,7 @@ export class ReleaseLifecycleService {
   ) {}
 
   async getState(workspace: ResolvedWorkspace): Promise<GetReleaseStateResult> {
-    assertReleaseWorkspace(workspace, this.platform);
+    assertReleaseStateWorkspace(workspace, this.platform);
     const installationRoot = resolveInstallationRoot();
     const state = await readLifecycleState(installationRoot);
     const activeReleaseId = state.active?.releaseId;
@@ -295,6 +295,14 @@ export class ReleaseLifecycleService {
   }
 }
 
+function assertReleaseStateWorkspace(
+  workspace: ResolvedWorkspace,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (process.env.MCP_V3_RELEASE_ROOT?.trim()) return;
+  assertReleaseWorkspace(workspace, platform);
+}
+
 function assertReleaseWorkspace(
   workspace: ResolvedWorkspace,
   platform: NodeJS.Platform = process.platform,
@@ -324,11 +332,15 @@ function assertReleaseWorkspace(
 function resolveInstallationRoot(): string {
   const explicit = process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT?.trim();
   if (explicit) return path.resolve(explicit);
+  const localReleaseRoot = process.env.MCP_V3_RELEASE_ROOT?.trim();
+  if (localReleaseRoot) {
+    return path.dirname(path.dirname(path.resolve(localReleaseRoot)));
+  }
   const localAppData = process.env.LOCALAPPDATA?.trim();
   if (!localAppData) {
     throw new AppError(
       "CAPABILITY_UNSUPPORTED",
-      "Release lifecycle requires MCP_ACCESS_STACK_INSTALLATION_ROOT or LOCALAPPDATA.",
+      "Release lifecycle requires MCP_ACCESS_STACK_INSTALLATION_ROOT, MCP_V3_RELEASE_ROOT, or LOCALAPPDATA.",
     );
   }
   return path.join(localAppData, "McpAccessStack");

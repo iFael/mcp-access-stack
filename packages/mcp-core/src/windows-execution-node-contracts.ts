@@ -134,10 +134,10 @@ export const windowsExecutionReleaseManifestSchema = z
         });
         continue;
       }
-      if (entry.owner !== service.id) {
+      if (entry.owner !== service.id && entry.owner !== "shared") {
         context.addIssue({
           code: "custom",
-          message: `service ${service.id} entry artifact must be owned by ${service.id}`,
+          message: `service ${service.id} entry artifact must be owned by ${service.id} or shared`,
           path: ["services"],
         });
       }
