@@ -747,6 +747,7 @@ function Write-McpWindowsExecutionNodeState {
     $directory = Split-Path -Parent $resolvedPath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $temporaryPath = "$resolvedPath.tmp.$([guid]::NewGuid().ToString('N'))"
+    $backupPath = "$resolvedPath.bak.$([guid]::NewGuid().ToString('N'))"
     try {
         [IO.File]::WriteAllText(
             $temporaryPath,
@@ -754,7 +755,8 @@ function Write-McpWindowsExecutionNodeState {
             [Text.UTF8Encoding]::new($false)
         )
         if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
-            [IO.File]::Replace($temporaryPath, $resolvedPath, $null)
+            [IO.File]::Replace($temporaryPath, $resolvedPath, $backupPath)
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
         }
         else {
             [IO.File]::Move($temporaryPath, $resolvedPath)
@@ -763,6 +765,9 @@ function Write-McpWindowsExecutionNodeState {
     finally {
         if (Test-Path -LiteralPath $temporaryPath) {
             Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
         }
     }
 }

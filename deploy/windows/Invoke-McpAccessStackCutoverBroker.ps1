@@ -98,6 +98,7 @@ function Write-McpEdgeTaskRecoveryConfig {
     $directory = Split-Path -Parent $Path
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $backup = $Path + '.' + [guid]::NewGuid().ToString('N') + '.bak'
     try {
         [IO.File]::WriteAllText(
             $temporary,
@@ -105,7 +106,8 @@ function Write-McpEdgeTaskRecoveryConfig {
             [Text.UTF8Encoding]::new($false)
         )
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            [IO.File]::Replace($temporary, $Path, $null)
+            [IO.File]::Replace($temporary, $Path, $backup)
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
         }
         else {
             [IO.File]::Move($temporary, $Path)
@@ -113,6 +115,7 @@ function Write-McpEdgeTaskRecoveryConfig {
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -442,6 +445,7 @@ $resultPath = Join-Path $runDirectory 'result.json'
 function Write-McpCutoverBrokerResult {
     param([Parameter(Mandatory = $true)][object]$Value)
     $temporary = $resultPath + '.tmp-' + [guid]::NewGuid().ToString('N')
+    $backup = $resultPath + '.bak-' + [guid]::NewGuid().ToString('N')
     try {
         [IO.File]::WriteAllText(
             $temporary,
@@ -449,7 +453,8 @@ function Write-McpCutoverBrokerResult {
             [Text.UTF8Encoding]::new($false)
         )
         if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
-            [IO.File]::Replace($temporary, $resultPath, $null)
+            [IO.File]::Replace($temporary, $resultPath, $backup)
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
         }
         else {
             [IO.File]::Move($temporary, $resultPath)
@@ -457,6 +462,7 @@ function Write-McpCutoverBrokerResult {
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     }
 }
 
