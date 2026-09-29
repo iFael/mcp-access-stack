@@ -75,15 +75,16 @@ if ($currentReleaseId -eq $expectedReleaseId) {
 }
 
 $genericUpdater = Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1'
-$switchScript = Join-Path $PSScriptRoot 'Invoke-McpV3LocalReleaseSwitch.ps1'
-foreach ($scriptPath in @($genericUpdater, $switchScript)) {
-    Assert-McpPublicSignature -Path $scriptPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-}
+Assert-McpPublicSignature -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $prepared = & $genericUpdater -Repository $Repository -InstallationRoot $installation -Tag $resolvedTag -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $expectedReleaseId) {
     throw 'MCP V3 local updater did not prepare the expected signed release.'
 }
+
+$targetReleaseRoot = Join-Path $installation ("releases\$expectedReleaseId")
+$switchScript = Join-Path $targetReleaseRoot 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'
+Assert-McpPublicSignature -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $switchResult = & $switchScript -InstallationRoot $installation -StateRoot $state -TargetReleaseId $expectedReleaseId -TaskName $TaskName -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ([string]$switchResult.status -ne 'active' -or [string]$switchResult.releaseId -ne $expectedReleaseId) {

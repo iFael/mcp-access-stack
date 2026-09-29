@@ -12,6 +12,9 @@ param(
 
     [string]$TaskName = 'MCP V3 local companion',
 
+    [ValidateRange(1, 180)]
+    [int]$HandoverWaitSeconds = 90,
+
     [ValidateRange(1, 60)]
     [int]$StartupWaitSeconds = 10,
 
@@ -158,7 +161,13 @@ function Wait-McpV3LocalHandover {
         Start-Sleep -Milliseconds 250
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
 
-    throw 'MCP V3 local handover did not transfer readiness before timeout.'
+    $observedInstanceId = if ($null -eq $record) { '<none>' } else { [string]$record.instanceId }
+    $observedPid = if ($null -eq $record) { 0 } else { [int]$record.pid }
+    $observedRelease = if ($null -eq $record) { '<none>' } else { [string]$record.releaseRoot }
+    $sourceAlive = [bool](Get-Process -Id ([int]$Source.pid) -ErrorAction SilentlyContinue)
+    throw ("MCP V3 local handover did not transfer readiness before timeout. " +
+        "targetRelease=$target observedRelease=$observedRelease observedInstanceId=$observedInstanceId " +
+        "observedPid=$observedPid sourcePid=$([int]$Source.pid) sourceAlive=$sourceAlive")
 }
 
 function Stop-McpV3LocalCompanionLaunchers {
@@ -252,7 +261,7 @@ try {
         $null = Wait-McpV3LocalHandover `
             -Source $handoverSource `
             -TargetReleaseRoot $targetReleaseRoot `
-            -TimeoutSeconds $StartupWaitSeconds
+            -TimeoutSeconds $HandoverWaitSeconds
         $taskResult = & $taskInstaller `
             -InstallationRoot $installation `
             -ReleaseId $TargetReleaseId `

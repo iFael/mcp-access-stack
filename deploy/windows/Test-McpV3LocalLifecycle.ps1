@@ -92,6 +92,9 @@ Assert-ContainsAll -Label 'MCP V3 local release switch' -Source $switch -Tokens 
     'Restore-McpV3LocalTask',
     'Stop-McpV3LocalCompanionLaunchers',
     'Wait-McpV3LocalHandover',
+    '[int]$HandoverWaitSeconds = 90',
+    '-TimeoutSeconds $HandoverWaitSeconds',
+    'sourceAlive=$sourceAlive',
     'companion-instance.v1.json',
     '-MultipleInstances Parallel',
     '-HandoverFromInstanceId',
@@ -109,6 +112,8 @@ $updater = Read-ProjectFile 'deploy\windows\Update-McpV3Local.ps1'
 Assert-ContainsAll -Label 'MCP V3 local updater' -Source $updater -Tokens @(
     'Update-McpAccessStack.ps1',
     'Invoke-McpV3LocalReleaseSwitch.ps1',
+    'targetReleaseRoot = Join-Path $installation ("releases\$expectedReleaseId")',
+    "switchScript = Join-Path `$targetReleaseRoot 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'",
     'Get-McpV3LocalDefaultStateRoot',
     "status = 'up-to-date'",
     "status = 'updated'"
