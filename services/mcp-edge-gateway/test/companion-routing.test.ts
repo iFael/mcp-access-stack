@@ -2,6 +2,7 @@ import { describe, expect, it } from "@jest/globals";
 import {
   isCompanionEligibleForUser,
   retireReplacedCompanion,
+  selectAvailableCompanionWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "../src/control-plane/companion-routing.js";
@@ -102,6 +103,47 @@ describe("companion routing", () => {
       candidate: candidates[0],
     });
     expect(selectCompanionDevice(candidates, "missing")).toEqual({ kind: "none" });
+  });
+
+  it("keeps a companion workspace id when it does not collide", () => {
+    expect(selectAvailableCompanionWorkspaceId(
+      "mcp-access-stack",
+      "c:/users/rafael/project/mcp-access-stack",
+      new Set(["primary-only"]),
+    )).toBe("mcp-access-stack");
+  });
+
+  it("deterministically disambiguates companion workspace ids reserved by another runtime", () => {
+    const reserved = new Set(["mcp-access-stack"]);
+    const first = selectAvailableCompanionWorkspaceId(
+      "mcp-access-stack",
+      "c:/users/rafael/project/mcp-access-stack",
+      reserved,
+    );
+    const second = selectAvailableCompanionWorkspaceId(
+      "mcp-access-stack",
+      "c:/users/rafael/project/mcp-access-stack",
+      reserved,
+    );
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^mcp-access-stack-local-[a-f0-9]{8}$/u);
+    expect(reserved.has(first)).toBe(false);
+  });
+
+  it("advances deterministically when the first disambiguated id is also reserved", () => {
+    const first = selectAvailableCompanionWorkspaceId(
+      "repo-a",
+      "c:/repos/repo-a",
+      new Set(["repo-a"]),
+    );
+    const second = selectAvailableCompanionWorkspaceId(
+      "repo-a",
+      "c:/repos/repo-a",
+      new Set(["repo-a", first]),
+    );
+
+    expect(second).toBe(`${first}-2`);
   });
 
   it("routes a workspace to one companion when primary does not own it", () => {

@@ -109,6 +109,37 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     });
   });
 
+  it("rebinds the same repository to a new workspace id without keeping the old binding", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+    });
+    const original = repositoryBinding(fixture.repository);
+    const migrated = {
+      ...original,
+      workspaceId: "project-local-deadbeef",
+    };
+
+    await manager.bindRepositories([original]);
+    const rebound = await manager.bindRepositories([migrated]);
+
+    expect(rebound).toHaveLength(1);
+    expect(rebound[0]).toMatchObject({
+      repositoryId: original.repositoryId,
+      workspaceId: migrated.workspaceId,
+      path: fixture.repository,
+    });
+    expect(manager.listBindings()).toEqual([
+      expect.objectContaining({
+        repositoryId: original.repositoryId,
+        workspaceId: migrated.workspaceId,
+        path: fixture.repository,
+      }),
+    ]);
+  });
+
   it("copies a repository into the managed root only after dry-run validation", async () => {
     const fixture = await createGitFixture();
     await writeFile(path.join(fixture.repository, "local.txt"), "dirty working tree\n", "utf8");

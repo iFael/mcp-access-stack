@@ -110,6 +110,40 @@ function Assert-McpManagedDirectoryBoundary {
     }
 }
 
+function Move-McpWindowsExecutionNodeDirectoryWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [int]$MaxAttempts = 8,
+        [int]$BaseDelayMilliseconds = 100
+    )
+
+    if ($MaxAttempts -lt 1 -or $MaxAttempts -gt 32 -or $BaseDelayMilliseconds -lt 1) {
+        throw 'Execution-node directory move retry settings are invalid.'
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if (Test-Path -LiteralPath $Destination) {
+            throw "Execution-node release target appeared during staging: $Destination"
+        }
+        try {
+            [IO.Directory]::Move($Source, $Destination)
+            return
+        }
+        catch {
+            $isTransient = $_.Exception -is [IO.IOException] -or
+                $_.Exception -is [System.UnauthorizedAccessException]
+            if (-not $isTransient) { throw }
+            if ($attempt -ge $MaxAttempts) {
+                throw ("Execution-node candidate directory move failed after {0} attempts. source={1} destination={2} lastError={3}" -f `
+                    $MaxAttempts, $Source, $Destination, $_.Exception.Message)
+            }
+            $delay = [Math]::Min($BaseDelayMilliseconds * $attempt, 1000)
+            Start-Sleep -Milliseconds $delay
+        }
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $installationRoot | Out-Null
 Assert-McpManagedDirectoryBoundary -Path $installationRoot
 $releasesRoot = Join-Path $installationRoot 'releases'
@@ -183,7 +217,9 @@ try {
             -DistributionManifest $distribution `
             -ReleaseId $releaseId `
             -ReleaseRoot $stagingPath
-        [IO.Directory]::Move($stagingPath, $targetRelease)
+        Move-McpWindowsExecutionNodeDirectoryWithRetry `
+            -Source $stagingPath `
+            -Destination $targetRelease
         $stagingPath = $null
         $finalVerification = Assert-McpWindowsExecutionNodeRelease `
             -ReleaseRoot $targetRelease `

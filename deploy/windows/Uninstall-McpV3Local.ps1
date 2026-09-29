@@ -52,8 +52,12 @@ function Assert-McpV3RemovalBoundary {
         [Parameter(Mandatory = $true)][string]$Label
     )
 
-    $candidate = [IO.Path]::GetFullPath($Path).TrimEnd('\\', '/')
-    $root = [IO.Path]::GetPathRoot($candidate).TrimEnd('\\', '/')
+    $trimChars = [char[]]@(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $candidate = [IO.Path]::GetFullPath($Path).TrimEnd($trimChars)
+    $root = [IO.Path]::GetPathRoot($candidate).TrimEnd($trimChars)
     if ([string]::IsNullOrWhiteSpace($candidate) -or
         $candidate -eq $root -or
         $candidate.Length -le ($root.Length + 4)) {
@@ -71,7 +75,7 @@ function Assert-McpV3RemovalBoundary {
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
 
     foreach ($protectedPath in $protected) {
-        $resolvedProtected = [IO.Path]::GetFullPath([string]$protectedPath).TrimEnd('\\', '/')
+        $resolvedProtected = [IO.Path]::GetFullPath([string]$protectedPath).TrimEnd($trimChars)
         if ($candidate.Equals($resolvedProtected, [StringComparison]::OrdinalIgnoreCase)) {
             throw ("Refusing to remove protected path for {0}: {1}" -f $Label, $candidate)
         }
