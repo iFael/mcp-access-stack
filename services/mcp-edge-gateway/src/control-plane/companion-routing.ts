@@ -52,6 +52,41 @@ export function selectCompanionDevice<T>(
   return { kind: "selected", candidate: eligible[0]! };
 }
 
+function stableWorkspaceKeyHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function selectAvailableCompanionWorkspaceId(
+  requestedWorkspaceId: string,
+  stableKey: string,
+  reservedWorkspaceIds: ReadonlySet<string>,
+): string {
+  const requested = requestedWorkspaceId.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(requested)) {
+    throw new Error("Companion workspace id is invalid.");
+  }
+  if (!reservedWorkspaceIds.has(requested)) return requested;
+
+  const hash = stableWorkspaceKeyHash(stableKey);
+  for (let attempt = 0; attempt < 4096; attempt += 1) {
+    const suffix = attempt === 0
+      ? `-local-${hash}`
+      : `-local-${hash}-${attempt + 1}`;
+    const prefixLength = Math.max(1, 200 - suffix.length);
+    const prefix = requested
+      .slice(0, prefixLength)
+      .replace(/[._-]+$/u, "") || "repository";
+    const candidate = `${prefix}${suffix}`;
+    if (!reservedWorkspaceIds.has(candidate)) return candidate;
+  }
+  throw new Error("Companion workspace id namespace is exhausted.");
+}
+
 export function selectWorkspaceRuntime<T>(
   candidates: readonly CompanionRouteCandidate<T>[],
   workspaceId: string,

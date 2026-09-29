@@ -14,6 +14,7 @@ import { EdgeAuthenticationError } from "./control-plane/auth.js";
 import {
   isCompanionEligibleForUser,
   retireReplacedCompanion,
+  selectAvailableCompanionWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "./control-plane/companion-routing.js";
@@ -974,6 +975,20 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
     const selected = selection.candidate.target;
     const deviceId = selection.candidate.deviceId;
+    const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(request, principal);
+    if (primaryWorkspaceIds === null) {
+      return mcpToolError(
+        body,
+        "WORKSPACE_ROUTE_UNRESOLVED",
+        "Primary workspace ownership could not be verified before repository import.",
+      );
+    }
+    const reservedWorkspaceIds = new Set(primaryWorkspaceIds);
+    for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
+      if (candidate.deviceId === deviceId) continue;
+      for (const workspaceId of candidate.workspaceIds) reservedWorkspaceIds.add(workspaceId);
+    }
+
     const discoveryRequest = {
       jsonrpc: "2.0",
       id: `edge-import-discovery-${crypto.randomUUID()}`,
@@ -1032,19 +1047,29 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       const usedNames = new Set(
         cloudRepositories.map(({ repository }) => normalizedRepositoryDisplayName(repository.name)),
       );
+      const allocatedWorkspaceIds = new Set(reservedWorkspaceIds);
       for (const discoveredRepository of selectedRepositories) {
         const existingPath = await this.accountStore.findMaterializationByDevicePath(
           principal.userId,
           deviceId,
           discoveredRepository.path,
         );
+        const requestedWorkspaceId = existingPath?.materialization.workspaceId ??
+          discoveredRepository.workspaceId;
+        const workspaceId = selectAvailableCompanionWorkspaceId(
+          requestedWorkspaceId,
+          companionPathKey(discoveredRepository.path, selected.attachment.platform),
+          allocatedWorkspaceIds,
+        );
+        allocatedWorkspaceIds.add(workspaceId);
+
         if (existingPath) {
           repositoryIds.push(existingPath.repository.id);
           bindings.push({
             repositoryId: existingPath.repository.id,
             name: existingPath.repository.name,
             path: discoveredRepository.path,
-            workspaceId: existingPath.materialization.workspaceId,
+            workspaceId,
             remoteUrls: discoveredRepository.remoteUrls,
             managed: false,
           });
@@ -1080,7 +1105,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           repositoryId: repository.id,
           name: repository.name,
           path: discoveredRepository.path,
-          workspaceId: discoveredRepository.workspaceId,
+          workspaceId,
           remoteUrls: discoveredRepository.remoteUrls,
           managed: false,
         });
@@ -1124,7 +1149,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       bindings.splice(0, bindings.length, ...canonicalBindings);
 
       for (const binding of canonicalBindings) {
-        const current = (await this.accountStore.listMaterializations(
+        const currentByPath = await this.accountStore.findMaterializationByDevicePath(
+          principal.userId,
+          deviceId,
+          binding.path,
+        );
+        const currentByWorkspace = (await this.accountStore.listMaterializations(
           principal.userId,
           binding.repositoryId,
         )).find((value) =>
@@ -1132,20 +1162,27 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           value.workspaceId === binding.workspaceId
         ) ?? null;
         previousMaterializations.set(
-          materializationRollbackKey(binding.repositoryId, binding.workspaceId),
-          current,
+          companionPathKey(binding.path, selected.attachment.platform),
+          currentByPath?.materialization ?? currentByWorkspace,
         );
       }
 
       await this.ctx.storage.transaction(async (transaction) => {
         const transactionalStore = new EdgeAccountStore(transaction);
         for (const binding of canonicalBindings) {
-          await transactionalStore.upsertMaterialization(principal.userId, deviceId, {
-            repositoryId: binding.repositoryId,
-            workspaceId: binding.workspaceId,
-            path: binding.path,
-            platform: selected.attachment.platform ?? "unknown",
-          });
+          const key = companionPathKey(binding.path, selected.attachment.platform);
+          const previous = previousMaterializations.get(key) ?? null;
+          await transactionalStore.upsertMaterialization(
+            principal.userId,
+            deviceId,
+            {
+              ...(previous ? { id: previous.id } : {}),
+              repositoryId: binding.repositoryId,
+              workspaceId: binding.workspaceId,
+              path: binding.path,
+              platform: selected.attachment.platform ?? "unknown",
+            },
+          );
         }
       });
       cloudMaterializationsCommitted = true;
@@ -1199,11 +1236,27 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           await this.ctx.storage.transaction(async (transaction) => {
             const transactionalStore = new EdgeAccountStore(transaction);
             for (const binding of bindings) {
-              const key = materializationRollbackKey(
-                binding.repositoryId,
-                binding.workspaceId,
-              );
+              const key = companionPathKey(binding.path, selected.attachment.platform);
               const previous = previousMaterializations.get(key) ?? null;
+              const current = (await transactionalStore.listMaterializations(
+                principal.userId,
+                binding.repositoryId,
+              )).find((value) =>
+                value.deviceId === deviceId &&
+                value.workspaceId === binding.workspaceId
+              );
+              if (current && (!previous || current.id !== previous.id)) {
+                const removed = await transactionalStore.deleteMaterialization(
+                  principal.userId,
+                  binding.repositoryId,
+                  current.id,
+                );
+                if (!removed) {
+                  throw new Error(
+                    `Materialization rollback failed for ${binding.repositoryId}/${binding.workspaceId}.`,
+                  );
+                }
+              }
               if (previous) {
                 await transactionalStore.upsertMaterialization(
                   principal.userId,
@@ -1216,26 +1269,6 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
                     platform: previous.platform,
                   },
                 );
-                continue;
-              }
-              const current = (await transactionalStore.listMaterializations(
-                principal.userId,
-                binding.repositoryId,
-              )).find((value) =>
-                value.deviceId === deviceId &&
-                value.workspaceId === binding.workspaceId
-              );
-              if (current) {
-                const removed = await transactionalStore.deleteMaterialization(
-                  principal.userId,
-                  binding.repositoryId,
-                  current.id,
-                );
-                if (!removed) {
-                  throw new Error(
-                    `Materialization rollback failed for ${binding.repositoryId}/${binding.workspaceId}.`,
-                  );
-                }
               }
             }
           });
@@ -2356,13 +2389,6 @@ function companionPathKey(value: string, platform?: CompanionPlatform): string {
   return platform === "windows"
     ? normalized.toLocaleLowerCase("en-US")
     : normalized;
-}
-
-function materializationRollbackKey(
-  repositoryId: string,
-  workspaceId: string,
-): string {
-  return `${repositoryId}\u0000${workspaceId}`;
 }
 
 function normalizedRepositoryDisplayName(value: string): string {

@@ -155,6 +155,58 @@ describe("Repository identity and ACL control plane", () => {
     });
   });
 
+  it("migrates a materialization workspace id without leaving a duplicate and can restore it", async () => {
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const user = await accounts.createUser("Owner", "owner-pass");
+    const device = await accounts.registerDevice(user.id, {
+      displayName: "COMPEXNOTE-10",
+      platform: "windows",
+    });
+    const repository = await accounts.createRepository(
+      user.id,
+      "mcp-access-stack",
+      ["https://example.invalid/mcp-access-stack.git"],
+    );
+
+    const previous = await accounts.upsertMaterialization(user.id, device.id, {
+      repositoryId: repository.id,
+      workspaceId: "mcp-access-stack",
+      path: "C:/Users/rafael/Desktop/Project/mcp-access-stack",
+      platform: "windows",
+    });
+    const migrated = await accounts.upsertMaterialization(user.id, device.id, {
+      id: previous.id,
+      repositoryId: repository.id,
+      workspaceId: "mcp-access-stack-local-deadbeef",
+      path: previous.path,
+      platform: "windows",
+    });
+    expect(migrated.id).toBe(previous.id);
+    expect(await accounts.listMaterializations(user.id, repository.id)).toEqual([
+      expect.objectContaining({
+        id: previous.id,
+        workspaceId: "mcp-access-stack-local-deadbeef",
+        path: previous.path,
+      }),
+    ]);
+
+    const restored = await accounts.upsertMaterialization(user.id, device.id, {
+      id: previous.id,
+      repositoryId: previous.repositoryId,
+      workspaceId: previous.workspaceId,
+      path: previous.path,
+      platform: previous.platform,
+    });
+    expect(restored.id).toBe(previous.id);
+    expect(await accounts.listMaterializations(user.id, repository.id)).toEqual([
+      expect.objectContaining({
+        id: previous.id,
+        workspaceId: "mcp-access-stack",
+      }),
+    ]);
+  });
+
   it("keeps one materialization per device/workspace and supports exact rollback removal", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);

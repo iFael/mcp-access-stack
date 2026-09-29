@@ -180,7 +180,20 @@ Assert-ContainsAll -Label 'MCP V3 local uninstaller' -Source $uninstaller -Token
     '[switch]$PurgeRepositories',
     'repositoriesPreserved = -not [bool]$PurgeRepositories',
     'Repositórios',
-    'Assert-McpV3RemovalBoundary'
+    'Assert-McpV3RemovalBoundary',
+    '[char[]]@(',
+    '[IO.Path]::DirectorySeparatorChar',
+    '[IO.Path]::AltDirectorySeparatorChar',
+    '.TrimEnd($trimChars)'
+)
+
+$stager = Read-ProjectFile 'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1'
+Assert-ContainsAll -Label 'MCP V3 Windows execution-node staging retry' -Source $stager -Tokens @(
+    'Move-McpWindowsExecutionNodeDirectoryWithRetry',
+    '[IO.IOException]',
+    '[System.UnauthorizedAccessException]',
+    'Start-Sleep -Milliseconds $delay',
+    'directory move failed after {0} attempts'
 )
 
 $distribution = Read-ProjectFile 'deploy\windows\New-McpPublicDistribution.ps1'

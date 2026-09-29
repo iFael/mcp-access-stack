@@ -678,6 +678,7 @@ jobs:
           node tooling/testing/run-jest.mjs --config services/mcp-gateway/jest.config.ts --runInBand --runTestsByPath services/mcp-gateway/test/unit/companion/local-browser-worker.test.ts
           node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/shell/elevation-broker.test.ts
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalLifecycle.ps1
+          pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsExecutionNodeStaging.ps1
 
       - name: Test real Windows native launcher through Task Scheduler
         if: runner.os == 'Windows'
