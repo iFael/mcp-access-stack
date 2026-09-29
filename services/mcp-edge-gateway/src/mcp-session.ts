@@ -395,6 +395,56 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
 
+  async recoverOwnerAccess(input: unknown): Promise<string> {
+    const result = await this.recoverOwnerAccessResult(input);
+    return JSON.stringify(result);
+  }
+
+  private async recoverOwnerAccessResult(input: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!isRecord(input) ||
+        Object.keys(input).sort().join(",") !== "password" ||
+        typeof input.password !== "string") {
+      return { status: 400, body: { error: "invalid_owner_recovery" } };
+    }
+
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return { status: 503, body: { error: "edge_control_plane_not_configured" } };
+      }
+      throw error;
+    }
+
+    if (!(runtime.oauth instanceof EdgeOwnerOAuth)) {
+      return { status: 409, body: { error: "owner_recovery_not_applicable" } };
+    }
+
+    try {
+      const recovered = await runtime.oauth.recoverAccess(input.password);
+      return {
+        status: 200,
+        body: {
+          status: "recovered",
+          userId: recovered.userId,
+          displayName: recovered.displayName,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const ambiguousIdentity = /Multiple legacy user profiles/u.test(message);
+      return {
+        status: ambiguousIdentity ? 409 : 400,
+        body: {
+          error: ambiguousIdentity
+            ? "owner_recovery_identity_ambiguous"
+            : "owner_recovery_rejected",
+        },
+      };
+    }
+  }
+
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
