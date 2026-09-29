@@ -59,6 +59,7 @@ export class DesktopOAuthClient {
       } catch (error) {
         this.session = null;
         if (signal?.aborted) throw error;
+        if (!isInvalidGrantRefreshError(error)) throw error;
         await this.options.credentialStore.clear().catch(() => undefined);
       }
     }
@@ -93,7 +94,8 @@ export class DesktopOAuthClient {
       ...(signal === undefined ? {} : { signal }),
     });
     if (!response.ok) {
-      throw new AppError("AUTHENTICATION_REQUIRED", "Stored MCP V3 authorization could not be refreshed.");
+      const oauthError = await readOAuthError(response);
+      throw new DesktopOAuthRefreshError(oauthError === "invalid_grant");
     }
     const tokens = parseTokenResponse(await response.json());
     const credential: DesktopOAuthRefreshCredential = {
@@ -206,6 +208,36 @@ export class DesktopOAuthClient {
   }
 }
 
+
+class DesktopOAuthRefreshError extends AppError {
+  readonly invalidGrant: boolean;
+
+  constructor(invalidGrant: boolean) {
+    super(
+      invalidGrant ? "AUTHENTICATION_REQUIRED" : "AUTHENTICATION_FAILED",
+      invalidGrant
+        ? "Stored MCP V3 authorization is no longer valid."
+        : "Stored MCP V3 authorization could not be refreshed.",
+    );
+    this.name = invalidGrant ? "OAuthInvalidGrant" : "OAuthRefreshRejected";
+    this.invalidGrant = invalidGrant;
+  }
+}
+
+function isInvalidGrantRefreshError(error: unknown): boolean {
+  return error instanceof DesktopOAuthRefreshError && error.invalidGrant;
+}
+
+async function readOAuthError(response: Response): Promise<string | undefined> {
+  try {
+    const value = await response.json() as unknown;
+    return isRecord(value) && typeof value.error === "string"
+      ? value.error
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 type TokenResponse = {
   access_token: string;

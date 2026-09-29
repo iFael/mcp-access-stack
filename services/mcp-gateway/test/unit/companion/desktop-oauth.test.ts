@@ -75,6 +75,132 @@ describe("DesktopOAuthClient", () => {
     });
   });
 
+  it("keeps the persisted credential and does not open a browser when refresh transport fails", async () => {
+    const store = new MemoryCredentialStore();
+    store.value = {
+      clientId: "client-transport-error",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-transport-error",
+    };
+    const openBrowser = jest.fn(async () => undefined);
+    const fetchImpl = jest.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+
+    const client = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: store,
+      fetchImpl: fetchImpl as typeof fetch,
+      openBrowser,
+    });
+
+    await expect(client.getAccessToken()).rejects.toThrow("fetch failed");
+    expect(store.clearCalls).toBe(0);
+    expect(store.value).toEqual({
+      clientId: "client-transport-error",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-transport-error",
+    });
+    expect(openBrowser).not.toHaveBeenCalled();
+  });
+
+  it("keeps the persisted credential and does not open a browser when refresh returns a server error", async () => {
+    const store = new MemoryCredentialStore();
+    store.value = {
+      clientId: "client-server-error",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-server-error",
+    };
+    const openBrowser = jest.fn(async () => undefined);
+    const fetchImpl = jest.fn(async () => new Response("temporarily unavailable", { status: 503 }));
+
+    const client = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: store,
+      fetchImpl: fetchImpl as typeof fetch,
+      openBrowser,
+    });
+
+    await expect(client.getAccessToken()).rejects.toMatchObject({
+      name: "OAuthRefreshRejected",
+      code: "AUTHENTICATION_FAILED",
+    });
+    expect(store.clearCalls).toBe(0);
+    expect(store.value).toEqual({
+      clientId: "client-server-error",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-server-error",
+    });
+    expect(openBrowser).not.toHaveBeenCalled();
+  });
+
+  it("clears the persisted credential and reauthorizes interactively only after invalid_grant", async () => {
+    const store = new MemoryCredentialStore();
+    store.value = {
+      clientId: "client-invalid-grant",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-invalid-grant",
+    };
+    let authorizationUrl: URL | undefined;
+    const fetchImpl = jest.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/token") {
+        const body = init?.body as URLSearchParams;
+        if (body.get("grant_type") === "refresh_token") {
+          return Response.json({ error: "invalid_grant" }, { status: 400 });
+        }
+        expect(body.get("grant_type")).toBe("authorization_code");
+        expect(body.get("client_id")).toBe("client-reauthorized");
+        expect(body.get("code")).toBe("authorization-code-value");
+        return Response.json({
+          access_token: "access-token-reauthorized-value",
+          refresh_token: "refresh-token-reauthorized-value",
+          expires_in: 1200,
+          token_type: "Bearer",
+          scope: "workspaces:read",
+        });
+      }
+      if (url.pathname === "/register") {
+        return Response.json({ client_id: "client-reauthorized" });
+      }
+      if (url.pathname === "/.well-known/oauth-authorization-server") {
+        return Response.json({ scopes_supported: ["workspaces:read"] });
+      }
+      throw new Error(`Unexpected OAuth request: ${url.href}`);
+    });
+
+    const client = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: store,
+      fetchImpl: fetchImpl as typeof fetch,
+      openBrowser: async (url) => {
+        authorizationUrl = new URL(url.href);
+        const redirectUri = authorizationUrl.searchParams.get("redirect_uri");
+        const state = authorizationUrl.searchParams.get("state");
+        if (!redirectUri || !state) throw new Error("Missing loopback authorization parameters.");
+        const callback = new URL(redirectUri);
+        callback.searchParams.set("code", "authorization-code-value");
+        callback.searchParams.set("state", state);
+        const response = await fetch(callback);
+        expect(response.status).toBe(200);
+      },
+      now: () => 20_000,
+    });
+
+    await expect(client.getAccessToken()).resolves.toEqual({
+      accessToken: "access-token-reauthorized-value",
+      scope: "workspaces:read",
+      expiresAtMs: 1_220_000,
+    });
+    expect(store.clearCalls).toBe(1);
+    expect(authorizationUrl?.pathname).toBe("/authorize");
+    expect(store.value).toEqual({
+      clientId: "client-reauthorized",
+      scope: "workspaces:read",
+      refreshToken: "refresh-token-reauthorized-value",
+    });
+  });
+
   it("completes public-client PKCE through a loopback callback and stores only the refresh credential", async () => {
     const store = new MemoryCredentialStore();
     let authorizationUrl: URL | undefined;
