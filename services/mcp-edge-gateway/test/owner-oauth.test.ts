@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
+import { EdgeAccountStore } from "../src/control-plane/account-store.js";
 import { EdgeOwnerOAuth, type OwnerOAuthStorage } from "../src/control-plane/owner-oauth.js";
 
 class MemoryStorage implements OwnerOAuthStorage {
@@ -24,6 +25,10 @@ describe("Edge Owner OAuth durable state", () => {
       resourceName: "MCP Access Stack",
     });
 
+    const accounts = new EdgeAccountStore(storage);
+    const legacyUser = await accounts.createUser("Rafael", "profile-password-1");
+    await oauth.recoverAccess(firstPassword);
+
     const registered = await oauth.handle(jsonRequest("https://edge.example/register", {
       client_name: "ChatGPT",
       redirect_uris: ["https://chatgpt.com/connector/oauth/test-client"],
@@ -45,12 +50,7 @@ describe("Edge Owner OAuth durable state", () => {
       scope: "mcp:tools",
       state: "state-1",
       resource: "https://edge.example/mcp",
-      owner_token: ownerSecret,
       owner_password: firstPassword,
-      owner_password_confirm: firstPassword,
-      user_name: "Rafael",
-      user_password: "profile-password-1",
-      user_password_confirm: "profile-password-1",
     }));
     expect(authorize?.status).toBe(302);
     const location = new URL(authorize!.headers.get("location")!);
@@ -77,8 +77,8 @@ describe("Edge Owner OAuth durable state", () => {
       headers: { authorization: `Bearer ${tokens.access_token}` },
     }));
     expect(authenticated).toMatchObject({ scopes: ["mcp:tools"], ownerScope: "owner" });
-    expect(authenticated.userId).toMatch(/^usr_[0-9a-f-]{36}$/iu);
-    expect(authenticated.subject).toBe(`user:${authenticated.userId}`);
+    expect(authenticated.userId).toBe(legacyUser.id);
+    expect(authenticated.subject).toBe(`user:${legacyUser.id}`);
 
     await oauth.rotateOwnerPassword(secondPassword);
     await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
@@ -103,8 +103,6 @@ describe("Edge Owner OAuth durable state", () => {
       state: "state-2",
       resource: "https://edge.example/mcp",
       owner_password: secondPassword,
-      user_name: "Rafael",
-      user_password: "profile-password-1",
     }));
     expect(authorizeAgain?.status).toBe(302);
     const secondCode = new URL(authorizeAgain!.headers.get("location")!).searchParams.get("code")!;
@@ -127,6 +125,7 @@ describe("Edge Owner OAuth durable state", () => {
     expect(persisted).not.toContain(ownerSecret);
     expect(persisted).not.toContain(firstPassword);
     expect(persisted).not.toContain(secondPassword);
+    expect(persisted).not.toContain("profile-password-1");
     expect(persisted).not.toContain(tokens.access_token);
     expect(persisted).not.toContain(tokens.refresh_token);
     expect(persisted).not.toContain(secondTokens.access_token);
