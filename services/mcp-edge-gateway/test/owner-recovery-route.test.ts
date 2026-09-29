@@ -1,5 +1,12 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import edgeGateway from "../src/index.js";
+
+jest.unstable_mockModule("cloudflare:workers", () => ({
+  DurableObject: class {},
+}), { virtual: true });
+
+async function loadEdgeGateway() {
+  return (await import("../src/index.js")).default;
+}
 
 function createEnv(ownerToken?: string) {
   const recoverOwnerAccess = jest.fn(async (_input: unknown) => JSON.stringify({
@@ -23,6 +30,7 @@ function createEnv(ownerToken?: string) {
 
 describe("Owner OAuth recovery route", () => {
   it("requires the technical break-glass credential", async () => {
+    const edgeGateway = await loadEdgeGateway();
     const missing = createEnv();
     const missingResponse = await edgeGateway.fetch(
       jsonRequest("https://edge.example/_internal/owner-oauth/recover-access", { password: "new-access-password" }),
@@ -46,6 +54,7 @@ describe("Owner OAuth recovery route", () => {
   });
 
   it("accepts a valid break-glass credential without exposing it to the session", async () => {
+    const edgeGateway = await loadEdgeGateway();
     const ownerToken = "x".repeat(48);
     const { env, session } = createEnv(ownerToken);
     const response = await edgeGateway.fetch(
@@ -68,6 +77,7 @@ describe("Owner OAuth recovery route", () => {
   });
 
   it("rejects non-json and malformed recovery bodies before reaching the session", async () => {
+    const edgeGateway = await loadEdgeGateway();
     const ownerToken = "x".repeat(48);
     const first = createEnv(ownerToken);
     const wrongType = await edgeGateway.fetch(
