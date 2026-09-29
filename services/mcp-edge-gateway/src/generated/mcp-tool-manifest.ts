@@ -12178,7 +12178,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Explicitly connects the worker to Chrome; normal browser actions auto-connect when needed.",
+    "description": "Diagnostic-only explicit Chrome connection. Normal browser work must start with browser_open, which auto-connects; do not use browser_connect as a preflight because it can launch an otherwise unnecessary browser window.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12446,7 +12446,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Auto-connects and lists registered tabs; unknown tabs remain user-owned.",
+    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12579,7 +12579,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Opens or safely reuses an MCP-owned Chromium tab and returns its semantic state; private sites require browser_open_authorized_site.",
+    "description": "Opens or safely reuses an MCP-owned Chromium tab for a real URL or cached purpose and returns its semantic state; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19149,7 +19149,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Closes the dedicated browser session only when the current task is fully finished. Do not call this for a temporary pause.",
+    "description": "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -20064,13 +20064,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8d8ecbb02397cc2841a279a74d35e5d03ce446c345e3b4dc99477262dd9c2aac",
-  "serverVersion": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef",
+  "contractRevision": "99b702e5dbd46ecb5f511cc5a2f3f855f392617d74fe96a1123d6e597c3347b4",
+  "serverVersion": "0.4.0-catalog.c99b702e5dbd4.s0b82ee333aef",
   "toolCount": 89,
   "toolSetRevision": "0b82ee333aefde809950518d251e6a214e3e9288b9df6975e01c43e4d61458f6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef"
+  "version": "0.4.0-catalog.c99b702e5dbd4.s0b82ee333aef"
 } as const;
