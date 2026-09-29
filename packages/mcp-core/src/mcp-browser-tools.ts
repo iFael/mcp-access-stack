@@ -296,17 +296,17 @@ function definitions(
       () => e.status(assumeParsed(v)),
       (activeContext) => e.status(assumeParsed(v), activeContext),
     )),
-    d("browser_connect", "Explicitly connects the worker to Chrome; normal browser actions auto-connect when needed.", c.browserConnectInputSchema, c.browserConnectResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_connect", "Diagnostic-only explicit Chrome connection. Normal browser work must start with browser_open, which auto-connects; do not use browser_connect as a preflight because it can launch an otherwise unnecessary browser window.", c.browserConnectInputSchema, c.browserConnectResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.connect(assumeParsed(v)),
       (activeContext) => e.connect(assumeParsed(v), activeContext),
     )),
-    d("browser_tabs", "Auto-connects and lists registered tabs; unknown tabs remain user-owned.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_tabs", "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.tabs(assumeParsed(v)),
       (activeContext) => e.tabs(assumeParsed(v), activeContext),
     )),
-    d("browser_open", "Opens or safely reuses an MCP-owned Chromium tab and returns its semantic state; private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_open", "Opens or safely reuses an MCP-owned Chromium tab for a real URL or cached purpose and returns its semantic state; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.open(assumeParsed(v)),
       (activeContext) => e.open(assumeParsed(v), activeContext),
@@ -411,7 +411,7 @@ function definitions(
       () => e.closeTab(assumeParsed(v)),
       (activeContext) => e.closeTab(assumeParsed(v), activeContext),
     ), true),
-    d("browser_finish_task", "Closes the dedicated browser session only when the current task is fully finished. Do not call this for a temporary pause.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_finish_task", "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.finishTask(assumeParsed(v)),
       (activeContext) => e.finishTask(assumeParsed(v), activeContext),
