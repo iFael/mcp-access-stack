@@ -1,21 +1,16 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import edgeGateway from "../src/index.js";
 
-type RecoverSession = {
-  recoverOwnerAccess: jest.Mock<Promise<string>, [unknown]>;
-};
-
 function createEnv(ownerToken?: string) {
-  const session: RecoverSession = {
-    recoverOwnerAccess: jest.fn(async () => JSON.stringify({
-      status: 200,
-      body: {
-        status: "recovered",
-        userId: "usr_00000000-0000-0000-0000-000000000001",
-        displayName: "Rafael",
-      },
-    })),
-  };
+  const recoverOwnerAccess = jest.fn(async (_input: unknown) => JSON.stringify({
+    status: 200,
+    body: {
+      status: "recovered",
+      userId: "usr_00000000-0000-0000-0000-000000000001",
+      displayName: "Rafael",
+    },
+  }));
+  const session = { recoverOwnerAccess };
   const env = {
     ...(ownerToken === undefined ? {} : { MCP_OWNER_TOKEN: ownerToken }),
     MCP_SESSION: {
