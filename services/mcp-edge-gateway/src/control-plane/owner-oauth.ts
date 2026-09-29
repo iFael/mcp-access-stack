@@ -66,6 +66,7 @@ type OwnerCredentialMaterial = {
 
 const OWNER_BOOTSTRAP_MARKER_KEY = "owner:bootstrap:v1";
 const OWNER_CREDENTIAL_MATERIAL_KEY = "owner:credential-material:v1";
+const OWNER_USER_ID_KEY = "owner:user-id:v1";
 
 type OwnerAccessClaims = {
   iss: string;
@@ -150,6 +151,12 @@ export class EdgeOwnerOAuth {
     material.credentialVersion = crypto.randomUUID();
     await this.storage.put(OWNER_CREDENTIAL_MATERIAL_KEY, material);
     this.hmacKeyPromise = undefined;
+  }
+
+  async recoverAccess(password: string): Promise<{ userId: string; displayName: string }> {
+    const user = await this.resolveOwnerUser();
+    await this.rotateOwnerPassword(password);
+    return { userId: user.id, displayName: user.displayName };
   }
 
   async bootstrapLegacyState(snapshot: unknown, suppliedOwnerSecret: string): Promise<void> {
@@ -256,53 +263,41 @@ export class EdgeOwnerOAuth {
     ) return oauthError("invalid_request", 400);
 
     const passwordConfigured = (await this.currentCredentialVersion()) !== undefined;
-    if (request.method === "GET") {
-      return htmlResponse(this.authorizationPage(client, fields, passwordConfigured));
-    }
 
     if (!passwordConfigured) {
-      const currentCredential = fields.get("owner_token") ?? "";
-      const password = fields.get("owner_password") ?? "";
-      const confirmation = fields.get("owner_password_confirm") ?? "";
-      if (!(await this.ownerSecretMatches(currentCredential))) {
-        return htmlResponse(this.authorizationPage(client, fields, false, "Current credential was not accepted."), 401);
-      }
-      if (password !== confirmation) {
-        return htmlResponse(this.authorizationPage(client, fields, false, "Passwords do not match."), 400);
-      }
-      try {
-        await this.rotateOwnerPassword(password);
-      } catch {
-        return htmlResponse(this.authorizationPage(client, fields, false, "Password must not be empty and must contain at most 2048 characters."), 400);
-      }
-    } else {
-      const supplied = fields.get("owner_password") ?? "";
-      if (!(await this.ownerSecretMatches(supplied))) {
-        return htmlResponse(this.authorizationPage(client, fields, true, "Password was not accepted."), 401);
-      }
+      return htmlResponse(
+        this.authorizationPage(
+          client,
+          fields,
+          false,
+          "Access password is not configured. Run the administrative recovery flow.",
+        ),
+        503,
+      );
     }
 
-    const userName = fields.get("user_name") ?? "";
-    const userPassword = fields.get("user_password") ?? "";
-    if (!userName.trim() || !userPassword) {
-      return htmlResponse(this.authorizationPage(client, fields, true, "User profile name and personal password are required."), 400);
+    if (request.method === "GET") {
+      return htmlResponse(this.authorizationPage(client, fields, true));
     }
-    let user = await this.accounts.findUserByName(userName);
-    if (user) {
-      user = await this.accounts.authenticateUser(userName, userPassword);
-      if (!user) {
-        return htmlResponse(this.authorizationPage(client, fields, true, "User profile credentials were not accepted."), 401);
-      }
-    } else {
-      const confirmation = fields.get("user_password_confirm") ?? "";
-      if (userPassword !== confirmation) {
-        return htmlResponse(this.authorizationPage(client, fields, true, "Personal passwords do not match."), 400);
-      }
-      try {
-        user = await this.accounts.createUser(userName, userPassword);
-      } catch (error) {
-        return htmlResponse(this.authorizationPage(client, fields, true, error instanceof Error ? error.message : "User profile could not be created."), 400);
-      }
+
+    const supplied = fields.get("owner_password") ?? "";
+    if (!(await this.ownerSecretMatches(supplied))) {
+      return htmlResponse(this.authorizationPage(client, fields, true, "Access password was not accepted."), 401);
+    }
+
+    let userId: string;
+    try {
+      userId = (await this.resolveOwnerUser()).id;
+    } catch (error) {
+      return htmlResponse(
+        this.authorizationPage(
+          client,
+          fields,
+          true,
+          error instanceof Error ? error.message : "Owner identity could not be resolved.",
+        ),
+        409,
+      );
     }
 
     const code = `code-${randomToken()}`;
@@ -313,13 +308,35 @@ export class EdgeOwnerOAuth {
       scopes,
       resource,
       expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS,
-      userId: user.id,
+      userId,
     } satisfies AuthorizationCodeRecord);
     const target = new URL(redirectUri);
     target.searchParams.set("code", code);
     const state = fields.get("state");
     if (state) target.searchParams.set("state", state);
     return new Response(null, { status: 302, headers: { location: target.href, "cache-control": "no-store" } });
+  }
+
+  private async resolveOwnerUser() {
+    const pinnedUserId = await this.storage.get<string>(OWNER_USER_ID_KEY);
+    if (pinnedUserId) {
+      const pinnedUser = await this.accounts.getUser(pinnedUserId);
+      if (pinnedUser) return pinnedUser;
+      await this.storage.delete(OWNER_USER_ID_KEY);
+    }
+
+    const users = await this.accounts.listUsers();
+    if (users.length > 1) {
+      throw new Error("Multiple legacy user profiles require explicit administrative migration.");
+    }
+
+    let user = users[0];
+    if (!user) {
+      user = await this.accounts.createUser("Owner", randomToken());
+    }
+
+    await this.storage.put(OWNER_USER_ID_KEY, user.id);
+    return user;
   }
 
   private async token(request: Request): Promise<Response> {
@@ -553,10 +570,10 @@ export class EdgeOwnerOAuth {
       .map(([name, value]) => `<input type="hidden" name="${htmlEscape(name)}" value="${htmlEscape(value)}">`)
       .join("\n");
     const credentialFields = passwordConfigured
-      ? `<label>Shared account password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
-      : `<p>One-time migration: enter the current credential and choose the shared account password.</p><label>Current credential<input name="owner_token" type="password" autocomplete="current-password" required></label><label>New shared password<input name="owner_password" type="password" autocomplete="new-password" required></label><label>Confirm shared password<input name="owner_password_confirm" type="password" autocomplete="new-password" required></label>`;
-    const profileFields = `<fieldset><legend>User profile</legend><p>Use an existing profile or choose a new profile name. A new profile is created when the name does not exist.</p><label>Profile name<input name="user_name" autocomplete="username" required></label><label>Personal password<input name="user_password" type="password" autocomplete="current-password" required></label><label>Confirm personal password (required only for a new profile)<input name="user_password_confirm" type="password" autocomplete="new-password"></label></fieldset>`;
-    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}${profileFields}<button type="submit">Authorize</button></form></main></body></html>`;
+      ? `<label>Access password<input name="owner_password" type="password" autocomplete="current-password" required></label>`
+      : `<p>Access password is not configured. Run the administrative recovery flow.</p>`;
+    const action = passwordConfigured ? `<button type="submit">Authorize</button>` : "";
+    return `<!doctype html><html><body><main><h1>${htmlEscape(this.config.resourceName)}</h1><p>${htmlEscape(client.client_name ?? client.client_id)}</p>${error ? `<p>${htmlEscape(error)}</p>` : ""}<form method="post">${hidden}${credentialFields}${action}</form></main></body></html>`;
   }
 }
 
