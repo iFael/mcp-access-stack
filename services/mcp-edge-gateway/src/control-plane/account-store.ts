@@ -71,6 +71,16 @@ export class EdgeAccountStore {
     return (await this.storage.get<string[]>(USER_IDS_KEY))?.length ?? 0;
   }
 
+  async listUsers(): Promise<AccountUser[]> {
+    const ids = (await this.storage.get<string[]>(USER_IDS_KEY)) ?? [];
+    const users: AccountUser[] = [];
+    for (const id of ids) {
+      const user = await this.getUser(id);
+      if (user) users.push(user);
+    }
+    return users;
+  }
+
   async getUser(userId: string): Promise<AccountUser | null> {
     const value = await this.storage.get<AccountUser>(userKey(userId));
     return isUser(value) ? value : null;
