@@ -28,26 +28,12 @@ jobs:
         env:
           SIGNING_PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
-          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
-          MACOS_APPLICATION_SIGNING_IDENTITY: ${{ secrets.MACOS_APPLICATION_SIGNING_IDENTITY }}
-          MACOS_INSTALLER_SIGNING_IDENTITY: ${{ secrets.MACOS_INSTALLER_SIGNING_IDENTITY }}
-          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           test -n "$SIGNING_PFX"
           test -n "$SIGNING_PASSWORD"
-          test -n "$MACOS_SIGNING_P12"
-          test -n "$MACOS_SIGNING_PASSWORD"
-          test -n "$MACOS_APPLICATION_SIGNING_IDENTITY"
-          test -n "$MACOS_INSTALLER_SIGNING_IDENTITY"
-          test -n "$MACOS_NOTARY_APPLE_ID"
-          test -n "$MACOS_NOTARY_TEAM_ID"
-          test -n "$MACOS_NOTARY_PASSWORD"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
 
@@ -222,10 +208,6 @@ jobs:
             platform: linux
           - os: ubuntu-24.04-arm
             platform: linux
-          - os: macos-latest
-            platform: darwin
-          - os: macos-15-intel
-            platform: darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     environment: public-release
@@ -603,13 +585,6 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: linux-deb-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Download macOS native packages
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          pattern: macos-pkg-*
           path: release-assets
           merge-multiple: true
 
