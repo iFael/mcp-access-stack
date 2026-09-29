@@ -103,6 +103,33 @@ export default {
       return jsonResponse(result.body, result.status);
     }
 
+    if (url.pathname === "/_internal/owner-oauth/recover-access" && request.method === "POST") {
+      const expectedToken = env.MCP_OWNER_TOKEN?.trim();
+      if (!expectedToken) return jsonResponse({ error: "owner_recovery_not_configured" }, 503);
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, {
+          status: 401,
+          headers: { "www-authenticate": "Bearer", "cache-control": "no-store" },
+        });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return jsonResponse({ error: "invalid_owner_recovery_content_type" }, 415);
+      }
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return jsonResponse({ error: "owner_recovery_too_large" }, 413);
+      }
+      let input: unknown;
+      try { input = JSON.parse(body) as unknown; } catch {
+        return jsonResponse({ error: "invalid_owner_recovery" }, 400);
+      }
+      const result = JSON.parse(await session.recoverOwnerAccess(input)) as {
+        status: number;
+        body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
+
     if (url.pathname === "/connector") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;
       if (!expectedToken) {
