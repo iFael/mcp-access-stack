@@ -17,6 +17,58 @@ afterEach(async () => {
 });
 
 describe("BrowserWorkerApplication", () => {
+  it("reports the versioned live-view capability only for an authenticated headless worker", async () => {
+    const runtime = { supportsLiveView: () => true } as unknown as BrowserRuntime;
+    const { baseUrl, token } = await startApplication(runtime, { headless: true });
+    const url = new URL("/live/capability", baseUrl);
+    expect((await fetch(url)).status).toBe(401);
+    const supported = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(supported.status).toBe(200);
+    await expect(supported.json()).resolves.toEqual({ version: 1 });
+
+    const visible = await startApplication(runtime, { headless: false });
+    expect((await fetch(new URL("/live/capability", visible.baseUrl), {
+      headers: { authorization: `Bearer ${visible.token}` },
+    })).status).toBe(503);
+  });
+
+  it("serves live frames only with the worker token and an exact task/tab pair", async () => {
+    const runtime = {
+      liveFrame: async (taskId: string, tabId: string, afterSeq: number) => {
+        if (taskId !== "task-1" || tabId !== "tab-1") throw new Error("wrong scope");
+        return afterSeq >= 7
+          ? null
+          : { seq: 7, data: "/9j/", width: 640, height: 360, capturedAt: 100 };
+      },
+    } as unknown as BrowserRuntime;
+    const { baseUrl, token } = await startApplication(runtime);
+    const url = new URL("/live/frame?taskId=task-1&tabId=tab-1&afterSeq=6", baseUrl);
+    expect((await fetch(url)).status).toBe(401);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      seq: 7,
+      data: "/9j/",
+      width: 640,
+      height: 360,
+      capturedAt: 100,
+    });
+    const mismatched = await fetch(
+      new URL("/live/frame?taskId=task-2&tabId=tab-1", baseUrl),
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(mismatched.status).toBe(404);
+    const unchanged = await fetch(
+      new URL("/live/frame?taskId=task-1&tabId=tab-1&afterSeq=7", baseUrl),
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(unchanged.status).toBe(204);
+  });
+
   it("treats auto-connect idle as ready while exposing connection state and requiring authentication", async () => {
     const { baseUrl, token } = await startApplication();
 

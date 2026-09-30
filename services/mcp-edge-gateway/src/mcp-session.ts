@@ -15,10 +15,17 @@ import {
   isCompanionEligibleForUser,
   retireReplacedCompanion,
   selectAvailableCompanionWorkspaceId,
+  selectAvailableRuntimeWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "./control-plane/companion-routing.js";
 import { EdgeAccountStore, type StoredMaterialization } from "./control-plane/account-store.js";
+import {
+  browserRuntimeAffinityKey,
+  readBrowserRuntimeAffinity,
+  selectBrowserExecutionRoute,
+  type BrowserRuntimeAffinity,
+} from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
 import {
   EXPECTED_MCP_CONTRACT_REVISION,
@@ -32,6 +39,14 @@ import {
 } from "./contract-compatibility.js";
 import { isPreferredConnectorRuntime, selectPreferredConnectorProtocol } from "./connector-handover.js";
 import { EdgeOwnerOAuth } from "./control-plane/owner-oauth.js";
+import {
+  BrowserLiveViewer,
+  type BrowserViewerScope,
+} from "./control-plane/browser-live-viewer.js";
+import {
+  addBrowserViewerLinks,
+  type BrowserViewerSource,
+} from "./control-plane/browser-viewer-links.js";
 import {
   createAgentUnavailableMcpResponse,
   getMcpResponseDiagnostic,
@@ -80,6 +95,7 @@ import {
 
 const EDGE_CONNECTOR_RECONNECT_GRACE_MS = 3_000;
 const EDGE_CONNECTOR_RECONNECT_POLL_MS = 50;
+const PRIMARY_RUNTIME_ID_STORAGE_KEY = "runtime:primary-id:v1";
 
 export type EdgeGatewayEnv = EdgeControlPlaneEnv & {
   MCP_SESSION: DurableObjectNamespace<McpSession>;
@@ -134,6 +150,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     this.accountStore = new EdgeAccountStore(this.ctx.storage);
     this.repositoryControlPlane = new EdgeRepositoryControlPlane(this.accountStore, {
       isDeviceOnline: (deviceId) => this.isCompanionDeviceOnline(deviceId),
+      isRemoteRuntimeOnline: () => this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
       disconnectDevice: (deviceId) => this.disconnectCompanionDevice(deviceId),
     });
     this.ctx.blockConcurrencyWhile(async () => {
@@ -458,11 +475,144 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (url.pathname === "/status") {
       return jsonResponse(await this.getStatus());
     }
+    if (url.pathname.startsWith("/viewer/")) {
+      return this.handleBrowserLiveViewer(request);
+    }
+    if (url.pathname === "/_viewer/frame") {
+      return jsonResponse({ error: "not_found" }, 404);
+    }
     if (isAllowedEdgeRequest(request.method, `${url.pathname}${url.search}`)) {
       return this.handleAllowedRequest(request);
     }
 
     return jsonResponse({ error: "not_found" }, 404);
+  }
+
+  private async handleBrowserLiveViewer(request: Request): Promise<Response> {
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return jsonResponse({ error: "edge_control_plane_not_configured" }, 503);
+      }
+      throw error;
+    }
+    const ownerOAuth = runtime.oauth;
+    if (!(ownerOAuth instanceof EdgeOwnerOAuth)) {
+      return jsonResponse({ error: "viewer_requires_owner_accounts" }, 503);
+    }
+
+    const viewer = new BrowserLiveViewer(this.ctx.storage, {
+      authenticate: (ownerPassword, userName, userPassword) =>
+        ownerOAuth.authenticateViewer(ownerPassword, userName, userPassword),
+      credentialVersion: () => ownerOAuth.viewerCredentialVersion(),
+      registerViewerDevice: async (userId, existingDeviceId) => {
+        const device = await this.accountStore.registerDevice(userId, {
+          ...(existingDeviceId === undefined ? {} : { deviceId: existingDeviceId }),
+          displayName: "Browser live viewer",
+          platform: "unknown",
+        });
+        return device.id;
+      },
+      viewerDeviceAuthorized: async (userId, deviceId) =>
+        (await this.accountStore.getActiveDeviceForUser(userId, deviceId)) !== null,
+      authorizeSource: (userId, scope) =>
+        this.authorizeBrowserViewerSource(userId, scope),
+      frame: async (viewerRequest, userId, scope, afterSeq) => {
+        let targetSocket: WebSocket | undefined;
+        let protocolVersion:
+          | typeof EDGE_PROTOCOL_VERSION
+          | typeof COMPANION_PROTOCOL_VERSION;
+
+        if (scope.kind === "runtime") {
+          const current = await this.getCurrentPrimaryBrowserAffinity();
+          if (!current ||
+              current.runtimeId !== scope.runtimeId ||
+              current.browserEpoch !== scope.browserEpoch) {
+            return jsonResponse({ error: "browser_offline" }, 503);
+          }
+          targetSocket = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) ?? undefined;
+          protocolVersion = EDGE_PROTOCOL_VERSION;
+        } else {
+          const selected = this.getReadyCompanionsForUser(userId).find(
+            ({ attachment }) =>
+              attachment.deviceId === scope.deviceId &&
+              attachment.capabilities?.includes("browser-live-view-v1"),
+          );
+          targetSocket = selected?.webSocket;
+          protocolVersion = COMPANION_PROTOCOL_VERSION;
+        }
+        if (!targetSocket) {
+          return jsonResponse({ error: "browser_offline" }, 503);
+        }
+
+        const target = new URL(viewerRequest.url);
+        target.pathname = "/_viewer/frame";
+        target.search = new URLSearchParams({
+          taskId: scope.taskId,
+          tabId: scope.tabId,
+          afterSeq: String(afterSeq),
+        }).toString();
+        return this.relayAuthenticatedRequestTo(
+          new Request(target, { method: "GET", signal: viewerRequest.signal }),
+          "",
+          {
+            subject: `viewer:${userId}`,
+            scopes: ["workspaces:read"],
+            ownerScope: "owner",
+            userId,
+          },
+          targetSocket,
+          protocolVersion,
+          undefined,
+          5_000,
+        );
+      },
+    });
+    return viewer.handle(request);
+  }
+
+  private async authorizeBrowserViewerSource(
+    userId: string,
+    scope: BrowserViewerScope,
+  ): Promise<boolean> {
+    if (scope.kind === "runtime") {
+      const [taskValue, tabValue, current] = await Promise.all([
+        this.ctx.storage.get<unknown>(
+          browserRuntimeAffinityKey(userId, "task", scope.taskId),
+        ),
+        this.ctx.storage.get<unknown>(
+          browserRuntimeAffinityKey(userId, "tab", scope.tabId),
+        ),
+        this.getCurrentPrimaryBrowserAffinity(),
+      ]);
+      const taskAffinity = readBrowserRuntimeAffinity(taskValue);
+      const tabAffinity = readBrowserRuntimeAffinity(tabValue);
+      return current !== null &&
+        current.runtimeId === scope.runtimeId &&
+        current.browserEpoch === scope.browserEpoch &&
+        taskAffinity?.runtimeId === scope.runtimeId &&
+        taskAffinity.browserEpoch === scope.browserEpoch &&
+        tabAffinity?.runtimeId === scope.runtimeId &&
+        tabAffinity.browserEpoch === scope.browserEpoch;
+    }
+
+    if (!(await this.accountStore.getActiveDeviceForUser(
+      userId,
+      scope.deviceId,
+    ))) {
+      return false;
+    }
+    const [taskDevice, tabDevice] = await Promise.all([
+      this.ctx.storage.get<string>(
+        browserAffinityKey(userId, "task", scope.taskId),
+      ),
+      this.ctx.storage.get<string>(
+        browserAffinityKey(userId, "tab", scope.tabId),
+      ),
+    ]);
+    return taskDevice === scope.deviceId && tabDevice === scope.deviceId;
   }
 
   override webSocketMessage(webSocket: WebSocket, message: string | ArrayBuffer): void {
@@ -545,7 +695,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
     headers.set("cache-control", "no-store");
 
-    pending.resolve(new Response(parsed.body, { status: parsed.status, headers }));
+    pending.resolve(new Response(
+      parsed.status === 204 || parsed.status === 205 || parsed.status === 304
+        ? null
+        : parsed.body,
+      { status: parsed.status, headers },
+    ));
   }
 
   override webSocketClose(webSocket: WebSocket, code: number, _reason: string, wasClean: boolean): void {
@@ -705,6 +860,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     principal: AuthenticatedEdgePrincipal,
     unavailableResponse?: () => Response,
   ): Promise<Response> {
+    const invocation = readMcpToolInvocation(body);
     const companionResponse = await this.tryRelayCompanionMcpRequest(
       request,
       body,
@@ -712,7 +868,28 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       unavailableResponse,
     );
     if (companionResponse) return companionResponse;
-    return this.relayAuthenticatedRequest(request, JSON.stringify(body), principal, unavailableResponse);
+    const primaryResponse = await this.relayAuthenticatedRequest(
+      request,
+      JSON.stringify(body),
+      principal,
+      unavailableResponse,
+    );
+    if (principal.userId && invocation?.name.startsWith("browser_")) {
+      await this.recordPrimaryBrowserAffinity(
+        principal.userId,
+        invocation,
+        primaryResponse.clone(),
+      );
+      const runtimeAffinity = await this.getCurrentPrimaryBrowserAffinity();
+      if (runtimeAffinity) {
+        return this.attachBrowserViewerLinks(primaryResponse, {
+          kind: "runtime",
+          runtimeId: runtimeAffinity.runtimeId,
+          browserEpoch: runtimeAffinity.browserEpoch,
+        });
+      }
+    }
+    return primaryResponse;
   }
 
   private async tryRelayCompanionMcpRequest(
@@ -756,6 +933,30 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     if (invocation.name === "materialize_repository") {
+      const targetRuntime = typeof invocation.arguments.targetRuntime === "string"
+        ? invocation.arguments.targetRuntime
+        : undefined;
+      const requestedDeviceId = typeof invocation.arguments.deviceId === "string"
+        ? invocation.arguments.deviceId
+        : undefined;
+      if (targetRuntime === "remote") {
+        if (requestedDeviceId) {
+          return mcpToolError(
+            body,
+            "RUNTIME_SELECTION_CONFLICT",
+            "deviceId cannot be combined with targetRuntime=remote.",
+          );
+        }
+        return this.materializeRepositoryOnPrimary(
+          request,
+          body,
+          { ...principal, userId: principal.userId },
+          invocation,
+        );
+      }
+      if (targetRuntime !== undefined && targetRuntime !== "companion") {
+        return mcpToolError(body, "INVALID_ARGUMENT", "targetRuntime is invalid.");
+      }
       return this.materializeRepositoryOnCompanion(
         request,
         body,
@@ -834,17 +1035,11 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     invocation: { id: string | number | null; name: string; arguments: Record<string, unknown> },
     unavailableResponse?: () => Response,
   ): Promise<Response | null> {
-    const browserCompanions = this.getReadyCompanionsForUser(principal.userId)
-      .filter(({ attachment }) => attachment.capabilities?.includes("browser"))
-      .map(({ webSocket, attachment }) => ({
-        target: { webSocket, attachment },
-        deviceId: attachment.deviceId!,
-        workspaceIds: (attachment.workspaces ?? []).map((workspace) => workspace.workspaceId),
-      }));
-    if (browserCompanions.length === 0) return null;
-
     const requestedDeviceId = typeof invocation.arguments.deviceId === "string"
       ? invocation.arguments.deviceId
+      : undefined;
+    const requestedRuntimeId = typeof invocation.arguments.runtimeId === "string"
+      ? invocation.arguments.runtimeId
       : undefined;
     const tabId = typeof invocation.arguments.tabId === "string"
       ? invocation.arguments.tabId
@@ -854,57 +1049,88 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       : undefined;
 
     const affinityDeviceIds = new Set<string>();
+    let affinityRuntime: BrowserRuntimeAffinity | undefined;
     for (const [kind, id] of [["tab", tabId], ["task", taskId]] as const) {
       if (!id) continue;
-      const deviceId = await this.ctx.storage.get<string>(
-        browserAffinityKey(principal.userId, kind, id),
-      );
+      const [deviceId, storedRuntimeAffinity] = await Promise.all([
+        this.ctx.storage.get<string>(browserAffinityKey(principal.userId, kind, id)),
+        this.ctx.storage.get<unknown>(browserRuntimeAffinityKey(principal.userId, kind, id)),
+      ]);
       if (deviceId) affinityDeviceIds.add(deviceId);
-    }
-    if (affinityDeviceIds.size > 1) {
-      return mcpToolError(
-        body,
-        "BROWSER_ROUTE_CONFLICT",
-        "Browser tab/task affinity points to different MCP V3 devices.",
-      );
-    }
-    const affinityDeviceId = [...affinityDeviceIds][0];
-    if (requestedDeviceId && affinityDeviceId &&
-        requestedDeviceId !== affinityDeviceId) {
-      return mcpToolError(
-        body,
-        "BROWSER_ROUTE_CONFLICT",
-        "Requested device conflicts with the existing browser tab/task affinity.",
-      );
-    }
-    const targetDeviceId = requestedDeviceId ?? affinityDeviceId;
-    const selection = selectCompanionDevice(
-      browserCompanions,
-      targetDeviceId,
-    );
-    if (selection.kind === "none") {
-      return targetDeviceId
-        ? mcpToolError(
+      const runtimeAffinity = readBrowserRuntimeAffinity(storedRuntimeAffinity);
+      if (runtimeAffinity) {
+        if (affinityRuntime &&
+            (affinityRuntime.runtimeId !== runtimeAffinity.runtimeId ||
+             affinityRuntime.browserEpoch !== runtimeAffinity.browserEpoch)) {
+          return mcpToolError(
             body,
-            "AGENT_UNAVAILABLE",
-            "The MCP V3 device owning this browser context is not online.",
-          )
-        : null;
+            "BROWSER_ROUTE_CONFLICT",
+            "Browser tab/task affinity points to different MCP V3 remote Browser sessions.",
+          );
+        }
+        affinityRuntime = runtimeAffinity;
+      }
     }
-    if (selection.kind === "ambiguous") {
+    if (affinityDeviceIds.size > 1 ||
+        (affinityDeviceIds.size > 0 && affinityRuntime !== undefined)) {
       return mcpToolError(
         body,
-        "DEVICE_SELECTION_REQUIRED",
-        "More than one browser-capable MCP V3 device is online; choose deviceId.",
+        "BROWSER_ROUTE_CONFLICT",
+        "Browser tab/task affinity points to different MCP V3 runtimes.",
       );
     }
 
-    const selectedDeviceId = selection.candidate.deviceId;
+    const browserCompanions = this.getReadyCompanionsForUser(principal.userId)
+      .filter(({ attachment }) => attachment.capabilities?.includes("browser"))
+      .map(({ webSocket, attachment }) => ({
+        target: { webSocket, attachment },
+        deviceId: attachment.deviceId!,
+        workspaceIds: (attachment.workspaces ?? []).map((workspace) => workspace.workspaceId),
+      }));
+    const remoteConnector = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION);
+    const remoteAttachment = remoteConnector
+      ? this.readConnectorAttachment(remoteConnector)
+      : null;
+    const remoteRuntimeId = await this.getOrCreatePrimaryRuntimeId();
+    const route = selectBrowserExecutionRoute({
+      ...(requestedDeviceId === undefined ? {} : { requestedDeviceId }),
+      ...(requestedRuntimeId === undefined ? {} : { requestedRuntimeId }),
+      ...([...affinityDeviceIds][0] === undefined
+        ? {}
+        : { affinityDeviceId: [...affinityDeviceIds][0] }),
+      ...(affinityRuntime === undefined ? {} : { affinityRuntime }),
+      remote: {
+        runtimeId: remoteRuntimeId,
+        online: remoteConnector !== null,
+        ...(remoteAttachment?.runtime?.browserEpoch === undefined
+          ? {}
+          : { browserEpoch: remoteAttachment.runtime.browserEpoch }),
+      },
+      companionDeviceIds: browserCompanions.map((candidate) => candidate.deviceId),
+    });
+    if (route.kind === "error") {
+      return mcpToolError(body, route.code, route.message);
+    }
+    if (route.kind === "remote" || route.kind === "primary-default") {
+      return null;
+    }
+
+    const selected = browserCompanions.find(
+      (candidate) => candidate.deviceId === route.deviceId,
+    );
+    if (!selected) {
+      return mcpToolError(
+        body,
+        "AGENT_UNAVAILABLE",
+        "The MCP V3 device selected for this browser operation is not online.",
+      );
+    }
+    const selectedDeviceId = selected.deviceId;
     const response = await this.relayAuthenticatedRequestTo(
       request,
       JSON.stringify(body),
       principal,
-      selection.candidate.target.webSocket,
+      selected.target.webSocket,
       COMPANION_PROTOCOL_VERSION,
       unavailableResponse,
     );
@@ -930,13 +1156,109 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           browserAffinityKey(principal.userId, "tab", tabId),
         );
       }
-      if (invocation.name === "browser_finish_task" && taskId) {
-        await this.ctx.storage.delete(
-          browserAffinityKey(principal.userId, "task", taskId),
-        );
+      if (invocation.name === "browser_finish_task") {
+        const finishedTaskId = typeof structured.taskId === "string"
+          ? structured.taskId
+          : taskId;
+        const closedTabIds = readClosedBrowserTabIds(structured);
+        await Promise.all([
+          ...(finishedTaskId
+            ? [this.ctx.storage.delete(
+                browserAffinityKey(principal.userId, "task", finishedTaskId),
+              )]
+            : []),
+          ...closedTabIds.map((closedTabId) =>
+            this.ctx.storage.delete(
+              browserAffinityKey(principal.userId, "tab", closedTabId),
+            ),
+          ),
+        ]);
       }
     }
+    if (selected.target.attachment.capabilities?.includes("browser-live-view-v1")) {
+      return this.attachBrowserViewerLinks(response, {
+        kind: "device",
+        deviceId: selectedDeviceId,
+      });
+    }
     return response;
+  }
+
+  private async attachBrowserViewerLinks(
+    response: Response,
+    source: BrowserViewerSource,
+  ): Promise<Response> {
+    if (!response.ok || !this.edgeEnv.MCP_PUBLIC_BASE_URL) return response;
+    try {
+      const body: unknown = await response.clone().json();
+      if (addBrowserViewerLinks(
+        body,
+        this.edgeEnv.MCP_PUBLIC_BASE_URL,
+        source,
+      ) === 0) {
+        return response;
+      }
+      const headers = new Headers(response.headers);
+      headers.delete("content-length");
+      headers.set("cache-control", "no-store");
+      headers.set("content-type", "application/json; charset=utf-8");
+      return new Response(JSON.stringify(body), {
+        status: response.status,
+        headers,
+      });
+    } catch {
+      return response;
+    }
+  }
+
+  private async recordPrimaryBrowserAffinity(
+    userId: string,
+    invocation: { id: string | number | null; name: string; arguments: Record<string, unknown> },
+    response: Response,
+  ): Promise<void> {
+    const structured = await readMcpStructuredContent(response);
+    if (!structured) return;
+    const runtimeAffinity = await this.getCurrentPrimaryBrowserAffinity();
+    if (!runtimeAffinity) return;
+    const affinities = collectBrowserAffinityIds(structured);
+    const writes: Record<string, BrowserRuntimeAffinity> = {};
+    for (const id of affinities.tabIds) {
+      writes[browserRuntimeAffinityKey(userId, "tab", id)] = runtimeAffinity;
+    }
+    for (const id of affinities.taskIds) {
+      writes[browserRuntimeAffinityKey(userId, "task", id)] = runtimeAffinity;
+    }
+    if (Object.keys(writes).length > 0) {
+      await this.ctx.storage.put(writes);
+    }
+
+    const tabId = typeof invocation.arguments.tabId === "string"
+      ? invocation.arguments.tabId
+      : undefined;
+    const taskId = typeof invocation.arguments.taskId === "string"
+      ? invocation.arguments.taskId
+      : undefined;
+    if (invocation.name === "browser_close_tab" && tabId) {
+      await this.ctx.storage.delete(browserRuntimeAffinityKey(userId, "tab", tabId));
+    }
+    if (invocation.name === "browser_finish_task") {
+      const finishedTaskId = typeof structured.taskId === "string"
+        ? structured.taskId
+        : taskId;
+      const closedTabIds = readClosedBrowserTabIds(structured);
+      await Promise.all([
+        ...(finishedTaskId
+          ? [this.ctx.storage.delete(
+              browserRuntimeAffinityKey(userId, "task", finishedTaskId),
+            )]
+          : []),
+        ...closedTabIds.map((closedTabId) =>
+          this.ctx.storage.delete(
+            browserRuntimeAffinityKey(userId, "tab", closedTabId),
+          ),
+        ),
+      ]);
+    }
   }
 
   private async importRepositoriesOnCompanion(
@@ -1317,6 +1639,265 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
 
+
+  private async materializeRepositoryOnPrimary(
+    request: Request,
+    body: unknown,
+    principal: AuthenticatedEdgePrincipal & { userId: string },
+    invocation: { id: string | number | null; name: string; arguments: Record<string, unknown> },
+  ): Promise<Response> {
+    const repositoryId = typeof invocation.arguments.repositoryId === "string"
+      ? invocation.arguments.repositoryId
+      : "";
+    const targetName = typeof invocation.arguments.targetName === "string"
+      ? invocation.arguments.targetName.trim()
+      : undefined;
+    if (!repositoryId) {
+      return mcpToolError(body, "INVALID_ARGUMENT", "repositoryId is required.");
+    }
+
+    const access = await this.accountStore.getRepositoryForUser(
+      principal.userId,
+      repositoryId,
+    );
+    if (!access) {
+      return mcpToolError(
+        body,
+        "REPOSITORY_NOT_FOUND",
+        "Repository is not available to this user.",
+      );
+    }
+    const remoteUrls = access.repository.remoteUrls ?? [];
+    if (remoteUrls.length === 0) {
+      return mcpToolError(
+        body,
+        "REPOSITORY_REMOTE_REQUIRED",
+        "Repository has no remote source that can be materialized on the remote runtime.",
+      );
+    }
+
+    const connector = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION);
+    if (!connector) {
+      return mcpToolError(
+        body,
+        "AGENT_UNAVAILABLE",
+        "The MCP V3 remote runtime is not online for repository materialization.",
+      );
+    }
+
+    const runtimeId = await this.getOrCreatePrimaryRuntimeId();
+    const existingForRuntime = (await this.accountStore.listMaterializations(
+      principal.userId,
+      repositoryId,
+    )).filter((value) => value.runtimeId === runtimeId);
+    if (existingForRuntime.length > 1) {
+      return mcpToolError(
+        body,
+        "MATERIALIZATION_AMBIGUOUS",
+        "Repository has more than one materialization on the remote runtime.",
+      );
+    }
+    const previous = existingForRuntime[0] ?? null;
+
+    let workspaceId = previous?.workspaceId;
+    if (!workspaceId) {
+      const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(
+        request,
+        principal,
+      );
+      if (primaryWorkspaceIds === null) {
+        return mcpToolError(
+          body,
+          "WORKSPACE_ROUTE_UNRESOLVED",
+          "Remote workspace ownership could not be verified.",
+        );
+      }
+      const reservedWorkspaceIds = new Set(primaryWorkspaceIds);
+      for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
+        for (const candidateWorkspaceId of candidate.workspaceIds) {
+          reservedWorkspaceIds.add(candidateWorkspaceId);
+        }
+      }
+      workspaceId = selectAvailableRuntimeWorkspaceId(
+        targetName || access.repository.name,
+        `${runtimeId}:${repositoryId}`,
+        reservedWorkspaceIds,
+        "remote",
+      );
+    }
+
+    const internalArguments = {
+      repositoryId,
+      name: access.repository.name,
+      remoteUrls: [...remoteUrls],
+      ...(targetName ? { targetName } : {}),
+      workspaceId,
+    };
+    const prepareRequest = {
+      jsonrpc: "2.0",
+      id: `edge-remote-materialize-prepare-${crypto.randomUUID()}`,
+      method: "tools/call",
+      params: {
+        name: COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+        arguments: { ...internalArguments, dryRun: true },
+      },
+    };
+
+    const prepareResponse = await this.relayAuthenticatedRequestTo(
+      request,
+      JSON.stringify(prepareRequest),
+      principal,
+      connector,
+      EDGE_PROTOCOL_VERSION,
+    );
+    const planned = await readInternalMaterializationResponse(prepareResponse);
+    if (!planned ||
+        planned.repositoryId !== repositoryId ||
+        planned.workspaceId !== workspaceId) {
+      return mcpToolError(
+        body,
+        "REPOSITORY_MATERIALIZATION_FAILED",
+        "Remote repository materialization validation failed.",
+      );
+    }
+
+    const previousForPlannedWorkspace = (await this.accountStore.listMaterializations(
+      principal.userId,
+      repositoryId,
+    )).find((value) =>
+      value.runtimeId === runtimeId &&
+      value.workspaceId === planned.workspaceId
+    ) ?? null;
+    let cloudCommitted = false;
+    try {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const transactionalStore = new EdgeAccountStore(transaction);
+        await transactionalStore.upsertRuntimeMaterialization(
+          principal.userId,
+          runtimeId,
+          {
+            repositoryId,
+            workspaceId: planned.workspaceId,
+            path: planned.path,
+            platform: "linux",
+          },
+        );
+      });
+      cloudCommitted = true;
+
+      const materializeRequest = {
+        jsonrpc: "2.0",
+        id: `edge-remote-materialize-commit-${crypto.randomUUID()}`,
+        method: "tools/call",
+        params: {
+          name: COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+          arguments: {
+            ...internalArguments,
+            workspaceId: planned.workspaceId,
+            dryRun: false,
+          },
+        },
+      };
+      const materializeResponse = await this.relayAuthenticatedRequestTo(
+        request,
+        JSON.stringify(materializeRequest),
+        principal,
+        connector,
+        EDGE_PROTOCOL_VERSION,
+      );
+      const actual = await readInternalMaterializationResponse(materializeResponse);
+      if (!actual ||
+          actual.repositoryId !== planned.repositoryId ||
+          actual.workspaceId !== planned.workspaceId ||
+          companionPathKey(actual.path, "linux") !==
+            companionPathKey(planned.path, "linux")) {
+        throw new Error(
+          "Remote repository materialization changed after validation.",
+        );
+      }
+
+      this.primaryWorkspaceIds = null;
+      const details = await this.repositoryControlPlane.readRepositoryDetails(
+        principal.userId,
+        repositoryId,
+      );
+      if (!details) {
+        throw new Error("Materialized repository details became unavailable.");
+      }
+      const materialization = details.materializations.find((value) =>
+        value.runtimeId === runtimeId &&
+        value.workspaceId === planned.workspaceId
+      );
+      if (!materialization) {
+        throw new Error("Remote materialized repository state is unavailable.");
+      }
+      return mcpToolSuccess(body, {
+        repository: details,
+        materialization,
+      });
+    } catch (error) {
+      let rollbackFailure: string | null = null;
+      if (cloudCommitted) {
+        try {
+          await this.ctx.storage.transaction(async (transaction) => {
+            const transactionalStore = new EdgeAccountStore(transaction);
+            if (previousForPlannedWorkspace) {
+              await transactionalStore.upsertRuntimeMaterialization(
+                principal.userId,
+                runtimeId,
+                {
+                  id: previousForPlannedWorkspace.id,
+                  repositoryId: previousForPlannedWorkspace.repositoryId,
+                  workspaceId: previousForPlannedWorkspace.workspaceId,
+                  path: previousForPlannedWorkspace.path,
+                  platform: previousForPlannedWorkspace.platform,
+                },
+              );
+              return;
+            }
+            const current = (await transactionalStore.listMaterializations(
+              principal.userId,
+              repositoryId,
+            )).find((value) =>
+              value.runtimeId === runtimeId &&
+              value.workspaceId === planned.workspaceId
+            );
+            if (current) {
+              const removed = await transactionalStore.deleteMaterialization(
+                principal.userId,
+                repositoryId,
+                current.id,
+              );
+              if (!removed) {
+                throw new Error("Remote materialization rollback failed.");
+              }
+            }
+          });
+        } catch (rollbackError) {
+          rollbackFailure = rollbackError instanceof Error
+            ? rollbackError.message
+            : "Remote materialization rollback failed.";
+        }
+      }
+
+      const message = error instanceof Error
+        ? error.message
+        : "Remote repository materialization failed.";
+      if (rollbackFailure) {
+        return mcpToolError(
+          body,
+          "REPOSITORY_MATERIALIZATION_ROLLBACK_FAILED",
+          `${message} Rollback failure: ${rollbackFailure}`,
+        );
+      }
+      return mcpToolError(
+        body,
+        "REPOSITORY_MATERIALIZATION_FAILED",
+        message,
+      );
+    }
+  }
+
   private async materializeRepositoryOnCompanion(
     request: Request,
     body: unknown,
@@ -1611,6 +2192,28 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     });
   }
 
+  private async getOrCreatePrimaryRuntimeId(): Promise<string> {
+    const existing = await this.ctx.storage.get<string>(PRIMARY_RUNTIME_ID_STORAGE_KEY);
+    if (existing && /^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(existing)) {
+      return existing;
+    }
+    const runtimeId = `rt_${crypto.randomUUID()}`;
+    await this.ctx.storage.put(PRIMARY_RUNTIME_ID_STORAGE_KEY, runtimeId);
+    return runtimeId;
+  }
+
+  private async getCurrentPrimaryBrowserAffinity(): Promise<BrowserRuntimeAffinity | null> {
+    const connector = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION);
+    if (!connector) return null;
+    const browserEpoch = this.readConnectorAttachment(connector)?.runtime?.browserEpoch;
+    if (!browserEpoch) return null;
+    return {
+      version: 3,
+      runtimeId: await this.getOrCreatePrimaryRuntimeId(),
+      browserEpoch,
+    };
+  }
+
   private async ensurePrimaryWorkspaceIds(
     request: Request,
     principal: AuthenticatedEdgePrincipal,
@@ -1793,7 +2396,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const headers = collectAllowedResponseHeaders(parsed.headers);
     if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
     headers.set("cache-control", "no-store");
-    pending.resolve(new Response(parsed.body, { status: parsed.status, headers }));
+    pending.resolve(new Response(
+      parsed.status === 204 || parsed.status === 205 || parsed.status === 304
+        ? null
+        : parsed.body,
+      { status: parsed.status, headers },
+    ));
   }
 
   private readCompanionAttachment(webSocket: WebSocket): CompanionAttachment | null {
@@ -1908,6 +2516,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     connector: WebSocket,
     protocolVersion: typeof EDGE_PROTOCOL_VERSION | typeof COMPANION_PROTOCOL_VERSION,
     unavailableResponse?: () => Response,
+    timeoutMs = EDGE_RELAY_TIMEOUT_MS,
   ): Promise<Response> {
     const url = new URL(request.url);
     const path = `${url.pathname}${url.search}`;
@@ -1946,7 +2555,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
       const timeout = setTimeout(() => {
         finishWithCancellation("timeout", jsonResponse({ error: protocolVersion === COMPANION_PROTOCOL_VERSION ? "companion_timeout" : "connector_timeout" }, 504));
-      }, EDGE_RELAY_TIMEOUT_MS);
+      }, timeoutMs);
       const onAbort = () => finishWithCancellation("client_disconnected", new Response(null, { status: 499 }));
       request.signal.addEventListener("abort", onAbort, { once: true });
       const releaseAbort = () => request.signal.removeEventListener("abort", onAbort);
@@ -2221,6 +2830,9 @@ function isConnectorRuntimeIdentity(value: unknown): value is ConnectorRuntimeId
   return value.version === 1 &&
     typeof value.connectorInstanceId === "string" &&
     Number.isSafeInteger(value.connectionGeneration) &&
+    (value.browserEpoch === undefined ||
+      (typeof value.browserEpoch === "string" &&
+       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.browserEpoch))) &&
     typeof value.processStartedAt === "string" &&
     typeof value.catalogContractRevision === "string" &&
     typeof value.toolSetRevision === "string" &&
@@ -2357,6 +2969,15 @@ function browserAffinityKey(
   id: string,
 ): string {
   return `browser-affinity:v1:${userId}:${kind}:${encodeURIComponent(id)}`;
+}
+
+function readClosedBrowserTabIds(value: Record<string, unknown>): string[] {
+  if (!Array.isArray(value.closedTabIds)) return [];
+  return value.closedTabIds
+    .slice(0, 100)
+    .filter((tabId): tabId is string =>
+      typeof tabId === "string" && tabId.length > 0 && tabId.length <= 128,
+    );
 }
 
 function collectBrowserAffinityIds(value: unknown): {

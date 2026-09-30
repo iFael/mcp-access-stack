@@ -71,6 +71,16 @@ export interface GatewayApplicationDependencies {
   logger?: Logger;
   tokenVerifier?: AccessTokenVerifier;
   browser?: BrowserExecutor;
+  browserLiveFrame?: (
+    input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
+    context: { ownerScope: string },
+  ) => Promise<{
+    seq: number;
+    data: string;
+    width: number;
+    height: number;
+    capturedAt: number;
+  } | null>;
   workspaceExecutor?: WorkspaceExecutor;
   sourceControlExecutor?: SourceControlExecutor;
   repositoryExecutor?: RepositoryExecutor;
@@ -165,6 +175,7 @@ export function createGatewayApplication(
   let mcpAuth: McpServerAuthOptions | undefined;
   let ownerChallenge: string | undefined;
   let ownerAuthMiddleware: RequestHandler | undefined;
+  let edgeTrustedAuthMiddleware: RequestHandler | undefined;
 
   const mcpMiddlewares: RequestHandler[] = [
     express.json({
@@ -225,12 +236,53 @@ export function createGatewayApplication(
     if (!dependencies.edgeTrust) {
       throw new Error("edge-trusted authentication requires an internal Edge trust assertion.");
     }
-    mcpMiddlewares.push(createEdgeTrustedAuthenticationMiddleware(dependencies.edgeTrust));
+    edgeTrustedAuthMiddleware = createEdgeTrustedAuthenticationMiddleware(dependencies.edgeTrust);
+    mcpMiddlewares.push(edgeTrustedAuthMiddleware);
   }
 
   mcpMiddlewares.push(createIpRateLimiter(config));
   if (config.authMode === "oauth" || config.authMode === "edge-trusted") {
     mcpMiddlewares.push(createSubjectRateLimiter(config));
+  }
+
+  if (edgeTrustedAuthMiddleware && dependencies.browserLiveFrame) {
+    app.get(
+      "/_viewer/frame",
+      edgeTrustedAuthMiddleware,
+      async (request: AuthenticatedRequest, response) => {
+        const userId = request.auth?.extra?.userId;
+        const taskId = typeof request.query.taskId === "string" ? request.query.taskId : "";
+        const tabId = typeof request.query.tabId === "string" ? request.query.tabId : "";
+        const afterSeqText = typeof request.query.afterSeq === "string"
+          ? request.query.afterSeq
+          : "0";
+        if (typeof userId !== "string" || !userId ||
+            !taskId || taskId.length > 128 || !tabId || tabId.length > 128 ||
+            !/^\d{1,16}$/u.test(afterSeqText) ||
+            !Number.isSafeInteger(Number(afterSeqText))) {
+          response.status(400).json({ error: "invalid_viewer_frame_request" });
+          return;
+        }
+        try {
+          const frame = await dependencies.browserLiveFrame!(
+            {
+              taskId,
+              tabId,
+              afterSeq: Number(afterSeqText),
+              signal: request.signal,
+            },
+            { ownerScope: `user:${userId}` },
+          );
+          if (!frame) {
+            response.status(204).end();
+            return;
+          }
+          response.json(frame);
+        } catch {
+          response.status(404).json({ error: "view_unavailable" });
+        }
+      },
+    );
   }
 
   const statefulOperationContextFactory: ToolOperationContextFactory = (
@@ -475,11 +527,15 @@ export function createGatewayApplication(
     }
 
     const requestAbort = bindMcpHttpRequestAbort(request, response);
+    const authenticatedUserId = request.auth?.extra?.userId;
     const operationContextFactory = createGatewayOperationContextFactory({
       registry: operationRegistry,
       principalKey,
       operationScopeKey,
       cancellationScopeKey,
+      ...(config.authMode === "edge-trusted" && typeof authenticatedUserId === "string"
+        ? { ownerScopeKey: `user:${authenticatedUserId}` }
+        : {}),
       ...(requestLifecycleId === undefined ? {} : { requestLifecycleId }),
       requestSignal: requestAbort.signal,
     });

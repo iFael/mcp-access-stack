@@ -24,6 +24,7 @@ export type ConnectorRuntimeIdentity = {
   version: 1;
   connectorInstanceId: string;
   connectionGeneration: number;
+  browserEpoch?: string;
   processStartedAt: string;
   catalogContractRevision: string;
   toolSetRevision: string;
@@ -88,6 +89,9 @@ export function isAllowedEdgeRequest(method: string, path: string): method is Ed
   }
   if (pathname === "/authorize") {
     return normalizedMethod === "GET" || normalizedMethod === "POST";
+  }
+  if (pathname === "/_viewer/frame") {
+    return normalizedMethod === "GET";
   }
   if (
     pathname === "/.well-known/oauth-authorization-server" ||
@@ -190,8 +194,21 @@ function isCancelReason(value: unknown): value is EdgeHttpCancelMessage["reason"
 
 function parseConnectorRuntimeIdentity(value: unknown): ConnectorRuntimeIdentity | null {
   if (!isRecord(value)) return null;
-  const keys = Object.keys(value).sort();
-  const allowedKeys = [
+  const keys = Object.keys(value);
+  const allowedKeys = new Set([
+    "browserEpoch",
+    "catalogContractRevision",
+    "connectionGeneration",
+    "connectorInstanceId",
+    "hostPid",
+    "nodePid",
+    "processStartedAt",
+    "serverVersion",
+    "toolCount",
+    "toolSetRevision",
+    "version",
+  ]);
+  const requiredKeys = [
     "catalogContractRevision",
     "connectionGeneration",
     "connectorInstanceId",
@@ -203,10 +220,12 @@ function parseConnectorRuntimeIdentity(value: unknown): ConnectorRuntimeIdentity
     "toolSetRevision",
     "version",
   ];
-  if (keys.length !== allowedKeys.length || keys.some((key, index) => key !== allowedKeys[index])) return null;
+  if (keys.some((key) => !allowedKeys.has(key)) || requiredKeys.some((key) => !(key in value))) return null;
   if (value.version !== 1) return null;
   if (typeof value.connectorInstanceId !== "string" || !isUuid(value.connectorInstanceId)) return null;
   if (!isPositiveSafeInteger(value.connectionGeneration)) return null;
+  if (value.browserEpoch !== undefined &&
+      (typeof value.browserEpoch !== "string" || !isUuid(value.browserEpoch))) return null;
   if (typeof value.processStartedAt !== "string" || !isIsoTimestamp(value.processStartedAt)) return null;
   if (typeof value.catalogContractRevision !== "string" || !isSha256Hex(value.catalogContractRevision)) return null;
   if (typeof value.toolSetRevision !== "string" || !isSha256Hex(value.toolSetRevision)) return null;
@@ -217,6 +236,7 @@ function parseConnectorRuntimeIdentity(value: unknown): ConnectorRuntimeIdentity
     version: 1,
     connectorInstanceId: value.connectorInstanceId,
     connectionGeneration: value.connectionGeneration,
+    ...(value.browserEpoch === undefined ? {} : { browserEpoch: value.browserEpoch }),
     processStartedAt: value.processStartedAt,
     catalogContractRevision: value.catalogContractRevision,
     toolSetRevision: value.toolSetRevision,

@@ -13,6 +13,7 @@ const servers: Array<{ close(): Promise<void> }> = [];
 const runtimeIdentity = {
   version: 1 as const,
   connectorInstanceId: "2fc94e69-439f-4f9f-a76b-71da6141b17f",
+  browserEpoch: "4b3db68f-1222-4ff3-a4b6-7c547e57c6cf",
   processStartedAt: "2026-09-02T12:00:00.000Z",
   catalogContractRevision: "a".repeat(64),
   toolSetRevision: "b".repeat(64),
@@ -93,6 +94,7 @@ describe("connector runtime identity protocol", () => {
     { catalogContractRevision: "not-a-sha256" },
     { toolSetRevision: "not-a-sha256" },
     { connectorInstanceId: "not-a-uuid" },
+    { browserEpoch: "not-a-uuid" },
   ])("rejects malformed runtime identity instead of partially trusting it: %o", (override) => {
     const message = {
       type: "connector-ready",
@@ -119,7 +121,7 @@ describe("connector runtime identity protocol", () => {
     expect(parseConnectorToEdgeMessage(JSON.stringify(message))).toBeNull();
   });
 
-  it("keeps connectorInstanceId stable and increments connectionGeneration across reconnect", async () => {
+  it("keeps connectorInstanceId/browserEpoch stable and increments only connectionGeneration across reconnect", async () => {
     const edgeHttp = createServer();
     const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/connector" });
     const edgePort = await listen(edgeHttp);

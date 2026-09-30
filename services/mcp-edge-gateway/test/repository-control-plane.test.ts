@@ -38,6 +38,7 @@ describe("Repository identity and ACL control plane", () => {
 
     const control = new EdgeRepositoryControlPlane(accounts, {
       isDeviceOnline: () => false,
+      isRemoteRuntimeOnline: () => true,
     });
     const response = await control.handle(toolCall(1, "get_repository", { repositoryId: repo.id }), {
       subject: `user:${felipe.id}`,
@@ -87,6 +88,7 @@ describe("Repository identity and ACL control plane", () => {
     });
     const control = new EdgeRepositoryControlPlane(accounts, {
       isDeviceOnline: (deviceId) => online.has(deviceId),
+      isRemoteRuntimeOnline: () => true,
       disconnectDevice,
     });
 
@@ -150,6 +152,57 @@ describe("Repository identity and ACL control plane", () => {
       result: {
         structuredContent: {
           devices: [expect.objectContaining({ id: device.id, status: "revoked" })],
+        },
+      },
+    });
+  });
+
+  it("treats the remote runtime as sufficient onboarding and reports remote materializations without a device", async () => {
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const user = await accounts.createUser("Rafael", "rafael-pass");
+    const repository = await accounts.createRepository(
+      user.id,
+      "cpx-open-finance",
+      ["git@github.com:Compex-Tecnologia/cpx-open-finance.git"],
+    );
+    const runtimeId = "rt_11111111-1111-4111-8111-111111111111";
+    await accounts.upsertRuntimeMaterialization(user.id, runtimeId, {
+      repositoryId: repository.id,
+      workspaceId: "cpx-open-finance",
+      path: "/var/lib/mcp-access-stack/edge-connector/repositories/cpx-open-finance",
+      platform: "linux",
+    });
+    const control = new EdgeRepositoryControlPlane(accounts, {
+      isDeviceOnline: () => false,
+      isRemoteRuntimeOnline: () => true,
+    });
+    const principal = {
+      subject: `user:${user.id}`,
+      scopes: ["workspaces:read"],
+      ownerScope: "owner" as const,
+      userId: user.id,
+    };
+
+    const onboarding = await control.handle(toolCall(20, "get_onboarding_state", {}), principal);
+    expect(await onboarding!.json()).toMatchObject({
+      result: { structuredContent: { status: "ready", devices: [] } },
+    });
+
+    const details = await control.handle(
+      toolCall(21, "get_repository", { repositoryId: repository.id }),
+      principal,
+    );
+    expect(await details!.json()).toMatchObject({
+      result: {
+        structuredContent: {
+          materializations: [expect.objectContaining({
+            runtime: "remote",
+            runtimeId,
+            workspaceId: "cpx-open-finance",
+            platform: "linux",
+            status: "online",
+          })],
         },
       },
     });

@@ -5,6 +5,7 @@ const idBody = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 export const userIdSchema = z.string().regex(new RegExp(`^usr_${idBody}$`, "iu"));
 export const repositoryIdSchema = z.string().regex(new RegExp(`^repo_${idBody}$`, "iu"));
 export const deviceIdSchema = z.string().regex(new RegExp(`^dev_${idBody}$`, "iu"));
+export const runtimeIdSchema = z.string().regex(new RegExp(`^rt_${idBody}$`, "iu"));
 export const materializationIdSchema = z.string().regex(new RegExp(`^mat_${idBody}$`, "iu"));
 
 export const repositoryRoleSchema = z.enum(["owner", "editor", "viewer"]);
@@ -12,6 +13,7 @@ export const repositoryVisibilitySchema = z.enum(["private", "shared"]);
 export const devicePlatformSchema = z.enum(["windows", "linux", "macos", "unknown"]);
 export const deviceStatusSchema = z.enum(["online", "offline", "revoked"]);
 export const materializationStatusSchema = z.enum(["online", "offline", "unavailable"]);
+export const repositoryRuntimeKindSchema = z.enum(["remote", "companion"]);
 
 export const repositorySummarySchema = z.object({
   id: repositoryIdSchema,
@@ -26,12 +28,27 @@ export type RepositorySummary = z.infer<typeof repositorySummarySchema>;
 export const repositoryMaterializationSchema = z.object({
   id: materializationIdSchema,
   repositoryId: repositoryIdSchema,
-  deviceId: deviceIdSchema,
+  deviceId: deviceIdSchema.optional(),
+  runtimeId: runtimeIdSchema.optional(),
+  runtime: repositoryRuntimeKindSchema.optional(),
   workspaceId: z.string().min(1).max(200),
   platform: devicePlatformSchema,
   path: z.string().min(1).max(4096),
   status: materializationStatusSchema,
-}).strict();
+}).strict().superRefine((value, context) => {
+  if ((value.deviceId === undefined) === (value.runtimeId === undefined)) {
+    context.addIssue({
+      code: "custom",
+      message: "Materialization must belong to exactly one device or remote runtime.",
+    });
+  }
+  if (value.runtime === "remote" && value.runtimeId === undefined) {
+    context.addIssue({ code: "custom", message: "Remote materialization requires runtimeId." });
+  }
+  if (value.runtime === "companion" && value.deviceId === undefined) {
+    context.addIssue({ code: "custom", message: "Companion materialization requires deviceId." });
+  }
+});
 export type RepositoryMaterialization = z.infer<typeof repositoryMaterializationSchema>;
 
 export const repositoryDetailsSchema = repositorySummarySchema.extend({
@@ -102,10 +119,19 @@ export type ImportRepositoriesInput = z.infer<typeof importRepositoriesInputSche
 
 export const materializeRepositoryInputSchema = z.object({
   deviceId: deviceIdSchema.optional(),
+  targetRuntime: repositoryRuntimeKindSchema.optional(),
   repositoryId: repositoryIdSchema,
   targetName: z.string().trim().min(1).max(200).optional(),
   confirmationId: z.string().min(1).max(128).optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.targetRuntime === "remote" && value.deviceId !== undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "deviceId cannot be combined with targetRuntime=remote.",
+      path: ["deviceId"],
+    });
+  }
+});
 export type MaterializeRepositoryInput = z.infer<typeof materializeRepositoryInputSchema>;
 
 export const syncRepositoryInputSchema = z.object({

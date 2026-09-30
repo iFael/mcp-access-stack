@@ -46,7 +46,7 @@ export function registerRepositoryTools(
 
   server.registerTool("get_onboarding_state", {
     title: "Get MCP V3 onboarding state",
-    description: "Returns the authenticated user's MCP V3 identity, repository count and authorized devices. Use this to decide whether local runtime onboarding is required.",
+    description: "Returns the authenticated user's MCP V3 identity, repository count and authorized devices. The remote runtime can satisfy onboarding without a local companion when remote capabilities are available.",
     inputSchema: getOnboardingStateInputSchema,
     outputSchema: onboardingStateSchema,
     annotations: { ...annotations, readOnlyHint: true, idempotentHint: true },
@@ -99,8 +99,8 @@ export function registerRepositoryTools(
   }, async (input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.importRepositories(input, context), importRepositoriesResultSchema));
 
   server.registerTool("materialize_repository", {
-    title: "Materialize repository locally",
-    description: "Creates a working materialization of an authorized repository on the selected local MCP V3 runtime. Existing dirty worktrees are never overwritten.",
+    title: "Materialize repository",
+    description: "Creates a working materialization of an authorized repository on the selected MCP V3 runtime. targetRuntime=remote uses the remote runtime; companion preserves device-based behavior. Existing dirty worktrees are never overwritten.",
     inputSchema: materializeRepositoryInputSchema,
     outputSchema: materializeRepositoryResultSchema,
     annotations: annotations,

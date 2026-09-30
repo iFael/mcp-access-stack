@@ -279,6 +279,8 @@ export class BrowserWorkerClient implements BrowserExecutor {
     context?.signal?.addEventListener("abort", onAbort, { once: true });
     if (context?.signal?.aborted) onAbort();
 
+    let requestMayHaveReachedWorker = false;
+    let workerEnvelopeValidated = false;
     let requestSerializeMs = 0;
     let fetchHeadersMs = 0;
     let responseReadMs = 0;
@@ -319,6 +321,7 @@ export class BrowserWorkerClient implements BrowserExecutor {
       let response: Response;
       try {
         const fetchStartedAt = performance.now();
+        requestMayHaveReachedWorker = true;
         response = await fetch(this.operationsUrl, {
           method: "POST",
           headers: {
@@ -385,6 +388,7 @@ export class BrowserWorkerClient implements BrowserExecutor {
         }
         throw new AppError("RELAY_PROTOCOL_ERROR", "The browser worker returned an invalid response.");
       }
+      workerEnvelopeValidated = true;
       if (!envelope.data.ok) {
         const appError = new AppError(
           envelope.data.error.code,
@@ -412,18 +416,24 @@ export class BrowserWorkerClient implements BrowserExecutor {
       });
       return attachBrowserWorkerClientTiming(result, timing);
     } catch (error) {
-      const timing = readBrowserWorkerClientTiming(error) ?? currentTiming();
+      const surfacedError = browserOutcomeAwareError(
+        error,
+        operation,
+        requestMayHaveReachedWorker,
+        workerEnvelopeValidated,
+      );
+      const timing = readBrowserWorkerClientTiming(surfacedError) ?? currentTiming();
       this.options.logger?.warn({
         event: "browser_worker_call_failed",
         operation,
         traceId,
         status: "error",
-        failureLayer: classifyGatewayBrowserFailure(error),
-        errorCode: browserErrorCode(error),
+        failureLayer: classifyGatewayBrowserFailure(surfacedError),
+        errorCode: browserErrorCode(surfacedError),
         durationMs: timing.totalMs,
       });
-      if (readBrowserWorkerClientTiming(error)) throw error;
-      throw attachBrowserWorkerClientTiming(error, timing);
+      if (readBrowserWorkerClientTiming(surfacedError)) throw surfacedError;
+      throw attachBrowserWorkerClientTiming(surfacedError, timing);
     } finally {
       clearTimeout(timeout);
       context?.signal?.removeEventListener("abort", onAbort);
@@ -447,6 +457,51 @@ function attachBrowserWorkerClientTiming<T>(
   return value;
 }
 
+const BROWSER_EFFECTFUL_OPERATIONS = new Set<BrowserOperation>([
+  "open",
+  "openAuthorizedSite",
+  "navigate",
+  "click",
+  "fill",
+  "press",
+  "sequence",
+  "frameClick",
+  "frameFill",
+  "frameSequence",
+  "navigatePath",
+  "goBack",
+  "goForward",
+  "download",
+  "upload",
+]);
+
+function browserOutcomeAwareError(
+  error: unknown,
+  operation: BrowserOperation,
+  requestMayHaveReachedWorker: boolean,
+  workerEnvelopeValidated: boolean,
+): unknown {
+  if (!requestMayHaveReachedWorker ||
+      workerEnvelopeValidated ||
+      !BROWSER_EFFECTFUL_OPERATIONS.has(operation)) {
+    return error;
+  }
+  const lifecycle = error instanceof AppError ? error.lifecycle : undefined;
+  return new AppError(
+    "EXECUTION_OUTCOME_UNKNOWN",
+    `Browser ${operation} may have taken effect before its response became unavailable. Observe the same task/tab before retrying.`,
+    {
+      cause: error,
+      ...(lifecycle === undefined ? {} : { lifecycle }),
+      details: {
+        operation: `browser_${operation}`,
+        outcome: "unknown",
+        retryable: false,
+      },
+    },
+  );
+}
+
 type GatewayBrowserFailureLayer =
   | "gateway"
   | "transport_http"
@@ -463,7 +518,8 @@ function browserErrorCode(error: unknown): string {
 function classifyGatewayBrowserFailure(error: unknown): GatewayBrowserFailureLayer {
   if (!(error instanceof AppError)) return "gateway";
   if (error.code === "IDEMPOTENCY_KEY_CONFLICT") return "idempotency";
-  if (error.code === "BROWSER_WORKER_UNAVAILABLE") return "transport_http";
+  if (error.code === "BROWSER_WORKER_UNAVAILABLE" ||
+      error.code === "EXECUTION_OUTCOME_UNKNOWN") return "transport_http";
   if (error.code === "RELAY_PROTOCOL_ERROR") return "worker_protocol";
   if ([
     "BROWSER_DISCONNECTED",

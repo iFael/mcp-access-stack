@@ -140,9 +140,11 @@ import {
 } from "../domain/browser-tab-reuse.js";
 import {
   BrowserTaskRegistry,
+  hashOwnerScope,
   type BrowserTask,
   type BrowserTaskLease,
 } from "../domain/browser-task-registry.js";
+import type { BrowserLiveFrame } from "./browser-live-frame-mailbox.js";
 import {
   BrowserSitePolicyRegistry,
   isAuthorizedSiteSemanticActionAllowed,
@@ -1446,6 +1448,7 @@ export class BrowserRuntime implements BrowserExecutor {
           completed: true,
           taskId: resolved.taskId,
           closedTabs: 0,
+          closedTabIds: [],
           browserClosed: !this.driver.isConnected(),
         };
       }
@@ -1500,6 +1503,7 @@ export class BrowserRuntime implements BrowserExecutor {
           completed: true,
           taskId: task.taskId,
           closedTabs: tabs.length,
+          closedTabIds: tabs.map((tab) => tab.tabId),
           browserClosed,
         };
       } catch (error) {
@@ -1730,6 +1734,31 @@ export class BrowserRuntime implements BrowserExecutor {
       state,
       timing,
     };
+  }
+
+  supportsLiveView(): boolean {
+    return isDirectPlaywrightDriver(this.driver) && !this.shutdownRequested;
+  }
+
+  async liveFrame(
+    taskId: string,
+    tabId: string,
+    afterSeq: number,
+    ownerScope?: string,
+  ): Promise<BrowserLiveFrame | null> {
+    const task = this.taskRegistry.taskForTab(tabId);
+    if (!task || task.taskId !== taskId ||
+        !["active", "suspended"].includes(task.state) ||
+        task.expiresAt <= new Date().toISOString() ||
+        (ownerScope !== undefined && task.ownerScopeHash !== hashOwnerScope(ownerScope))) {
+      throw new AppError("TASK_NOT_FOUND", "The browser live view is unavailable.");
+    }
+    this.tabsRegistry.assertMcpOwned(tabId);
+    const binding = this.bindings.get(tabId);
+    if (!binding || !isDirectPlaywrightDriver(this.driver)) {
+      throw new AppError("STALE_TAB_ID", "The browser live view is unavailable.");
+    }
+    return this.driver.liveFrame(binding.remoteTabId, afterSeq);
   }
 
   private async withActionState(
@@ -2273,7 +2302,12 @@ export class BrowserRuntime implements BrowserExecutor {
       return false;
     }
 
-    const remoteTabs = await this.driver.listTabs().catch(() => []);
+    let remoteTabs: Awaited<ReturnType<BrowserDriver["listTabs"]>>;
+    try {
+      remoteTabs = await this.driver.listTabs();
+    } catch {
+      return false;
+    }
     const onlyDisposableBlankTabs = remoteTabs.every((tab) =>
       !tab.crashed && normalizeUrl(tab.url) === "about:blank",
     );

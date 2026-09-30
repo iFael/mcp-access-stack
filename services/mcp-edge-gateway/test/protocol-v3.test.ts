@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   EDGE_PROTOCOL_VERSION,
+  parseConnectorToEdgeMessage,
   parseEdgeToConnectorMessage,
 } from "@mcp-access-stack/edge-protocol";
 import { collectAllowedRequestHeaders } from "../src/protocol.js";
@@ -65,6 +66,42 @@ describe("Edge Protocol v3 authenticated execution envelope", () => {
     ]) {
       expect(parseEdgeToConnectorMessage(envelope(principal))).toBeNull();
     }
+  });
+
+  it("keeps connector runtime identity backward compatible while carrying Browser epoch", () => {
+    const runtime = {
+      version: 1,
+      connectorInstanceId: "11111111-1111-4111-8111-111111111111",
+      connectionGeneration: 7,
+      processStartedAt: "2026-09-30T12:00:00.000Z",
+      catalogContractRevision: "a".repeat(64),
+      toolSetRevision: "b".repeat(64),
+      toolCount: 89,
+      serverVersion: "1.1.0-test",
+      nodePid: 100,
+      hostPid: 99,
+    };
+    const ready = (activeRuntime: Record<string, unknown>) => JSON.stringify({
+      type: "connector-ready",
+      protocolVersion: 3,
+      runtime: activeRuntime,
+    });
+
+    expect(parseConnectorToEdgeMessage(ready(runtime))).toMatchObject({
+      type: "connector-ready",
+      runtime,
+    });
+
+    const browserEpoch = "22222222-2222-4222-8222-222222222222";
+    expect(parseConnectorToEdgeMessage(ready({ ...runtime, browserEpoch }))).toMatchObject({
+      type: "connector-ready",
+      runtime: { ...runtime, browserEpoch },
+    });
+
+    expect(parseConnectorToEdgeMessage(ready({
+      ...runtime,
+      browserEpoch: "not-a-uuid",
+    }))).toBeNull();
   });
 
   it("strips public credentials while preserving the opaque ChatGPT session identity", () => {

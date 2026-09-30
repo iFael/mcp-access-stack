@@ -61,22 +61,23 @@ function stableWorkspaceKeyHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-export function selectAvailableCompanionWorkspaceId(
+export function selectAvailableRuntimeWorkspaceId(
   requestedWorkspaceId: string,
   stableKey: string,
   reservedWorkspaceIds: ReadonlySet<string>,
+  scope: "local" | "remote",
 ): string {
   const requested = requestedWorkspaceId.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(requested)) {
-    throw new Error("Companion workspace id is invalid.");
+    throw new Error("Runtime workspace id is invalid.");
   }
   if (!reservedWorkspaceIds.has(requested)) return requested;
 
   const hash = stableWorkspaceKeyHash(stableKey);
   for (let attempt = 0; attempt < 4096; attempt += 1) {
     const suffix = attempt === 0
-      ? `-local-${hash}`
-      : `-local-${hash}-${attempt + 1}`;
+      ? `-${scope}-${hash}`
+      : `-${scope}-${hash}-${attempt + 1}`;
     const prefixLength = Math.max(1, 200 - suffix.length);
     const prefix = requested
       .slice(0, prefixLength)
@@ -84,7 +85,20 @@ export function selectAvailableCompanionWorkspaceId(
     const candidate = `${prefix}${suffix}`;
     if (!reservedWorkspaceIds.has(candidate)) return candidate;
   }
-  throw new Error("Companion workspace id namespace is exhausted.");
+  throw new Error("Runtime workspace id namespace is exhausted.");
+}
+
+export function selectAvailableCompanionWorkspaceId(
+  requestedWorkspaceId: string,
+  stableKey: string,
+  reservedWorkspaceIds: ReadonlySet<string>,
+): string {
+  return selectAvailableRuntimeWorkspaceId(
+    requestedWorkspaceId,
+    stableKey,
+    reservedWorkspaceIds,
+    "local",
+  );
 }
 
 export function selectWorkspaceRuntime<T>(

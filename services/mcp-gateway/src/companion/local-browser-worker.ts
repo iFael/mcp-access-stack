@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { AppError } from "@vs-code-gpt/shared";
@@ -11,10 +11,21 @@ const DEFAULT_OPERATION_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const DEFAULT_STOP_TIMEOUT_MS = 8_000;
 
+export type BrowserLiveFramePayload = {
+  seq: number;
+  data: string;
+  width: number;
+  height: number;
+  capturedAt: number;
+};
+
 export interface LocalBrowserWorkerOptions {
   releaseRoot: string;
   stateRoot: string;
-  credentialBrokerPath: string;
+  credentialBrokerPath?: string;
+  credentialsPath?: string;
+  nodePath?: string;
+  platform?: NodeJS.Platform;
   browserChannel?: "chromium" | "chrome";
   headless?: boolean;
   startupTimeoutMs?: number;
@@ -33,7 +44,7 @@ export class LocalBrowserWorker {
   private constructor(
     private readonly child: ChildProcess,
     url: URL,
-    token: string,
+    private readonly token: string,
     private readonly options: LocalBrowserWorkerOptions,
   ) {
     this.url = url;
@@ -49,17 +60,7 @@ export class LocalBrowserWorker {
     options: LocalBrowserWorkerOptions,
   ): Promise<LocalBrowserWorker> {
     const releaseRoot = path.resolve(options.releaseRoot);
-    const launcherPath = path.join(
-      releaseRoot,
-      "compat",
-      "McpNodeHostLauncher.exe",
-    );
-    const nodePath = path.join(
-      releaseRoot,
-      "runtime",
-      "node",
-      "node.exe",
-    );
+    const platform = options.platform ?? process.platform;
     const browserScript = path.join(
       releaseRoot,
       "services",
@@ -67,13 +68,7 @@ export class LocalBrowserWorker {
       "dist",
       "server.js",
     );
-
-    await Promise.all([
-      assertRegularFile(launcherPath, "Browser native launcher"),
-      assertRegularFile(nodePath, "Bundled Node.js"),
-      assertRegularFile(browserScript, "Browser Worker server"),
-      assertRegularFile(options.credentialBrokerPath, "Credential broker"),
-    ]);
+    await assertRegularFile(browserScript, "Browser Worker server");
 
     const browserRoot = path.join(options.stateRoot, "browser");
     const privateDirectory = path.join(browserRoot, "private");
@@ -87,13 +82,35 @@ export class LocalBrowserWorker {
       mkdir(logsDirectory, { recursive: true }),
     ]);
 
-    const port = await reserveLoopbackPort();
-    const url = new URL(`http://127.0.0.1:${port}/`);
-    const token = randomBytes(32).toString("base64url");
-    const spawnProcess = options.spawnProcess ?? spawn;
-    const child = spawnProcess(
-      launcherPath,
-      [
+    let executable: string;
+    let args: string[];
+    let credentialEnvironment: Record<string, string>;
+    const headless = options.headless ?? platform !== "win32";
+    if (platform === "win32") {
+      const launcherPath = path.join(
+        releaseRoot,
+        "compat",
+        "McpNodeHostLauncher.exe",
+      );
+      const nodePath = path.resolve(
+        options.nodePath ?? path.join(releaseRoot, "runtime", "node", "node.exe"),
+      );
+      const credentialBrokerPath = options.credentialBrokerPath === undefined
+        ? ""
+        : path.resolve(options.credentialBrokerPath);
+      if (!credentialBrokerPath) {
+        throw new AppError(
+          "CAPABILITY_UNSUPPORTED",
+          "Credential broker is required for the Windows Browser Worker.",
+        );
+      }
+      await Promise.all([
+        assertRegularFile(launcherPath, "Browser native launcher"),
+        assertRegularFile(nodePath, "Bundled Node.js"),
+        assertRegularFile(credentialBrokerPath, "Credential broker"),
+      ]);
+      executable = launcherPath;
+      args = [
         "--node", nodePath,
         "--stdout-log", path.join(logsDirectory, "browser-worker.stdout.log"),
         "--stderr-log", path.join(logsDirectory, "browser-worker.stderr.log"),
@@ -101,7 +118,35 @@ export class LocalBrowserWorker {
         "--runner-restart-interval-seconds", "1",
         "--",
         browserScript,
-      ],
+      ];
+      credentialEnvironment = {
+        BROWSER_WORKER_CREDENTIAL_BROKER_PATH: credentialBrokerPath,
+      };
+    } else {
+      const nodePath = path.resolve(options.nodePath ?? process.execPath);
+      await assertRegularFile(nodePath, "Node.js runtime");
+      const credentialsPath = path.resolve(
+        options.credentialsPath ?? path.join(privateDirectory, "credentials.json"),
+      );
+      if (options.credentialsPath === undefined) {
+        await ensureEmptyCredentialFile(credentialsPath);
+      } else {
+        await assertRegularFile(credentialsPath, "Browser credential file");
+      }
+      executable = nodePath;
+      args = [browserScript];
+      credentialEnvironment = {
+        BROWSER_WORKER_CREDENTIALS_PATH: credentialsPath,
+      };
+    }
+
+    const port = await reserveLoopbackPort();
+    const url = new URL(`http://127.0.0.1:${port}/`);
+    const token = randomBytes(32).toString("base64url");
+    const spawnProcess = options.spawnProcess ?? spawn;
+    const child = spawnProcess(
+      executable,
+      args,
       {
         cwd: releaseRoot,
         windowsHide: true,
@@ -114,13 +159,11 @@ export class LocalBrowserWorker {
           BROWSER_WORKER_MODE: "interactive",
           BROWSER_WORKER_PROFILE_MODE: "persistent",
           BROWSER_WORKER_BROWSER_CHANNEL: options.browserChannel ?? "chromium",
-          BROWSER_WORKER_HEADLESS: options.headless ? "true" : "false",
+          BROWSER_WORKER_HEADLESS: headless ? "true" : "false",
           BROWSER_WORKER_USER_DATA_DIR: userDataDirectory,
           BROWSER_WORKER_RUNTIME_DIR: runtimeDirectory,
           BROWSER_WORKER_PRIVATE_DIR: privateDirectory,
-          BROWSER_WORKER_CREDENTIAL_BROKER_PATH: path.resolve(
-            options.credentialBrokerPath,
-          ),
+          ...credentialEnvironment,
         },
       },
     );
@@ -137,6 +180,83 @@ export class LocalBrowserWorker {
     } catch (error) {
       await instance.close().catch(() => undefined);
       throw error;
+    }
+  }
+
+  async readLiveFrame(input: {
+    taskId: string;
+    tabId: string;
+    afterSeq: number;
+    ownerScope?: string;
+    signal?: AbortSignal;
+  }): Promise<BrowserLiveFramePayload | null> {
+    const target = new URL("/live/frame", this.url);
+    target.search = new URLSearchParams({
+      taskId: input.taskId,
+      tabId: input.tabId,
+      afterSeq: String(input.afterSeq),
+    }).toString();
+    let response: Response;
+    try {
+      response = await (this.options.fetchImpl ?? fetch)(target, {
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          ...(input.ownerScope === undefined
+            ? {}
+            : { "x-mcp-owner-scope": input.ownerScope }),
+        },
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+    } catch (error) {
+      throw new AppError(
+        "BROWSER_WORKER_UNAVAILABLE",
+        "Browser live view is unavailable.",
+        { cause: error },
+      );
+    }
+    if (response.status === 204) return null;
+    if (response.status === 404) {
+      throw new AppError("TASK_NOT_FOUND", "Browser live view is unavailable.");
+    }
+    if (!response.ok) {
+      throw new AppError(
+        "BROWSER_WORKER_UNAVAILABLE",
+        `Browser live view request failed with HTTP ${response.status}.`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch (error) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Browser live view returned invalid JSON.",
+        { cause: error },
+      );
+    }
+    if (!isBrowserLiveFramePayload(parsed)) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Browser live view returned an invalid frame payload.",
+      );
+    }
+    return parsed;
+  }
+
+  async supportsLiveView(): Promise<boolean> {
+    if (this.stopped) return false;
+    const target = new URL("/live/capability", this.url);
+    try {
+      const response = await (this.options.fetchImpl ?? fetch)(target, {
+        headers: { authorization: `Bearer ${this.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.status !== 200) return false;
+      const payload: unknown = await response.json();
+      return typeof payload === "object" && payload !== null &&
+        (payload as { version?: unknown }).version === 1;
+    } catch {
+      return false;
     }
   }
 
@@ -229,6 +349,28 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
+async function ensureEmptyCredentialFile(filePath: string): Promise<void> {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) throw new Error("not a regular file");
+    await chmod(filePath, 0o600);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new AppError(
+        "CAPABILITY_UNSUPPORTED",
+        "Browser credential file could not be prepared.",
+        { cause: error },
+      );
+    }
+  }
+  await writeFile(
+    filePath,
+    JSON.stringify({ version: 1, credentials: [] }) + "\n",
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+}
+
 async function assertRegularFile(filePath: string, label: string): Promise<void> {
   try {
     const info = await stat(filePath);
@@ -240,6 +382,16 @@ async function assertRegularFile(filePath: string, label: string): Promise<void>
       { cause: error },
     );
   }
+}
+
+function isBrowserLiveFramePayload(value: unknown): value is BrowserLiveFramePayload {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const frame = value as Record<string, unknown>;
+  return Number.isSafeInteger(frame.seq) && Number(frame.seq) > 0 &&
+    typeof frame.data === "string" && frame.data.length <= 512 * 1024 &&
+    Number.isSafeInteger(frame.width) && Number(frame.width) > 0 && Number(frame.width) <= 4096 &&
+    Number.isSafeInteger(frame.height) && Number(frame.height) > 0 && Number(frame.height) <= 4096 &&
+    Number.isSafeInteger(frame.capturedAt) && Number(frame.capturedAt) >= 0;
 }
 
 function delay(milliseconds: number): Promise<void> {

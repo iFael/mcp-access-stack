@@ -143,6 +143,25 @@ export class EdgeOwnerOAuth {
     return isOwnerCredentialMaterial(await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY));
   }
 
+  async authenticateViewer(
+    ownerPassword: string,
+    userName: string,
+    userPassword: string,
+  ): Promise<{ userId: string; credentialVersion: string } | null> {
+    if (!ownerPassword || ownerPassword.length > 2048 ||
+        !userName.trim() || userName.length > 200 ||
+        !userPassword || userPassword.length > 2048) return null;
+    if (!(await this.ownerSecretMatches(ownerPassword))) return null;
+    const user = await this.accounts.authenticateUser(userName, userPassword).catch(() => null);
+    return user
+      ? { userId: user.id, credentialVersion: await this.viewerCredentialVersion() }
+      : null;
+  }
+
+  async viewerCredentialVersion(): Promise<string> {
+    return (await this.currentCredentialVersion()) ?? "initial";
+  }
+
   async rotateOwnerPassword(password: string): Promise<void> {
     if (password.length === 0 || password.length > 2048 || /[\r\n\0]/u.test(password)) {
       throw new Error("Owner password is invalid.");

@@ -99,6 +99,7 @@ export const browserTabSchema = z
     requestedUrl: z.url().optional(),
     title: z.string().max(500).optional(),
     lockedUrl: z.url().optional(),
+    viewerUrl: z.url().optional(),
   })
   .strict();
 export type BrowserTab = z.infer<typeof browserTabSchema>;
@@ -650,6 +651,7 @@ export const browserFinishTaskResultSchema = z
     completed: z.literal(true),
     taskId: taskIdSchema.optional(),
     closedTabs: z.number().int().nonnegative(),
+    closedTabIds: z.array(tabIdSchema).max(100).optional(),
     browserClosed: z.boolean(),
   })
   .strict();

@@ -468,6 +468,7 @@ describe("BrowserRuntime Playwright layer", () => {
       completed: true,
       taskId: opened.tab.taskId,
       closedTabs: 1,
+      closedTabIds: [opened.tab.tabId],
       browserClosed: true,
     });
     await expect(runtime.status({})).resolves.toMatchObject({
@@ -514,6 +515,29 @@ describe("BrowserRuntime Playwright layer", () => {
       taskCount: 0,
     });
     expect(fake.closeCount).toBe(1);
+  });
+
+  it("fails closed when physical tab ownership cannot be observed during finalization", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    fake.setTabs([]);
+    fake.recreateBlankAfterLastTabClose();
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+    const opened = await runtime.open({
+      url: "https://example.com/",
+      purpose: "ownership-probe",
+    });
+    fake.failListTabsWhenOnlyBlank();
+
+    await expect(runtime.finishTask({ taskId: opened.tab.taskId })).resolves.toMatchObject({
+      completed: true,
+      taskId: opened.tab.taskId,
+      closedTabs: 1,
+      closedTabIds: [opened.tab.tabId],
+      browserClosed: false,
+    });
+    expect(fake.closeCount).toBe(0);
+    expect(fake.isConnected()).toBe(true);
   });
 
   it("rejects blank Browser Worker targets instead of creating an about:blank tab", async () => {
@@ -2223,6 +2247,7 @@ class FakeBrowserDriver implements BrowserDriver {
   private newTabFailuresRemaining = 0;
   private resetTabsAfterClose = false;
   private recreateBlankWhenLastTabCloses = false;
+  private failListTabsForBlankOnly = false;
   private pageCounter = 1;
   private tabs: BrowserDriverTab[] = [
     {
@@ -2311,6 +2336,10 @@ class FakeBrowserDriver implements BrowserDriver {
 
   recreateBlankAfterLastTabClose(): void {
     this.recreateBlankWhenLastTabCloses = true;
+  }
+
+  failListTabsWhenOnlyBlank(): void {
+    this.failListTabsForBlankOnly = true;
   }
 
   isConnected(): boolean {
@@ -2457,6 +2486,11 @@ class FakeBrowserDriver implements BrowserDriver {
 
   async listTabs(): Promise<BrowserDriverTab[]> {
     this.listTabsCount += 1;
+    if (this.failListTabsForBlankOnly &&
+        this.tabs.length > 0 &&
+        this.tabs.every((tab) => tab.url === "about:blank")) {
+      throw new Error("list tabs ownership probe failed");
+    }
     return structuredClone(this.tabs);
   }
 
