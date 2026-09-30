@@ -161,7 +161,7 @@ describe("LocalBrowserWorker", () => {
 
     const child = fakeChild();
     const requests: Array<{ url: string; authorization?: string; ownerScope?: string }> = [];
-    const fetchImpl = jest.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+    const fetchImpl = jest.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const url = new URL(String(input));
       if (url.pathname === "/health/live") {
         return new Response(JSON.stringify({ status: "live" }), { status: 200 });
