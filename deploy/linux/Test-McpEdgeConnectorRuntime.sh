@@ -29,7 +29,11 @@ if [[ "${1:-}" == "-p" && "${2:-}" == "process.versions.node" ]]; then
   printf '26.0.0\n'
   exit 0
 fi
-printf 'fake node should not execute the connector in validate-only mode\n' >&2
+if [[ "${1:-}" == *.js ]]; then
+  printf 'connector-executed\n'
+  exit 0
+fi
+printf 'unexpected fake node invocation: %s\n' "${1:-}" >&2
 exit 99
 EOF
 chmod +x "$fake_node"
@@ -49,12 +53,24 @@ output="$(bash "$launcher" --from-environment --validate-only)"
 grep -Fq 'status=validated' <<<"$output"
 grep -Fq "releaseRoot=$release" <<<"$output"
 grep -Fq 'nodeVersion=26.0.0' <<<"$output"
+grep -Fq 'browserRuntimeReady=true' <<<"$output"
 grep -Fq "browserWorkerPath=$release/services/browser-worker/dist/server.js" <<<"$output"
 grep -Fq 'playwrightBrowsersPath=0' <<<"$output"
 grep -Fq "browserNativeLibPath=$release/runtime/native-libs/usr/lib/x86_64-linux-gnu" <<<"$output"
 grep -Fq "browserNativeFontPath=$release/runtime/native-libs/usr/share/fonts" <<<"$output"
 grep -Fq "fontconfigFile=$runtime/browser-fontconfig/fonts.conf" <<<"$output"
 grep -Fq 'mcpSessionMode=stateless' <<<"$output"
+
+legacy_release="$tmp/legacy-release"
+mkdir -p "$legacy_release/services/mcp-gateway/dist"
+printf '// legacy connector fixture\n' > "$legacy_release/services/mcp-gateway/dist/edge-connector-cli.js"
+export MCP_RELEASE_ROOT="$legacy_release"
+legacy_output="$(bash "$launcher" --from-environment --validate-only)"
+grep -Fq 'status=validated' <<<"$legacy_output"
+grep -Fq 'browserRuntimeReady=false' <<<"$legacy_output"
+grep -Fq 'browserRuntimeReason=Built Browser Worker was not found:' <<<"$legacy_output"
+grep -Fq 'connector-executed' <<<"$(bash "$launcher" --from-environment)"
+export MCP_RELEASE_ROOT="$release"
 
 chmod 640 "$secrets/owner-token"
 if bash "$launcher" --from-environment --validate-only >/dev/null 2>&1; then

@@ -133,10 +133,22 @@ fontconfig_root="$runtime_root/browser-fontconfig"
 fontconfig_file="$fontconfig_root/fonts.conf"
 fontconfig_cache="$fontconfig_root/cache"
 [[ -f "$edge_connector_path" ]] || fail "Built Edge Connector was not found: $edge_connector_path"
-[[ -f "$browser_worker_path" ]] || fail "Built Browser Worker was not found: $browser_worker_path"
-[[ -d "$native_lib_dir" ]] || fail "Browser native library bundle was not found: $native_lib_dir"
-[[ -d "$native_font_dir" ]] || fail "Browser font bundle was not found: $native_font_dir"
-[[ -s "$native_package_manifest" ]] || fail "Browser native package manifest was not found: $native_package_manifest"
+
+browser_runtime_ready=true
+browser_runtime_reason=''
+if [[ ! -f "$browser_worker_path" ]]; then
+  browser_runtime_ready=false
+  browser_runtime_reason="Built Browser Worker was not found: $browser_worker_path"
+elif [[ ! -d "$native_lib_dir" ]]; then
+  browser_runtime_ready=false
+  browser_runtime_reason="Browser native library bundle was not found: $native_lib_dir"
+elif [[ ! -d "$native_font_dir" ]]; then
+  browser_runtime_ready=false
+  browser_runtime_reason="Browser font bundle was not found: $native_font_dir"
+elif [[ ! -s "$native_package_manifest" ]]; then
+  browser_runtime_ready=false
+  browser_runtime_reason="Browser native package manifest was not found: $native_package_manifest"
+fi
 
 connector_token="$(read_token "$connector_token_file" 'Connector token' 32)"
 owner_token="$(read_token "$owner_token_file" 'Owner token' 16)"
@@ -153,19 +165,25 @@ if $validate_only; then
   printf 'nodePath=%s\n' "$node_binary"
   printf 'nodeVersion=%s\n' "$node_version"
   printf 'edgeConnectorPath=%s\n' "$edge_connector_path"
-  printf 'browserWorkerPath=%s\n' "$browser_worker_path"
-  printf 'playwrightBrowsersPath=0\n'
-  printf 'browserNativeLibPath=%s\n' "$native_lib_dir"
-  printf 'browserNativeFontPath=%s\n' "$native_font_dir"
-  printf 'fontconfigFile=%s\n' "$fontconfig_file"
+  printf 'browserRuntimeReady=%s\n' "$browser_runtime_ready"
+  if $browser_runtime_ready; then
+    printf 'browserWorkerPath=%s\n' "$browser_worker_path"
+    printf 'playwrightBrowsersPath=0\n'
+    printf 'browserNativeLibPath=%s\n' "$native_lib_dir"
+    printf 'browserNativeFontPath=%s\n' "$native_font_dir"
+    printf 'fontconfigFile=%s\n' "$fontconfig_file"
+  else
+    printf 'browserRuntimeReason=%s\n' "$browser_runtime_reason"
+  fi
   printf 'mcpSessionMode=%s\n' "$session_mode"
   printf 'maxConcurrentRequests=%s\n' "$max_concurrency"
   exit 0
 fi
 
-mkdir -p "$fontconfig_cache"
-chmod 700 "$fontconfig_root" "$fontconfig_cache"
-cat > "$fontconfig_file" <<EOF
+if $browser_runtime_ready; then
+  mkdir -p "$fontconfig_cache"
+  chmod 700 "$fontconfig_root" "$fontconfig_cache"
+  cat > "$fontconfig_file" <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
@@ -174,16 +192,21 @@ cat > "$fontconfig_file" <<EOF
   <config></config>
 </fontconfig>
 EOF
-chmod 600 "$fontconfig_file"
+  chmod 600 "$fontconfig_file"
+fi
 
 export MCP_EDGE_BASE_URL
 export MCP_CONNECTOR_TOKEN_FILE="$connector_token_file"
 export VS_CODE_GPT_POLICY_PATH="$policy_path"
 export VS_CODE_GPT_STACK_ROOT="$project_root"
 export MCP_RELEASE_ROOT="$release_root"
-export PLAYWRIGHT_BROWSERS_PATH='0'
-export LD_LIBRARY_PATH="$native_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export FONTCONFIG_FILE="$fontconfig_file"
+if $browser_runtime_ready; then
+  export PLAYWRIGHT_BROWSERS_PATH='0'
+  export LD_LIBRARY_PATH="$native_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export FONTCONFIG_FILE="$fontconfig_file"
+else
+  unset PLAYWRIGHT_BROWSERS_PATH FONTCONFIG_FILE
+fi
 export MCP_ACCESS_STACK_INSTALLATION_ROOT="${MCP_ACCESS_STACK_INSTALLATION_ROOT:-/var/lib/mcp-access-stack}"
 export MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS="$max_concurrency"
 export MCP_SESSION_MODE="$session_mode"
