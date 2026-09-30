@@ -29,9 +29,7 @@ export type ViewerStorage = {
 
 export type BrowserLiveViewerDependencies = {
   authenticate(
-    ownerPassword: string,
-    userName: string,
-    userPassword: string,
+    accountPassword: string,
   ): Promise<{ userId: string; credentialVersion: string } | null>;
   credentialVersion(): Promise<string>;
   registerViewerDevice(userId: string, existingDeviceId?: string): Promise<string>;
@@ -127,8 +125,6 @@ export class BrowserLiveViewer {
     const fields = new URLSearchParams(raw);
     const identity = await this.dependencies.authenticate(
       fields.get("owner_password") ?? "",
-      fields.get("user_name") ?? "",
-      fields.get("user_password") ?? "",
     );
     if (!identity) {
       await this.storage.put(throttleKey, {
@@ -311,7 +307,7 @@ function readCookie(request: Request, name: string): string | undefined {
 }
 
 function loginPage(error = ""): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>body{font:16px system-ui;background:#171923;color:#f8f8ff;margin:3rem auto;max-width:24rem;padding:1rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.7rem;margin-top:.3rem}button{padding:.7rem 1rem}</style><h1>Browser live viewer</h1><p>Sign in to view this agent tab.</p>${error ? `<p role="alert">${error}</p>` : ""}<form method="post"><label>Shared account password<input name="owner_password" type="password" autocomplete="current-password" required></label><label>Profile name<input name="user_name" autocomplete="username" required></label><label>Personal password<input name="user_password" type="password" autocomplete="current-password" required></label><button type="submit">View tab</button></form></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>body{font:16px system-ui;background:#171923;color:#f8f8ff;margin:3rem auto;max-width:24rem;padding:1rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.7rem;margin-top:.3rem}button{padding:.7rem 1rem}</style><h1>Browser live viewer</h1><p>Sign in to view this agent tab.</p>${error ? `<p role="alert">${error}</p>` : ""}<form method="post"><label>Access password<input name="owner_password" type="password" autocomplete="current-password" required></label><button type="submit">View tab</button></form></html>`;
 }
 
 function viewerPage(): string {

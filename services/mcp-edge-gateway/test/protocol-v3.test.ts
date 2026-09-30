@@ -76,7 +76,7 @@ describe("Edge Protocol v3 authenticated execution envelope", () => {
       processStartedAt: "2026-09-30T12:00:00.000Z",
       catalogContractRevision: "a".repeat(64),
       toolSetRevision: "b".repeat(64),
-      toolCount: 89,
+      toolCount: 90,
       serverVersion: "1.1.0-test",
       nodePid: 100,
       hostPid: 99,

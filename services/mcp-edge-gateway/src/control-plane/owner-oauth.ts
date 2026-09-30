@@ -117,11 +117,15 @@ export class EdgeOwnerOAuth {
       if (!scopes.includes(this.requiredScope)) {
         throw new EdgeAuthenticationError(403, "insufficient_scope", this.challenge);
       }
+      const currentUser = await this.resolveOwnerUser().catch(() => null);
+      if (!currentUser || claims.user_id !== currentUser.id) {
+        throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
+      }
       return {
         subject: claims.sub,
         scopes,
         ownerScope: "owner",
-        ...(claims.user_id === undefined ? {} : { userId: claims.user_id }),
+        userId: currentUser.id,
       };
     }
 
@@ -135,15 +139,11 @@ export class EdgeOwnerOAuth {
   }
 
   async authenticateViewer(
-    ownerPassword: string,
-    userName: string,
-    userPassword: string,
+    accountPassword: string,
   ): Promise<{ userId: string; credentialVersion: string } | null> {
-    if (!ownerPassword || ownerPassword.length > 2048 ||
-        !userName.trim() || userName.length > 200 ||
-        !userPassword || userPassword.length > 2048) return null;
-    if (!(await this.ownerSecretMatches(ownerPassword))) return null;
-    const user = await this.accounts.authenticateUser(userName, userPassword).catch(() => null);
+    if (!accountPassword || accountPassword.length > 2048) return null;
+    if (!(await this.ownerSecretMatches(accountPassword))) return null;
+    const user = await this.resolveOwnerUser().catch(() => null);
     return user
       ? { userId: user.id, credentialVersion: await this.viewerCredentialVersion() }
       : null;
@@ -166,6 +166,18 @@ export class EdgeOwnerOAuth {
   async recoverAccess(password: string): Promise<{ userId: string; displayName: string }> {
     const user = await this.resolveOwnerUser();
     await this.rotateOwnerPassword(password);
+    return { userId: user.id, displayName: user.displayName };
+  }
+
+  async activateSingleUser(userId: string): Promise<{ userId: string; displayName: string }> {
+    const users = await this.accounts.listUsers();
+    const user = users.length === 1 && users[0]?.id === userId ? users[0] : undefined;
+    if (!user) throw new Error("Canonical single-user identity is not available.");
+    const pinnedUserId = await this.storage.get<string>(OWNER_USER_ID_KEY);
+    if (pinnedUserId !== user.id) {
+      await this.storage.put(OWNER_USER_ID_KEY, user.id);
+      await this.bumpCredentialVersion();
+    }
     return { userId: user.id, displayName: user.displayName };
   }
 
@@ -318,17 +330,12 @@ export class EdgeOwnerOAuth {
     }
 
     const users = await this.accounts.listUsers();
-    if (users.length > 1) {
-      throw new Error("Multiple legacy user profiles require explicit administrative migration.");
+    if (users.length !== 1 || !users[0]) {
+      throw new Error("Single-user identity requires explicit administrative migration.");
     }
 
-    let user = users[0];
-    if (!user) {
-      user = await this.accounts.createUser("Owner", randomToken());
-    }
-
-    await this.storage.put(OWNER_USER_ID_KEY, user.id);
-    return user;
+    await this.storage.put(OWNER_USER_ID_KEY, users[0].id);
+    return users[0];
   }
 
   private async token(request: Request): Promise<Response> {
@@ -452,6 +459,19 @@ export class EdgeOwnerOAuth {
   private async currentCredentialVersion(): Promise<string | undefined> {
     const stored = await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY);
     return isOwnerCredentialMaterial(stored) ? stored.credentialVersion : undefined;
+  }
+
+  private async bumpCredentialVersion(): Promise<void> {
+    const stored = await this.storage.get<OwnerCredentialMaterial>(OWNER_CREDENTIAL_MATERIAL_KEY);
+    const material = stored ??
+      (this.config.ownerSecret ? await deriveOwnerCredentialMaterial(this.config.ownerSecret) : undefined);
+    if (!material || !isOwnerCredentialMaterial(material)) {
+      throw new Error("Owner credential material is not configured.");
+    }
+    await this.storage.put(OWNER_CREDENTIAL_MATERIAL_KEY, {
+      ...material,
+      credentialVersion: crypto.randomUUID(),
+    } satisfies OwnerCredentialMaterial);
   }
 
   private async loadSigningKey(): Promise<CryptoKey> {

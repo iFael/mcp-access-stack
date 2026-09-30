@@ -66,11 +66,14 @@ export const deviceSummarySchema = z.object({
 }).strict();
 export type DeviceSummary = z.infer<typeof deviceSummarySchema>;
 
+export const currentUserSchema = z.object({
+  id: userIdSchema,
+  displayName: z.string().min(1).max(200),
+}).strict();
+export type CurrentUser = z.infer<typeof currentUserSchema>;
+
 export const onboardingStateSchema = z.object({
-  user: z.object({
-    id: userIdSchema,
-    displayName: z.string().min(1).max(200),
-  }).strict().nullable(),
+  user: currentUserSchema.nullable(),
   repositoryCount: z.number().int().nonnegative(),
   devices: z.array(deviceSummarySchema).max(256),
   status: z.enum(["identity_required", "device_required", "ready"]),
@@ -86,6 +89,9 @@ export const discoveredRepositorySchema = z.object({
   dirty: z.boolean(),
 }).strict();
 export type DiscoveredRepository = z.infer<typeof discoveredRepositorySchema>;
+
+export const getCurrentUserInputSchema = z.object({}).strict();
+export type GetCurrentUserInput = z.infer<typeof getCurrentUserInputSchema>;
 
 export const getOnboardingStateInputSchema = z.object({}).strict();
 export type GetOnboardingStateInput = z.infer<typeof getOnboardingStateInputSchema>;

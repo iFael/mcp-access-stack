@@ -8,6 +8,7 @@ import {
 export const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 
 export const MCP_REPOSITORY_TOOL_NAMES = [
+  "get_current_user",
   "get_onboarding_state",
   "list_repositories",
   "get_repository",

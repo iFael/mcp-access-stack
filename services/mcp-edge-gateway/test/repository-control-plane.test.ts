@@ -1,6 +1,5 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import {
-  ACCOUNT_PASSWORD_PBKDF2_ITERATIONS,
   EdgeAccountStore,
   type AccountStorage,
 } from "../src/control-plane/account-store.js";
@@ -14,23 +13,24 @@ class MemoryStorage implements AccountStorage {
 }
 
 describe("Repository identity and ACL control plane", () => {
-  it("keeps account password PBKDF2 within the Cloudflare runtime limit", async () => {
-    expect(ACCOUNT_PASSWORD_PBKDF2_ITERATIONS).toBe(100_000);
-
+  it("stores exactly one identity without a personal password", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    await accounts.createUser("Rafael", "rafael-pass");
+    const rafael = await accounts.createSingleUserIdentity("Rafael");
 
-    await expect(accounts.authenticateUser("Rafael", "rafael-pass")).resolves.toMatchObject({
-      displayName: "Rafael",
-    });
+    expect(await accounts.getUser(rafael.id)).toEqual(rafael);
+    expect(JSON.stringify([...storage.data.values()])).not.toContain("passwordSalt");
+    expect(JSON.stringify([...storage.data.values()])).not.toContain("passwordVerifier");
+    await expect(accounts.createSingleUserIdentity("Felipe")).rejects.toThrow(
+      "Single-user identity already exists.",
+    );
   });
 
   it("keeps private repositories isolated by individual user identity", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const rafael = await accounts.createUser("Rafael", "rafael-pass");
-    const felipe = await accounts.createUser("Felipe", "felipe-pass");
+    const rafael = await accounts.createSingleUserIdentity("Rafael");
+    const felipe = { id: "usr_22222222-2222-4222-8222-222222222222" };
     const repo = await accounts.createRepository(rafael.id, "privado");
 
     expect(await accounts.getRepositoryForUser(rafael.id, repo.id)).not.toBeNull();
@@ -60,8 +60,8 @@ describe("Repository identity and ACL control plane", () => {
   it("tracks device lifecycle without exposing another user's device", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const rafael = await accounts.createUser("Rafael", "rafael-pass");
-    const felipe = await accounts.createUser("Felipe", "felipe-pass");
+    const rafael = await accounts.createSingleUserIdentity("Rafael");
+    const felipe = { id: "usr_22222222-2222-4222-8222-222222222222" };
     const device = await accounts.registerDevice(rafael.id, {
       displayName: "PC Trabalho",
       platform: "windows",
@@ -76,8 +76,8 @@ describe("Repository identity and ACL control plane", () => {
   it("revokes only the caller device and disconnects its active presence", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const rafael = await accounts.createUser("Rafael", "rafael-pass");
-    const felipe = await accounts.createUser("Felipe", "felipe-pass");
+    const rafael = await accounts.createSingleUserIdentity("Rafael");
+    const felipe = { id: "usr_22222222-2222-4222-8222-222222222222" };
     const device = await accounts.registerDevice(rafael.id, {
       displayName: "PC Trabalho",
       platform: "windows",
@@ -160,7 +160,7 @@ describe("Repository identity and ACL control plane", () => {
   it("treats the remote runtime as sufficient onboarding and reports remote materializations without a device", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const user = await accounts.createUser("Rafael", "rafael-pass");
+    const user = await accounts.createSingleUserIdentity("Rafael");
     const repository = await accounts.createRepository(
       user.id,
       "cpx-open-finance",
@@ -211,7 +211,7 @@ describe("Repository identity and ACL control plane", () => {
   it("migrates a materialization workspace id without leaving a duplicate and can restore it", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const user = await accounts.createUser("Owner", "owner-pass");
+    const user = await accounts.createSingleUserIdentity("Owner");
     const device = await accounts.registerDevice(user.id, {
       displayName: "COMPEXNOTE-10",
       platform: "windows",
@@ -263,8 +263,8 @@ describe("Repository identity and ACL control plane", () => {
   it("keeps one materialization per device/workspace and supports exact rollback removal", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
-    const rafael = await accounts.createUser("Rafael", "rafael-pass");
-    const felipe = await accounts.createUser("Felipe", "felipe-pass");
+    const rafael = await accounts.createSingleUserIdentity("Rafael");
+    const felipe = { id: "usr_22222222-2222-4222-8222-222222222222" };
     const device = await accounts.registerDevice(rafael.id, {
       displayName: "PC Trabalho",
       platform: "windows",
@@ -307,6 +307,99 @@ describe("Repository identity and ACL control plane", () => {
       accounts.deleteOwnedRepositoryIfUnmaterialized(rafael.id, repository.id),
     ).resolves.toBe(true);
     expect(await accounts.getRepositoryForUser(rafael.id, repository.id)).toBeNull();
+  });
+
+  it("migrates the synthetic Owner to the historical Rafael identity without changing resource ids", async () => {
+    const storage = new MemoryStorage();
+    const ownerId = "usr_54135447-1418-4a47-a300-3720970e4731";
+    const rafaelId = "usr_bd5ee3a9-b231-4062-beb5-b441467cea5b";
+    storage.data.set("account:user-ids:v1", [ownerId]);
+    storage.data.set(`account:user:${ownerId}`, {
+      version: 1,
+      id: ownerId,
+      displayName: "Owner",
+      normalizedName: "owner",
+      passwordSalt: "legacy-salt",
+      passwordVerifier: "legacy-verifier",
+      createdAt: "2026-09-28T00:00:00.000Z",
+    });
+    storage.data.set("account:user-name:owner", ownerId);
+
+    const accounts = new EdgeAccountStore(storage);
+    const device = await accounts.registerDevice(ownerId, {
+      displayName: "COMPEXNOTE-10",
+      platform: "windows",
+    });
+    const localRepository = await accounts.createRepository(ownerId, "mcp-access-stack");
+    const remoteRepository = await accounts.createRepository(ownerId, "cpx-open-finance");
+    const localMaterialization = await accounts.upsertMaterialization(ownerId, device.id, {
+      repositoryId: localRepository.id,
+      workspaceId: "mcp-access-stack-local-e3b4a051",
+      path: "C:/Users/rafael.damasio/Desktop/Project/mcp-access-stack",
+      platform: "windows",
+    });
+    const remoteMaterialization = await accounts.upsertRuntimeMaterialization(
+      ownerId,
+      "rt_11111111-1111-4111-8111-111111111111",
+      {
+        repositoryId: remoteRepository.id,
+        workspaceId: "cpx-open-finance-remote-27344d5c",
+        path: "/var/lib/mcp-access-stack/edge-connector/repositories/cpx-open-finance",
+        platform: "linux",
+      },
+    );
+
+    const input = {
+      fromUserId: ownerId,
+      toUser: {
+        id: rafaelId,
+        displayName: "Rafael",
+        createdAt: "2026-09-26T20:05:35.707Z",
+      },
+    };
+    const migrated = await accounts.migrateSingleUserIdentity(input);
+    expect(migrated).toMatchObject({
+      user: { id: rafaelId, displayName: "Rafael", version: 2 },
+      repositoryCount: 2,
+      deviceCount: 1,
+      materializationCount: 2,
+      alreadyMigrated: false,
+    });
+    expect(await accounts.getUser(ownerId)).toBeNull();
+    expect(await accounts.listUsers()).toEqual([
+      expect.objectContaining({ id: rafaelId, displayName: "Rafael" }),
+    ]);
+    expect((await accounts.listRepositories(rafaelId)).map(({ repository }) => repository.id).sort()).toEqual(
+      [localRepository.id, remoteRepository.id].sort(),
+    );
+    expect((await accounts.listDevices(rafaelId)).map((value) => value.id)).toEqual([device.id]);
+    expect((await accounts.listMaterializations(rafaelId, localRepository.id)).map((value) => value.id))
+      .toEqual([localMaterialization.id]);
+    expect((await accounts.listMaterializations(rafaelId, remoteRepository.id)).map((value) => value.id))
+      .toEqual([remoteMaterialization.id]);
+
+    const replay = await accounts.migrateSingleUserIdentity(input);
+    expect(replay).toMatchObject({
+      user: { id: rafaelId, displayName: "Rafael" },
+      repositoryCount: 2,
+      deviceCount: 1,
+      materializationCount: 2,
+      alreadyMigrated: true,
+    });
+
+    const control = new EdgeRepositoryControlPlane(accounts, {
+      isDeviceOnline: () => true,
+      isRemoteRuntimeOnline: () => true,
+    });
+    const currentUser = await control.handle(toolCall(99, "get_current_user", {}), {
+      subject: `user:${rafaelId}`,
+      scopes: ["workspaces:read"],
+      ownerScope: "owner",
+      userId: rafaelId,
+    });
+    expect(await currentUser!.json()).toMatchObject({
+      result: { structuredContent: { id: rafaelId, displayName: "Rafael" } },
+    });
   });
 });
 

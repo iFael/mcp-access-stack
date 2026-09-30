@@ -34,8 +34,8 @@ function fixture() {
     }),
   );
   const viewer = new BrowserLiveViewer(storage, {
-    authenticate: async (owner, name, password) =>
-      owner === "shared" && name === "alice" && password === "personal"
+    authenticate: async (password) =>
+      password === "shared"
         ? { userId: "user-a", credentialVersion: "v1" }
         : null,
     credentialVersion: async () => credentialVersion,
@@ -70,8 +70,6 @@ function loginRequest(url = base): Request {
     },
     body: new URLSearchParams({
       owner_password: "shared",
-      user_name: "alice",
-      user_password: "personal",
     }),
   });
 }
@@ -114,8 +112,6 @@ describe("BrowserLiveViewer", () => {
         },
         body: new URLSearchParams({
           owner_password: "wrong",
-          user_name: "alice",
-          user_password: "personal",
         }),
       }));
       expect(response.status).toBe(401);
@@ -130,8 +126,6 @@ describe("BrowserLiveViewer", () => {
       },
       body: new URLSearchParams({
         owner_password: "shared",
-        user_name: "alice",
-        user_password: "personal",
       }),
     }));
     expect(blocked.status).toBe(429);
@@ -168,7 +162,10 @@ describe("BrowserLiveViewer", () => {
     expect(loginPage.headers.get("content-security-policy")).toContain(
       "connect-src 'self'",
     );
-    expect(await loginPage.text()).toContain("Personal password");
+    const loginHtml = await loginPage.text();
+    expect(loginHtml).toContain("Access password");
+    expect(loginHtml).not.toContain("Profile name");
+    expect(loginHtml).not.toContain("Personal password");
     expect((await viewer.handle(new Request(`${base}/frame`))).status).toBe(401);
 
     const login = await viewer.handle(loginRequest());

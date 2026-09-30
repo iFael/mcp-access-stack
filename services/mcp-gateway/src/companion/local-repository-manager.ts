@@ -6,8 +6,10 @@ import { spawn } from "node:child_process";
 import {
   AppError,
   type CreateRepositoryInput,
+  type CurrentUser,
   type DiscoverLocalRepositoriesInput,
   type DiscoverLocalRepositoriesResult,
+  type GetCurrentUserInput,
   type GetOnboardingStateInput,
   type GetRepositoryInput,
   type ImportRepositoriesInput,
@@ -433,6 +435,10 @@ export class LocalRepositoryManager implements RepositoryExecutor {
       shellsEnabled: true,
       allowedShells: [...workspace.allowedShells],
     }));
+  }
+
+  async getCurrentUser(_input: GetCurrentUserInput, _context?: OperationContext): Promise<CurrentUser> {
+    throw new AppError("AGENT_UNAVAILABLE", "User identity is managed by the MCP V3 cloud control plane.");
   }
 
   async getOnboardingState(_input: GetOnboardingStateInput, _context?: OperationContext): Promise<OnboardingState> {

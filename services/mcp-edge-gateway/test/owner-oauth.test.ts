@@ -26,7 +26,7 @@ describe("Edge Owner OAuth durable state", () => {
     });
 
     const accounts = new EdgeAccountStore(storage);
-    const legacyUser = await accounts.createUser("Rafael", "profile-password-1");
+    const legacyUser = await accounts.createSingleUserIdentity("Rafael");
     await oauth.recoverAccess(firstPassword);
 
     const registered = await oauth.handle(jsonRequest("https://edge.example/register", {
@@ -125,11 +125,103 @@ describe("Edge Owner OAuth durable state", () => {
     expect(persisted).not.toContain(ownerSecret);
     expect(persisted).not.toContain(firstPassword);
     expect(persisted).not.toContain(secondPassword);
-    expect(persisted).not.toContain("profile-password-1");
+    expect(persisted).not.toContain("passwordSalt");
+    expect(persisted).not.toContain("passwordVerifier");
     expect(persisted).not.toContain(tokens.access_token);
     expect(persisted).not.toContain(tokens.refresh_token);
     expect(persisted).not.toContain(secondTokens.access_token);
     expect(persisted).not.toContain(secondTokens.refresh_token);
+  });
+
+  it("rejects an Owner access token immediately after migrating to the historical Rafael identity", async () => {
+    const storage = new MemoryStorage();
+    const ownerId = "usr_54135447-1418-4a47-a300-3720970e4731";
+    const rafaelId = "usr_bd5ee3a9-b231-4062-beb5-b441467cea5b";
+    storage.data.set("account:user-ids:v1", [ownerId]);
+    storage.data.set(`account:user:${ownerId}`, {
+      version: 1,
+      id: ownerId,
+      displayName: "Owner",
+      normalizedName: "owner",
+      passwordSalt: "legacy-salt",
+      passwordVerifier: "legacy-verifier",
+      createdAt: "2026-09-28T00:00:00.000Z",
+    });
+    storage.data.set("account:user-name:owner", ownerId);
+
+    const oauth = new EdgeOwnerOAuth(storage, {
+      ownerSecret: "x".repeat(32),
+      publicBaseUrl: new URL("https://edge.example/"),
+      mcpPath: "/mcp",
+      scopes: ["mcp:tools"],
+      accessTokenTtlSeconds: 3600,
+      refreshTokenTtlSeconds: 2592000,
+      resourceName: "MCP Access Stack",
+    });
+    const accounts = new EdgeAccountStore(storage);
+    const password = "phase-b-access-password";
+    await oauth.recoverAccess(password);
+
+    const registered = await oauth.handle(jsonRequest("https://edge.example/register", {
+      client_name: "ChatGPT",
+      redirect_uris: ["https://chatgpt.com/connector/oauth/phase-b"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }));
+    const client = await registered!.json() as { client_id: string };
+    const verifier = "phase-b-pkce-verifier-abcdefghijklmnopqrstuvwxyz";
+    const challenge = await sha256Base64Url(verifier);
+    const authorize = await oauth.handle(formRequest("https://edge.example/authorize", {
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: "https://chatgpt.com/connector/oauth/phase-b",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      scope: "mcp:tools",
+      resource: "https://edge.example/mcp",
+      owner_password: password,
+    }));
+    const code = new URL(authorize!.headers.get("location")!).searchParams.get("code")!;
+    const tokenResponse = await oauth.handle(formRequest("https://edge.example/token", {
+      grant_type: "authorization_code",
+      client_id: client.client_id,
+      code,
+      redirect_uri: "https://chatgpt.com/connector/oauth/phase-b",
+      code_verifier: verifier,
+      resource: "https://edge.example/mcp",
+    }));
+    const tokens = await tokenResponse!.json() as { access_token: string; refresh_token: string };
+
+    await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    }))).resolves.toMatchObject({ userId: ownerId });
+
+    await accounts.migrateSingleUserIdentity({
+      fromUserId: ownerId,
+      toUser: {
+        id: rafaelId,
+        displayName: "Rafael",
+        createdAt: "2026-09-26T20:05:35.707Z",
+      },
+    });
+    await oauth.activateSingleUser(rafaelId);
+    const versionAfterCutover = await oauth.viewerCredentialVersion();
+    await oauth.activateSingleUser(rafaelId);
+    expect(await oauth.viewerCredentialVersion()).toBe(versionAfterCutover);
+
+    await expect(oauth.authenticate(new Request("https://edge.example/mcp", {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    }))).rejects.toMatchObject({ status: 401, oauthError: "invalid_token" });
+    await expect(oauth.authenticateViewer(password)).resolves.toMatchObject({
+      userId: rafaelId,
+    });
+    expect(await accounts.getUser(ownerId)).toBeNull();
+    expect(await accounts.getUser(rafaelId)).toMatchObject({
+      id: rafaelId,
+      displayName: "Rafael",
+      version: 2,
+    });
   });
 });
 
