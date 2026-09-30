@@ -1,9 +1,11 @@
 import type { OperationContext } from "./contracts.js";
 import type {
   CreateRepositoryInput,
+  CurrentUser,
   DeviceSummary,
   DiscoverLocalRepositoriesInput,
   DiscoverLocalRepositoriesResult,
+  GetCurrentUserInput,
   GetOnboardingStateInput,
   GetRepositoryInput,
   ImportRepositoriesInput,
@@ -23,6 +25,10 @@ import type {
 } from "./repository-contracts.js";
 
 export interface RepositoryExecutor {
+  getCurrentUser(
+    input: GetCurrentUserInput,
+    context?: OperationContext,
+  ): Promise<CurrentUser>;
   getOnboardingState(
     input: GetOnboardingStateInput,
     context?: OperationContext,

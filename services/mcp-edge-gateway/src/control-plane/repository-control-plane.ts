@@ -32,6 +32,7 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
 
   private async dispatch(request: ToolCall, userId: string): Promise<Response> {
     switch (request.name) {
+      case "get_current_user": return this.getCurrentUser(request.id, userId);
       case "get_onboarding_state": return this.getOnboardingState(request.id, userId);
       case "list_repositories": return this.listRepositories(request.id, userId);
       case "get_repository": return this.getRepository(request.id, userId, request.arguments);
@@ -40,6 +41,12 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
       case "revoke_device": return this.revokeDevice(request.id, userId, request.arguments);
       default: return toolError(request.id, "METHOD_NOT_FOUND", "Repository operation is not supported.");
     }
+  }
+
+  private async getCurrentUser(id: JsonRpcId, userId: string): Promise<Response> {
+    const user = await this.accounts.getUser(userId);
+    if (!user) return toolError(id, "IDENTITY_REQUIRED", "Authenticated user identity no longer exists.");
+    return toolSuccess(id, { id: user.id, displayName: user.displayName });
   }
 
   private async getOnboardingState(id: JsonRpcId, userId: string): Promise<Response> {
@@ -141,6 +148,7 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
 }
 
 const CLOUD_REPOSITORY_TOOLS = new Set([
+  "get_current_user",
   "get_onboarding_state",
   "list_repositories",
   "get_repository",

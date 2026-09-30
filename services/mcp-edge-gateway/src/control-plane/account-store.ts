@@ -5,6 +5,14 @@ export interface AccountStorage {
 }
 
 export type AccountUser = {
+  version: 2;
+  id: string;
+  displayName: string;
+  normalizedName: string;
+  createdAt: string;
+};
+
+type LegacyAccountUser = {
   version: 1;
   id: string;
   displayName: string;
@@ -12,6 +20,23 @@ export type AccountUser = {
   passwordSalt: string;
   passwordVerifier: string;
   createdAt: string;
+};
+
+export type SingleUserIdentityMigrationInput = {
+  fromUserId: string;
+  toUser: {
+    id: string;
+    displayName: string;
+    createdAt: string;
+  };
+};
+
+export type SingleUserIdentityMigrationResult = {
+  user: AccountUser;
+  repositoryCount: number;
+  deviceCount: number;
+  materializationCount: number;
+  alreadyMigrated: boolean;
 };
 
 export type RepositoryRole = "owner" | "editor" | "viewer";
@@ -59,8 +84,6 @@ export type MaterializationUpsertInput = Omit<
 > & { id?: string };
 
 const USER_IDS_KEY = "account:user-ids:v1";
-export const ACCOUNT_PASSWORD_PBKDF2_ITERATIONS = 100_000;
-const MAX_USERS = 1024;
 const MAX_REPOSITORIES_PER_USER = 4096;
 const MAX_DEVICES_PER_USER = 256;
 const MAX_MATERIALIZATIONS_PER_REPOSITORY = 256;
@@ -83,8 +106,8 @@ export class EdgeAccountStore {
   }
 
   async getUser(userId: string): Promise<AccountUser | null> {
-    const value = await this.storage.get<AccountUser>(userKey(userId));
-    return isUser(value) ? value : null;
+    const value = await this.storage.get<unknown>(userKey(userId));
+    return toAccountUser(value);
   }
 
   async findUserByName(displayName: string): Promise<AccountUser | null> {
@@ -94,41 +117,183 @@ export class EdgeAccountStore {
     return userId ? this.getUser(userId) : null;
   }
 
-  async createUser(displayName: string, password: string): Promise<AccountUser> {
+  async createSingleUserIdentity(
+    displayName: string,
+    options: { id?: string; createdAt?: string } = {},
+  ): Promise<AccountUser> {
     const normalizedName = normalizeName(displayName);
     if (!normalizedName || normalizedName.length > 200) throw new Error("User name is invalid.");
-    assertPassword(password);
-    if (await this.findUserByName(displayName)) throw new Error("User name already exists.");
-
     const ids = (await this.storage.get<string[]>(USER_IDS_KEY)) ?? [];
-    if (ids.length >= MAX_USERS) throw new Error("User limit reached.");
-
-    const salt = randomBytes(16);
-    const verifier = await derivePasswordVerifier(password, salt);
+    if (ids.length !== 0) throw new Error("Single-user identity already exists.");
+    const id = options.id ?? prefixedId("usr");
+    assertUserId(id);
+    const createdAt = options.createdAt ?? new Date().toISOString();
+    assertTimestamp(createdAt, "User creation timestamp");
     const user: AccountUser = {
-      version: 1,
-      id: prefixedId("usr"),
+      version: 2,
+      id,
       displayName: displayName.trim(),
       normalizedName,
-      passwordSalt: base64UrlBytes(salt),
-      passwordVerifier: verifier,
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
     await this.storage.put(userKey(user.id), user);
     await this.storage.put(userNameKey(normalizedName), user.id);
-    await this.storage.put(USER_IDS_KEY, [...ids, user.id]);
+    await this.storage.put(USER_IDS_KEY, [user.id]);
     return user;
   }
 
-  async authenticateUser(displayName: string, password: string): Promise<AccountUser | null> {
-    const user = await this.findUserByName(displayName);
-    if (!user) {
-      await derivePasswordVerifier(password, randomBytes(16)).catch(() => "");
-      return null;
+  async migrateSingleUserIdentity(
+    input: SingleUserIdentityMigrationInput,
+  ): Promise<SingleUserIdentityMigrationResult> {
+    const transaction = storageTransaction(this.storage);
+    if (transaction) {
+      return transaction(async (storage) =>
+        new EdgeAccountStore(storage).migrateSingleUserIdentityDirect(input));
     }
-    assertPassword(password);
-    const actual = await derivePasswordVerifier(password, decodeBase64UrlBytes(user.passwordSalt));
-    return constantTimeEquals(actual, user.passwordVerifier) ? user : null;
+    return this.migrateSingleUserIdentityDirect(input);
+  }
+
+  private async migrateSingleUserIdentityDirect(
+    input: SingleUserIdentityMigrationInput,
+  ): Promise<SingleUserIdentityMigrationResult> {
+    assertUserId(input.fromUserId);
+    assertUserId(input.toUser.id);
+    if (input.fromUserId === input.toUser.id) throw new Error("Source and target user ids must differ.");
+    const displayName = input.toUser.displayName.trim();
+    const normalizedName = normalizeName(displayName);
+    if (!normalizedName || normalizedName.length > 200) throw new Error("Target user name is invalid.");
+    assertTimestamp(input.toUser.createdAt, "Target user creation timestamp");
+
+    const ids = (await this.storage.get<string[]>(USER_IDS_KEY)) ?? [];
+    if (ids.length === 1 && ids[0] === input.toUser.id) {
+      const user = await this.getUser(input.toUser.id);
+      if (!user ||
+          user.displayName !== displayName ||
+          user.createdAt !== input.toUser.createdAt ||
+          await this.getUser(input.fromUserId)) {
+        throw new Error("Existing single-user identity does not match the requested migration.");
+      }
+      const counts = await this.identityBindingCounts(user.id);
+      return { user, ...counts, alreadyMigrated: true };
+    }
+    if (ids.length !== 1 || ids[0] !== input.fromUserId) {
+      throw new Error("Single-user migration source does not match durable account state.");
+    }
+
+    const rawSource = await this.storage.get<unknown>(userKey(input.fromUserId));
+    const source = readStoredUser(rawSource);
+    if (!source || source.id !== input.fromUserId) throw new Error("Source user identity is unavailable.");
+    if (await this.storage.get<unknown>(userKey(input.toUser.id))) {
+      throw new Error("Target user identity already exists.");
+    }
+    const targetNameOwner = await this.storage.get<string>(userNameKey(normalizedName));
+    if (targetNameOwner && targetNameOwner !== input.fromUserId) {
+      throw new Error("Target user name already belongs to another identity.");
+    }
+
+    const repositoryIds = (await this.storage.get<string[]>(userRepositoryIdsKey(input.fromUserId))) ?? [];
+    const repositories: StoredRepository[] = [];
+    const materializations: StoredMaterialization[] = [];
+    for (const repositoryId of repositoryIds) {
+      const repository = await this.storage.get<StoredRepository>(repositoryKey(repositoryId));
+      if (!isRepository(repository) ||
+          repository.ownerUserId !== input.fromUserId ||
+          repository.visibility !== "private" ||
+          repository.members.length !== 1 ||
+          repository.members[0]?.userId !== input.fromUserId ||
+          repository.members[0]?.role !== "owner") {
+        throw new Error("Repository ownership is not compatible with single-user migration.");
+      }
+      repositories.push(repository);
+      const materializationIds =
+        (await this.storage.get<string[]>(repositoryMaterializationIdsKey(repositoryId))) ?? [];
+      for (const materializationId of materializationIds) {
+        const materialization =
+          await this.storage.get<StoredMaterialization>(materializationKey(materializationId));
+        if (!isMaterialization(materialization) ||
+            materialization.repositoryId !== repositoryId ||
+            materialization.userId !== input.fromUserId) {
+          throw new Error("Repository materialization is not compatible with single-user migration.");
+        }
+        materializations.push(materialization);
+      }
+    }
+
+    const deviceIds = (await this.storage.get<string[]>(userDeviceIdsKey(input.fromUserId))) ?? [];
+    const devices: StoredDevice[] = [];
+    for (const deviceId of deviceIds) {
+      const device = await this.storage.get<StoredDevice>(deviceKey(deviceId));
+      if (!isDevice(device) || device.userId !== input.fromUserId) {
+        throw new Error("Device ownership is not compatible with single-user migration.");
+      }
+      devices.push(device);
+    }
+
+    const user: AccountUser = {
+      version: 2,
+      id: input.toUser.id,
+      displayName,
+      normalizedName,
+      createdAt: input.toUser.createdAt,
+    };
+
+    await this.storage.put(userKey(user.id), user);
+    await this.storage.put(userNameKey(user.normalizedName), user.id);
+    await this.storage.put(userRepositoryIdsKey(user.id), [...repositoryIds]);
+    await this.storage.put(userDeviceIdsKey(user.id), [...deviceIds]);
+
+    for (const repository of repositories) {
+      await this.storage.put(repositoryKey(repository.id), {
+        ...repository,
+        ownerUserId: user.id,
+        visibility: "private",
+        members: [{ userId: user.id, role: "owner" }],
+      } satisfies StoredRepository);
+    }
+    for (const materialization of materializations) {
+      await this.storage.put(materializationKey(materialization.id), {
+        ...materialization,
+        userId: user.id,
+      } satisfies StoredMaterialization);
+    }
+    for (const device of devices) {
+      await this.storage.put(deviceKey(device.id), {
+        ...device,
+        userId: user.id,
+      } satisfies StoredDevice);
+    }
+
+    await this.storage.put(USER_IDS_KEY, [user.id]);
+    if (source.normalizedName !== user.normalizedName) {
+      const sourceNameOwner = await this.storage.get<string>(userNameKey(source.normalizedName));
+      if (sourceNameOwner === input.fromUserId) await this.storage.delete(userNameKey(source.normalizedName));
+    }
+    await this.storage.delete(userRepositoryIdsKey(input.fromUserId));
+    await this.storage.delete(userDeviceIdsKey(input.fromUserId));
+    await this.storage.delete(userKey(input.fromUserId));
+
+    return {
+      user,
+      repositoryCount: repositories.length,
+      deviceCount: devices.length,
+      materializationCount: materializations.length,
+      alreadyMigrated: false,
+    };
+  }
+
+  private async identityBindingCounts(userId: string): Promise<{
+    repositoryCount: number;
+    deviceCount: number;
+    materializationCount: number;
+  }> {
+    const repositoryIds = (await this.storage.get<string[]>(userRepositoryIdsKey(userId))) ?? [];
+    let materializationCount = 0;
+    for (const repositoryId of repositoryIds) {
+      materializationCount +=
+        ((await this.storage.get<string[]>(repositoryMaterializationIdsKey(repositoryId))) ?? []).length;
+    }
+    const deviceCount = ((await this.storage.get<string[]>(userDeviceIdsKey(userId))) ?? []).length;
+    return { repositoryCount: repositoryIds.length, deviceCount, materializationCount };
   }
 
   async listRepositories(userId: string): Promise<Array<{ repository: StoredRepository; role: RepositoryRole }>> {
@@ -216,29 +381,9 @@ export class EdgeAccountStore {
       if (isMaterialization(value)) return false;
     }
 
-    for (const member of access.repository.members) {
-      await removeValue(this.storage, userRepositoryIdsKey(member.userId), repositoryId);
-    }
+    await removeValue(this.storage, userRepositoryIdsKey(userId), repositoryId);
     await this.storage.delete(repositoryMaterializationIdsKey(repositoryId));
     return this.storage.delete(repositoryKey(repositoryId));
-  }
-
-  async addRepositoryMember(repositoryId: string, actorUserId: string, memberUserId: string, role: Exclude<RepositoryRole, "owner">): Promise<StoredRepository> {
-    const current = await this.getRepositoryForUser(actorUserId, repositoryId);
-    if (!current || current.role !== "owner") throw new Error("Repository owner permission is required.");
-    if (!(await this.getUser(memberUserId))) throw new Error("Repository member user does not exist.");
-    const repository = current.repository;
-    const members = repository.members.filter((member) => member.userId !== memberUserId);
-    members.push({ userId: memberUserId, role });
-    const updated: StoredRepository = {
-      ...repository,
-      visibility: members.length > 1 ? "shared" : "private",
-      members,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.storage.put(repositoryKey(repositoryId), updated);
-    await addUnique(this.storage, userRepositoryIdsKey(memberUserId), repositoryId, MAX_REPOSITORIES_PER_USER);
-    return updated;
   }
 
   async registerDevice(
@@ -477,6 +622,15 @@ function prefixedId(prefix: "usr" | "repo" | "dev" | "mat"): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function storageTransaction(
+  storage: AccountStorage,
+): (<T>(closure: (transaction: AccountStorage) => Promise<T>) => Promise<T>) | null {
+  const transaction = (storage as { transaction?: unknown }).transaction;
+  if (typeof transaction !== "function") return null;
+  return transaction.bind(storage) as
+    <T>(closure: (transaction: AccountStorage) => Promise<T>) => Promise<T>;
+}
+
 function normalizeName(value: string): string {
   return value.trim().normalize("NFKC").toLocaleLowerCase("en-US");
 }
@@ -504,14 +658,45 @@ function repositoryMaterializationIdsKey(repositoryId: string): string { return 
 function materializationKey(id: string): string { return `account:materialization:${id}`; }
 
 function roleFor(repository: StoredRepository, userId: string): RepositoryRole | null {
-  return repository.members.find((member) => member.userId === userId)?.role ?? null;
+  return repository.ownerUserId === userId ? "owner" : null;
 }
 
-function isUser(value: unknown): value is AccountUser {
-  return isRecord(value) && value.version === 1 && typeof value.id === "string" &&
-    typeof value.displayName === "string" && typeof value.normalizedName === "string" &&
-    typeof value.passwordSalt === "string" && typeof value.passwordVerifier === "string" &&
-    typeof value.createdAt === "string";
+function readStoredUser(value: unknown): AccountUser | LegacyAccountUser | null {
+  if (!isRecord(value) ||
+      typeof value.id !== "string" ||
+      typeof value.displayName !== "string" ||
+      typeof value.normalizedName !== "string" ||
+      typeof value.createdAt !== "string") {
+    return null;
+  }
+  if (value.version === 2) {
+    return {
+      version: 2,
+      id: value.id,
+      displayName: value.displayName,
+      normalizedName: value.normalizedName,
+      createdAt: value.createdAt,
+    };
+  }
+  if (value.version === 1 &&
+      typeof value.passwordSalt === "string" &&
+      typeof value.passwordVerifier === "string") {
+    return value as LegacyAccountUser;
+  }
+  return null;
+}
+
+function toAccountUser(value: unknown): AccountUser | null {
+  const stored = readStoredUser(value);
+  return stored
+    ? {
+        version: 2,
+        id: stored.id,
+        displayName: stored.displayName,
+        normalizedName: stored.normalizedName,
+        createdAt: stored.createdAt,
+      }
+    : null;
 }
 
 function isRepository(value: unknown): value is StoredRepository {
@@ -544,61 +729,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertPassword(value: string): void {
-  if (value.length === 0 || value.length > 2048 || /[\r\n\0]/u.test(value)) {
-    throw new Error("User password is invalid.");
+function assertUserId(value: string): void {
+  if (!/^usr_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
+    throw new Error("User id is invalid.");
   }
 }
 
-async function derivePasswordVerifier(password: string, salt: Uint8Array): Promise<string> {
-  assertPassword(password);
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt: toArrayBuffer(salt), iterations: ACCOUNT_PASSWORD_PBKDF2_ITERATIONS },
-    key,
-    256,
-  );
-  return base64UrlBytes(new Uint8Array(bits));
-}
-
-function randomBytes(length: number): Uint8Array {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  return bytes;
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-}
-
-function base64UrlBytes(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-
-function decodeBase64UrlBytes(value: string): Uint8Array {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  const binary = atob(padded);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+function assertTimestamp(value: string, label: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(value) ||
+      Number.isNaN(Date.parse(value))) {
+    throw new Error(`${label} is invalid.`);
   }
-  return difference === 0;
 }
 
 function normalizeRemoteUrls(values: string[]): string[] {
@@ -612,13 +753,6 @@ async function removeValue(storage: AccountStorage, key: string, value: string):
   const values = (await storage.get<string[]>(key)) ?? [];
   if (!values.includes(value)) return;
   await storage.put(key, values.filter((entry) => entry !== value));
-}
-
-async function addUnique(storage: AccountStorage, key: string, value: string, limit: number): Promise<void> {
-  const values = (await storage.get<string[]>(key)) ?? [];
-  if (values.includes(value)) return;
-  if (values.length >= limit) throw new Error("Index limit reached.");
-  await storage.put(key, [...values, value]);
 }
 
 async function findMaterialization(

@@ -7861,6 +7861,56 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Returns the canonical single-user identity authenticated for this MCP V3 session.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_current_user",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^usr_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "displayName"
+      ],
+      "type": "object"
+    },
+    "title": "Get current MCP V3 user"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Returns the authenticated user's MCP V3 identity, repository count and authorized devices. The remote runtime can satisfy onboarding without a local companion when remote capabilities are available.",
     "execution": {
       "taskSupport": "forbidden"
@@ -20282,13 +20332,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "c30c1df4c3e157cd7972c4ccdb89f37e3c8512c166ddff0bac3c6046fb3e1d35",
-  "serverVersion": "0.4.0-catalog.cc30c1df4c3e1.s0b82ee333aef",
-  "toolCount": 89,
-  "toolSetRevision": "0b82ee333aefde809950518d251e6a214e3e9288b9df6975e01c43e4d61458f6"
+  "contractRevision": "46903b0c544e68eda017a33d022019b37dfd8ff67cb0c3245ffd79b04fedfbba",
+  "serverVersion": "0.4.0-catalog.c46903b0c544e.sa56beb65af4e",
+  "toolCount": 90,
+  "toolSetRevision": "a56beb65af4e9c8a08c209094c2412a2fa11cec4b95da3834fb3b31d398a8e78"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cc30c1df4c3e1.s0b82ee333aef"
+  "version": "0.4.0-catalog.c46903b0c544e.sa56beb65af4e"
 } as const;

@@ -372,6 +372,76 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     };
   }
 
+  async migrateSingleUserIdentity(input: unknown): Promise<string> {
+    const result = await this.migrateSingleUserIdentityResult(input);
+    return JSON.stringify(result);
+  }
+
+  private async migrateSingleUserIdentityResult(
+    input: unknown,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!isRecord(input) ||
+        Object.keys(input).sort().join(",") !== "fromUserId,toUser" ||
+        typeof input.fromUserId !== "string" ||
+        !isRecord(input.toUser) ||
+        Object.keys(input.toUser).sort().join(",") !== "createdAt,displayName,id" ||
+        typeof input.toUser.id !== "string" ||
+        typeof input.toUser.displayName !== "string" ||
+        typeof input.toUser.createdAt !== "string") {
+      return { status: 400, body: { error: "invalid_single_user_migration" } };
+    }
+
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return { status: 503, body: { error: "edge_control_plane_not_configured" } };
+      }
+      throw error;
+    }
+    if (!(runtime.oauth instanceof EdgeOwnerOAuth)) {
+      return { status: 409, body: { error: "single_user_migration_not_applicable" } };
+    }
+
+    try {
+      const migration = await this.accountStore.migrateSingleUserIdentity({
+        fromUserId: input.fromUserId,
+        toUser: {
+          id: input.toUser.id,
+          displayName: input.toUser.displayName,
+          createdAt: input.toUser.createdAt,
+        },
+      });
+      await runtime.oauth.activateSingleUser(migration.user.id);
+      const disconnectedCompanions = this.disconnectCompanionsForUser(input.fromUserId);
+      this.controlRuntime = undefined;
+      return {
+        status: 200,
+        body: {
+          status: migration.alreadyMigrated ? "already-migrated" : "migrated",
+          user: {
+            id: migration.user.id,
+            displayName: migration.user.displayName,
+            createdAt: migration.user.createdAt,
+          },
+          repositoryCount: migration.repositoryCount,
+          deviceCount: migration.deviceCount,
+          materializationCount: migration.materializationCount,
+          disconnectedCompanions,
+        },
+      };
+    } catch (error) {
+      return {
+        status: 409,
+        body: {
+          error: "single_user_migration_rejected",
+          message: error instanceof Error ? error.message : "Single-user migration failed.",
+        },
+      };
+    }
+  }
+
   async recoverOwnerAccess(input: unknown): Promise<string> {
     const result = await this.recoverOwnerAccessResult(input);
     return JSON.stringify(result);
@@ -463,8 +533,8 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     const viewer = new BrowserLiveViewer(this.ctx.storage, {
-      authenticate: (ownerPassword, userName, userPassword) =>
-        ownerOAuth.authenticateViewer(ownerPassword, userName, userPassword),
+      authenticate: (accountPassword) =>
+        ownerOAuth.authenticateViewer(accountPassword),
       credentialVersion: () => ownerOAuth.viewerCredentialVersion(),
       registerViewerDevice: async (userId, existingDeviceId) => {
         const device = await this.accountStore.registerDevice(userId, {
@@ -770,6 +840,21 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         try { webSocket.close(1008, "device revoked"); } catch { /* already closed */ }
       }
     }
+  }
+
+  private disconnectCompanionsForUser(userId: string): number {
+    let disconnected = 0;
+    for (const webSocket of this.ctx.getWebSockets("companion")) {
+      const attachment = this.readCompanionAttachment(webSocket);
+      if (!attachment || attachment.userId !== userId) continue;
+      try {
+        webSocket.close(1012, "identity migrated");
+        disconnected += 1;
+      } catch {
+        // Already closed.
+      }
+    }
+    return disconnected;
   }
 
   private getReadyCompanionsForUser(

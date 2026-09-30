@@ -3,8 +3,10 @@ import { AppError, asAppError } from "./errors.js";
 import { withToolOperationContext, type ToolOperationContextFactory } from "./mcp-operation-context.js";
 import {
   createRepositoryInputSchema,
+  currentUserSchema,
   discoverLocalRepositoriesInputSchema,
   discoverLocalRepositoriesResultSchema,
+  getCurrentUserInputSchema,
   getOnboardingStateInputSchema,
   getRepositoryInputSchema,
   importRepositoriesInputSchema,
@@ -43,6 +45,15 @@ export function registerRepositoryTools(
   options: RegisterRepositoryToolsOptions = {},
 ): void {
   const meta = options.securitySchemes ? { securitySchemes: options.securitySchemes } : undefined;
+
+  server.registerTool("get_current_user", {
+    title: "Get current MCP V3 user",
+    description: "Returns the canonical single-user identity authenticated for this MCP V3 session.",
+    inputSchema: getCurrentUserInputSchema,
+    outputSchema: currentUserSchema,
+    annotations: { ...annotations, readOnlyHint: true, idempotentHint: true },
+    ...(meta ? { _meta: meta } : {}),
+  }, async (input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.getCurrentUser(input, context), currentUserSchema));
 
   server.registerTool("get_onboarding_state", {
     title: "Get MCP V3 onboarding state",
