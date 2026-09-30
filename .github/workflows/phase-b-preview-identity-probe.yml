@@ -37,6 +37,9 @@ jobs:
       - name: Build Edge protocol package
         run: npm run build --workspace @mcp-access-stack/edge-protocol
 
+      - name: Build Edge protocol
+        run: npm run build --workspace @mcp-access-stack/edge-protocol
+
       - name: Upload isolated preview version and read Rafael identity
         shell: bash
         run: |
