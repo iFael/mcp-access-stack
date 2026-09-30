@@ -152,7 +152,6 @@ $runtimeFiles = @(
     'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1',
     'deploy\windows\Install-McpEdgeConnectorTask.ps1',
     'deploy\windows\Repair-McpEdgeConnectorTask.ps1',
-    'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
     'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
     'deploy\windows\Test-McpEdgeConnectorTerminalIndependence.ps1',
@@ -174,10 +173,6 @@ $edgeLauncherSource = Join-Path $stage 'deploy\windows\Start-McpEdgeConnector.ps
 $edgeLauncherTarget = Join-Path $releaseTarget 'deploy\windows\Start-McpEdgeConnector.ps1'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeLauncherTarget) | Out-Null
 Copy-Item -LiteralPath $edgeLauncherSource -Destination $edgeLauncherTarget
-$edgeOwnerOAuthBootstrapSource = Join-Path $stage 'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1'
-$edgeOwnerOAuthBootstrapTarget = Join-Path $releaseTarget 'deploy\windows\Invoke-McpEdgeOwnerOAuthBootstrap.ps1'
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $edgeOwnerOAuthBootstrapTarget) | Out-Null
-Copy-Item -LiteralPath $edgeOwnerOAuthBootstrapSource -Destination $edgeOwnerOAuthBootstrapTarget
 $edgeRecoveryReleaseFiles = @(
     'Repair-McpEdgeConnectorTask.ps1',
     'Install-McpV3Local.ps1',

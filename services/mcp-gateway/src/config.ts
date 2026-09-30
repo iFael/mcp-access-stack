@@ -60,7 +60,6 @@ const configSchema = z
     SSH_WORKSPACE_CONNECT_TIMEOUT_MS: cappedInteger(15_000, 120_000),
     SSH_WORKSPACE_BACKGROUND_STATE_DIR: z.string().trim().min(1).default("/var/lib/mcp-access-stack/background-tasks"),
     BROWSER_WORKER_ENABLED: z.stringbool().default(false),
-    BROWSER_WORKER_ALLOW_DOCKER_HOST: z.stringbool().default(false),
     BROWSER_WORKER_ALLOWED_HOSTS: z.string().default(""),
     BROWSER_WORKER_URL: z.url().default("http://127.0.0.1:3350"),
     BROWSER_WORKER_TOKEN: z.string().min(32).optional(),
@@ -280,9 +279,6 @@ function loadBrowserWorkerConfig(
   }
   const url = new URL(value.BROWSER_WORKER_URL);
   const allowedHosts = new Set(["127.0.0.1", "localhost", "::1"]);
-  if (value.BROWSER_WORKER_ALLOW_DOCKER_HOST) {
-    allowedHosts.add("host.docker.internal");
-  }
   for (const host of parseSet(value.BROWSER_WORKER_ALLOWED_HOSTS)) {
     allowedHosts.add(host.toLocaleLowerCase("en-US"));
   }
@@ -295,7 +291,7 @@ function loadBrowserWorkerConfig(
     url.hash
   ) {
     throw new Error(
-      "BROWSER_WORKER_URL must be a loopback HTTP URL, or host.docker.internal when BROWSER_WORKER_ALLOW_DOCKER_HOST=true.",
+      "BROWSER_WORKER_URL must be an allowed loopback HTTP URL.",
     );
   }
   return {

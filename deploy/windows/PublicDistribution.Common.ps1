@@ -196,10 +196,10 @@ function Assert-McpPublicDistribution {
         throw 'Signed distribution manifest returned no data.'
     }
     $schemaVersion = [int]$manifest.schemaVersion
-    if ($schemaVersion -notin @(1, 2)) {
+    if ($schemaVersion -ne 2) {
         throw "Unsupported distribution manifest version: $($manifest.schemaVersion)"
     }
-    if ($schemaVersion -eq 2 -and $manifest.PSObject.Properties['dockerImages']) {
+    if ($manifest.PSObject.Properties['dockerImages']) {
         throw 'Distribution manifest v2 must not contain dockerImages.'
     }
     if ([string]$manifest.platform -ne 'windows-x64') {
@@ -256,7 +256,7 @@ function Assert-McpPublicReleaseAttestation {
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     $attestation = & $attestationPath
     $schemaVersion = if ($null -eq $attestation) { 0 } else { [int]$attestation.schemaVersion }
-    if ($schemaVersion -notin @(1, 2)) {
+    if ($schemaVersion -ne 2) {
         throw 'Unsupported or missing release attestation.'
     }
     if ([string]$attestation.releaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
@@ -278,25 +278,7 @@ function Assert-McpPublicReleaseAttestation {
     if ($expectedManifestHash -notmatch '^[a-f0-9]{64}$' -or $actualManifestHash -ne $expectedManifestHash) {
         throw 'Release attestation manifest hash mismatch.'
     }
-    if ($schemaVersion -eq 1) {
-        $images = @($attestation.dockerImages)
-        if ($images.Count -ne 2) {
-            throw 'Historical release attestation v1 must contain exactly gateway and proxy images.'
-        }
-        foreach ($component in @('gateway', 'proxy')) {
-            $record = @($images | Where-Object { [string]$_.component -eq $component })
-            if ($record.Count -ne 1) {
-                throw "Historical release attestation image identity is incomplete: $component"
-            }
-            if (
-                [string]$record[0].repository -notmatch '^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.\/-]+$' -or
-                [string]$record[0].digest -notmatch '^sha256:[a-f0-9]{64}$'
-            ) {
-                throw "Historical release attestation image reference is invalid: $component"
-            }
-        }
-    }
-    elseif ($attestation.PSObject.Properties['dockerImages']) {
+    if ($attestation.PSObject.Properties['dockerImages']) {
         throw 'Release attestation v2 must not contain dockerImages.'
     }
     return $attestation

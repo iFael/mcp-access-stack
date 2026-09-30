@@ -120,7 +120,6 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     'Install-McpEdgeConnectorTask.ps1',
     'Install-McpBrowserWorkerTask.ps1',
     'Start-McpEdgeConnector.ps1',
-    'Invoke-McpEdgeOwnerOAuthBootstrap.ps1',
     "-Id 'edge-connector'",
     "-Id 'edge-host'",
     "-Id 'node-host-launcher'",
@@ -160,8 +159,7 @@ Assert-ContainsAll -Label 'Execution-node verifier' -Source $executionCommon -To
     "'browser-worker'",
     "'local-companion'",
     "'edge-host'",
-    "'node-host-launcher'",
-    'Historical execution-node manifest must contain exactly the eight-role split-owner contract.'
+    "'node-host-launcher'"
 )
 Assert-ContainsNone -Label 'Execution-node verifier' -Source $executionCommon -Tokens @(
     'four legacy',
