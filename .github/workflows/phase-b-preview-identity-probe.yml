@@ -29,47 +29,109 @@ jobs:
         with:
           node-version: 26
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Probe existing Rafael identity and restore Preview
         id: probe
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          mkdir -p .codex
+          stage=preflight
+          code=0
+          restored=true
+          previous_version=''
+
+          record_status() {
+            jq -n               --arg stage "$stage"               --argjson exitCode "$code"               --argjson restored "$restored"               '{stage:$stage,exitCode:$exitCode,previewRestored:$restored}'               > .codex/PHASE_B_PROBE_STATUS.json
+          }
+
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+            stage=cloudflare_credentials_unavailable
+            code=10
+            record_status
+            exit 0
+          fi
+
+          stage=npm_ci
+          npm ci >/tmp/phase-b-npm.log 2>&1
+          code=$?
+          if [[ $code -ne 0 ]]; then
+            record_status
+            exit 0
+          fi
+
           wrangler='node_modules/wrangler/bin/wrangler.js'
-          previous_json="$(node "$wrangler" deployments list --name "$WORKER_NAME" --json)"
-          previous_version="$(jq -r '.[0].versions[0].version_id // .[0].id // empty' <<<"$previous_json")"
-          test -n "$previous_version"
+          stage=list_deployments
+          node "$wrangler" deployments list --name "$WORKER_NAME" --json >/tmp/phase-b-deployments.json 2>/tmp/phase-b-deployments.err
+          code=$?
+          if [[ $code -ne 0 ]]; then
+            record_status
+            exit 0
+          fi
+
+          stage=resolve_previous_version
+          previous_version="$(jq -r '
+            if type == "array" then
+              (.[0].versions[0].version_id // .[0].versions[0].id // .[0].version_id // .[0].id // empty)
+            else empty end
+          ' /tmp/phase-b-deployments.json)"
+          if [[ -z "$previous_version" ]]; then
+            code=11
+            record_status
+            exit 0
+          fi
 
           probe_token="$(openssl rand -hex 32)"
           restored=false
           restore() {
-            if [[ "$restored" != "true" ]]; then
-              node "$wrangler" rollback "$previous_version" --name "$WORKER_NAME" --yes --message "Restore R10 Preview after Phase B identity probe" >/dev/null
+            stage=restore_preview
+            node "$wrangler" rollback "$previous_version"               --name "$WORKER_NAME"               --yes               --message "Restore R10 Preview after Phase B identity probe"               >/tmp/phase-b-rollback.log 2>/tmp/phase-b-rollback.err
+            local rollback_code=$?
+            if [[ $rollback_code -eq 0 ]]; then
               restored=true
+            else
+              restored=false
+              code=$rollback_code
             fi
           }
-          trap restore EXIT
+          trap 'restore; record_status' EXIT
 
-          node "$wrangler" deploy             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name "$WORKER_NAME"             --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"             --var "MCP_EDGE_ENABLED:true"             --var "MCP_EDGE_AUTH_MODE:owner"             --var "MCP_PUBLIC_BASE_URL:$PREVIEW_BASE_URL/"             --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"             --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"             --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"             --var "MCP_OWNER_RESOURCE_NAME:MCP V3 R10 Homologation" >/dev/null
+          stage=deploy_probe
+          node "$wrangler" deploy             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name "$WORKER_NAME"             --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"             --var "MCP_EDGE_ENABLED:true"             --var "MCP_EDGE_AUTH_MODE:owner"             --var "MCP_PUBLIC_BASE_URL:$PREVIEW_BASE_URL/"             --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"             --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"             --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"             --var "MCP_OWNER_RESOURCE_NAME:MCP V3 R10 Homologation"             >/tmp/phase-b-deploy.log 2>/tmp/phase-b-deploy.err
+          code=$?
+          if [[ $code -ne 0 ]]; then
+            exit 0
+          fi
 
+          stage=read_identity
           identity=''
           for attempt in $(seq 1 20); do
-            if identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PREVIEW_BASE_URL/_internal/phase-b-identity-probe")"; then
+            identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PREVIEW_BASE_URL/_internal/phase-b-identity-probe" 2>/dev/null)"
+            code=$?
+            if [[ $code -eq 0 ]]; then
               break
             fi
             sleep 2
           done
+          if [[ $code -ne 0 ]]; then
+            exit 0
+          fi
 
+          stage=validate_identity
           jq -e '.users | length == 1 and .[0].displayName == "Rafael"' <<<"$identity" >/dev/null
-          mkdir -p .codex
+          code=$?
+          if [[ $code -ne 0 ]]; then
+            exit 0
+          fi
           jq '{user: .users[0]}' <<<"$identity" > .codex/PHASE_B_PREVIEW_IDENTITY.json
 
           restore
           trap - EXIT
+          stage=completed
+          code=0
+          record_status
 
-      - name: Persist non-secret identity evidence to branch
+      - name: Persist non-secret probe evidence to branch
+        if: always()
         shell: bash
         env:
           BRANCH: ${{ github.ref_name }}
@@ -77,6 +139,12 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .codex/PHASE_B_PREVIEW_IDENTITY.json
-          git commit -m 'chore: capture phase-b preview identity'
+          git add .codex/PHASE_B_PROBE_STATUS.json
+          if [[ -f .codex/PHASE_B_PREVIEW_IDENTITY.json ]]; then
+            git add .codex/PHASE_B_PREVIEW_IDENTITY.json
+          fi
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore: capture phase-b probe evidence'
           git push origin "HEAD:$BRANCH"
