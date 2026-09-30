@@ -41,6 +41,9 @@ const DEFAULT_MAX_SCOPES = 32;
 
 export class ScopedBrowserWorkerPool implements BrowserExecutor {
   private readonly workers = new Map<string, Promise<ScopedBrowserWorkerHandle>>();
+  private readonly retiringWorkers = new Map<string, Promise<void>>();
+  private readonly activeInvocations = new Map<string, number>();
+  private readonly pendingReleases = new Set<string>();
   private readonly tabTaskScopes = new Map<string, Set<string>>();
   private readonly scopesRoot: string;
   private readonly maxScopes: number;
@@ -64,18 +67,48 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     if (this.closed) return;
     this.closed = true;
     const workers = [...this.workers.values()];
+    const retirements = [...this.retiringWorkers.values()];
     this.workers.clear();
+    this.retiringWorkers.clear();
+    this.activeInvocations.clear();
+    this.pendingReleases.clear();
     this.tabTaskScopes.clear();
-    await Promise.allSettled(
-      workers.map(async (workerPromise) => {
+    await Promise.allSettled([
+      ...workers.map(async (workerPromise) => {
         const worker = await workerPromise;
         await worker.close();
       }),
-    );
+      ...retirements,
+    ]);
     await rm(this.scopesRoot, { recursive: true, force: true });
   }
 
-  status(...args: Parameters<BrowserExecutor["status"]>): ReturnType<BrowserExecutor["status"]> {
+  async status(
+    ...args: Parameters<BrowserExecutor["status"]>
+  ): ReturnType<BrowserExecutor["status"]> {
+    if (this.closed) {
+      throw new AppError(
+        "BROWSER_WORKER_UNAVAILABLE",
+        "Remote Browser Worker pool is closed.",
+      );
+    }
+    const ownerScope = args[1]?.ownerScope?.trim();
+    if (ownerScope) {
+      await this.waitForRetirement(ownerScope);
+      if (!this.workers.has(ownerScope)) {
+        return {
+          state: "disconnected",
+          ready: false,
+          browser: "chrome",
+          profile: "dedicated-persistent",
+          autoLaunch: true,
+          tabGroup: "MCP",
+          edgeFallback: "technical-necessity-only",
+          tabCount: 0,
+          taskCount: 0,
+        };
+      }
+    }
     return this.invoke(args[1], (client) => client.status(...args));
   }
 
@@ -83,7 +116,25 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.connect(...args));
   }
 
-  tabs(...args: Parameters<BrowserExecutor["tabs"]>): ReturnType<BrowserExecutor["tabs"]> {
+  async tabs(
+    ...args: Parameters<BrowserExecutor["tabs"]>
+  ): ReturnType<BrowserExecutor["tabs"]> {
+    if (this.closed) {
+      throw new AppError(
+        "BROWSER_WORKER_UNAVAILABLE",
+        "Remote Browser Worker pool is closed.",
+      );
+    }
+    const ownerScope = args[1]?.ownerScope?.trim();
+    if (ownerScope) {
+      await this.waitForRetirement(ownerScope);
+      if (!this.workers.has(ownerScope)) {
+        if (args[0].taskId) {
+          throw new AppError("TASK_NOT_FOUND", "The browser task was not found.");
+        }
+        return { tabs: [] };
+      }
+    }
     return this.invoke(args[1], (client) => client.tabs(...args));
   }
 
@@ -198,9 +249,14 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
+    const ownerScope = args[1]?.ownerScope?.trim();
     const result = await this.invoke(args[1], (client) => client.finishTask(...args));
-    const taskId = args[0].taskId;
+    const taskId = result.taskId ?? args[0].taskId;
     if (taskId) this.forgetTask(taskId);
+    if (ownerScope && result.browserClosed) {
+      this.pendingReleases.add(ownerScope);
+      await this.releaseWorkerIfIdle(ownerScope);
+    }
     return result;
   }
 
@@ -307,10 +363,20 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     operation: (client: BrowserExecutor) => Promise<T>,
   ): Promise<T> {
     const ownerScope = context?.ownerScope?.trim();
-    const worker = await this.workerFor(context);
-    const result = await operation(worker.client);
-    if (ownerScope) this.rememberResultScopes(result, ownerScope);
-    return result;
+    if (ownerScope) this.incrementActiveInvocation(ownerScope);
+    try {
+      const worker = await this.workerFor(context);
+      const result = await operation(worker.client);
+      if (ownerScope) this.rememberResultScopes(result, ownerScope);
+      return result;
+    } finally {
+      if (ownerScope) {
+        const remaining = this.decrementActiveInvocation(ownerScope);
+        if (remaining === 0 && this.pendingReleases.has(ownerScope)) {
+          await this.releaseWorkerIfIdle(ownerScope);
+        }
+      }
+    }
   }
 
   private rememberResultScopes(value: unknown, ownerScope: string): void {
@@ -334,6 +400,60 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     }
   }
 
+  private incrementActiveInvocation(ownerScope: string): void {
+    this.activeInvocations.set(
+      ownerScope,
+      (this.activeInvocations.get(ownerScope) ?? 0) + 1,
+    );
+  }
+
+  private decrementActiveInvocation(ownerScope: string): number {
+    const next = Math.max(0, (this.activeInvocations.get(ownerScope) ?? 1) - 1);
+    if (next === 0) this.activeInvocations.delete(ownerScope);
+    else this.activeInvocations.set(ownerScope, next);
+    return next;
+  }
+
+  private hasScopeBindings(ownerScope: string): boolean {
+    return [...this.tabTaskScopes.values()].some((scopes) => scopes.has(ownerScope));
+  }
+
+  private async waitForRetirement(ownerScope: string): Promise<void> {
+    await this.retiringWorkers.get(ownerScope);
+  }
+
+  private async releaseWorkerIfIdle(ownerScope: string): Promise<void> {
+    if ((this.activeInvocations.get(ownerScope) ?? 0) > 0) return;
+    if (this.hasScopeBindings(ownerScope)) return;
+
+    const workerPromise = this.workers.get(ownerScope);
+    if (!workerPromise) {
+      this.pendingReleases.delete(ownerScope);
+      await this.waitForRetirement(ownerScope);
+      return;
+    }
+
+    this.pendingReleases.delete(ownerScope);
+    this.workers.delete(ownerScope);
+    const scopeRoot = path.join(this.scopesRoot, scopeDirectoryName(ownerScope));
+    const retirement = (async () => {
+      try {
+        const worker = await workerPromise;
+        await worker.close();
+      } finally {
+        await rm(scopeRoot, { recursive: true, force: true }).catch(() => undefined);
+      }
+    })();
+    this.retiringWorkers.set(ownerScope, retirement);
+    try {
+      await retirement;
+    } finally {
+      if (this.retiringWorkers.get(ownerScope) === retirement) {
+        this.retiringWorkers.delete(ownerScope);
+      }
+    }
+  }
+
   private async workerFor(
     context: OperationContext | undefined,
   ): Promise<ScopedBrowserWorkerHandle> {
@@ -351,6 +471,7 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
       );
     }
 
+    await this.waitForRetirement(ownerScope);
     const existing = this.workers.get(ownerScope);
     if (existing) return existing;
     if (this.workers.size >= this.maxScopes) {
