@@ -3,7 +3,7 @@ name: Phase B preview identity probe
 on:
   push:
     tags:
-      - "candidate/r10-phase-b-identity-probe-v3"
+      - "candidate/r10-phase-b-identity-probe-v4"
 
 permissions:
   contents: read
@@ -17,7 +17,6 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_NAME: mcp-access-stack
       PROBE_ALIAS: phase-b-identity-probe
-      PROBE_BASE_URL: https://phase-b-identity-probe-mcp-access-stack.rafaeldamasio77.workers.dev
     steps:
       - name: Checkout exact probe commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -37,10 +36,7 @@ jobs:
       - name: Build Edge protocol package
         run: npm run build --workspace @mcp-access-stack/edge-protocol
 
-      - name: Build Edge protocol
-        run: npm run build --workspace @mcp-access-stack/edge-protocol
-
-      - name: Upload isolated preview version and read Rafael identity
+      - name: Upload isolated preview version and print version metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -48,19 +44,14 @@ jobs:
           probe_token="$(openssl rand -hex 32)"
 
           upload_output="$(
-            node "$wrangler" versions upload               --cwd .               --config services/mcp-edge-gateway/wrangler.jsonc               --name "$WORKER_NAME"               --preview-alias "$PROBE_ALIAS"               --message "Temporary Phase B identity probe"               --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"               --var "MCP_EDGE_ENABLED:true"               --var "MCP_EDGE_AUTH_MODE:owner"               --var "MCP_PUBLIC_BASE_URL:$PROBE_BASE_URL/"               --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"               --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"               --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"               --var "MCP_OWNER_RESOURCE_NAME:Phase B identity probe"
+            node "$wrangler" versions upload               --cwd .               --config services/mcp-edge-gateway/wrangler.jsonc               --name "$WORKER_NAME"               --preview-alias "$PROBE_ALIAS"               --message "Temporary Phase B identity metadata probe"               --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"               --var "MCP_EDGE_ENABLED:true"               --var "MCP_EDGE_AUTH_MODE:owner"               --var "MCP_PUBLIC_BASE_URL:https://mcp-access-stack.rafaeldamasio77.workers.dev/"               --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"               --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"               --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"               --var "MCP_OWNER_RESOURCE_NAME:Phase B identity probe"
           )"
           printf '%s\n' "$upload_output"
 
-          identity=''
-          for attempt in $(seq 1 30); do
-            if identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PROBE_BASE_URL/_internal/phase-b-identity-probe")"; then
-              break
-            fi
-            sleep 2
-          done
+          version_id="$(sed -nE 's/^Worker Version ID: ([0-9a-f-]+)$/\1/p' <<<"$upload_output" | tail -n 1)"
+          test -n "$version_id"
+          echo "PHASE_B_VERSION_ID=$version_id"
 
-          jq -e '.users | length == 1 and .[0].displayName == "Rafael"' <<<"$identity" >/dev/null
-          echo 'PHASE_B_PREVIEW_IDENTITY_BEGIN'
-          jq '{user: .users[0]}' <<<"$identity"
-          echo 'PHASE_B_PREVIEW_IDENTITY_END'
+          echo 'PHASE_B_VERSION_METADATA_BEGIN'
+          node "$wrangler" versions view "$version_id" --name "$WORKER_NAME" --json
+          echo 'PHASE_B_VERSION_METADATA_END'
