@@ -98,6 +98,7 @@ export type EdgeGatewayEnv = EdgeControlPlaneEnv & {
   MCP_SESSION: DurableObjectNamespace<McpSession>;
   MCP_EDGE_ENABLED?: string;
   MCP_CONNECTOR_TOKEN?: string;
+  MCP_PHASE_B_PROBE_TOKEN?: string;
 };
 
 type ConnectorAttachment = {
@@ -166,6 +167,13 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         this.ctx.storage,
         reconciled.state.activeContractRevision,
       );
+    });
+  }
+
+  async getPhaseBIdentityProbe(): Promise<string> {
+    const users = await this.accountStore.listUsers();
+    return JSON.stringify({
+      users: users.map(({ id, displayName, createdAt }) => ({ id, displayName, createdAt })),
     });
   }
 

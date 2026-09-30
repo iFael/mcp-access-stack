@@ -23,6 +23,15 @@ export default {
       return jsonResponse(health.body, health.statusCode);
     }
 
+    if (url.pathname === "/_internal/phase-b-identity-probe" && request.method === "GET") {
+      const expectedToken = env.MCP_PHASE_B_PROBE_TOKEN?.trim();
+      if (!expectedToken) return new Response(null, { status: 404 });
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, { status: 401, headers: { "cache-control": "no-store" } });
+      }
+      return jsonResponse(JSON.parse(await session.getPhaseBIdentityProbe()), 200);
+    }
+
     if (url.pathname === "/_internal/session-diagnostics" && request.method === "GET") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;
       if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);

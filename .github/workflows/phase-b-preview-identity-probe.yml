@@ -1,0 +1,81 @@
+name: Phase B preview identity probe
+
+on:
+  push:
+    branches:
+      - "refactor/phase-b-single-user-identity"
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: r10-homologation-mcp-access-stack
+      PREVIEW_BASE_URL: https://r10-homologation-mcp-access-stack.rafaeldamasio77.workers.dev
+    steps:
+      - name: Checkout probe branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Probe existing Rafael identity and restore Preview
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrangler='node_modules/wrangler/bin/wrangler.js'
+          previous_json="$(node "$wrangler" deployments list --name "$WORKER_NAME" --json)"
+          previous_version="$(jq -r '.[0].versions[0].version_id // .[0].id // empty' <<<"$previous_json")"
+          test -n "$previous_version"
+
+          probe_token="$(openssl rand -hex 32)"
+          restored=false
+          restore() {
+            if [[ "$restored" != "true" ]]; then
+              node "$wrangler" rollback "$previous_version" --name "$WORKER_NAME" --yes --message "Restore R10 Preview after Phase B identity probe" >/dev/null
+              restored=true
+            fi
+          }
+          trap restore EXIT
+
+          node "$wrangler" deploy             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name "$WORKER_NAME"             --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"             --var "MCP_EDGE_ENABLED:true"             --var "MCP_EDGE_AUTH_MODE:owner"             --var "MCP_PUBLIC_BASE_URL:$PREVIEW_BASE_URL/"             --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"             --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"             --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"             --var "MCP_OWNER_RESOURCE_NAME:MCP V3 R10 Homologation" >/dev/null
+
+          identity=''
+          for attempt in $(seq 1 20); do
+            if identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PREVIEW_BASE_URL/_internal/phase-b-identity-probe")"; then
+              break
+            fi
+            sleep 2
+          done
+
+          jq -e '.users | length == 1 and .[0].displayName == "Rafael"' <<<"$identity" >/dev/null
+          mkdir -p .codex
+          jq '{user: .users[0]}' <<<"$identity" > .codex/PHASE_B_PREVIEW_IDENTITY.json
+
+          restore
+          trap - EXIT
+
+      - name: Persist non-secret identity evidence to branch
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .codex/PHASE_B_PREVIEW_IDENTITY.json
+          git commit -m 'chore: capture phase-b preview identity'
+          git push origin "HEAD:$BRANCH"
