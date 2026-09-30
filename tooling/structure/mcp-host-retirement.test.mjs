@@ -41,11 +41,12 @@ test("new Windows artifacts and distributions are Edge-only", () => {
   }
 });
 
-test("execution manifest validator isolates eight-role compatibility to the historical v1 branch", () => {
+test("execution manifest validator rejects retired v1 and McpHost compatibility", () => {
   const source = read("deploy/windows/WindowsExecutionNode.Common.ps1");
-  assert.doesNotMatch(source, /currentEdgeRoles|legacySplitOwnerRoles/u);
-  assert.match(source, /executionVersion -eq 2/u);
-  assert.match(source, /Historical execution-node manifest must contain exactly the eight-role split-owner contract/u);
+  assert.match(source, /executionVersion -ne 2/u);
+  for (const token of ["legacyRoles", "Historical execution-node", "mcp-host-contract-v3"]) {
+    assert.equal(source.includes(token), false, `execution manifest validator still contains retired token: ${token}`);
+  }
 });
 
 test("cutover is Edge-only and has no persistent-host branch", () => {

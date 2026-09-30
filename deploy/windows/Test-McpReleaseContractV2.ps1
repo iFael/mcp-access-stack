@@ -55,9 +55,15 @@ try {
     }
 
     Write-TestAttestation -SchemaVersion 1 -IncludeDockerImages
-    $v1 = Assert-McpPublicReleaseAttestation -ReleaseRoot $releaseRoot -AllowUnsignedDevelopment
-    if ([int]$v1.schemaVersion -ne 1) {
-        throw 'Historical release attestation v1 was not accepted.'
+    $v1Rejected = $false
+    try {
+        Assert-McpPublicReleaseAttestation -ReleaseRoot $releaseRoot -AllowUnsignedDevelopment | Out-Null
+    }
+    catch {
+        $v1Rejected = $true
+    }
+    if (-not $v1Rejected) {
+        throw 'Release attestation v1 must be rejected after the compatibility floor moved to v2.'
     }
 
     Write-TestAttestation -SchemaVersion 2 -IncludeDockerImages
@@ -157,7 +163,7 @@ try {
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
         throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
     }
-    Write-Output 'Release contract v2 test passed: v2 is Docker-free, runtime is self-contained, CI evidence is duplicate-safe, Edge prepare gates publication without invalidating the active connector, and v1 remains historical read compatibility.'
+    Write-Output 'Release contract v2 test passed: v2 is the only accepted contract, Docker is retired, runtime is self-contained, CI evidence is duplicate-safe, and Edge prepare gates publication without invalidating the active connector.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -452,7 +452,7 @@ function Assert-McpWindowsExecutionNodeRelease {
     $executionManifestPath = Join-Path $release 'execution-node-manifest.json'
     $executionManifest = Read-McpPublicJson -Path $executionManifestPath
     $executionVersion = [int]$executionManifest.version
-    if ($executionVersion -notin @(1, 2) -or
+    if ($executionVersion -ne 2 -or
         [string]$executionManifest.releaseId -ne $releaseId -or
         [string]$executionManifest.commit -ne $commit -or
         [string]$executionManifest.platform -ne 'win32-x64' -or
@@ -498,7 +498,6 @@ function Assert-McpWindowsExecutionNodeRelease {
 
     $artifacts = @($executionManifest.artifacts)
     $nodeRecord = $null
-    if ($executionVersion -eq 2) {
         $services = @($executionManifest.services)
         $requiredServices = @('edge-runtime', 'browser-worker', 'local-companion')
         foreach ($serviceId in $requiredServices) {
@@ -563,50 +562,6 @@ function Assert-McpWindowsExecutionNodeRelease {
             }
         }
         $nodeRecord = @($artifacts | Where-Object { [string]$_.id -eq 'node-runtime' })[0]
-    }
-    else {
-        $legacyRoles = @(
-            'mcp-host',
-            'workspace-agent',
-            'browser-worker',
-            'edge-connector',
-            'edge-connector-launcher',
-            'edge-host',
-            'edge-native-launcher',
-            'node-runtime'
-        )
-        if ($artifacts.Count -ne $legacyRoles.Count) {
-            throw 'Historical execution-node manifest must contain exactly the eight-role split-owner contract.'
-        }
-        foreach ($role in $legacyRoles) {
-            $records = @($artifacts | Where-Object { [string]$_.role -eq $role })
-            if ($records.Count -ne 1) {
-                throw "Historical execution-node manifest role is missing or duplicated: $role"
-            }
-            Assert-McpExecutionArtifactIntegrity -Record $records[0] | Out-Null
-        }
-        $hostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'mcp-host' })[0]
-        if ($hostRecord.authenticodeRequired -ne $true) {
-            throw 'Historical McpHost must require Authenticode validation.'
-        }
-        $edgeConnectorRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-connector' })[0]
-        $edgeHostRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-host' })[0]
-        $edgeLauncherRecord = @($artifacts | Where-Object { [string]$_.role -eq 'edge-native-launcher' })[0]
-        if ([string]$edgeConnectorRecord.path -ne 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -or
-            [string]$edgeHostRecord.path -ne 'native/McpEdgeHost.exe' -or
-            [string]$edgeLauncherRecord.path -ne 'compat/McpNodeHostLauncher.exe') {
-            throw 'Historical execution-node artifact paths are invalid.'
-        }
-        $nodeRecord = @($artifacts | Where-Object { [string]$_.role -eq 'node-runtime' })[0]
-
-        if ($RuntimeSmoke) {
-            $hostPath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$hostRecord.path)
-            $hostVersion = @(& $hostPath --version)
-            if ($LASTEXITCODE -ne 0 -or $hostVersion.Count -ne 1 -or [string]$hostVersion[0] -ne 'mcp-host-contract-v3') {
-                throw 'Historical signed McpHost failed its version smoke check.'
-            }
-        }
-    }
 
     if ($RuntimeSmoke) {
         $nodePath = Resolve-McpPublicChildPath -Root $release -RelativePath ([string]$nodeRecord.path)

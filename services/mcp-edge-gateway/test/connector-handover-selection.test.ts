@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
 import type { ConnectorRuntimeIdentity } from "@mcp-access-stack/edge-protocol";
-import { isPreferredConnectorRuntime, selectPreferredConnectorProtocol } from "../src/connector-handover.js";
+import { isPreferredConnectorRuntime } from "../src/connector-handover.js";
 
 function runtime(
   connectorInstanceId: string,
@@ -94,17 +94,5 @@ describe("connector handover ownership selection", () => {
 
     expect(isPreferredConnectorRuntime(candidate, undefined)).toBe(true);
     expect(isPreferredConnectorRuntime(undefined, candidate)).toBe(false);
-  });
-});
-
-
-describe("connector protocol handover priority", () => {
-  it("prefers v3 while both connectors are ready", () => {
-    expect(selectPreferredConnectorProtocol(true, true)).toBe(3);
-  });
-
-  it("uses legacy only as a transitional fallback when v3 is not ready", () => {
-    expect(selectPreferredConnectorProtocol(false, true)).toBe(2);
-    expect(selectPreferredConnectorProtocol(false, false)).toBeNull();
   });
 });

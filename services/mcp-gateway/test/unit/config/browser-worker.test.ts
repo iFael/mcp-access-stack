@@ -31,33 +31,11 @@ describe("browser worker gateway configuration", () => {
     expect(config.browserWorker?.url.href).toBe("http://127.0.0.1:3350/");
   });
 
-  it("allows the Docker host bridge only with explicit opt-in", () => {
-    expect(() =>
-      loadGatewayConfig({
-        ...baseEnvironment,
-        BROWSER_WORKER_ENABLED: "true",
-        BROWSER_WORKER_URL: "http://host.docker.internal:3350",
-        BROWSER_WORKER_TOKEN: "x".repeat(32),
-      }),
-    ).toThrow(/BROWSER_WORKER_ALLOW_DOCKER_HOST=true/i);
-
-    const config = loadGatewayConfig({
-      ...baseEnvironment,
-      BROWSER_WORKER_ENABLED: "true",
-      BROWSER_WORKER_ALLOW_DOCKER_HOST: "true",
-      BROWSER_WORKER_URL: "http://host.docker.internal:3350",
-      BROWSER_WORKER_TOKEN: "x".repeat(32),
-    });
-
-    expect(config.browserWorker?.url.href).toBe("http://host.docker.internal:3350/");
-  });
-
   it("rejects non-loopback endpoints", () => {
     expect(() =>
       loadGatewayConfig({
         ...baseEnvironment,
         BROWSER_WORKER_ENABLED: "true",
-        BROWSER_WORKER_ALLOW_DOCKER_HOST: "true",
         BROWSER_WORKER_URL: "https://browser.example.test",
         BROWSER_WORKER_TOKEN: "x".repeat(32),
       }),

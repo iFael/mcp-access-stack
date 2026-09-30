@@ -57,14 +57,12 @@ type RefreshTokenRecord = {
 };
 
 type RevokedAccessRecord = { expiresAt: number };
-type LegacyAccessTokenRecord = RefreshTokenRecord;
 type OwnerCredentialMaterial = {
   ownerVerifierHash: string;
   signingKey: string;
   credentialVersion?: string;
 };
 
-const OWNER_BOOTSTRAP_MARKER_KEY = "owner:bootstrap:v1";
 const OWNER_CREDENTIAL_MATERIAL_KEY = "owner:credential-material:v1";
 const OWNER_USER_ID_KEY = "owner:user-id:v1";
 
@@ -127,14 +125,7 @@ export class EdgeOwnerOAuth {
       };
     }
 
-    const legacy = await this.storage.get<LegacyAccessTokenRecord>(legacyAccessKey(await sha256Base64Url(token)));
-    if (!legacy || legacy.expiresAt <= nowSeconds() || legacy.resource !== this.mcpUrl.href) {
-      throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
-    }
-    if (!legacy.scopes.includes(this.requiredScope)) {
-      throw new EdgeAuthenticationError(403, "insufficient_scope", this.challenge);
-    }
-    return { subject: `owner:${legacy.clientId}`, scopes: [...legacy.scopes], ownerScope: "owner" };
+    throw new EdgeAuthenticationError(401, "invalid_token", this.challenge);
   }
 
 
@@ -176,24 +167,6 @@ export class EdgeOwnerOAuth {
     const user = await this.resolveOwnerUser();
     await this.rotateOwnerPassword(password);
     return { userId: user.id, displayName: user.displayName };
-  }
-
-  async bootstrapLegacyState(snapshot: unknown, suppliedOwnerSecret: string): Promise<void> {
-    if (await this.storage.get<boolean>(OWNER_BOOTSTRAP_MARKER_KEY)) {
-      throw new Error("Owner OAuth state is already bootstrapped.");
-    }
-    if (suppliedOwnerSecret.length < 16 || suppliedOwnerSecret.length > 2048 || /[\r\n\0]/u.test(suppliedOwnerSecret)) {
-      throw new Error("Owner secret is invalid.");
-    }
-    const parsed = this.parseLegacySnapshot(snapshot);
-    const material = await deriveOwnerCredentialMaterial(suppliedOwnerSecret);
-
-    await this.storage.put(OWNER_CREDENTIAL_MATERIAL_KEY, material);
-    for (const client of parsed.clients) await this.storage.put(clientKey(client.client_id), client);
-    await this.storage.put("owner:client-count", parsed.clients.length);
-    for (const record of parsed.accessTokens) await this.storage.put(legacyAccessKey(record.hash), record.value);
-    for (const record of parsed.refreshTokens) await this.storage.put(refreshKey(record.hash), record.value);
-    await this.storage.put(OWNER_BOOTSTRAP_MARKER_KEY, true);
   }
 
   async handle(request: Request): Promise<Response | null> {
@@ -406,7 +379,6 @@ export class EdgeOwnerOAuth {
     } else {
       const hash = await sha256Base64Url(token);
       await this.storage.delete(refreshKey(hash));
-      await this.storage.delete(legacyAccessKey(hash));
     }
     return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
   }
@@ -504,74 +476,6 @@ export class EdgeOwnerOAuth {
     return this.config.ownerSecret !== undefined && constantTimeEquals(supplied, this.config.ownerSecret);
   }
 
-  private parseLegacySnapshot(snapshot: unknown): {
-    clients: OwnerClient[];
-    accessTokens: Array<{ hash: string; value: LegacyAccessTokenRecord }>;
-    refreshTokens: Array<{ hash: string; value: RefreshTokenRecord }>;
-  } {
-    if (!isRecord(snapshot) || snapshot.version !== 1 || snapshot.resourceServerUrl !== this.mcpUrl.href) {
-      throw new Error("Legacy Owner OAuth state does not match this MCP resource.");
-    }
-    if (!Array.isArray(snapshot.clients) || snapshot.clients.length > MAX_CLIENTS) throw new Error("Legacy Owner OAuth clients are invalid.");
-    const clients = snapshot.clients.map((entry) => this.parseLegacyClient(entry));
-    const clientIds = new Set(clients.map((client) => client.client_id));
-    return {
-      clients,
-      accessTokens: this.parseLegacyTokenRecords(snapshot.accessTokens, clientIds, "access"),
-      refreshTokens: this.parseLegacyTokenRecords(snapshot.refreshTokens, clientIds, "refresh"),
-    };
-  }
-
-  private parseLegacyClient(value: unknown): OwnerClient {
-    if (!isRecord(value) || typeof value.client_id !== "string" || value.client_id.length === 0 ||
-        typeof value.client_id_issued_at !== "number" || !Number.isSafeInteger(value.client_id_issued_at) ||
-        !Array.isArray(value.redirect_uris) || value.redirect_uris.length === 0 ||
-        !value.redirect_uris.every((entry) => typeof entry === "string" && this.redirectAllowed(entry)) ||
-        (value.token_endpoint_auth_method !== undefined && value.token_endpoint_auth_method !== "none")) {
-      throw new Error("Legacy Owner OAuth client is invalid.");
-    }
-    const grantTypes = readStringArray(value.grant_types, ["authorization_code", "refresh_token"]);
-    const responseTypes = readStringArray(value.response_types, ["code"]);
-    if (!grantTypes.every((entry) => entry === "authorization_code" || entry === "refresh_token") ||
-        !responseTypes.every((entry) => entry === "code")) throw new Error("Legacy Owner OAuth client grants are invalid.");
-    return {
-      client_id: value.client_id,
-      client_id_issued_at: value.client_id_issued_at,
-      redirect_uris: [...value.redirect_uris] as string[],
-      ...(typeof value.client_name === "string" && value.client_name.length > 0 ? { client_name: value.client_name.slice(0, 200) } : {}),
-      token_endpoint_auth_method: "none",
-      grant_types: grantTypes,
-      response_types: responseTypes,
-    };
-  }
-
-  private parseLegacyTokenRecords(
-    value: unknown,
-    clientIds: Set<string>,
-    kind: "access" | "refresh",
-  ): Array<{ hash: string; value: RefreshTokenRecord }> {
-    if (!Array.isArray(value) || value.length > 4096) throw new Error(`Legacy Owner OAuth ${kind} tokens are invalid.`);
-    return value.map((entry) => {
-      if (!isRecord(entry) || typeof entry.hash !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(entry.hash) ||
-          typeof entry.clientId !== "string" || !clientIds.has(entry.clientId) ||
-          !Array.isArray(entry.scopes) || entry.scopes.length === 0 || entry.scopes.length > MAX_SCOPES ||
-          !entry.scopes.every((scope) => typeof scope === "string" && scope.length > 0 && this.config.scopes.includes(scope)) ||
-          typeof entry.expiresAt !== "number" || !Number.isSafeInteger(entry.expiresAt) || entry.expiresAt <= 0 ||
-          (entry.resource !== undefined && entry.resource !== this.mcpUrl.href)) {
-        throw new Error(`Legacy Owner OAuth ${kind} token record is invalid.`);
-      }
-      return {
-        hash: entry.hash,
-        value: {
-          clientId: entry.clientId,
-          scopes: [...entry.scopes] as string[],
-          resource: typeof entry.resource === "string" ? entry.resource : this.mcpUrl.href,
-          expiresAt: entry.expiresAt,
-        },
-      };
-    });
-  }
-
   private redirectAllowed(value: string): boolean {
     let url: URL;
     try { url = new URL(value); } catch { return false; }
@@ -599,7 +503,6 @@ export class EdgeOwnerOAuth {
 function clientKey(clientId: string): string { return `owner:client:${clientId}`; }
 function codeKey(hash: string): string { return `owner:code:${hash}`; }
 function refreshKey(hash: string): string { return `owner:refresh:${hash}`; }
-function legacyAccessKey(hash: string): string { return `owner:legacy-access:${hash}`; }
 function revokedAccessKey(jti: string): string { return `owner:revoked:${jti}`; }
 function nowSeconds(): number { return Math.floor(Date.now() / 1000); }
 function randomToken(): string { const bytes = new Uint8Array(32); crypto.getRandomValues(bytes); return base64UrlBytes(bytes); }

@@ -28,8 +28,10 @@ test("removes Docker-specific repository automation and runtime defaults", () =>
     assert.equal(benchmark.includes(token), false, `benchmark still contains Docker runtime token: ${token}`);
   }
 
-  const productionConfig = readJson("config/gpt-only-production.example.json");
-  assert.equal(Object.hasOwn(productionConfig, "tunnel"), false, "production example still exposes retired tunnel configuration");
+  const gatewayConfig = readFileSync(path.join(root, "services/mcp-gateway/src/config.ts"), "utf8");
+  for (const token of ["BROWSER_WORKER_ALLOW_DOCKER_HOST", "host.docker.internal"]) {
+    assert.equal(gatewayConfig.includes(token), false, `gateway config still contains retired Docker bridge token: ${token}`);
+  }
 });
 
 test("removes Docker-named npm entrypoints and deploy/docker references", () => {
