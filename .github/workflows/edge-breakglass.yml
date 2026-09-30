@@ -1,0 +1,79 @@
+name: Edge break-glass provisioning
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-breakglass-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: public-release
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Require break-glass secrets
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$MCP_OWNER_TOKEN"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+      - name: Sync Edge break-glass secret
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MCP_OWNER_TOKEN" | npx wrangler secret put MCP_OWNER_TOKEN --config services/mcp-edge-gateway/wrangler.jsonc
+
+      - name: Verify authenticated break-glass gate without mutation
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+        run: |
+          set -euo pipefail
+          export EDGE_BASE_URL="$(sed -nE 's/.*"MCP_PUBLIC_BASE_URL"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' services/mcp-edge-gateway/wrangler.jsonc | head -n 1)"
+          node --input-type=module <<'NODE'
+          const base = process.env.EDGE_BASE_URL;
+          const token = process.env.MCP_OWNER_TOKEN;
+          if (!base || !token) throw new Error("Break-glass verification inputs are missing.");
+          const response = await fetch(new URL("/_internal/single-user/migrate", base), {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "text/plain",
+            },
+            body: "probe",
+          });
+          const body = await response.json().catch(() => ({}));
+          if (response.status !== 415 || body.error !== "invalid_single_user_migration_content_type") {
+            throw new Error(`Break-glass verification failed with HTTP ${response.status} / ${String(body.error ?? "unknown")}`);
+          }
+          console.log("Edge break-glass route authenticated and rejected the non-mutating probe as expected.");
+          NODE
