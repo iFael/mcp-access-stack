@@ -140,9 +140,11 @@ import {
 } from "../domain/browser-tab-reuse.js";
 import {
   BrowserTaskRegistry,
+  hashOwnerScope,
   type BrowserTask,
   type BrowserTaskLease,
 } from "../domain/browser-task-registry.js";
+import type { BrowserLiveFrame } from "./browser-live-frame-mailbox.js";
 import {
   BrowserSitePolicyRegistry,
   isAuthorizedSiteSemanticActionAllowed,
@@ -537,18 +539,31 @@ export class BrowserRuntime implements BrowserExecutor {
     input: BrowserTabsInput,
     context: OperationContext = {},
   ): Promise<BrowserTabsResult> {
-    const task = this.taskRegistry.resolveForOpen(input.taskId, context);
+    const accessible = input.taskId
+      ? [this.taskRegistry.resolveScoped(input.taskId, context)]
+      : this.taskRegistry.accessibleTasks(context);
+    if (accessible.length === 0) return { tabs: [] };
+    if (accessible.length > 1) {
+      throw new AppError(
+        "TASK_SCOPE_REQUIRED",
+        "More than one browser task is accessible. Provide taskId explicitly.",
+      );
+    }
+
+    const task = accessible[0]!;
+    const tabIds = new Set(task.tabIds);
+    const logicalTabs = () =>
+      this.tabsRegistry.list().filter((tab) => tabIds.has(tab.tabId));
+    if (task.tabIds.length === 0 || !this.driver.isConnected()) {
+      return { tabs: logicalTabs() };
+    }
+
     return this.withTaskLease(task.taskId, context, async () => {
       this.cancelContextIdleShutdown();
       await this.ensureConnection(task.taskId);
       await this.reconcileBindings(true);
       await this.checkpoint();
-      const tabIds = new Set(
-        this.taskRegistry.resolveScoped(task.taskId, context).tabIds,
-      );
-      return {
-        tabs: this.tabsRegistry.list().filter((tab) => tabIds.has(tab.tabId)),
-      };
+      return { tabs: logicalTabs() };
     });
   }
 
@@ -649,9 +664,6 @@ export class BrowserRuntime implements BrowserExecutor {
     const task = this.taskRegistry.resolveForOpen(input.taskId, context);
     return this.withTaskLease(task.taskId, context, async () => {
       this.cancelContextIdleShutdown();
-      this.connectionTaskId = task.taskId;
-      await this.ensureConnection(task.taskId);
-      const actionStarted = performance.now();
       if (input.sticky && !input.url) {
         throw new AppError("INVALID_ARGUMENT", "A sticky tab requires a locked URL.");
       }
@@ -661,7 +673,24 @@ export class BrowserRuntime implements BrowserExecutor {
       const cacheState = input.url === undefined && input.purpose !== undefined
         ? (cached === undefined ? "miss" : "hit")
         : "not_applicable";
-      const targetUrl = normalizeUrl(input.url ?? cached?.entry.url ?? "about:blank");
+      const target = input.url ?? cached?.entry.url;
+      if (!target) {
+        throw new AppError(
+          "INVALID_ARGUMENT",
+          "browser_open requires a URL or a purpose with a cached URL; blank tabs are not created.",
+        );
+      }
+      const targetUrl = normalizeUrl(target);
+      if (targetUrl === "about:blank") {
+        throw new AppError(
+          "INVALID_ARGUMENT",
+          "about:blank is not a supported Browser Worker target.",
+        );
+      }
+
+      this.connectionTaskId = task.taskId;
+      await this.ensureConnection(task.taskId);
+      const actionStarted = performance.now();
       const targetGrant = this.requireTargetGrant(task, targetUrl);
       const primaryPrivateSiteUrl = this.config.primaryPrivateSiteUrl?.href;
       const isPrimaryPrivateSite = primaryPrivateSiteUrl === targetUrl;
@@ -1419,6 +1448,7 @@ export class BrowserRuntime implements BrowserExecutor {
           completed: true,
           taskId: resolved.taskId,
           closedTabs: 0,
+          closedTabIds: [],
           browserClosed: !this.driver.isConnected(),
         };
       }
@@ -1459,22 +1489,7 @@ export class BrowserRuntime implements BrowserExecutor {
         this.taskRegistry.completeFinish(task.taskId);
         await this.checkpoint();
 
-        let browserClosed = false;
-        const unfinishedTasks = this.taskRegistry.snapshot().filter((candidate) =>
-          candidate.state === "active" || candidate.state === "suspended",
-        );
-        if (unfinishedTasks.every((candidate) => candidate.tabIds.length === 0) && this.driver.isConnected()) {
-          const remoteTabs = await this.driver.listTabs().catch(() => []);
-          if (remoteTabs.length === 0) {
-            await this.driver.close();
-            this.disconnectedReady = true;
-            this.state = "disconnected";
-            this.sessionState.transition("disconnected");
-            await this.checkpoint();
-            browserClosed = true;
-          }
-        }
-
+        const browserClosed = await this.closeIdleBrowserContext();
         if (!browserClosed) this.scheduleContextIdleShutdown();
         this.telemetry?.record({
           event: "browser_task_finished",
@@ -1488,6 +1503,7 @@ export class BrowserRuntime implements BrowserExecutor {
           completed: true,
           taskId: task.taskId,
           closedTabs: tabs.length,
+          closedTabIds: tabs.map((tab) => tab.tabId),
           browserClosed,
         };
       } catch (error) {
@@ -1718,6 +1734,31 @@ export class BrowserRuntime implements BrowserExecutor {
       state,
       timing,
     };
+  }
+
+  supportsLiveView(): boolean {
+    return isDirectPlaywrightDriver(this.driver) && !this.shutdownRequested;
+  }
+
+  async liveFrame(
+    taskId: string,
+    tabId: string,
+    afterSeq: number,
+    ownerScope?: string,
+  ): Promise<BrowserLiveFrame | null> {
+    const task = this.taskRegistry.taskForTab(tabId);
+    if (!task || task.taskId !== taskId ||
+        !["active", "suspended"].includes(task.state) ||
+        task.expiresAt <= new Date().toISOString() ||
+        (ownerScope !== undefined && task.ownerScopeHash !== hashOwnerScope(ownerScope))) {
+      throw new AppError("TASK_NOT_FOUND", "The browser live view is unavailable.");
+    }
+    this.tabsRegistry.assertMcpOwned(tabId);
+    const binding = this.bindings.get(tabId);
+    if (!binding || !isDirectPlaywrightDriver(this.driver)) {
+      throw new AppError("STALE_TAB_ID", "The browser live view is unavailable.");
+    }
+    return this.driver.liveFrame(binding.remoteTabId, afterSeq);
   }
 
   private async withActionState(
@@ -2242,17 +2283,8 @@ export class BrowserRuntime implements BrowserExecutor {
     this.contextIdleTimer = setTimeout(() => {
       this.contextIdleTimer = undefined;
       void this.withLifecycleLock(async () => {
-        const stillActive = this.taskRegistry.snapshot().some((task) =>
-          (task.state === "active" || task.state === "suspended") && task.tabIds.length > 0,
-        );
-        if (stillActive || !this.driver.isConnected()) return;
-        const remoteTabs = await this.driver.listTabs().catch(() => []);
-        if (remoteTabs.length > 0) return;
-        await this.driver.close();
-        this.disconnectedReady = true;
-        this.state = "disconnected";
-        this.sessionState.transition("disconnected");
-        await this.checkpoint();
+        const closed = await this.closeIdleBrowserContext();
+        if (!closed) return;
         this.telemetry?.record({
           event: "browser_context_idle_closed",
           status: "allowed",
@@ -2260,6 +2292,33 @@ export class BrowserRuntime implements BrowserExecutor {
       }).catch(() => undefined);
     }, delayMs);
     this.contextIdleTimer.unref?.();
+  }
+
+  private async closeIdleBrowserContext(): Promise<boolean> {
+    const hasActiveTaskTabs = this.taskRegistry.snapshot().some((task) =>
+      (task.state === "active" || task.state === "suspended") && task.tabIds.length > 0,
+    );
+    if (hasActiveTaskTabs || this.tabsRegistry.list().length > 0 || !this.driver.isConnected()) {
+      return false;
+    }
+
+    let remoteTabs: Awaited<ReturnType<BrowserDriver["listTabs"]>>;
+    try {
+      remoteTabs = await this.driver.listTabs();
+    } catch {
+      return false;
+    }
+    const onlyDisposableBlankTabs = remoteTabs.every((tab) =>
+      !tab.crashed && normalizeUrl(tab.url) === "about:blank",
+    );
+    if (!onlyDisposableBlankTabs) return false;
+
+    await this.driver.close();
+    this.disconnectedReady = true;
+    this.state = "disconnected";
+    this.sessionState.transition("disconnected");
+    await this.checkpoint();
+    return true;
   }
 
   private cancelContextIdleShutdown(): void {

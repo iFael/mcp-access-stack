@@ -25,6 +25,55 @@ afterEach(async () => {
 }, 30_000);
 
 describe("DirectPlaywrightDriver", () => {
+  it("streams the newest frame of a selected headless tab without bringing it forward", async () => {
+    const driver = await createDriver();
+    const first = (await driver.listTabs())[0]!;
+    const page = driver.currentPage();
+    await page.setContent('<button id="target">Before</button>');
+    const initial = await driver.liveFrame(first.id!, 0);
+    expect(initial).toMatchObject({
+      seq: expect.any(Number),
+      width: expect.any(Number),
+      height: expect.any(Number),
+    });
+    expect(initial?.data.startsWith("/9j/")).toBe(true);
+    await page.locator("#target").evaluate((element) => {
+      element.textContent = "After";
+    });
+    const next = await driver.liveFrame(first.id!, initial!.seq);
+    expect(next?.seq).toBeGreaterThan(initial!.seq);
+    expect((await driver.listTabs())[0]?.current).toBe(true);
+    await page.setViewportSize({ width: 640, height: 360 });
+    const resized = await driver.liveFrame(first.id!, next!.seq);
+    expect(resized).toMatchObject({ width: 640, height: 360 });
+    await page.setViewportSize({ width: 1600, height: 900 });
+    const scaled = await driver.liveFrame(first.id!, resized!.seq);
+    expect(scaled).toMatchObject({ width: 1280, height: 720 });
+    const secondTab = (await driver.newTab()).find((tab) => tab.current)!;
+    await driver.currentPage().setContent("<main>Second tab</main>");
+    const secondFrame = await driver.liveFrame(secondTab.id!, 0);
+    expect(secondFrame?.data).not.toBe(scaled?.data);
+    expect((await driver.liveFrame(first.id!, scaled!.seq))?.width).toBe(1280);
+    await driver.closeTab(1);
+    await expect(driver.liveFrame(secondTab.id!, 0)).rejects.toMatchObject({
+      code: "STALE_TAB_ID",
+    });
+  }, 30_000);
+
+  it("renders a virtual pointer after a headless click without intercepting the page", async () => {
+    const driver = await createDriver();
+    const page = driver.currentPage();
+    await page.setContent('<button id="target" onclick="document.body.dataset.clicked = \'yes\'">Target</button>');
+    const snapshot = await driver.captureSemanticSnapshot({ forceFull: true });
+    const targetRef = /\[ref=([^\]\s]+)\]/.exec(snapshot.fullContent)?.[1];
+    expect(targetRef).toBeDefined();
+    await driver.click({ target: targetRef! });
+    const pointer = page.locator("#__mcp_v3_action_pointer__");
+    await expect(pointer.isVisible()).resolves.toBe(true);
+    await expect(pointer.getAttribute("style")).resolves.toContain("pointer-events:none");
+    await expect(page.locator("body").getAttribute("data-clicked")).resolves.toBe("yes");
+  });
+
   it("returns action state and indexes a named legacy frame natively", async () => {
     const driver = await createDriver();
     const page = driver.currentPage();

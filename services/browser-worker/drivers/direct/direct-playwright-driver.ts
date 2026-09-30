@@ -71,6 +71,11 @@ import {
   type SemanticSnapshotCapture,
 } from "./semantic-snapshot-tracker.js";
 import {
+  BrowserLiveFrameMailbox,
+  jpegFrameDimensions,
+  type BrowserLiveFrame,
+} from "../../services/browser-live-frame-mailbox.js";
+import {
   BrowserPageStabilizationService,
   type BrowserDocumentReadyState,
   type BrowserPageStabilizationResult,
@@ -81,6 +86,30 @@ import type {
   BrowserExtractionProbe,
 } from "../../services/browser-extraction-completeness-service.js";
 const MAX_DIAGNOSTIC_BYTES = 4 * 1024 * 1024;
+
+export async function showActionPointer(target: Locator): Promise<void> {
+  await target.scrollIntoViewIfNeeded().catch(() => undefined);
+  await target.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top)) return;
+    const document = element.ownerDocument;
+    const pointer = document.getElementById("__mcp_v3_action_pointer__") ?? document.createElement("div");
+    if (!pointer.isConnected) {
+      pointer.id = "__mcp_v3_action_pointer__";
+      pointer.setAttribute("aria-hidden", "true");
+      document.documentElement.appendChild(pointer);
+    }
+    pointer.innerHTML = '<svg width="32" height="40" viewBox="0 0 32 40" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M3 2V29L10 22L15 34L21 31L16 20H27Z" fill="#171321" stroke="#f8f7ff" stroke-width="2" stroke-linejoin="round"/></svg>';
+    pointer.setAttribute("style", [
+      "position:fixed", "width:32px", "height:40px", "z-index:2147483647",
+      "pointer-events:none",
+      "filter:drop-shadow(0 0 3px #a16eff) drop-shadow(0 0 10px #a16eff)",
+      `left:${rect.left + rect.width / 2}px`,
+      `top:${rect.top + rect.height / 2}px`,
+    ].join(";"));
+  }).catch(() => undefined);
+}
+
 const DEFAULT_PAGE_STABILIZATION_TIMEOUT_MS = 2_000;
 const MAX_STABILIZATION_FRAME_PROBES = 32;
 const STABILIZATION_RESOURCE_TYPES = new Set(["document", "script", "xhr", "fetch"]);
@@ -101,6 +130,18 @@ interface ActiveScreencast {
   onFrame: (event: {
     data: string;
     sessionId: number;
+  }) => void;
+}
+
+interface LiveScreencast {
+  page: Page;
+  session: CDPSession;
+  mailbox: BrowserLiveFrameMailbox;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
+  onFrame: (event: {
+    data: string;
+    sessionId: number;
+    metadata?: { deviceWidth?: number; deviceHeight?: number };
   }) => void;
 }
 
@@ -145,6 +186,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   private connectPromise: Promise<void> | undefined;
   private traceActive = false;
   private screencast: ActiveScreencast | undefined;
+  private readonly liveScreencasts = new Map<string, LiveScreencast>();
   private incrementalSnapshots = false;
 
   constructor(private readonly config: BrowserWorkerConfig) {
@@ -353,6 +395,9 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
 
   async close(): Promise<void> {
     const context = this.context;
+    await Promise.all(
+      [...this.liveScreencasts.keys()].map((id) => this.stopLiveScreencast(id)),
+    );
     if (this.screencast) {
       await this.stopVideo().catch(() => undefined);
     }
@@ -416,7 +461,9 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("click", options, async (page) => {
-      await this.refLocator(page, input.target).click({
+      const target = this.refLocator(page, input.target);
+      await showActionPointer(target);
+      await target.click({
         timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
       });
       return this.pageResponse(page);
@@ -428,7 +475,9 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("fill", options, async (page) => {
-      await this.refLocator(page, input.target).fill(input.text, {
+      const target = this.refLocator(page, input.target);
+      await showActionPointer(target);
+      await target.fill(input.text, {
         timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
       });
       if (input.submit) await page.keyboard.press("Enter");
@@ -545,8 +594,115 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     return { tab, tabCount: tabs.length };
   }
 
+  async liveFrame(
+    remoteTabId: string,
+    afterSeq: number,
+  ): Promise<BrowserLiveFrame | null> {
+    const id = remoteTabId.includes(":page:")
+      ? remoteTabId.slice(remoteTabId.indexOf(":page:") + 6)
+      : remoteTabId;
+    const page = this.pagesById.get(id);
+    if (!page || page.isClosed() || this.crashedPages.has(page)) {
+      throw new AppError(
+        "STALE_TAB_ID",
+        "The browser page is no longer available for live viewing.",
+      );
+    }
+    let stream = this.liveScreencasts.get(id);
+    if (!stream) stream = await this.startLiveScreencast(id, page);
+    if (stream.idleTimer) clearTimeout(stream.idleTimer);
+    stream.idleTimer = setTimeout(() => {
+      void this.stopLiveScreencast(id);
+    }, 10_000);
+    stream.idleTimer.unref();
+    const next = await stream.mailbox.read(afterSeq, 250);
+    if (next) return next;
+
+    const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
+    const scale = Math.min(1, 1280 / viewport.width, 720 / viewport.height);
+    for (const quality of [60, 45]) {
+      const captured = await stream.session.send("Page.captureScreenshot", {
+        format: "jpeg",
+        quality,
+        fromSurface: true,
+        clip: {
+          x: 0,
+          y: 0,
+          width: viewport.width,
+          height: viewport.height,
+          scale,
+        },
+      }).catch(() => null);
+      if (typeof captured?.data !== "string" || captured.data.length > 512 * 1024) continue;
+      const dimensions = jpegFrameDimensions(captured.data);
+      if (!dimensions) continue;
+      stream.mailbox.publish({ data: captured.data, ...dimensions });
+      break;
+    }
+    return stream.mailbox.read(afterSeq, 1);
+  }
+
+  private async startLiveScreencast(
+    id: string,
+    page: Page,
+  ): Promise<LiveScreencast> {
+    const session = await this.requireContext().newCDPSession(page);
+    const mailbox = new BrowserLiveFrameMailbox(
+      { maxFrameBytes: 512 * 1024, minFrameIntervalMs: 150 },
+      Date.now(),
+    );
+    const stream: LiveScreencast = {
+      page,
+      session,
+      mailbox,
+      idleTimer: undefined,
+      onFrame: (event) => {
+        if (event.data.length > 512 * 1024) {
+          void session.send("Page.screencastFrameAck", {
+            sessionId: event.sessionId,
+          }).catch(() => undefined);
+          return;
+        }
+        const dimensions = jpegFrameDimensions(event.data);
+        if (dimensions) mailbox.publish({ data: event.data, ...dimensions });
+        void session.send("Page.screencastFrameAck", {
+          sessionId: event.sessionId,
+        }).catch(() => undefined);
+      },
+    };
+    session.on("Page.screencastFrame", stream.onFrame);
+    try {
+      await session.send("Page.startScreencast", {
+        format: "jpeg",
+        quality: 70,
+        maxWidth: 1280,
+        maxHeight: 720,
+        everyNthFrame: 1,
+      });
+      this.liveScreencasts.set(id, stream);
+      return stream;
+    } catch (error) {
+      session.off("Page.screencastFrame", stream.onFrame);
+      await session.detach().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async stopLiveScreencast(id: string): Promise<void> {
+    const stream = this.liveScreencasts.get(id);
+    if (!stream) return;
+    this.liveScreencasts.delete(id);
+    if (stream.idleTimer) clearTimeout(stream.idleTimer);
+    stream.mailbox.close();
+    stream.session.off("Page.screencastFrame", stream.onFrame);
+    await stream.session.send("Page.stopScreencast").catch(() => undefined);
+    await stream.session.detach().catch(() => undefined);
+  }
+
   async closeTab(index: number): Promise<BrowserDriverTab[]> {
     const page = this.requirePageAt(index);
+    const id = this.pageIds.get(page);
+    if (id) await this.stopLiveScreencast(id);
     await page.close();
     if (this.current === page) {
       this.current = this.livePages()[0];

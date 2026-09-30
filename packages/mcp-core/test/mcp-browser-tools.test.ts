@@ -185,6 +185,25 @@ describe("registerBrowserTools", () => {
     );
   });
 
+  it("keeps device/runtime routing selectors outside the Browser executor contract", async () => {
+    const executor = mockExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerBrowserTools(server, executor);
+
+    await callTool(server, "browser_tabs", {
+      runtimeId: "rt_11111111-1111-4111-8111-111111111111",
+    });
+    await callTool(server, "browser_tabs", {
+      deviceId: "dev_22222222-2222-4222-8222-222222222222",
+    });
+
+    expect(executor.tabs).toHaveBeenNthCalledWith(1, {});
+    expect(executor.tabs).toHaveBeenNthCalledWith(2, {});
+  });
+
   it("routes private-site confirmation through the typed executor", async () => {
     const executor = mockExecutor();
     const server = new McpServer(

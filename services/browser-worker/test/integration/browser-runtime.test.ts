@@ -468,6 +468,7 @@ describe("BrowserRuntime Playwright layer", () => {
       completed: true,
       taskId: opened.tab.taskId,
       closedTabs: 1,
+      closedTabIds: [opened.tab.tabId],
       browserClosed: true,
     });
     await expect(runtime.status({})).resolves.toMatchObject({
@@ -484,6 +485,70 @@ describe("BrowserRuntime Playwright layer", () => {
     });
     expect(next.tab.url).toBe("https://example.org/");
     expect(fake.connectCount).toBe(2);
+  });
+
+  it("closes the dedicated browser when Chromium leaves one unclaimed blank page after the task tab closes", async () => {
+    const directory = await makeTemporaryDirectory();
+    const config = makeConfig(directory);
+    config.profileMode = "persistent";
+    config.userDataDirectory = path.join(config.privateDirectory, "chrome-profile");
+    const fake = new FakeBrowserDriver();
+    fake.setTabs([]);
+    fake.recreateBlankAfterLastTabClose();
+    const runtime = await BrowserRuntime.create(config, () => fake);
+    const opened = await runtime.open({
+      url: "https://example.com/",
+      purpose: "task-work",
+      reusable: true,
+    });
+
+    await expect(runtime.finishTask({ taskId: opened.tab.taskId })).resolves.toMatchObject({
+      completed: true,
+      taskId: opened.tab.taskId,
+      closedTabs: 1,
+      browserClosed: true,
+    });
+    await expect(runtime.status({})).resolves.toMatchObject({
+      state: "disconnected",
+      ready: false,
+      tabCount: 0,
+      taskCount: 0,
+    });
+    expect(fake.closeCount).toBe(1);
+  });
+
+  it("fails closed when physical tab ownership cannot be observed during finalization", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    fake.setTabs([]);
+    fake.recreateBlankAfterLastTabClose();
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+    const opened = await runtime.open({
+      url: "https://example.com/",
+      purpose: "ownership-probe",
+    });
+    fake.failListTabsWhenOnlyBlank();
+
+    await expect(runtime.finishTask({ taskId: opened.tab.taskId })).resolves.toMatchObject({
+      completed: true,
+      taskId: opened.tab.taskId,
+      closedTabs: 1,
+      closedTabIds: [opened.tab.tabId],
+      browserClosed: false,
+    });
+    expect(fake.closeCount).toBe(0);
+    expect(fake.isConnected()).toBe(true);
+  });
+
+  it("rejects blank Browser Worker targets instead of creating an about:blank tab", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+
+    await expect(runtime.open({ url: "about:blank" })).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+    });
+    expect(fake.connectCount).toBe(0);
   });
 
   it("restores an active task after finalization fails before closing its tab", async () => {
@@ -892,6 +957,21 @@ describe("BrowserRuntime Playwright layer", () => {
     const upload = fake.calls.find((call) => call.name === "direct_set_input_files");
     expect(upload?.args.selector).toBe("input[type=file]");
     expect(JSON.stringify(upload?.args.files)).toContain("playbook.md");
+  });
+
+  it("lists no tabs while idle without launching Chromium or creating a blank task", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    fake.setTabs([]);
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+
+    await expect(runtime.tabs({})).resolves.toEqual({ tabs: [] });
+    expect(fake.connectCount).toBe(0);
+    await expect(runtime.status({})).resolves.toMatchObject({
+      state: "disconnected",
+      tabCount: 0,
+      taskCount: 0,
+    });
   });
 
   it("auto-connects browser actions without requiring a separate connect call", async () => {
@@ -2166,6 +2246,8 @@ class FakeBrowserDriver implements BrowserDriver {
   private connectDelayMs = 0;
   private newTabFailuresRemaining = 0;
   private resetTabsAfterClose = false;
+  private recreateBlankWhenLastTabCloses = false;
+  private failListTabsForBlankOnly = false;
   private pageCounter = 1;
   private tabs: BrowserDriverTab[] = [
     {
@@ -2250,6 +2332,14 @@ class FakeBrowserDriver implements BrowserDriver {
 
   resetToBlankOnClose(): void {
     this.resetTabsAfterClose = true;
+  }
+
+  recreateBlankAfterLastTabClose(): void {
+    this.recreateBlankWhenLastTabCloses = true;
+  }
+
+  failListTabsWhenOnlyBlank(): void {
+    this.failListTabsForBlankOnly = true;
   }
 
   isConnected(): boolean {
@@ -2396,6 +2486,11 @@ class FakeBrowserDriver implements BrowserDriver {
 
   async listTabs(): Promise<BrowserDriverTab[]> {
     this.listTabsCount += 1;
+    if (this.failListTabsForBlankOnly &&
+        this.tabs.length > 0 &&
+        this.tabs.every((tab) => tab.url === "about:blank")) {
+      throw new Error("list tabs ownership probe failed");
+    }
     return structuredClone(this.tabs);
   }
 
@@ -2446,6 +2541,16 @@ class FakeBrowserDriver implements BrowserDriver {
       tab.index = currentIndex;
       tab.current = currentIndex === 0;
     });
+    if (this.tabs.length === 0 && this.recreateBlankWhenLastTabCloses) {
+      this.tabs = [{
+        id: "blank-after-last-close",
+        index: 0,
+        current: true,
+        title: "",
+        url: "about:blank",
+        crashed: false,
+      }];
+    }
     return structuredClone(this.tabs);
   }
 

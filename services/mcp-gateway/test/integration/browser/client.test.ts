@@ -198,6 +198,34 @@ describe("BrowserWorkerClient", () => {
     });
   });
 
+  it("marks an effectful Browser operation outcome unknown when transport is lost after dispatch", async () => {
+    let received = 0;
+    const { url } = await listen((request) => {
+      received += 1;
+      request.resume();
+      request.once("end", () => request.socket.destroy());
+    });
+    const client = new BrowserWorkerClient({
+      url,
+      token: "x".repeat(32),
+      timeoutMs: 1_000,
+      maxPayloadBytes: 1024 * 1024,
+    });
+
+    await expect(client.click({ tabId: "tab-1", ref: "e1" }, {
+      invocationId: "effect-unknown-invocation",
+      ownerScope: "principal:opaque",
+    })).rejects.toMatchObject({
+      code: "EXECUTION_OUTCOME_UNKNOWN",
+      details: {
+        operation: "browser_click",
+        outcome: "unknown",
+        retryable: false,
+      },
+    });
+    expect(received).toBe(1);
+  });
+
   it("maps worker timeouts without affecting workspace operations", async () => {
     const { url } = await listen(() => undefined);
     const client = new BrowserWorkerClient({

@@ -160,6 +160,13 @@ export default {
       return session.fetch(request);
     }
 
+    if (url.pathname.startsWith("/viewer/")) {
+      if (env.MCP_EDGE_ENABLED !== "true") {
+        return jsonResponse({ error: "edge_not_enabled" }, 503);
+      }
+      return session.fetch(request);
+    }
+
     const path = `${url.pathname}${url.search}`;
     if (isAllowedEdgeRequest(request.method, path)) {
       if (env.MCP_EDGE_ENABLED !== "true") {

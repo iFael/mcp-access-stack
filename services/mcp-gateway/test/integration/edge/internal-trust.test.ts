@@ -179,6 +179,52 @@ describe("embedded Gateway edge-trusted mode", () => {
     }
   });
 
+  it("serves the internal live-view frame route only through the signed Edge principal", async () => {
+    const config = {
+      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
+      authMode: "edge-trusted" as const,
+    };
+    const calls: unknown[] = [];
+    const gateway = createGatewayApplication(config, {
+      logger: silentLogger(),
+      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceReady: () => true,
+      edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
+      browserLiveFrame: async (input, context) => {
+        calls.push({ input, context });
+        return { seq: 9, data: "/9j/", width: 640, height: 360, capturedAt: 123 };
+      },
+    });
+    const http = await listenGateway(gateway.app);
+    const viewerPrincipal = {
+      ...PRINCIPAL,
+      userId: "usr_11111111-1111-4111-8111-111111111111",
+    };
+    try {
+      const target = new URL("/_viewer/frame?taskId=task-1&tabId=tab-1&afterSeq=8", http.url);
+      expect((await fetch(target)).status).toBe(401);
+      const response = await fetch(target, {
+        headers: {
+          "x-mcp-edge-internal-assertion": INTERNAL_ASSERTION,
+          "x-mcp-edge-principal": Buffer.from(
+            JSON.stringify(viewerPrincipal),
+            "utf8",
+          ).toString("base64url"),
+        },
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ seq: 9, width: 640, height: 360 });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        input: { taskId: "task-1", tabId: "tab-1", afterSeq: 8 },
+        context: { ownerScope: `user:${viewerPrincipal.userId}` },
+      });
+    } finally {
+      await http.close();
+    }
+  });
+
   it("accepts a sanitized principal only with the connector-owned assertion", async () => {
     const config = {
       ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),

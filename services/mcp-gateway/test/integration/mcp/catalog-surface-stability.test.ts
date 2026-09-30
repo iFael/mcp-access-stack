@@ -1,3 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, jest } from "@jest/globals";
@@ -9,12 +15,16 @@ import {
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
+import { LocalRepositoryManager } from "../../../src/companion/local-repository-manager.js";
+import { ReloadableLocalAgent } from "../../../src/companion/reloadable-local-agent.js";
 import type { AgentRelay } from "../../../src/relay/service.js";
 import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import {
   createMcpServer,
   getMcpServerCatalogMetadata,
 } from "../../../src/mcp/server.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("MCP public catalog stability", () => {
   it("publishes the complete catalog and advertises catalog changes even when browser execution is unavailable", async () => {
@@ -158,4 +168,100 @@ describe("MCP public catalog stability", () => {
       await server.close().catch(() => undefined);
     }
   });
+
+  it("reuses the internal materializer to make a remote-runtime clone immediately available as a workspace", async () => {
+    const temporaryRoot = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "mcp-v3-remote-materialize-")),
+    );
+    const source = path.join(temporaryRoot, "source");
+    const remotes = path.join(temporaryRoot, "remotes");
+    const remote = path.join(remotes, "fixture.git");
+    const gitConfigPath = path.join(temporaryRoot, "gitconfig");
+    let client: Client | undefined;
+    let server: ReturnType<typeof createMcpServer> | undefined;
+
+    try {
+      await mkdir(source, { recursive: true });
+      await mkdir(remotes, { recursive: true });
+      await execFileAsync("git", ["init", source]);
+      await execFileAsync("git", ["-C", source, "config", "user.name", "MCP V3 Test"]);
+      await execFileAsync("git", ["-C", source, "config", "user.email", "mcp-v3@example.invalid"]);
+      await writeFile(path.join(source, "tracked.txt"), "tracked\n", "utf8");
+      await execFileAsync("git", ["-C", source, "add", "tracked.txt"]);
+      await execFileAsync("git", ["-C", source, "commit", "-m", "fixture"]);
+      await execFileAsync("git", ["clone", "--bare", source, remote]);
+      await writeFile(
+        gitConfigPath,
+        `[url "${pathToFileURL(remotes + path.sep).href}"]\n\tinsteadOf = https://fixture.invalid/\n`,
+        "utf8",
+      );
+
+      const reloadable = new ReloadableLocalAgent();
+      let repositories!: LocalRepositoryManager;
+      const reload = async (): Promise<void> => {
+        await reloadable.reload(await repositories.buildPolicy());
+      };
+      repositories = await LocalRepositoryManager.create({
+        stateDirectory: path.join(temporaryRoot, "state"),
+        managedRoot: path.join(temporaryRoot, "managed"),
+        homeDirectory: temporaryRoot,
+        gitEnvironment: {
+          GIT_CONFIG_GLOBAL: gitConfigPath,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+        onChanged: reload,
+      });
+      await reload();
+
+      server = createMcpServer({
+        workspaceExecutor: reloadable.workspaceExecutor,
+        sourceControlExecutor: reloadable.sourceControlExecutor,
+        companionRepositoryBinder: repositories,
+      });
+      client = new Client(
+        { name: "remote-runtime-materialization", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        server.connect(serverTransport),
+        client.connect(clientTransport),
+      ]);
+
+      const before = await client.callTool({ name: "list_workspaces", arguments: {} });
+      expect(before.structuredContent).toEqual({ workspaces: [] });
+
+      const repositoryId = "repo_22222222-2222-4222-8222-222222222222";
+      const materialized = await client.callTool({
+        name: COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+        arguments: {
+          repositoryId,
+          name: "fixture",
+          remoteUrls: ["https://fixture.invalid/fixture.git"],
+          workspaceId: "fixture-remote",
+          dryRun: false,
+        },
+      });
+      expect(materialized.structuredContent).toMatchObject({
+        materialization: {
+          repositoryId,
+          workspaceId: "fixture-remote",
+        },
+      });
+
+      const after = await client.callTool({ name: "list_workspaces", arguments: {} });
+      expect(after.structuredContent).toMatchObject({
+        workspaces: [expect.objectContaining({
+          id: "fixture-remote",
+          workspaceKind: "repository",
+          writesEnabled: true,
+          shellsEnabled: true,
+        })],
+      });
+    } finally {
+      await client?.close().catch(() => undefined);
+      await server?.close().catch(() => undefined);
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

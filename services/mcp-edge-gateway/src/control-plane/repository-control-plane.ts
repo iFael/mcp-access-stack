@@ -3,6 +3,7 @@ import { EdgeAccountStore, type StoredDevice, type StoredMaterialization, type S
 
 export interface RepositoryPresence {
   isDeviceOnline(deviceId: string): boolean;
+  isRemoteRuntimeOnline(): boolean;
   disconnectDevice?(deviceId: string): void;
 }
 
@@ -51,7 +52,9 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
       user: { id: user.id, displayName: user.displayName },
       repositoryCount: repositories.length,
       devices: visibleDevices,
-      status: visibleDevices.some((device) => device.status === "online") ? "ready" : "device_required",
+      status: this.presence.isRemoteRuntimeOnline() || visibleDevices.some((device) => device.status === "online")
+        ? "ready"
+        : "device_required",
     });
   }
 
@@ -112,14 +115,27 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
   }
 
   private materializationSummary(value: StoredMaterialization) {
+    if (value.deviceId) {
+      return {
+        id: value.id,
+        repositoryId: value.repositoryId,
+        deviceId: value.deviceId,
+        runtime: "companion" as const,
+        workspaceId: value.workspaceId,
+        platform: value.platform,
+        path: value.path,
+        status: this.presence.isDeviceOnline(value.deviceId) ? "online" as const : "offline" as const,
+      };
+    }
     return {
       id: value.id,
       repositoryId: value.repositoryId,
-      deviceId: value.deviceId,
+      runtimeId: value.runtimeId!,
+      runtime: "remote" as const,
       workspaceId: value.workspaceId,
       platform: value.platform,
       path: value.path,
-      status: this.presence.isDeviceOnline(value.deviceId) ? "online" as const : "offline" as const,
+      status: this.presence.isRemoteRuntimeOnline() ? "online" as const : "offline" as const,
     };
   }
 }

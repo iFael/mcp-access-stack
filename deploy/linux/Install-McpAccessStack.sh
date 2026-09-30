@@ -82,7 +82,7 @@ $execute || fail 'Installation is intentionally gated. Re-run with --execute.'
 (( handover_delay_seconds >= 0 && handover_delay_seconds <= 30 )) || fail 'handoverDelaySeconds must be between 0 and 30.'
 [[ -n "$edge_task_name" ]] || fail 'Edge task/service name is required.'
 
-for command in git node sha256sum jq tar systemctl readlink mktemp; do
+for command in git node npm npx apt dpkg-deb ldd sha256sum jq tar systemctl readlink mktemp; do
   command -v "$command" >/dev/null 2>&1 || fail "Required command is unavailable: $command"
 done
 
@@ -105,15 +105,21 @@ policy_path="$(readlink -f -- "$policy_path")"
   fail 'Initial Linux release requires a clean source checkout.'
 source_commit="$(git -C "$source_root" rev-parse HEAD)"
 [[ "$source_commit" =~ ^[a-f0-9]{40}$ ]] || fail 'Unable to resolve source commit.'
+[[ -f "$source_root/deploy/linux/Prepare-McpBrowserRuntime.sh" ]] ||
+  fail 'Browser runtime preparer is missing from source.'
+bash "$source_root/deploy/linux/Prepare-McpBrowserRuntime.sh" --source-root "$source_root" --execute
 
 required_files=(
   "services/mcp-gateway/dist/edge-connector-cli.js"
+  "services/browser-worker/dist/server.js"
   "services/workspace-agent/dist/index.js"
   "packages/mcp-core/dist/index.js"
   "packages/edge-protocol/dist/index.js"
   "deploy/linux/Start-McpEdgeConnector.sh"
   "deploy/linux/Install-McpAccessStack.sh"
   "deploy/linux/Update-McpAccessStack.sh"
+  "deploy/linux/Prepare-McpBrowserRuntime.sh"
+  "runtime/native-libs/packages.v1.tsv"
   "deploy/linux/Start-McpAccessStackCutover.sh"
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
   "deploy/linux/mcp-access-stack-edge-connector.service"
@@ -121,6 +127,29 @@ required_files=(
 for required in "${required_files[@]}"; do
   [[ -f "$source_root/$required" ]] || fail "Built source is missing required Linux runtime file: $required"
 done
+
+shopt -s nullglob
+browser_headless_shells=(
+  "$source_root"/node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
+)
+browser_ffmpeg_dirs=(
+  "$source_root"/node_modules/playwright-core/.local-browsers/ffmpeg-*
+)
+shopt -u nullglob
+(( ${#browser_headless_shells[@]} > 0 )) ||
+  fail 'Built source is missing the Playwright chromium_headless_shell required by Remote Browser.'
+[[ -x "${browser_headless_shells[0]}" ]] ||
+  fail 'Built source Playwright chromium_headless_shell is not executable.'
+(( ${#browser_ffmpeg_dirs[@]} > 0 )) ||
+  fail 'Built source is missing the Playwright ffmpeg package required by Browser diagnostics/video.'
+native_lib_dir="$source_root/runtime/native-libs/usr/lib/x86_64-linux-gnu"
+native_font_dir="$source_root/runtime/native-libs/usr/share/fonts"
+[[ -d "$native_lib_dir" ]] || fail 'Built source is missing the Browser native library bundle.'
+[[ -d "$native_font_dir" ]] || fail 'Built source is missing the Browser font bundle.'
+find "$native_font_dir" -type f -name '*.ttf' -print -quit | grep -q . ||
+  fail 'Built source Browser font bundle contains no TrueType fonts.'
+[[ -s "$source_root/runtime/native-libs/packages.v1.tsv" ]] ||
+  fail 'Built source is missing the Browser native package manifest.'
 
 state_root="$installation_root/state"
 state_path="$state_root/lifecycle-state.v1.json"
@@ -165,12 +194,15 @@ const crypto = require("node:crypto");
 const root = process.env.MCP_MANIFEST_ROOT;
 const files = [
   "services/mcp-gateway/dist/edge-connector-cli.js",
+  "services/browser-worker/dist/server.js",
   "services/workspace-agent/dist/index.js",
   "packages/mcp-core/dist/index.js",
   "packages/edge-protocol/dist/index.js",
   "deploy/linux/Start-McpEdgeConnector.sh",
   "deploy/linux/Install-McpAccessStack.sh",
   "deploy/linux/Update-McpAccessStack.sh",
+  "deploy/linux/Prepare-McpBrowserRuntime.sh",
+  "runtime/native-libs/packages.v1.tsv",
   "deploy/linux/Start-McpAccessStackCutover.sh",
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1",
   "deploy/linux/mcp-access-stack-edge-connector.service",

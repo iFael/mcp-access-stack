@@ -92,17 +92,43 @@ else
     "HOME=$home_root"
     "PATH=/usr/local/bin:/usr/bin:/bin"
     "NODE_OPTIONS=--max-old-space-size=${MCP_LINUX_BUILD_HEAP_MB:-512}"
+    "PLAYWRIGHT_BROWSERS_PATH=0"
   )
   (
     cd "$source_root"
     env "${build_env[@]}" npm ci --no-audit --no-fund
+    env "${build_env[@]}" bash deploy/linux/Prepare-McpBrowserRuntime.sh --source-root "$source_root" --execute
     env "${build_env[@]}" npm run build --workspace @vs-code-gpt/shared
+    env "${build_env[@]}" npm run build --workspace @vs-code-gpt/browser-worker
     env "${build_env[@]}" npm run build --workspace @vs-code-gpt/local-agent
     env "${build_env[@]}" npm run build --workspace @mcp-access-stack/edge-protocol
     env "${build_env[@]}" npm run build --workspace @vs-code-gpt/remote-mcp-gateway
   )
 
-  for required in     "services/mcp-gateway/dist/edge-connector-cli.js"     "services/workspace-agent/dist/index.js"     "packages/mcp-core/dist/index.js"     "packages/edge-protocol/dist/index.js"     "deploy/linux/Start-McpEdgeConnector.sh"     "deploy/linux/Install-McpAccessStack.sh"     "deploy/linux/Update-McpAccessStack.sh"     "deploy/linux/Start-McpAccessStackCutover.sh"     "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"; do
+  shopt -s nullglob
+  browser_headless_shells=(
+    "$source_root"/node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
+  )
+  browser_ffmpeg_dirs=(
+    "$source_root"/node_modules/playwright-core/.local-browsers/ffmpeg-*
+  )
+  shopt -u nullglob
+  (( ${#browser_headless_shells[@]} > 0 )) ||
+    fail 'Prepared release is missing the Playwright chromium_headless_shell required by Remote Browser.'
+  [[ -x "${browser_headless_shells[0]}" ]] ||
+    fail 'Prepared Playwright chromium_headless_shell is not executable.'
+  (( ${#browser_ffmpeg_dirs[@]} > 0 )) ||
+    fail 'Prepared release is missing the Playwright ffmpeg package required by Browser diagnostics/video.'
+  native_lib_dir="$source_root/runtime/native-libs/usr/lib/x86_64-linux-gnu"
+  native_font_dir="$source_root/runtime/native-libs/usr/share/fonts"
+  native_manifest="$source_root/runtime/native-libs/packages.v1.tsv"
+  [[ -d "$native_lib_dir" ]] || fail 'Prepared release is missing the Browser native library bundle.'
+  [[ -d "$native_font_dir" ]] || fail 'Prepared release is missing the Browser font bundle.'
+  find "$native_font_dir" -type f -name '*.ttf' -print -quit | grep -q . ||
+    fail 'Prepared release Browser font bundle contains no TrueType fonts.'
+  [[ -s "$native_manifest" ]] || fail 'Prepared release is missing the Browser native package manifest.'
+
+  for required in     "services/mcp-gateway/dist/edge-connector-cli.js"     "services/browser-worker/dist/server.js"     "services/workspace-agent/dist/index.js"     "packages/mcp-core/dist/index.js"     "packages/edge-protocol/dist/index.js"     "deploy/linux/Start-McpEdgeConnector.sh"     "deploy/linux/Install-McpAccessStack.sh"     "deploy/linux/Update-McpAccessStack.sh"     "deploy/linux/Prepare-McpBrowserRuntime.sh"     "deploy/linux/Start-McpAccessStackCutover.sh"     "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"; do
     [[ -f "$source_root/$required" ]] || fail "Built release is missing required runtime file: $required"
   done
 
@@ -121,12 +147,15 @@ const crypto = require("node:crypto");
 const root = process.env.MCP_MANIFEST_ROOT;
 const files = [
   "services/mcp-gateway/dist/edge-connector-cli.js",
+  "services/browser-worker/dist/server.js",
   "services/workspace-agent/dist/index.js",
   "packages/mcp-core/dist/index.js",
   "packages/edge-protocol/dist/index.js",
   "deploy/linux/Start-McpEdgeConnector.sh",
   "deploy/linux/Install-McpAccessStack.sh",
   "deploy/linux/Update-McpAccessStack.sh",
+  "deploy/linux/Prepare-McpBrowserRuntime.sh",
+  "runtime/native-libs/packages.v1.tsv",
   "deploy/linux/Start-McpAccessStackCutover.sh",
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1",
   "deploy/linux/mcp-access-stack-edge-connector.service",

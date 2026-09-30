@@ -45,7 +45,8 @@ export type StoredMaterialization = {
   id: string;
   repositoryId: string;
   userId: string;
-  deviceId: string;
+  deviceId?: string;
+  runtimeId?: string;
   workspaceId: string;
   path: string;
   platform: StoredDevice["platform"];
@@ -54,7 +55,7 @@ export type StoredMaterialization = {
 
 export type MaterializationUpsertInput = Omit<
   StoredMaterialization,
-  "version" | "id" | "userId" | "deviceId" | "updatedAt"
+  "version" | "id" | "userId" | "deviceId" | "runtimeId" | "updatedAt"
 > & { id?: string };
 
 const USER_IDS_KEY = "account:user-ids:v1";
@@ -285,6 +286,16 @@ export class EdgeAccountStore {
     return updated;
   }
 
+  async getActiveDeviceForUser(
+    userId: string,
+    deviceId: string,
+  ): Promise<StoredDevice | null> {
+    const device = await this.storage.get<StoredDevice>(deviceKey(deviceId));
+    return isDevice(device) && device.userId === userId && !device.revokedAt
+      ? device
+      : null;
+  }
+
   async listDevices(userId: string): Promise<StoredDevice[]> {
     const ids = (await this.storage.get<string[]>(userDeviceIdsKey(userId))) ?? [];
     const devices: StoredDevice[] = [];
@@ -325,6 +336,47 @@ export class EdgeAccountStore {
       repositoryId: input.repositoryId,
       userId,
       deviceId,
+      workspaceId: input.workspaceId,
+      path: input.path,
+      platform: input.platform,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.storage.put(materializationKey(materialization.id), materialization);
+    if (!ids.includes(materialization.id)) {
+      if (ids.length >= MAX_MATERIALIZATIONS_PER_REPOSITORY) throw new Error("Materialization limit reached.");
+      await this.storage.put(repositoryMaterializationIdsKey(input.repositoryId), [...ids, materialization.id]);
+    }
+    return materialization;
+  }
+
+  async upsertRuntimeMaterialization(
+    userId: string,
+    runtimeId: string,
+    input: MaterializationUpsertInput,
+  ): Promise<StoredMaterialization> {
+    const repositoryAccess = await this.getRepositoryForUser(userId, input.repositoryId);
+    if (!repositoryAccess) throw new Error("Repository is not authorized for this user.");
+    if (!/^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(runtimeId)) {
+      throw new Error("Runtime id is invalid.");
+    }
+
+    const ids = (await this.storage.get<string[]>(repositoryMaterializationIdsKey(input.repositoryId))) ?? [];
+    let existing: StoredMaterialization | undefined;
+    if (input.id) {
+      const candidate = await this.storage.get<StoredMaterialization>(materializationKey(input.id));
+      if (isMaterialization(candidate) && candidate.userId === userId && candidate.repositoryId === input.repositoryId) {
+        existing = candidate;
+      }
+    }
+    if (!existing) {
+      existing = await findRuntimeMaterialization(this.storage, ids, runtimeId, input.workspaceId);
+    }
+    const materialization: StoredMaterialization = {
+      version: 1,
+      id: existing?.id ?? prefixedId("mat"),
+      repositoryId: input.repositoryId,
+      userId,
+      runtimeId,
       workspaceId: input.workspaceId,
       path: input.path,
       platform: input.platform,
@@ -477,11 +529,15 @@ function isDevice(value: unknown): value is StoredDevice {
 }
 
 function isMaterialization(value: unknown): value is StoredMaterialization {
-  return isRecord(value) && value.version === 1 && typeof value.id === "string" &&
-    typeof value.repositoryId === "string" && typeof value.userId === "string" &&
-    typeof value.deviceId === "string" && typeof value.workspaceId === "string" &&
-    typeof value.path === "string" && typeof value.platform === "string" &&
-    typeof value.updatedAt === "string";
+  if (!isRecord(value) || value.version !== 1 || typeof value.id !== "string" ||
+      typeof value.repositoryId !== "string" || typeof value.userId !== "string" ||
+      typeof value.workspaceId !== "string" || typeof value.path !== "string" ||
+      typeof value.platform !== "string" || typeof value.updatedAt !== "string") {
+    return false;
+  }
+  const hasDevice = typeof value.deviceId === "string";
+  const hasRuntime = typeof value.runtimeId === "string";
+  return hasDevice !== hasRuntime;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -574,6 +630,19 @@ async function findMaterialization(
   for (const id of ids) {
     const value = await storage.get<StoredMaterialization>(materializationKey(id));
     if (isMaterialization(value) && value.deviceId === deviceId && value.workspaceId === workspaceId) return value;
+  }
+  return undefined;
+}
+
+async function findRuntimeMaterialization(
+  storage: AccountStorage,
+  ids: string[],
+  runtimeId: string,
+  workspaceId: string,
+): Promise<StoredMaterialization | undefined> {
+  for (const id of ids) {
+    const value = await storage.get<StoredMaterialization>(materializationKey(id));
+    if (isMaterialization(value) && value.runtimeId === runtimeId && value.workspaceId === workspaceId) return value;
   }
   return undefined;
 }

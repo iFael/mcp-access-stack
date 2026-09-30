@@ -5,7 +5,7 @@ import { z } from "zod";
 import * as c from "./browser-contracts.js";
 import * as l from "./legacy-browser-contracts.js";
 import { AppError, asAppError } from "./errors.js";
-import { deviceIdSchema } from "./repository-contracts.js";
+import { deviceIdSchema, runtimeIdSchema } from "./repository-contracts.js";
 import type { BrowserExecutor } from "./browser-executor.js";
 import type { WorkspaceExecutor } from "./workspace-executor.js";
 import type { OperationContext } from "./contracts.js";
@@ -221,7 +221,7 @@ export function registerBrowserTools(
       {
         title: definition.name,
         description: definition.description,
-        inputSchema: withBrowserDeviceSelector(definition.input),
+        inputSchema: withBrowserRuntimeSelectors(definition.input),
         outputSchema: definition.output,
         annotations: {
           readOnlyHint: definition.readOnly,
@@ -236,7 +236,7 @@ export function registerBrowserTools(
         if (authError) return authError;
         try {
           const parsedInputResult = definition.input.safeParse(
-            stripBrowserDeviceSelector(input),
+            stripBrowserRuntimeSelectors(input),
           );
           if (!parsedInputResult.success) {
             throw new AppError(
@@ -296,17 +296,17 @@ function definitions(
       () => e.status(assumeParsed(v)),
       (activeContext) => e.status(assumeParsed(v), activeContext),
     )),
-    d("browser_connect", "Explicitly connects the worker to Chrome; normal browser actions auto-connect when needed.", c.browserConnectInputSchema, c.browserConnectResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_connect", "Diagnostic-only explicit Chrome connection. Normal browser work must start with browser_open, which auto-connects; do not use browser_connect as a preflight because it can launch an otherwise unnecessary browser window.", c.browserConnectInputSchema, c.browserConnectResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.connect(assumeParsed(v)),
       (activeContext) => e.connect(assumeParsed(v), activeContext),
     )),
-    d("browser_tabs", "Auto-connects and lists registered tabs; unknown tabs remain user-owned.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_tabs", "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.tabs(assumeParsed(v)),
       (activeContext) => e.tabs(assumeParsed(v), activeContext),
     )),
-    d("browser_open", "Opens or safely reuses an MCP-owned Chromium tab and returns its semantic state; private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_open", "Opens or safely reuses an MCP-owned Chromium tab for a real URL or cached purpose and returns its semantic state; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.open(assumeParsed(v)),
       (activeContext) => e.open(assumeParsed(v), activeContext),
@@ -411,7 +411,7 @@ function definitions(
       () => e.closeTab(assumeParsed(v)),
       (activeContext) => e.closeTab(assumeParsed(v), activeContext),
     ), true),
-    d("browser_finish_task", "Closes the dedicated browser session only when the current task is fully finished. Do not call this for a temporary pause.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_finish_task", "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.finishTask(assumeParsed(v)),
       (activeContext) => e.finishTask(assumeParsed(v), activeContext),
@@ -616,21 +616,31 @@ function d(
   return { name, description, input, output, readOnly, destructive, run };
 }
 
-function withBrowserDeviceSelector(schema: z.ZodType): z.ZodType {
+function withBrowserRuntimeSelectors(schema: z.ZodType): z.ZodType {
   const extendable = schema as z.ZodType & {
-    safeExtend?: (shape: { deviceId: z.ZodOptional<typeof deviceIdSchema> }) => z.ZodType;
+    safeExtend?: (shape: {
+      deviceId: z.ZodOptional<typeof deviceIdSchema>;
+      runtimeId: z.ZodOptional<typeof runtimeIdSchema>;
+    }) => z.ZodType;
   };
   if (typeof extendable.safeExtend !== "function") {
-    throw new Error("Browser MCP input schema must support safeExtend for device routing.");
+    throw new Error("Browser MCP input schema must support safeExtend for runtime routing.");
   }
-  return extendable.safeExtend({ deviceId: deviceIdSchema.optional() });
+  return extendable.safeExtend({
+    deviceId: deviceIdSchema.optional(),
+    runtimeId: runtimeIdSchema.optional(),
+  });
 }
 
-function stripBrowserDeviceSelector(input: unknown): unknown {
+function stripBrowserRuntimeSelectors(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return input;
   }
-  const { deviceId: _deviceId, ...rest } = input as Record<string, unknown>;
+  const {
+    deviceId: _deviceId,
+    runtimeId: _runtimeId,
+    ...rest
+  } = input as Record<string, unknown>;
   return rest;
 }
 

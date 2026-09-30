@@ -7861,7 +7861,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Returns the authenticated user's MCP V3 identity, repository count and authorized devices. Use this to decide whether local runtime onboarding is required.",
+    "description": "Returns the authenticated user's MCP V3 identity, repository count and authorized devices. The remote runtime can satisfy onboarding without a local companion when remote capabilities are available.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -8150,6 +8150,17 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                 "type": "string"
               },
+              "runtime": {
+                "enum": [
+                  "remote",
+                  "companion"
+                ],
+                "type": "string"
+              },
+              "runtimeId": {
+                "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "online",
@@ -8167,7 +8178,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "required": [
               "id",
               "repositoryId",
-              "deviceId",
               "workspaceId",
               "platform",
               "path",
@@ -8297,6 +8307,17 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                 "type": "string"
               },
+              "runtime": {
+                "enum": [
+                  "remote",
+                  "companion"
+                ],
+                "type": "string"
+              },
+              "runtimeId": {
+                "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
               "status": {
                 "enum": [
                   "online",
@@ -8314,7 +8335,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "required": [
               "id",
               "repositoryId",
-              "deviceId",
               "workspaceId",
               "platform",
               "path",
@@ -8582,6 +8602,17 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                       "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                       "type": "string"
                     },
+                    "runtime": {
+                      "enum": [
+                        "remote",
+                        "companion"
+                      ],
+                      "type": "string"
+                    },
+                    "runtimeId": {
+                      "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    },
                     "status": {
                       "enum": [
                         "online",
@@ -8599,7 +8630,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "required": [
                     "id",
                     "repositoryId",
-                    "deviceId",
                     "workspaceId",
                     "platform",
                     "path",
@@ -8675,7 +8705,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Creates a working materialization of an authorized repository on the selected local MCP V3 runtime. Existing dirty worktrees are never overwritten.",
+    "description": "Creates a working materialization of an authorized repository on the selected MCP V3 runtime. targetRuntime=remote uses the remote runtime; companion preserves device-based behavior. Existing dirty worktrees are never overwritten.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -8699,6 +8729,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "targetName": {
           "maxLength": 200,
           "minLength": 1,
+          "type": "string"
+        },
+        "targetRuntime": {
+          "enum": [
+            "remote",
+            "companion"
+          ],
           "type": "string"
         }
       },
@@ -8741,6 +8778,17 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             },
+            "runtime": {
+              "enum": [
+                "remote",
+                "companion"
+              ],
+              "type": "string"
+            },
+            "runtimeId": {
+              "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
             "status": {
               "enum": [
                 "online",
@@ -8758,7 +8806,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "required": [
             "id",
             "repositoryId",
-            "deviceId",
             "workspaceId",
             "platform",
             "path",
@@ -8808,6 +8855,17 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "type": "string"
                   },
+                  "runtime": {
+                    "enum": [
+                      "remote",
+                      "companion"
+                    ],
+                    "type": "string"
+                  },
+                  "runtimeId": {
+                    "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
                   "status": {
                     "enum": [
                       "online",
@@ -8825,7 +8883,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "required": [
                   "id",
                   "repositoryId",
-                  "deviceId",
                   "workspaceId",
                   "platform",
                   "path",
@@ -8880,7 +8937,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ],
       "type": "object"
     },
-    "title": "Materialize repository locally"
+    "title": "Materialize repository"
   },
   {
     "_meta": {
@@ -11921,6 +11978,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         }
       },
       "type": "object"
@@ -12178,7 +12239,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Explicitly connects the worker to Chrome; normal browser actions auto-connect when needed.",
+    "description": "Diagnostic-only explicit Chrome connection. Normal browser work must start with browser_open, which auto-connects; do not use browser_connect as a preflight because it can launch an otherwise unnecessary browser window.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12188,6 +12249,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         }
       },
@@ -12446,7 +12511,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Auto-connects and lists registered tabs; unknown tabs remain user-owned.",
+    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12456,6 +12521,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "taskId": {
@@ -12537,6 +12606,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "url": {
                 "format": "uri",
                 "type": "string"
+              },
+              "viewerUrl": {
+                "format": "uri",
+                "type": "string"
               }
             },
             "required": [
@@ -12579,7 +12652,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Opens or safely reuses an MCP-owned Chromium tab and returns its semantic state; private sites require browser_open_authorized_site.",
+    "description": "Opens or safely reuses an MCP-owned Chromium tab for a real URL or cached purpose and returns its semantic state; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12606,6 +12679,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "reusable": {
           "type": "boolean"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         },
         "sticky": {
           "type": "boolean"
@@ -12794,6 +12871,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "url": {
               "format": "uri",
               "type": "string"
+            },
+            "viewerUrl": {
+              "format": "uri",
+              "type": "string"
             }
           },
           "required": [
@@ -12880,6 +12961,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "purpose": {
           "maxLength": 200,
           "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "siteId": {
@@ -13187,6 +13272,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 0,
           "type": "integer"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -13383,6 +13472,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "url": {
               "format": "uri",
               "type": "string"
+            },
+            "viewerUrl": {
+              "format": "uri",
+              "type": "string"
             }
           },
           "required": [
@@ -13468,6 +13561,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         },
         "tabId": {
           "maxLength": 128,
@@ -13707,6 +13804,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -13905,6 +14006,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "ref": {
           "maxLength": 128,
           "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -14112,6 +14217,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 0,
           "type": "integer"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -14305,6 +14414,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "ref": {
           "maxLength": 128,
           "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -14522,6 +14635,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "selector": {
           "maxLength": 2000,
           "minLength": 1,
@@ -14668,6 +14785,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         },
         "steps": {
           "items": {
@@ -15329,6 +15450,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "selector": {
           "maxLength": 2000,
           "minLength": 1,
@@ -15500,6 +15625,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "exact",
             "contains"
           ],
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "selector": {
@@ -15712,6 +15841,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 0,
           "type": "integer"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "selector": {
           "maxLength": 2000,
           "minLength": 1,
@@ -15912,6 +16045,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 16,
           "minimum": 0,
           "type": "integer"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         },
         "tabId": {
           "maxLength": 128,
@@ -16203,6 +16340,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -16460,6 +16601,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "steps": {
@@ -17777,6 +17922,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minItems": 1,
           "type": "array"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "segments": {
           "items": {
             "additionalProperties": false,
@@ -18380,6 +18529,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "fullPage": {
           "type": "boolean"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -18448,6 +18601,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -18633,6 +18790,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "url": {
               "format": "uri",
               "type": "string"
+            },
+            "viewerUrl": {
+              "format": "uri",
+              "type": "string"
             }
           },
           "required": [
@@ -18709,6 +18870,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -18894,6 +19059,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "url": {
               "format": "uri",
               "type": "string"
+            },
+            "viewerUrl": {
+              "format": "uri",
+              "type": "string"
             }
           },
           "required": [
@@ -18975,6 +19144,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -19149,7 +19322,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Closes the dedicated browser session only when the current task is fully finished. Do not call this for a temporary pause.",
+    "description": "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19159,6 +19332,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "taskId": {
@@ -19176,6 +19353,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "browserClosed": {
           "type": "boolean"
+        },
+        "closedTabIds": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
         },
         "closedTabs": {
           "maximum": 9007199254740991,
@@ -19238,6 +19424,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "ref": {
           "maxLength": 128,
           "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -19337,6 +19527,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxItems": 10,
           "minItems": 1,
           "type": "array"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
         },
         "selector": {
           "maxLength": 2000,
@@ -19440,6 +19634,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "info",
             "debug"
           ],
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -19547,6 +19745,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -19626,6 +19828,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -19769,6 +19975,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 64,
           "type": "integer"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -19868,6 +20078,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "filename": {
           "maxLength": 180,
           "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
         "tabId": {
@@ -19970,6 +20184,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 500,
           "type": "string"
         },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -20064,13 +20282,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8d8ecbb02397cc2841a279a74d35e5d03ce446c345e3b4dc99477262dd9c2aac",
-  "serverVersion": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef",
+  "contractRevision": "c30c1df4c3e157cd7972c4ccdb89f37e3c8512c166ddff0bac3c6046fb3e1d35",
+  "serverVersion": "0.4.0-catalog.cc30c1df4c3e1.s0b82ee333aef",
   "toolCount": 89,
   "toolSetRevision": "0b82ee333aefde809950518d251e6a214e3e9288b9df6975e01c43e4d61458f6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8d8ecbb02397.s0b82ee333aef"
+  "version": "0.4.0-catalog.cc30c1df4c3e1.s0b82ee333aef"
 } as const;

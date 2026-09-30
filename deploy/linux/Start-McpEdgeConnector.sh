@@ -125,7 +125,18 @@ node_major="${node_version%%.*}"
 (( node_major >= 26 )) || fail 'Node 26 or newer is required.'
 
 edge_connector_path="$release_root/services/mcp-gateway/dist/edge-connector-cli.js"
+browser_worker_path="$release_root/services/browser-worker/dist/server.js"
+native_lib_dir="$release_root/runtime/native-libs/usr/lib/x86_64-linux-gnu"
+native_font_dir="$release_root/runtime/native-libs/usr/share/fonts"
+native_package_manifest="$release_root/runtime/native-libs/packages.v1.tsv"
+fontconfig_root="$runtime_root/browser-fontconfig"
+fontconfig_file="$fontconfig_root/fonts.conf"
+fontconfig_cache="$fontconfig_root/cache"
 [[ -f "$edge_connector_path" ]] || fail "Built Edge Connector was not found: $edge_connector_path"
+[[ -f "$browser_worker_path" ]] || fail "Built Browser Worker was not found: $browser_worker_path"
+[[ -d "$native_lib_dir" ]] || fail "Browser native library bundle was not found: $native_lib_dir"
+[[ -d "$native_font_dir" ]] || fail "Browser font bundle was not found: $native_font_dir"
+[[ -s "$native_package_manifest" ]] || fail "Browser native package manifest was not found: $native_package_manifest"
 
 connector_token="$(read_token "$connector_token_file" 'Connector token' 32)"
 owner_token="$(read_token "$owner_token_file" 'Owner token' 16)"
@@ -142,16 +153,37 @@ if $validate_only; then
   printf 'nodePath=%s\n' "$node_binary"
   printf 'nodeVersion=%s\n' "$node_version"
   printf 'edgeConnectorPath=%s\n' "$edge_connector_path"
+  printf 'browserWorkerPath=%s\n' "$browser_worker_path"
+  printf 'playwrightBrowsersPath=0\n'
+  printf 'browserNativeLibPath=%s\n' "$native_lib_dir"
+  printf 'browserNativeFontPath=%s\n' "$native_font_dir"
+  printf 'fontconfigFile=%s\n' "$fontconfig_file"
   printf 'mcpSessionMode=%s\n' "$session_mode"
   printf 'maxConcurrentRequests=%s\n' "$max_concurrency"
   exit 0
 fi
+
+mkdir -p "$fontconfig_cache"
+chmod 700 "$fontconfig_root" "$fontconfig_cache"
+cat > "$fontconfig_file" <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <dir>$native_font_dir</dir>
+  <cachedir>$fontconfig_cache</cachedir>
+  <config></config>
+</fontconfig>
+EOF
+chmod 600 "$fontconfig_file"
 
 export MCP_EDGE_BASE_URL
 export MCP_CONNECTOR_TOKEN_FILE="$connector_token_file"
 export VS_CODE_GPT_POLICY_PATH="$policy_path"
 export VS_CODE_GPT_STACK_ROOT="$project_root"
 export MCP_RELEASE_ROOT="$release_root"
+export PLAYWRIGHT_BROWSERS_PATH='0'
+export LD_LIBRARY_PATH="$native_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FONTCONFIG_FILE="$fontconfig_file"
 export MCP_ACCESS_STACK_INSTALLATION_ROOT="${MCP_ACCESS_STACK_INSTALLATION_ROOT:-/var/lib/mcp-access-stack}"
 export MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS="$max_concurrency"
 export MCP_SESSION_MODE="$session_mode"
@@ -160,6 +192,8 @@ export OWNER_TOKEN="$owner_token"
 export OWNER_OAUTH_SCOPES="$owner_oauth_scopes"
 export OWNER_OAUTH_STATE_PATH="$runtime_root/owner-oauth-state.json"
 export ALLOWED_ORIGINS="$allowed_origins"
+# The Edge Connector injects its loopback BrowserWorkerClient directly.
+# Keep gateway env-based Browser Worker wiring disabled to avoid a second worker.
 export BROWSER_WORKER_ENABLED='false'
 unset BROWSER_WORKER_URL BROWSER_WORKER_TOKEN
 

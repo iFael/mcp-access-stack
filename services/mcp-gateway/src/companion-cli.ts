@@ -85,6 +85,7 @@ async function main(): Promise<void> {
         releaseRoot: runtime.releaseRoot,
         stateRoot: runtime.stateRoot,
         credentialBrokerPath: runtime.credentialBrokerPath,
+        headless: true,
         log: writeLog,
       });
     } catch (error) {
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
       });
     }
   }
+  const browserLiveViewReady = browserWorker
+    ? await browserWorker.supportsLiveView()
+    : false;
 
   const gatewayConfig = {
     ...loadGatewayConfig({
@@ -115,7 +119,22 @@ async function main(): Promise<void> {
     sourceControlExecutor: reloadable.sourceControlExecutor,
     repositoryExecutor: repositories,
     companionRepositoryBinder: repositories,
-    ...(browserWorker === undefined ? {} : { browser: browserWorker.client }),
+    ...(browserWorker === undefined
+      ? {}
+      : {
+          browser: browserWorker.client,
+          ...(browserLiveViewReady
+            ? {
+                browserLiveFrame: (
+                  input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
+                  context: { ownerScope: string },
+                ) => browserWorker.readLiveFrame({
+                  ...input,
+                  ownerScope: context.ownerScope,
+                }),
+              }
+            : {}),
+        }),
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
   });
@@ -133,6 +152,7 @@ async function main(): Promise<void> {
   });
   const capabilities: string[] = [...DEFAULT_COMPANION_CAPABILITIES];
   if (browserWorker) capabilities.push("browser");
+  if (browserLiveViewReady) capabilities.push("browser-live-view-v1");
   if (elevationBroker) capabilities.push("elevation");
 
   connector = new CompanionConnector({

@@ -3,6 +3,7 @@ import {
   isCompanionEligibleForUser,
   retireReplacedCompanion,
   selectAvailableCompanionWorkspaceId,
+  selectAvailableRuntimeWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
 } from "../src/control-plane/companion-routing.js";
@@ -144,6 +145,24 @@ describe("companion routing", () => {
     );
 
     expect(second).toBe(`${first}-2`);
+  });
+
+  it("uses a remote-specific deterministic suffix without changing companion ids", () => {
+    const reserved = new Set(["mcp-access-stack"]);
+    const remote = selectAvailableRuntimeWorkspaceId(
+      "mcp-access-stack",
+      "rt_primary:repo-a",
+      reserved,
+      "remote",
+    );
+    const companion = selectAvailableCompanionWorkspaceId(
+      "mcp-access-stack",
+      "c:/repos/mcp-access-stack",
+      reserved,
+    );
+
+    expect(remote).toMatch(/^mcp-access-stack-remote-[a-f0-9]{8}$/u);
+    expect(companion).toMatch(/^mcp-access-stack-local-[a-f0-9]{8}$/u);
   });
 
   it("routes a workspace to one companion when primary does not own it", () => {

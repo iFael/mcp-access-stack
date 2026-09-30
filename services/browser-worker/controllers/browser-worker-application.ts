@@ -69,6 +69,46 @@ export class BrowserWorkerApplication {
       const readiness = await this.runtime.readiness();
       return json(response, readiness.ready ? 200 : 503, readiness);
     }
+    if (request.method === "GET" && url.pathname === "/live/capability") {
+      if (!authenticate(request, this.config.token)) {
+        response.setHeader("WWW-Authenticate", 'Bearer realm="browser-worker"');
+        return json(response, 401, { error: "unauthorized" });
+      }
+      response.setHeader("cache-control", "no-store");
+      return this.config.headless === true && this.runtime.supportsLiveView()
+        ? json(response, 200, { version: 1 })
+        : json(response, 503, { error: "live_view_unavailable" });
+    }
+    if (request.method === "GET" && url.pathname === "/live/frame") {
+      if (!authenticate(request, this.config.token)) {
+        response.setHeader("WWW-Authenticate", 'Bearer realm="browser-worker"');
+        return json(response, 401, { error: "unauthorized" });
+      }
+      const taskId = url.searchParams.get("taskId");
+      const tabId = url.searchParams.get("tabId");
+      const afterSeqText = url.searchParams.get("afterSeq") ?? "0";
+      if (!taskId || !tabId || taskId.length > 128 || tabId.length > 128 ||
+          !/^\d{1,16}$/.test(afterSeqText) || !Number.isSafeInteger(Number(afterSeqText))) {
+        return json(response, 400, { error: "invalid_request" });
+      }
+      try {
+        const frame = await this.runtime.liveFrame(
+          taskId,
+          tabId,
+          Number(afterSeqText),
+          browserOwnerScope(request),
+        );
+        response.setHeader("cache-control", "no-store");
+        if (!frame) {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        return json(response, 200, frame);
+      } catch {
+        return json(response, 404, { error: "not_found" });
+      }
+    }
     if (request.method !== "POST" || url.pathname !== "/operations") {
       return json(response, 404, { error: "not_found" });
     }

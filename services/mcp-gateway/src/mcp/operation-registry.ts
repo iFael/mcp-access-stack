@@ -170,6 +170,7 @@ export interface GatewayOperationContextFactoryOptions {
   principalKey: string;
   operationScopeKey: string;
   cancellationScopeKey: string;
+  ownerScopeKey?: string;
   requestLifecycleId?: string;
   requestSignal: AbortSignal;
 }
@@ -255,7 +256,7 @@ export function createGatewayOperationContextFactory(
         signal: controller.signal,
         correlationId: String(extra.requestId),
         invocationId: randomUUID(),
-        ownerScope: options.cancellationScopeKey,
+        ownerScope: options.ownerScopeKey ?? options.cancellationScopeKey,
         deadline,
       },
       release: () => {
