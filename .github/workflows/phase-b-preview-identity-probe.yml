@@ -3,7 +3,7 @@ name: Phase B preview identity probe
 on:
   push:
     tags:
-      - "candidate/r10-phase-b-identity-probe"
+      - "candidate/r10-phase-b-identity-probe-v2"
 
 permissions:
   contents: read
@@ -15,8 +15,9 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      WORKER_NAME: r10-homologation-mcp-access-stack
-      PREVIEW_BASE_URL: https://r10-homologation-mcp-access-stack.rafaeldamasio77.workers.dev
+      WORKER_NAME: mcp-access-stack
+      PROBE_ALIAS: phase-b-identity-probe
+      PROBE_BASE_URL: https://phase-b-identity-probe-mcp-access-stack.rafaeldamasio77.workers.dev
     steps:
       - name: Checkout exact probe commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -33,35 +34,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Read existing Rafael identity and restore Preview
+      - name: Upload isolated preview version and read Rafael identity
         shell: bash
         run: |
           set -euo pipefail
           wrangler='node_modules/wrangler/bin/wrangler.js'
-
-          previous_json="$(node "$wrangler" deployments list --name "$WORKER_NAME" --json)"
-          previous_version="$(jq -r '
-            if type == "array" then
-              (.[0].versions[0].version_id // .[0].versions[0].id // .[0].version_id // .[0].id // empty)
-            else empty end
-          ' <<<"$previous_json")"
-          test -n "$previous_version"
-
           probe_token="$(openssl rand -hex 32)"
-          restored=false
-          restore() {
-            if [[ "$restored" != "true" ]]; then
-              node "$wrangler" rollback "$previous_version"                 --name "$WORKER_NAME"                 --yes                 --message "Restore R10 Preview after Phase B identity probe"
-              restored=true
-            fi
-          }
-          trap restore EXIT
 
-          node "$wrangler" deploy             --cwd .             --config services/mcp-edge-gateway/wrangler.jsonc             --name "$WORKER_NAME"             --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"             --var "MCP_EDGE_ENABLED:true"             --var "MCP_EDGE_AUTH_MODE:owner"             --var "MCP_PUBLIC_BASE_URL:$PREVIEW_BASE_URL/"             --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"             --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"             --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"             --var "MCP_OWNER_RESOURCE_NAME:MCP V3 R10 Homologation"
+          upload_output="$(
+            node "$wrangler" versions upload               --cwd .               --config services/mcp-edge-gateway/wrangler.jsonc               --name "$WORKER_NAME"               --preview-alias "$PROBE_ALIAS"               --message "Temporary Phase B identity probe"               --var "MCP_PHASE_B_PROBE_TOKEN:$probe_token"               --var "MCP_EDGE_ENABLED:true"               --var "MCP_EDGE_AUTH_MODE:owner"               --var "MCP_PUBLIC_BASE_URL:$PROBE_BASE_URL/"               --var "MCP_OWNER_OAUTH_SCOPES:workspaces:read"               --var "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS:3600"               --var "MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS:2592000"               --var "MCP_OWNER_RESOURCE_NAME:Phase B identity probe"
+          )"
+          printf '%s\n' "$upload_output"
 
           identity=''
-          for attempt in $(seq 1 20); do
-            if identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PREVIEW_BASE_URL/_internal/phase-b-identity-probe")"; then
+          for attempt in $(seq 1 30); do
+            if identity="$(curl --fail --silent --show-error               -H "Authorization: Bearer $probe_token"               "$PROBE_BASE_URL/_internal/phase-b-identity-probe")"; then
               break
             fi
             sleep 2
@@ -71,6 +58,3 @@ jobs:
           echo 'PHASE_B_PREVIEW_IDENTITY_BEGIN'
           jq '{user: .users[0]}' <<<"$identity"
           echo 'PHASE_B_PREVIEW_IDENTITY_END'
-
-          restore
-          trap - EXIT
