@@ -74,13 +74,19 @@ jobs:
         run: |
           set -euo pipefail
           EDGE_BASE_URL="$(sed -nE 's/.*"MCP_PUBLIC_BASE_URL"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' services/mcp-edge-gateway/wrangler.jsonc | head -n 1)"
-          status="$(curl --silent --show-error             --output "$RUNNER_TEMP/edge-breakglass-probe.json"             --write-out '%{http_code}'             -X POST             -H "Authorization: Bearer $MCP_OWNER_TOKEN"             -H "Content-Type: text/plain"             --data 'probe'             "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
-          error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
-          if [[ "$status" != "415" || "$error" != "invalid_owner_recovery_content_type" ]]; then
-            echo "Break-glass verification failed: HTTP $status / $error" >&2
-            exit 1
-          fi
-          echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+          status=''
+          error=''
+          for attempt in $(seq 1 15); do
+            status="$(curl --silent --show-error               --output "$RUNNER_TEMP/edge-breakglass-probe.json"               --write-out '%{http_code}'               -X POST               -H "Authorization: Bearer $MCP_OWNER_TOKEN"               -H "Content-Type: text/plain"               --data 'probe'               "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
+            error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
+            if [[ "$status" == "415" && "$error" == "invalid_owner_recovery_content_type" ]]; then
+              echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+              exit 0
+            fi
+            if [[ "$attempt" -lt 15 ]]; then sleep 2; fi
+          done
+          echo "Break-glass verification failed after propagation retries: HTTP $status / $error" >&2
+          exit 1
 
       - name: Migrate synthetic Owner to historical Rafael identity
         if: ${{ inputs.operation == 'migrate-single-user' }}
