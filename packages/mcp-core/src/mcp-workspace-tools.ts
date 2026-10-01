@@ -96,6 +96,8 @@ import {
   gitUnstagePathsResultSchema,
   githubCreatePullRequestInputSchema,
   githubCreatePullRequestResultSchema,
+  githubClosePullRequestInputSchema,
+  githubClosePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -192,6 +194,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
+  "github_close_pull_request",
   "github_merge_pull_request",
 ] as const satisfies readonly SourceControlToolName[];
 
@@ -2552,6 +2555,23 @@ const sourceControlMcpSchemas = {
       message: "Invalid github_create_pull_request MCP result.",
     }),
   },
+  github_close_pull_request: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_close_pull_request").optional(),
+      number: z.number().int().positive().optional(),
+      state: z.literal("closed").optional(),
+      title: z.string().min(1).max(256).optional(),
+      url: mcpGitHubUrl.optional(),
+      headSha: mcpSourceControlSha.optional(),
+      baseSha: mcpSourceControlSha.optional(),
+      merged: z.literal(false).optional(),
+    }).strict().refine((value) => githubClosePullRequestResultSchema.safeParse(value).success, {
+      message: "Invalid github_close_pull_request MCP result.",
+    }),
+  },
   github_merge_pull_request: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
     output: z.object({
@@ -2588,6 +2608,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_create_repository: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+  github_close_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
 };
 
@@ -3126,6 +3147,31 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_close_pull_request", include)) {
+    server.registerTool(
+      "github_close_pull_request",
+      {
+        title: "Close GitHub pull request",
+        description: "Closes an unmerged pull request at an exact expected head SHA after typed confirmation. Repeated close is idempotent when the same PR is already closed at that head.",
+        inputSchema: sourceControlMcpSchemas.github_close_pull_request.input,
+        outputSchema: sourceControlMcpSchemas.github_close_pull_request.output,
+        annotations: sourceControlAnnotations.github_close_pull_request,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubClosePullRequestInputSchema.parse(input);
+          const structuredContent = githubClosePullRequestResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.closePullRequest(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub pull-request close processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
   if (shouldInclude("github_merge_pull_request", include)) {
     server.registerTool(
       "github_merge_pull_request",
@@ -3201,5 +3247,6 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   githubCreateRepository: "github_create_repository",
   githubGetPullRequest: "github_get_pull_request",
   githubCreatePullRequest: "github_create_pull_request",
+  githubClosePullRequest: "github_close_pull_request",
   githubMergePullRequest: "github_merge_pull_request",
 };

@@ -94,6 +94,8 @@ import {
   gitUnstagePathsResultSchema,
   githubCreatePullRequestInputSchema,
   githubCreatePullRequestResultSchema,
+  githubClosePullRequestInputSchema,
+  githubClosePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -117,6 +119,8 @@ import {
   type GitCreateBranchResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
+  type GitHubClosePullRequestInput,
+  type GitHubClosePullRequestResult,
   type GitHubCreateRepositoryInput,
   type GitHubCreateRepositoryResult,
   type GitHubCommitChecksResult,
@@ -1299,6 +1303,48 @@ export class LocalAgent {
     );
   }
 
+  async githubClosePullRequest(
+    input: GitHubClosePullRequestInput,
+    context: OperationContext = {},
+  ): Promise<GitHubClosePullRequestResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubClosePullRequest",
+      githubClosePullRequestInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        const targetResource = `github:${repository}:pull/${parsed.pullNumber}`;
+        metadata.sourceControlCapability = "github.pull_request.close";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedPullRequestHeadSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.pull_request.close",
+          repository,
+          parsed.root ?? ".",
+          true,
+          activeContext.signal,
+        );
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "github_close_pull_request",
+          confirmableOperation: "github_close_pull_request",
+          capability: "github.pull_request.close",
+          repository,
+          canonicalRepositoryAlreadyAuthorized: true,
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: githubClosePullRequestResultSchema,
+          backend: async () => (await this.getGitHubExecutor()).closePullRequest(parsed, activeContext),
+          resultSha: (result) => result.status === "completed" ? result.headSha : undefined,
+        });
+      },
+    );
+  }
+
   async githubMergePullRequest(
     input: GitHubMergePullRequestInput,
     context: OperationContext = {},
@@ -1411,6 +1457,7 @@ export class LocalAgent {
         | "git_push_branch"
         | "github_create_repository"
         | "github_create_pull_request"
+        | "github_close_pull_request"
         | "github_merge_pull_request";
       capability: SourceControlCapability;
       repository?: string;
@@ -1696,6 +1743,7 @@ type ConfirmableSourceControlOperation =
   | "git_push_branch"
   | "github_create_repository"
   | "github_create_pull_request"
+  | "github_close_pull_request"
   | "github_merge_pull_request";
 
 function sourceControlConfirmationOperation(

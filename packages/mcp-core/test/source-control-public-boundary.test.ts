@@ -13,6 +13,7 @@ import {
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
   githubCreatePullRequestInputSchema,
+  githubClosePullRequestInputSchema,
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -37,6 +38,7 @@ const expectedPublicSourceControlNames = [
   "git_push_branch",
   "git_stage_paths",
   "git_unstage_paths",
+  "github_close_pull_request",
   "github_create_pull_request",
   "github_create_repository",
   "github_get_commit_checks",
@@ -62,6 +64,7 @@ const expectedSourceControlCapabilities = [
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
+  "github.pull_request.close",
   "github.pull_request.merge",
 ] as const;
 
@@ -229,6 +232,18 @@ const inputCases = [
     },
   },
   {
+    name: "github_close_pull_request",
+    schema: githubClosePullRequestInputSchema,
+    input: {
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "app",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: shaB,
+      confirmationId: "opaque-confirmation-id",
+    },
+  },
+  {
     name: "github_merge_pull_request",
     schema: githubMergePullRequestInputSchema,
     input: {
@@ -257,7 +272,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes exactly seventeen public tools, sixteen relay operations and ten capabilities", () => {
+  it("exposes exactly eighteen public tools, seventeen relay operations and eleven capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -267,8 +282,8 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(17);
-    expect(sourceControlCapabilities).toHaveLength(10);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(18);
+    expect(sourceControlCapabilities).toHaveLength(11);
 
     for (const forbiddenName of [
       "source_control",

@@ -6,6 +6,8 @@ import type {
   GitCreateBranchResult,
   GitHubCreatePullRequestInput,
   GitHubCreatePullRequestResult,
+  GitHubClosePullRequestInput,
+  GitHubClosePullRequestResult,
   GitHubCreateRepositoryInput,
   GitHubCreateRepositoryResult,
   GitHubCommitChecksResult,
@@ -101,6 +103,10 @@ export interface GitHubExecutor {
     input: GitHubCreatePullRequestInput,
     context?: OperationContext,
   ): Promise<GitHubCreatePullRequestResult>;
+  closePullRequest(
+    input: GitHubClosePullRequestInput,
+    context?: OperationContext,
+  ): Promise<GitHubClosePullRequestResult>;
   mergePullRequest(
     input: GitHubMergePullRequestInput,
     context?: OperationContext,

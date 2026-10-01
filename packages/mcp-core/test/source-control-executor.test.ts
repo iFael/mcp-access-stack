@@ -1,6 +1,7 @@
 import { describe, expect, test } from "@jest/globals";
 import type {
   GitHubCreatePullRequestInput,
+  GitHubClosePullRequestInput,
   GitHubCreateRepositoryInput,
   GitHubGetCommitChecksInput,
   GitHubGetPullRequestInput,
@@ -116,7 +117,7 @@ describe("source-control executor ports", () => {
     ]);
   });
 
-  test("keeps GitHubExecutor limited to exactly six typed methods", async () => {
+  test("keeps GitHubExecutor limited to exactly seven typed methods", async () => {
     const calls: string[] = [];
     const executor: GitHubExecutor = {
       async getRepository(input: GitHubGetRepositoryInput) {
@@ -192,6 +193,19 @@ describe("source-control executor ports", () => {
           merged: false,
         };
       },
+      async closePullRequest(input: GitHubClosePullRequestInput) {
+        calls.push("closePullRequest");
+        return {
+          status: "completed",
+          number: input.pullNumber,
+          state: "closed",
+          title: "Feature",
+          url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`,
+          headSha: input.expectedPullRequestHeadSha,
+          baseSha: shaB,
+          merged: false,
+        };
+      },
       async mergePullRequest(input: GitHubMergePullRequestInput) {
         calls.push("mergePullRequest");
         return {
@@ -204,6 +218,7 @@ describe("source-control executor ports", () => {
     };
 
     expect(Object.keys(executor).sort()).toEqual([
+      "closePullRequest",
       "createPullRequest",
       "createRepository",
       "getCommitChecks",
@@ -217,6 +232,7 @@ describe("source-control executor ports", () => {
     await executor.createRepository({ workspaceId: "repo", owner: "acme", name: "app-2", visibility: "private" });
     await executor.getPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 });
     await executor.createPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", title: "Feature", head: "feature/x", base: "main" });
+    await executor.closePullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA });
     await executor.mergePullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA, mergeMethod: "squash" });
 
     expect(calls).toEqual([
@@ -225,6 +241,7 @@ describe("source-control executor ports", () => {
       "createRepository",
       "getPullRequest",
       "createPullRequest",
+      "closePullRequest",
       "mergePullRequest",
     ]);
   });

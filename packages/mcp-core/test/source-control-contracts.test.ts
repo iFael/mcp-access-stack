@@ -21,6 +21,8 @@ import {
   gitUnstagePathsResultSchema,
   githubCreatePullRequestInputSchema,
   githubCreatePullRequestResultSchema,
+  githubClosePullRequestInputSchema,
+  githubClosePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -47,7 +49,7 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly ten source-control capabilities", () => {
+  test("publishes exactly eleven source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
       "git.index.write",
@@ -58,6 +60,7 @@ describe("source-control contracts", () => {
       "github.repository.create",
       "github.pull_request.read",
       "github.pull_request.create",
+      "github.pull_request.close",
       "github.pull_request.merge",
     ]);
     expect(sourceControlCapabilitySchema.options).toEqual(sourceControlCapabilities);
@@ -81,7 +84,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes exactly sixteen operation names and four confirmable operations", () => {
+  test("publishes exactly seventeen operation names and five confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -98,12 +101,14 @@ describe("source-control contracts", () => {
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",
+      "github_close_pull_request",
       "github_merge_pull_request",
     ]);
     expect(confirmableSourceControlOperationNameSchema.options).toEqual([
       "git_push_branch",
       "github_create_repository",
       "github_create_pull_request",
+      "github_close_pull_request",
       "github_merge_pull_request",
     ]);
   });
@@ -528,7 +533,7 @@ describe("source-control contracts", () => {
     })).toThrow();
   });
 
-  test("keeps GitHub pull-request operations strict and merge SHA-preconditioned", () => {
+  test("keeps GitHub pull-request operations strict and close/merge SHA-preconditioned", () => {
     expect(githubGetPullRequestInputSchema.parse({
       workspaceId: "repo",
       owner: "acme",
@@ -552,6 +557,25 @@ describe("source-control contracts", () => {
       operation: "github_create_pull_request",
       targetResource: "github:pull-request/acme/app:feature/x->main",
     })).toMatchObject({ status: "confirmation_required" });
+
+    expect(githubClosePullRequestInputSchema.parse({
+      workspaceId: "repo",
+      owner: "acme",
+      repository: "app",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: shaA,
+    })).toMatchObject({ expectedPullRequestHeadSha: shaA });
+
+    expect(githubClosePullRequestResultSchema.parse({
+      status: "completed",
+      number: 7,
+      state: "closed",
+      title: "Ship feature",
+      url: "https://github.com/acme/app/pull/7",
+      headSha: shaA,
+      baseSha: shaB,
+      merged: false,
+    })).toMatchObject({ status: "completed", state: "closed", merged: false });
 
     expect(githubMergePullRequestInputSchema.parse({
       workspaceId: "repo",
@@ -593,6 +617,7 @@ describe("source-control contracts", () => {
       ["github_create_repository", githubCreateRepositoryInputSchema, { workspaceId: "repo", owner: "acme", name: "app", visibility: "private" }],
       ["github_get_pull_request", githubGetPullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 }],
       ["github_create_pull_request", githubCreatePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", title: "Ship", head: "feature/x", base: "main" }],
+      ["github_close_pull_request", githubClosePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA }],
       ["github_merge_pull_request", githubMergePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA, mergeMethod: "merge" }],
     ];
 

@@ -1622,6 +1622,10 @@ class MockSourceControlExecutor {
     this.record("createPullRequest", input, context);
     return { status: "completed" as const, number: 7, state: "open" as const, title: input.title, url: `https://github.com/${input.owner}/${input.repository}/pull/7`, headSha: sourceControlShaB, baseSha: sourceControlShaA, merged: false };
   }
+  async closePullRequest(input: any, context?: unknown) {
+    this.record("closePullRequest", input, context);
+    return { status: "completed" as const, number: input.pullNumber, state: "closed" as const, title: "typed", url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`, headSha: input.expectedPullRequestHeadSha, baseSha: sourceControlShaA, merged: false as const };
+  }
   async mergePullRequest(input: any, context?: unknown) {
     this.record("mergePullRequest", input, context);
     return { status: "completed" as const, number: input.pullNumber, merged: true, mergeSha: sourceControlShaC };
@@ -1644,6 +1648,7 @@ const sourceControlCases = [
   ["github_create_repository", "createRepository", { workspaceId: "ws", owner: "octo", name: "repo", visibility: "private" }],
   ["github_get_pull_request", "getPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7 }],
   ["github_create_pull_request", "createPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", title: "typed", head: "feature/task7", base: "main" }],
+  ["github_close_pull_request", "closePullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB }],
   ["github_merge_pull_request", "mergePullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB, mergeMethod: "squash" }],
 ] as const;
 
@@ -1664,11 +1669,12 @@ const expectedSourceControlAnnotations = {
   github_create_repository: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_close_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes seventeen source-control tools inside the 46-tool workspace surface", () => {
+  it("publishes eighteen source-control tools inside the 47-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1686,11 +1692,12 @@ describe("registerSourceControlTools", () => {
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",
+      "github_close_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(17);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(46);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(46);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(18);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(47);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(47);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

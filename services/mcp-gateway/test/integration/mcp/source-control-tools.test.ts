@@ -218,6 +218,20 @@ class RecordingSourceControlExecutor {
     });
   }
 
+  async closePullRequest(input: any, context?: OperationContext) {
+    this.record("closePullRequest", input, context);
+    return this.result({
+      status: "completed" as const,
+      number: input.pullNumber,
+      state: "closed" as const,
+      title: "Task 8",
+      url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`,
+      headSha: input.expectedPullRequestHeadSha,
+      baseSha: shaA,
+      merged: false as const,
+    });
+  }
+
   async mergePullRequest(input: any, context?: OperationContext) {
     this.record("mergePullRequest", input, context);
     return this.result({
@@ -421,6 +435,13 @@ const cases = [
     expectedResult: { status: "completed", number: 8, state: "open", title: "Task 8", url: "https://github.com/octo/app/pull/8", headSha: shaB, baseSha: shaA, merged: false },
   },
   {
+    name: "github_close_pull_request",
+    method: "closePullRequest",
+    input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 8, expectedPullRequestHeadSha: shaB, confirmationId: opaqueConfirmationId },
+    expectedInput: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 8, expectedPullRequestHeadSha: shaB, confirmationId: opaqueConfirmationId },
+    expectedResult: { status: "completed", number: 8, state: "closed", title: "Task 8", url: "https://github.com/octo/app/pull/8", headSha: shaB, baseSha: shaA, merged: false },
+  },
+  {
     name: "github_merge_pull_request",
     method: "mergePullRequest",
     input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 8, expectedPullRequestHeadSha: shaB, mergeMethod: "squash", confirmationId: opaqueConfirmationId },
@@ -433,6 +454,7 @@ const confirmableNames = new Set([
   "git_push_branch",
   "github_create_repository",
   "github_create_pull_request",
+  "github_close_pull_request",
   "github_merge_pull_request",
 ]);
 
