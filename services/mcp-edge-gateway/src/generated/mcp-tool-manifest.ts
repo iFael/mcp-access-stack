@@ -12839,7 +12839,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Opens or safely reuses an MCP-owned Chromium tab for a real URL or cached purpose and returns its semantic state; about:blank is rejected and private sites require browser_open_authorized_site.",
+    "description": "Opens or safely reuses an MCP-owned browser tab. browserMode defaults to managed; browserMode=personal opens the URL in the user's connected personal Chrome profile through the MCP V3 extension. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12847,6 +12847,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "browserMode": {
+          "enum": [
+            "managed",
+            "personal"
+          ],
+          "type": "string"
+        },
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
@@ -20469,13 +20476,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "579417ad12585adefdc19258747fd9d80dc028cc7b61aaaac78a7cf69466e4fd",
-  "serverVersion": "0.4.0-catalog.c579417ad1258.s8b73637247cd",
+  "contractRevision": "dfe348e3fc22fe5b38e6034b9152b028b77849e7cc4afcbb7c3ef12672c82789",
+  "serverVersion": "0.4.0-catalog.cdfe348e3fc22.s8b73637247cd",
   "toolCount": 91,
   "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c579417ad1258.s8b73637247cd"
+  "version": "0.4.0-catalog.cdfe348e3fc22.s8b73637247cd"
 } as const;

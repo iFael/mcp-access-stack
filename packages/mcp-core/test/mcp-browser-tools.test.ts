@@ -4,7 +4,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, jest } from "@jest/globals";
 import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
-import { browserUploadFileSchema } from "../src/browser-contracts.js";
+import {
+  browserNavigateInputSchema,
+  browserOpenInputSchema,
+  browserUploadFileSchema,
+} from "../src/browser-contracts.js";
 import {
   BROWSER_TOOL_NAMES,
   type BrowserToolName,
@@ -12,6 +16,24 @@ import {
 } from "../src/mcp-browser-tools.js";
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
+
+describe("browser mode contract", () => {
+  it("exposes browserMode only on browser_open", () => {
+    expect(browserOpenInputSchema.safeParse({
+      url: "https://chatgpt.com/",
+      browserMode: "personal",
+    }).success).toBe(true);
+    expect(browserOpenInputSchema.safeParse({
+      url: "https://chatgpt.com/",
+      browserMode: "managed",
+    }).success).toBe(true);
+    expect(browserNavigateInputSchema.safeParse({
+      tabId: "tab-1",
+      url: "https://chatgpt.com/",
+      browserMode: "personal",
+    }).success).toBe(false);
+  });
+});
 
 describe("browser upload file contract", () => {
   it("rejects path separators and NUL in client-provided filenames", () => {

@@ -6,11 +6,13 @@ import path from "node:path";
 import { AppError, asAppError } from "@vs-code-gpt/shared";
 import { WindowsElevationBroker } from "@vs-code-gpt/local-agent";
 import { createGatewayApplication } from "./app.js";
+import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
 import { LocalBrowserWorker } from "./companion/local-browser-worker.js";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager } from "./companion/local-repository-manager.js";
+import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
 import { loadGatewayConfig } from "./config.js";
@@ -100,6 +102,26 @@ async function main(): Promise<void> {
     ? await browserWorker.supportsLiveView()
     : false;
 
+  let personalBrowser: PersonalBrowserBridge | undefined;
+  if (process.platform === "win32") {
+    try {
+      personalBrowser = await PersonalBrowserBridge.start({
+        stateRoot: runtime.stateRoot,
+        log: writeLog,
+      });
+    } catch (error) {
+      const browserError = asAppError(error);
+      writeLog({
+        event: "mcp_v3_personal_browser_unavailable",
+        error: browserError.toJSON(),
+      });
+    }
+  }
+
+  const browser = browserWorker
+    ? new BrowserModeRouter(browserWorker.client, personalBrowser)
+    : undefined;
+
   const gatewayConfig = loadGatewayConfig({
     ...process.env,
     NODE_ENV: "production",
@@ -114,16 +136,16 @@ async function main(): Promise<void> {
     sourceControlExecutor: reloadable.sourceControlExecutor,
     repositoryExecutor: repositories,
     companionRepositoryBinder: repositories,
-    ...(browserWorker === undefined
+    ...(browser === undefined
       ? {}
       : {
-          browser: browserWorker.client,
+          browser,
           ...(browserLiveViewReady
             ? {
                 browserLiveFrame: (
                   input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
                   context: { ownerScope: string },
-                ) => browserWorker.readLiveFrame({
+                ) => browserWorker!.readLiveFrame({
                   ...input,
                   ownerScope: context.ownerScope,
                 }),
@@ -191,6 +213,7 @@ async function main(): Promise<void> {
     process.removeListener("SIGTERM", onSigterm);
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
+    await personalBrowser?.close();
     await browserWorker?.close();
     await instanceLock.release();
     writeLog({ event: "mcp_v3_local_stopped" });

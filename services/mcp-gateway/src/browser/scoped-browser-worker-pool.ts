@@ -139,7 +139,15 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   }
 
   open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
-    return this.invoke(args[1], (client) => client.open(...args));
+    const [input, context] = args;
+    if (input.browserMode === "personal") {
+      return Promise.reject(new AppError(
+        "BROWSER_CAPABILITY_UNSUPPORTED",
+        "Personal browser mode requires a connected local companion.",
+      ));
+    }
+    const { browserMode: _browserMode, ...managedInput } = input;
+    return this.invoke(context, (client) => client.open(managedInput, context));
   }
 
   openAuthorizedSite(

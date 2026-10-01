@@ -15,6 +15,9 @@ import {
 export const browserOwnershipSchema = z.enum(["user", "mcp"]);
 export type BrowserOwnership = z.infer<typeof browserOwnershipSchema>;
 
+export const browserModeSchema = z.enum(["managed", "personal"]);
+export type BrowserMode = z.infer<typeof browserModeSchema>;
+
 export const browserConnectionStateSchema = z.enum([
   "disconnected",
   "connecting",
@@ -190,6 +193,7 @@ export type BrowserTabsResult = z.infer<typeof browserTabsResultSchema>;
 export const browserOpenInputSchema = z
   .object({
     taskId: taskIdSchema.optional(),
+    browserMode: browserModeSchema.optional(),
     url: z.url().optional(),
     purpose: z.string().min(1).max(200).optional(),
     reusable: z.boolean().optional(),

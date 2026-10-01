@@ -52,6 +52,32 @@ describe("ScopedBrowserWorkerPool", () => {
     });
   });
 
+  it("fails closed for personal mode instead of launching a managed worker", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-personal-"));
+    temporaryRoots.push(root);
+
+    const startWorker = jest.fn(async () => ({
+      client: {} as BrowserExecutor,
+      close: jest.fn(async () => undefined),
+    }));
+    const pool = await ScopedBrowserWorkerPool.create({
+      releaseRoot: root,
+      stateRoot: path.join(root, "state"),
+      startWorker: startWorker as never,
+    });
+    const scope = { ownerScope: "owner-personal" } as OperationContext;
+
+    await expect(pool.open({
+      url: "https://chatgpt.com/",
+      browserMode: "personal",
+    }, scope)).rejects.toMatchObject({
+      code: "BROWSER_CAPABILITY_UNSUPPORTED",
+    });
+    expect(startWorker).not.toHaveBeenCalled();
+
+    await pool.close();
+  });
+
   it("releases the owner worker after the final task finishes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-finish-"));
     temporaryRoots.push(root);
