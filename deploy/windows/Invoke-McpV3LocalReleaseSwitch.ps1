@@ -88,9 +88,21 @@ if ($existingTask -and [string]$existingTask.State -eq 'Running' -and -not $alre
         -not (Get-Process -Id ([int]$lockRecord.pid) -ErrorAction SilentlyContinue)) {
         throw 'MCP V3 local companion lock is not a live handover source.'
     }
+    $sourceNodeProcess = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f ([int]$lockRecord.pid)) -ErrorAction SilentlyContinue
+    if ($null -eq $sourceNodeProcess -or [int]$sourceNodeProcess.ParentProcessId -le 0) {
+        throw 'MCP V3 local companion handover source process metadata is unavailable.'
+    }
+    $sourceLauncherProcess = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f ([int]$sourceNodeProcess.ParentProcessId)) -ErrorAction SilentlyContinue
+    if ($null -eq $sourceLauncherProcess -or
+        [string]$sourceLauncherProcess.Name -ne 'McpNodeHostLauncher.exe' -or
+        [string]::IsNullOrWhiteSpace([string]$sourceLauncherProcess.CommandLine) -or
+        ([string]$sourceLauncherProcess.CommandLine).IndexOf('companion-cli.js', [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw 'MCP V3 local companion handover source launcher could not be resolved safely.'
+    }
     $handoverSource = [pscustomobject]@{
         instanceId = [string]$lockRecord.instanceId
         pid = [int]$lockRecord.pid
+        launcherPid = [int]$sourceLauncherProcess.ProcessId
         releaseRoot = [IO.Path]::GetFullPath([string]$lockRecord.releaseRoot)
         lockPath = $lockPath
     }
@@ -138,6 +150,7 @@ function Wait-McpV3LocalHandover {
 
     $target = [IO.Path]::GetFullPath($TargetReleaseRoot)
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $sourceRetirementAttempted = $false
     do {
         $record = $null
         if (Test-Path -LiteralPath ([string]$Source.lockPath) -PathType Leaf) {
@@ -154,8 +167,26 @@ function Wait-McpV3LocalHandover {
             [int]$record.pid -gt 0 -and
             (Get-Process -Id ([int]$record.pid) -ErrorAction SilentlyContinue) -and
             [string]::Equals([IO.Path]::GetFullPath([string]$record.releaseRoot), $target, [StringComparison]::OrdinalIgnoreCase)
+        if ($newOwnerReady -and -not $sourceRetirementAttempted) {
+            $sourceRetirementAttempted = $true
+            $sourceLauncherProcess = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f ([int]$Source.launcherPid)) -ErrorAction SilentlyContinue
+            if ($sourceLauncherProcess) {
+                $sourceLauncherCommandLine = [string]$sourceLauncherProcess.CommandLine
+                if ([string]$sourceLauncherProcess.Name -ne 'McpNodeHostLauncher.exe' -or
+                    [string]::IsNullOrWhiteSpace($sourceLauncherCommandLine) -or
+                    $sourceLauncherCommandLine.IndexOf([string]$Source.releaseRoot, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+                    $sourceLauncherCommandLine.IndexOf('companion-cli.js', [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                    throw "MCP V3 local handover source launcher identity changed before retirement: pid=$([int]$Source.launcherPid)"
+                }
+                & taskkill.exe /PID ([string]$Source.launcherPid) /T /F *> $null
+                if ($LASTEXITCODE -ne 0 -and (Get-Process -Id ([int]$Source.launcherPid) -ErrorAction SilentlyContinue)) {
+                    throw "MCP V3 local handover source launcher could not be retired: pid=$([int]$Source.launcherPid)"
+                }
+            }
+        }
         $oldOwnerExited = -not (Get-Process -Id ([int]$Source.pid) -ErrorAction SilentlyContinue)
-        if ($newOwnerReady -and $oldOwnerExited) {
+        $oldLauncherExited = -not (Get-Process -Id ([int]$Source.launcherPid) -ErrorAction SilentlyContinue)
+        if ($newOwnerReady -and $oldOwnerExited -and $oldLauncherExited) {
             return $record
         }
         Start-Sleep -Milliseconds 250
@@ -165,9 +196,11 @@ function Wait-McpV3LocalHandover {
     $observedPid = if ($null -eq $record) { 0 } else { [int]$record.pid }
     $observedRelease = if ($null -eq $record) { '<none>' } else { [string]$record.releaseRoot }
     $sourceAlive = [bool](Get-Process -Id ([int]$Source.pid) -ErrorAction SilentlyContinue)
+    $sourceLauncherAlive = [bool](Get-Process -Id ([int]$Source.launcherPid) -ErrorAction SilentlyContinue)
     throw ("MCP V3 local handover did not transfer readiness before timeout. " +
         "targetRelease=$target observedRelease=$observedRelease observedInstanceId=$observedInstanceId " +
-        "observedPid=$observedPid sourcePid=$([int]$Source.pid) sourceAlive=$sourceAlive")
+        "observedPid=$observedPid sourcePid=$([int]$Source.pid) sourceAlive=$sourceAlive " +
+        "sourceLauncherPid=$([int]$Source.launcherPid) sourceLauncherAlive=$sourceLauncherAlive")
 }
 
 function Stop-McpV3LocalCompanionLaunchers {
