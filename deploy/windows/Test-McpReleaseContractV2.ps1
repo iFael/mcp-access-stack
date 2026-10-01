@@ -160,6 +160,17 @@ try {
             throw "Public release Edge gate is missing required token: $requiredToken"
         }
     }
+    $deployIndex = $edgeJobSource.IndexOf('npm run deploy --workspace @mcp-access-stack/edge-gateway')
+    $secretIndex = $edgeJobSource.IndexOf('wrangler secret put MCP_OWNER_TOKEN')
+    $probeIndex = $edgeJobSource.IndexOf('/_internal/owner-oauth/recover-access')
+    if ($deployIndex -lt 0 -or $secretIndex -lt 0 -or $probeIndex -lt 0 -or
+        $deployIndex -ge $secretIndex -or $secretIndex -ge $probeIndex) {
+        throw 'Public release Edge gate must deploy first, then sync the break-glass secret, then verify the authenticated probe.'
+    }
+    if (-not $edgeJobSource.Contains('after propagation retries')) {
+        throw 'Public release Edge break-glass verification must tolerate secret propagation delay.'
+    }
+
     $publishJobSource = $releaseWorkflow.Substring($publishJobMatch.Index)
     if (-not $publishJobSource.Contains('- edge')) {
         throw 'Public GitHub Release must depend on the successful Edge contract gate.'
@@ -181,7 +192,8 @@ try {
         'invalid_owner_recovery_content_type',
         '/_internal/owner-oauth/recover-access',
         'migrate-single-user',
-        'MIGRATE_OWNER_TO_RAFAEL'
+        'MIGRATE_OWNER_TO_RAFAEL',
+        'after propagation retries'
     )) {
         if (-not $breakGlassWorkflow.Contains($requiredToken)) {
             throw "Edge break-glass provisioning workflow is missing required token: $requiredToken"

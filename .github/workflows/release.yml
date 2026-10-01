@@ -517,6 +517,12 @@ jobs:
           fi
           echo "Edge rollout preflight passed: current=$current_expected active=$active_revision next=$EXPECTED_CONTRACT_REVISION"
 
+      - name: Prepare exact Edge contract in production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy --workspace @mcp-access-stack/edge-gateway
+
       - name: Sync Edge break-glass secret
         env:
           MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
@@ -526,12 +532,6 @@ jobs:
           set -euo pipefail
           printf '%s' "$MCP_OWNER_TOKEN" | npx wrangler secret put MCP_OWNER_TOKEN --config services/mcp-edge-gateway/wrangler.jsonc
 
-      - name: Prepare exact Edge contract in production
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: npm run deploy --workspace @mcp-access-stack/edge-gateway
-
       - name: Verify Edge break-glass authentication without mutation
         shell: bash
         env:
@@ -539,13 +539,19 @@ jobs:
           EDGE_BASE_URL: ${{ needs.metadata.outputs.edge-base-url }}
         run: |
           set -euo pipefail
-          status="$(curl --silent --show-error             --output "$RUNNER_TEMP/edge-breakglass-probe.json"             --write-out '%{http_code}'             -X POST             -H "Authorization: Bearer $MCP_OWNER_TOKEN"             -H "Content-Type: text/plain"             --data 'probe'             "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
-          error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
-          if [[ "$status" != "415" || "$error" != "invalid_owner_recovery_content_type" ]]; then
-            echo "Edge break-glass verification failed: HTTP $status / $error" >&2
-            exit 1
-          fi
-          echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+          status=''
+          error=''
+          for attempt in $(seq 1 15); do
+            status="$(curl --silent --show-error               --output "$RUNNER_TEMP/edge-breakglass-probe.json"               --write-out '%{http_code}'               -X POST               -H "Authorization: Bearer $MCP_OWNER_TOKEN"               -H "Content-Type: text/plain"               --data 'probe'               "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
+            error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
+            if [[ "$status" == "415" && "$error" == "invalid_owner_recovery_content_type" ]]; then
+              echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+              exit 0
+            fi
+            if [[ "$attempt" -lt 15 ]]; then sleep 2; fi
+          done
+          echo "Edge break-glass verification failed after propagation retries: HTTP $status / $error" >&2
+          exit 1
 
       - name: Verify prepared Edge contract before publication
         env:
