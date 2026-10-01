@@ -2,6 +2,8 @@ import {
   AppError,
   githubCreatePullRequestInputSchema,
   githubCreatePullRequestResultSchema,
+  githubClosePullRequestInputSchema,
+  githubClosePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -14,6 +16,8 @@ import {
   githubRepositoryResultSchema,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
+  type GitHubClosePullRequestInput,
+  type GitHubClosePullRequestResult,
   type GitHubCreateRepositoryInput,
   type GitHubCreateRepositoryResult,
   type GitHubCommitChecksResult,
@@ -153,6 +157,48 @@ export class GitHubService implements GitHubExecutor {
     }
   }
 
+  async closePullRequest(
+    input: GitHubClosePullRequestInput,
+    context?: OperationContext,
+  ): Promise<GitHubClosePullRequestResult> {
+    const parsed = githubClosePullRequestInputSchema.parse(input);
+    const operationContext = context ?? {};
+    const beforeRaw = await this.client.getPullRequest(
+      parsed.owner,
+      parsed.repository,
+      parsed.pullNumber,
+      operationContext,
+    );
+    const before = mapPullRequest(beforeRaw);
+    if (before.headSha !== parsed.expectedPullRequestHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "GitHub pull-request head changed before close.");
+    }
+    if (before.merged) {
+      throw new AppError("INVALID_ARGUMENT", "Merged pull requests cannot be closed as unmerged.");
+    }
+    if (before.state === "closed") {
+      return parseCloseResult({ status: "completed", ...before });
+    }
+    try {
+      const raw = await this.client.closePullRequest(
+        parsed.owner,
+        parsed.repository,
+        parsed.pullNumber,
+        operationContext,
+      );
+      return mapClosedPullRequest(raw);
+    } catch (error) {
+      if (!isAmbiguousMutation(error)) throw error;
+      return this.reconcileClose(
+        parsed.owner,
+        parsed.repository,
+        parsed.pullNumber,
+        parsed.expectedPullRequestHeadSha,
+        operationContext,
+      );
+    }
+  }
+
   async mergePullRequest(
     input: GitHubMergePullRequestInput,
     context?: OperationContext,
@@ -236,6 +282,26 @@ export class GitHubService implements GitHubExecutor {
     }
     if (matches.length !== 1) throw reconciliationRequired();
     return mapCreatedPullRequest(matches[0]);
+  }
+
+  private async reconcileClose(
+    owner: string,
+    repository: string,
+    pullNumber: number,
+    expectedHeadSha: string,
+    context: OperationContext,
+  ): Promise<GitHubClosePullRequestResult> {
+    let raw: unknown;
+    try {
+      raw = await this.client.getPullRequest(owner, repository, pullNumber, context);
+    } catch {
+      throw reconciliationRequired();
+    }
+    const mapped = mapPullRequest(raw);
+    if (mapped.headSha !== expectedHeadSha || mapped.state !== "closed" || mapped.merged) {
+      throw reconciliationRequired();
+    }
+    return parseCloseResult({ status: "completed", ...mapped });
   }
 
   private async reconcileMerge(
@@ -437,6 +503,16 @@ function mapCreatedPullRequest(raw: unknown): GitHubCreatePullRequestResult {
     status: "completed",
     ...mapPullRequest(raw),
   });
+  if (!parsed.success) throw invalidGitHubResponse();
+  return parsed.data;
+}
+
+function mapClosedPullRequest(raw: unknown): GitHubClosePullRequestResult {
+  return parseCloseResult({ status: "completed", ...mapPullRequest(raw) });
+}
+
+function parseCloseResult(value: unknown): GitHubClosePullRequestResult {
+  const parsed = githubClosePullRequestResultSchema.safeParse(value);
   if (!parsed.success) throw invalidGitHubResponse();
   return parsed.data;
 }

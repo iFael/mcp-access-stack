@@ -24,6 +24,8 @@ import {
   gitUnstagePathsResultSchema,
   githubCreatePullRequestInputSchema,
   githubCreatePullRequestResultSchema,
+  githubClosePullRequestInputSchema,
+  githubClosePullRequestResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -848,6 +850,7 @@ export const sourceControlRelayOperations = [
   "githubCreateRepository",
   "githubGetPullRequest",
   "githubCreatePullRequest",
+  "githubClosePullRequest",
   "githubMergePullRequest",
 ] as const;
 export type SourceControlRelayOperation = (typeof sourceControlRelayOperations)[number];
@@ -1022,6 +1025,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   z.object({ ...relayRequestBase, operation: z.literal("githubCreateRepository"), input: githubCreateRepositoryInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubGetPullRequest"), input: githubGetPullRequestInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubCreatePullRequest"), input: githubCreatePullRequestInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubClosePullRequest"), input: githubClosePullRequestInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubMergePullRequest"), input: githubMergePullRequestInputSchema }).strict(),
 ]);
 
@@ -1126,5 +1130,6 @@ export const relayResultSchemas = {
   githubCreateRepository: githubCreateRepositoryResultSchema,
   githubGetPullRequest: githubPullRequestResultSchema,
   githubCreatePullRequest: githubCreatePullRequestResultSchema,
+  githubClosePullRequest: githubClosePullRequestResultSchema,
   githubMergePullRequest: githubMergePullRequestResultSchema,
 } as const;

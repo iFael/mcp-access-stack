@@ -49,6 +49,7 @@ function client(overrides: Partial<GitHubApiClient> = {}): GitHubApiClient {
     getPullRequest: jest.fn(async () => pullRequestRecord()),
     findPullRequests: jest.fn(async () => [pullRequestRecord()]),
     createPullRequest: jest.fn(async () => pullRequestRecord()),
+    closePullRequest: jest.fn(async () => pullRequestRecord({ state: "closed" })),
     mergePullRequest: jest.fn(async () => ({ sha: mergeSha, merged: true, message: "merged" })),
     ...overrides,
   } as GitHubApiClient;
@@ -285,6 +286,86 @@ describe("GitHubService pull request creation", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(findPullRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitHubService pull request close", () => {
+  it("re-reads PR head before close and returns the closed typed PR", async () => {
+    const closePullRequest = jest.fn<GitHubApiClient["closePullRequest"]>(async () =>
+      pullRequestRecord({ state: "closed" }),
+    );
+    const service = new GitHubService(client({ closePullRequest }));
+
+    await expect(service.closePullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+    })).resolves.toMatchObject({
+      status: "completed",
+      number: 7,
+      state: "closed",
+      headSha,
+      merged: false,
+    });
+    expect(closePullRequest).toHaveBeenCalledWith("octo", "repo", 7, expect.anything());
+  });
+
+  it("is idempotent when the same unmerged PR is already closed", async () => {
+    const closePullRequest = jest.fn<GitHubApiClient["closePullRequest"]>();
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ state: "closed" })),
+      closePullRequest,
+    }));
+
+    await expect(service.closePullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+    })).resolves.toMatchObject({ status: "completed", state: "closed", merged: false });
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("fails before close when the PR head changed or the PR is already merged", async () => {
+    const closePullRequest = jest.fn<GitHubApiClient["closePullRequest"]>();
+    const changed = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ head: { sha: "d".repeat(40) } })),
+      closePullRequest,
+    }));
+    await expect(changed.closePullRequest({
+      workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+
+    const merged = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ state: "closed", merged: true, merge_commit_sha: mergeSha })),
+      closePullRequest,
+    }));
+    await expect(merged.closePullRequest({
+      workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+    })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("reconciles an ambiguous close only when the same head is observed closed and unmerged", async () => {
+    const getPullRequest = jest
+      .fn<GitHubApiClient["getPullRequest"]>()
+      .mockResolvedValueOnce(pullRequestRecord())
+      .mockResolvedValueOnce(pullRequestRecord({ state: "closed" }));
+    const closePullRequest = jest.fn<GitHubApiClient["closePullRequest"]>(async () => {
+      throw ambiguousError();
+    });
+    const service = new GitHubService(client({ getPullRequest, closePullRequest }));
+
+    await expect(service.closePullRequest({
+      workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+    })).resolves.toMatchObject({ status: "completed", state: "closed", headSha, merged: false });
+    expect(getPullRequest).toHaveBeenCalledTimes(2);
   });
 });
 

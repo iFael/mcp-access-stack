@@ -208,6 +208,16 @@ function fakeGitHubExecutor(): GitHubExecutor {
       baseSha: SHA_A,
       merged: false,
     })),
+    closePullRequest: jest.fn<GitHubExecutor["closePullRequest"]>(async (input) => ({
+      status: "completed" as const,
+      number: input.pullNumber,
+      state: "closed" as const,
+      title: "typed pr",
+      url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`,
+      headSha: input.expectedPullRequestHeadSha,
+      baseSha: SHA_A,
+      merged: false as const,
+    })),
     mergePullRequest: jest.fn<GitHubExecutor["mergePullRequest"]>(async (input) => ({
       status: "completed" as const,
       number: input.pullNumber,
@@ -454,9 +464,9 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
     expect(githubExecutor.createPullRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps repository creation and pull-request merge confirmation-bound", async () => {
+  it("keeps repository creation and pull-request close/merge confirmation-bound", async () => {
     const { agent, githubExecutor } = await setupAgent({
-      capabilities: ["github.repository.create", "github.pull_request.merge"],
+      capabilities: ["github.repository.create", "github.pull_request.close", "github.pull_request.merge"],
       accountOwners: ["octo"],
       confirmationMode: "trusted-workspace",
     });
@@ -465,6 +475,18 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
       (agent as any).githubCreateRepository(
         { workspaceId: "test", owner: "octo", name: "trusted-repo", visibility: "private" },
         { invocationId: "trusted-repo-create" },
+      ),
+    ).resolves.toMatchObject({ status: "confirmation_required" });
+    await expect(
+      (agent as any).githubClosePullRequest(
+        {
+          workspaceId: "test",
+          owner: "octo",
+          repository: "repo",
+          pullNumber: 7,
+          expectedPullRequestHeadSha: SHA_B,
+        },
+        { invocationId: "trusted-pr-close" },
       ),
     ).resolves.toMatchObject({ status: "confirmation_required" });
     await expect(
@@ -481,6 +503,7 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
       ),
     ).resolves.toMatchObject({ status: "confirmation_required" });
     expect(githubExecutor.createRepository).not.toHaveBeenCalled();
+    expect(githubExecutor.closePullRequest).not.toHaveBeenCalled();
     expect(githubExecutor.mergePullRequest).not.toHaveBeenCalled();
   });
 });
@@ -508,6 +531,20 @@ describe("LocalAgent confirmation and receipt completeness", () => {
         title: "typed pr",
         head: "feature/task6",
         base: "main",
+      },
+    },
+    {
+      name: "pull-request close",
+      capabilities: ["github.pull_request.close"],
+      method: "githubClosePullRequest",
+      backend: "closePullRequest",
+      operation: "github_close_pull_request",
+      input: {
+        workspaceId: "test",
+        owner: "octo",
+        repository: "repo",
+        pullNumber: 7,
+        expectedPullRequestHeadSha: SHA_B,
       },
     },
     {

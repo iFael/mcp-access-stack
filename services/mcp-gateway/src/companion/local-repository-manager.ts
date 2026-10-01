@@ -47,6 +47,7 @@ const LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES = [
   "github.repository.read",
   "github.pull_request.read",
   "github.pull_request.create",
+  "github.pull_request.close",
   "github.pull_request.merge",
 ] as const satisfies readonly SourceControlCapability[];
 

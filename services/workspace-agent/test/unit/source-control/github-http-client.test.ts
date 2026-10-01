@@ -41,6 +41,7 @@ describe("GitHubHttpClient fixed transport", () => {
       body: "body",
       draft: false,
     });
+    await client.closePullRequest("octo", "repo", 7);
     await client.mergePullRequest("octo", "repo", 7, {
       sha: "a".repeat(40),
       merge_method: "squash",
@@ -55,6 +56,7 @@ describe("GitHubHttpClient fixed transport", () => {
       ["https://api.github.com/orgs/octo-org/repos", "POST"],
       ["https://api.github.com/repos/octo/repo/pulls/7", "GET"],
       ["https://api.github.com/repos/octo/repo/pulls", "POST"],
+      ["https://api.github.com/repos/octo/repo/pulls/7", "PATCH"],
       ["https://api.github.com/repos/octo/repo/pulls/7/merge", "PUT"],
       [
         "https://api.github.com/repos/octo/repo/pulls?state=open&head=octo%3Afeature%2Ftask5&base=main",
@@ -77,7 +79,7 @@ describe("GitHubHttpClient fixed transport", () => {
     expect("fetch" in client).toBe(false);
   });
 
-  it("sends exact fixed JSON bodies for repository, PR and merge mutations", async () => {
+  it("sends exact fixed JSON bodies for repository, PR close and merge mutations", async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ ok: true }));
     const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
 
@@ -93,6 +95,7 @@ describe("GitHubHttpClient fixed transport", () => {
       body: "body",
       draft: true,
     });
+    await client.closePullRequest("octo", "repo", 7);
     await client.mergePullRequest("octo", "repo", 7, {
       sha: "b".repeat(40),
       merge_method: "merge",
@@ -110,7 +113,8 @@ describe("GitHubHttpClient fixed transport", () => {
       body: "body",
       draft: true,
     });
-    expect(JSON.parse(String(requestOf(fetchImpl, 2).init.body))).toEqual({
+    expect(JSON.parse(String(requestOf(fetchImpl, 2).init.body))).toEqual({ state: "closed" });
+    expect(JSON.parse(String(requestOf(fetchImpl, 3).init.body))).toEqual({
       sha: "b".repeat(40),
       merge_method: "merge",
     });

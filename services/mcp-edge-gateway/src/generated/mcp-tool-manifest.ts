@@ -11890,6 +11890,143 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Closes an unmerged pull request at an exact expected head SHA after typed confirmation. Repeated close is idempotent when the same PR is already closed at that head.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedPullRequestHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "pullNumber": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "pullNumber",
+        "expectedPullRequestHeadSha"
+      ],
+      "type": "object"
+    },
+    "name": "github_close_pull_request",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "baseSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "merged": {
+          "const": false,
+          "type": "boolean"
+        },
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "const": "github_close_pull_request",
+          "type": "string"
+        },
+        "state": {
+          "const": "closed",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Close GitHub pull request"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Merges an authorized pull request at an exact expected head SHA after typed confirmation.",
     "execution": {
       "taskSupport": "forbidden"
@@ -20332,13 +20469,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "46903b0c544e68eda017a33d022019b37dfd8ff67cb0c3245ffd79b04fedfbba",
-  "serverVersion": "0.4.0-catalog.c46903b0c544e.sa56beb65af4e",
-  "toolCount": 90,
-  "toolSetRevision": "a56beb65af4e9c8a08c209094c2412a2fa11cec4b95da3834fb3b31d398a8e78"
+  "contractRevision": "579417ad12585adefdc19258747fd9d80dc028cc7b61aaaac78a7cf69466e4fd",
+  "serverVersion": "0.4.0-catalog.c579417ad1258.s8b73637247cd",
+  "toolCount": 91,
+  "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c46903b0c544e.sa56beb65af4e"
+  "version": "0.4.0-catalog.c579417ad1258.s8b73637247cd"
 } as const;

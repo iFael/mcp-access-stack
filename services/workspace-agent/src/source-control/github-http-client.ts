@@ -116,6 +116,12 @@ export interface GitHubApiClient {
     request: GitHubCreatePullRequestRequest,
     context?: OperationContext,
   ): Promise<GitHubPullRequestRecord>;
+  closePullRequest(
+    owner: string,
+    repository: string,
+    pullNumber: number,
+    context?: OperationContext,
+  ): Promise<GitHubPullRequestRecord>;
   mergePullRequest(
     owner: string,
     repository: string,
@@ -274,6 +280,25 @@ export class GitHubHttpClient implements GitHubApiClient {
     );
   }
 
+  closePullRequest(
+    owner: string,
+    repository: string,
+    pullNumber: number,
+    context?: OperationContext,
+  ): Promise<GitHubPullRequestRecord> {
+    return performGitHubRequest<GitHubPullRequestRecord>(
+      this.#credentialProvider,
+      this.#fetchImpl,
+      {
+        method: "PATCH",
+        path: `/repos/${segment(owner)}/${segment(repository)}/pulls/${positiveInteger(pullNumber)}`,
+        body: { state: "closed" },
+        mutation: true,
+      },
+      context,
+    );
+  }
+
   mergePullRequest(
     owner: string,
     repository: string,
@@ -296,7 +321,7 @@ export class GitHubHttpClient implements GitHubApiClient {
 }
 
 interface FixedRequest {
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "PATCH";
   path: string;
   body?: object;
   mutation: boolean;

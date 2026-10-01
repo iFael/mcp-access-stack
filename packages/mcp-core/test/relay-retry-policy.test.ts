@@ -41,6 +41,7 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "githubStartCommitChecksWatch",
   "githubCreateRepository",
   "githubCreatePullRequest",
+  "githubClosePullRequest",
   "githubMergePullRequest",
 ];
 

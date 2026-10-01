@@ -164,6 +164,7 @@ export const sourceControlCapabilities = [
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
+  "github.pull_request.close",
   "github.pull_request.merge",
 ] as const;
 
@@ -186,6 +187,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
+  "github_close_pull_request",
   "github_merge_pull_request",
 ]);
 export type SourceControlOperationName = z.infer<typeof sourceControlOperationNameSchema>;
@@ -194,6 +196,7 @@ export const confirmableSourceControlOperationNameSchema = z.enum([
   "git_push_branch",
   "github_create_repository",
   "github_create_pull_request",
+  "github_close_pull_request",
   "github_merge_pull_request",
 ]);
 export type ConfirmableSourceControlOperationName = z.infer<
@@ -752,6 +755,35 @@ export const githubCreatePullRequestResultSchema = z.discriminatedUnion("status"
 ]);
 export type GitHubCreatePullRequestResult = z.infer<
   typeof githubCreatePullRequestResultSchema
+>;
+
+export const githubClosePullRequestInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    pullNumber: z.number().int().positive(),
+    expectedPullRequestHeadSha: gitShaSchema,
+    confirmationId: confirmationIdSchema.optional(),
+  })
+  .strict();
+export type GitHubClosePullRequestInput = z.input<typeof githubClosePullRequestInputSchema>;
+
+const githubClosePullRequestConfirmationRequiredSchema = sourceControlConfirmationRequiredSchema.extend({
+  operation: z.literal("github_close_pull_request"),
+});
+const githubClosePullRequestCompletedResultSchema = githubPullRequestResultSchema.extend({
+  status: z.literal("completed"),
+  state: z.literal("closed"),
+  merged: z.literal(false),
+});
+export const githubClosePullRequestResultSchema = z.discriminatedUnion("status", [
+  githubClosePullRequestConfirmationRequiredSchema,
+  githubClosePullRequestCompletedResultSchema,
+]);
+export type GitHubClosePullRequestResult = z.infer<
+  typeof githubClosePullRequestResultSchema
 >;
 
 export const githubMergePullRequestInputSchema = z
