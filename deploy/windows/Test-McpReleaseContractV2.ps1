@@ -139,6 +139,10 @@ try {
         '- package',
         'CLOUDFLARE_API_TOKEN',
         'CLOUDFLARE_ACCOUNT_ID',
+        'MCP_OWNER_TOKEN',
+        'wrangler secret put MCP_OWNER_TOKEN',
+        'invalid_owner_recovery_content_type',
+        '/_internal/owner-oauth/recover-access',
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
         'Preflight contract rollout compatibility',
@@ -163,7 +167,28 @@ try {
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
         throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
     }
-    Write-Output 'Release contract v2 test passed: v2 is the only accepted contract, Docker is retired, runtime is self-contained, CI evidence is duplicate-safe, and Edge prepare gates publication without invalidating the active connector.'
+
+    $breakGlassWorkflowPath = Join-Path $repositoryRoot '.github\workflows\edge-breakglass.yml'
+    if (-not (Test-Path -LiteralPath $breakGlassWorkflowPath -PathType Leaf)) {
+        throw 'Edge break-glass provisioning workflow is missing.'
+    }
+    $breakGlassWorkflow = Get-Content -Raw -LiteralPath $breakGlassWorkflowPath
+    foreach ($requiredToken in @(
+        'workflow_dispatch',
+        'environment: public-release',
+        'MCP_OWNER_TOKEN',
+        'wrangler secret put MCP_OWNER_TOKEN',
+        'invalid_owner_recovery_content_type',
+        '/_internal/owner-oauth/recover-access',
+        'migrate-single-user',
+        'MIGRATE_OWNER_TO_RAFAEL'
+    )) {
+        if (-not $breakGlassWorkflow.Contains($requiredToken)) {
+            throw "Edge break-glass provisioning workflow is missing required token: $requiredToken"
+        }
+    }
+
+    Write-Output 'Release contract v2 test passed: v2 is the only accepted contract, Docker is retired, runtime is self-contained, CI evidence is duplicate-safe, Edge prepare gates publication, and break-glass provisioning is explicit and verified.'
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

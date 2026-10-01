@@ -1,0 +1,124 @@
+name: Edge break-glass provisioning
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Protected administrative operation
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - migrate-single-user
+      confirmation:
+        description: Type MIGRATE_OWNER_TO_RAFAEL only for the migration operation
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-breakglass-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: public-release
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Require break-glass secrets
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$MCP_OWNER_TOKEN"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+      - name: Sync Edge break-glass secret
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MCP_OWNER_TOKEN" | npx wrangler secret put MCP_OWNER_TOKEN --config services/mcp-edge-gateway/wrangler.jsonc
+
+      - name: Verify authenticated break-glass gate without mutation
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+        run: |
+          set -euo pipefail
+          EDGE_BASE_URL="$(sed -nE 's/.*"MCP_PUBLIC_BASE_URL"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' services/mcp-edge-gateway/wrangler.jsonc | head -n 1)"
+          status="$(curl --silent --show-error             --output "$RUNNER_TEMP/edge-breakglass-probe.json"             --write-out '%{http_code}'             -X POST             -H "Authorization: Bearer $MCP_OWNER_TOKEN"             -H "Content-Type: text/plain"             --data 'probe'             "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
+          error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
+          if [[ "$status" != "415" || "$error" != "invalid_owner_recovery_content_type" ]]; then
+            echo "Break-glass verification failed: HTTP $status / $error" >&2
+            exit 1
+          fi
+          echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+
+      - name: Migrate synthetic Owner to historical Rafael identity
+        if: ${{ inputs.operation == 'migrate-single-user' }}
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRMATION" != "MIGRATE_OWNER_TO_RAFAEL" ]]; then
+            echo "Migration confirmation did not match the required phrase." >&2
+            exit 1
+          fi
+
+          EDGE_BASE_URL="$(sed -nE 's/.*"MCP_PUBLIC_BASE_URL"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' services/mcp-edge-gateway/wrangler.jsonc | head -n 1)"
+          payload="$(jq -nc '{
+            fromUserId: "usr_54135447-1418-4a47-a300-3720970e4731",
+            toUser: {
+              id: "usr_bd5ee3a9-b231-4062-beb5-b441467cea5b",
+              displayName: "Rafael",
+              createdAt: "2026-09-26T20:05:35.707Z"
+            }
+          }')"
+
+          status="$(curl --silent --show-error             --output "$RUNNER_TEMP/single-user-migration.json"             --write-out '%{http_code}'             -X POST             -H "Authorization: Bearer $MCP_OWNER_TOKEN"             -H "Content-Type: application/json"             --data "$payload"             "${EDGE_BASE_URL%/}/_internal/single-user/migrate")"
+          if [[ "$status" != "200" ]]; then
+            echo "Single-user migration failed with HTTP $status." >&2
+            cat "$RUNNER_TEMP/single-user-migration.json" >&2
+            exit 1
+          fi
+
+          jq -e '
+            (.status == "migrated" or .status == "already-migrated") and
+            .user.id == "usr_bd5ee3a9-b231-4062-beb5-b441467cea5b" and
+            .user.displayName == "Rafael" and
+            .repositoryCount == 2 and
+            .deviceCount == 1 and
+            .materializationCount == 3
+          ' "$RUNNER_TEMP/single-user-migration.json" >/dev/null
+
+          echo "Single-user migration completed and preserved the expected production topology."
