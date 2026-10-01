@@ -15,15 +15,12 @@ Required environment:
   MCP_ACCESS_STACK_RUNTIME_ROOT
   MCP_EDGE_BASE_URL
   MCP_CONNECTOR_TOKEN_FILE
-  MCP_OWNER_TOKEN_FILE
   VS_CODE_GPT_POLICY_PATH
 
 Optional environment:
   MCP_RELEASE_ROOT
   MCP_NODE_BINARY
   MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS
-  MCP_SESSION_MODE
-  OWNER_OAUTH_SCOPES
   ALLOWED_ORIGINS
 EOF
   exit 2
@@ -89,7 +86,6 @@ require_value VS_CODE_GPT_STACK_ROOT
 require_value MCP_ACCESS_STACK_RUNTIME_ROOT
 require_value MCP_EDGE_BASE_URL
 require_value MCP_CONNECTOR_TOKEN_FILE
-require_value MCP_OWNER_TOKEN_FILE
 require_value VS_CODE_GPT_POLICY_PATH
 
 project_root="$(resolve_dir "$VS_CODE_GPT_STACK_ROOT")"
@@ -97,16 +93,11 @@ release_root="$(resolve_dir "${MCP_RELEASE_ROOT:-$project_root}")"
 runtime_root="$(resolve_dir "$MCP_ACCESS_STACK_RUNTIME_ROOT")"
 policy_path="$(resolve_file "$VS_CODE_GPT_POLICY_PATH")"
 connector_token_file="$(assert_private_readable_file "$MCP_CONNECTOR_TOKEN_FILE" 'Connector token' 4096)"
-owner_token_file="$(assert_private_readable_file "$MCP_OWNER_TOKEN_FILE" 'Owner token' 4096)"
 
 edge_rest="${MCP_EDGE_BASE_URL#https://}"
 [[ "$MCP_EDGE_BASE_URL" == https://* && -n "$edge_rest" ]] || fail 'MCP_EDGE_BASE_URL must be a credential-free HTTPS origin.'
 [[ "$edge_rest" != *'/'* && "$edge_rest" != *'?'* && "$edge_rest" != *'#'* && "$edge_rest" != *'@'* ]] ||
   fail 'MCP_EDGE_BASE_URL must be a credential-free HTTPS origin with no path, query or fragment.'
-
-session_mode="${MCP_SESSION_MODE:-stateless}"
-[[ "$session_mode" == 'stateless' || "$session_mode" == 'stateful-experiment' ]] ||
-  fail 'MCP_SESSION_MODE must be stateless or stateful-experiment.'
 
 max_concurrency="${MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS:-8}"
 [[ "$max_concurrency" =~ ^[0-9]+$ ]] || fail 'MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS must be an integer.'
@@ -151,10 +142,8 @@ elif [[ ! -s "$native_package_manifest" ]]; then
 fi
 
 connector_token="$(read_token "$connector_token_file" 'Connector token' 32)"
-owner_token="$(read_token "$owner_token_file" 'Owner token' 16)"
 
 allowed_origins="${ALLOWED_ORIGINS:-https://chatgpt.com,https://chat.openai.com}"
-owner_oauth_scopes="${OWNER_OAUTH_SCOPES:-workspaces:read}"
 
 if $validate_only; then
   printf 'status=validated\n'
@@ -175,7 +164,6 @@ if $validate_only; then
   else
     printf 'browserRuntimeReason=%s\n' "$browser_runtime_reason"
   fi
-  printf 'mcpSessionMode=%s\n' "$session_mode"
   printf 'maxConcurrentRequests=%s\n' "$max_concurrency"
   exit 0
 fi
@@ -209,11 +197,6 @@ else
 fi
 export MCP_ACCESS_STACK_INSTALLATION_ROOT="${MCP_ACCESS_STACK_INSTALLATION_ROOT:-/var/lib/mcp-access-stack}"
 export MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS="$max_concurrency"
-export MCP_SESSION_MODE="$session_mode"
-export AUTH_MODE='owner'
-export OWNER_TOKEN="$owner_token"
-export OWNER_OAUTH_SCOPES="$owner_oauth_scopes"
-export OWNER_OAUTH_STATE_PATH="$runtime_root/owner-oauth-state.json"
 export ALLOWED_ORIGINS="$allowed_origins"
 # The Edge Connector injects its loopback BrowserWorkerClient directly.
 # Keep gateway env-based Browser Worker wiring disabled to avoid a second worker.

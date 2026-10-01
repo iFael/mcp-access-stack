@@ -6,7 +6,6 @@
   "workers_dev": true,
   "vars": {
     "MCP_EDGE_ENABLED": "true",
-    "MCP_EDGE_AUTH_MODE": "owner",
     "MCP_PUBLIC_BASE_URL": "https://mcp-access-stack.rafaeldamasio77.workers.dev/",
     "MCP_OWNER_OAUTH_SCOPES": "workspaces:read",
     "MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS": "3600",

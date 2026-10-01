@@ -1,15 +1,12 @@
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { describe, expect, it } from "@jest/globals";
 import { createGatewayApplication } from "../../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
-
-const validAuth: AuthInfo = {
-  token: "valid",
-  clientId: "browser-tools-http-list-test",
-  scopes: ["workspaces:read"],
-  expiresAt: Math.floor(Date.now() / 1_000) + 300,
-  extra: { subject: "allowed-user" },
-};
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+} from "../../support/helpers.js";
 
 const advancedToolNames = [
   "browser_console",
@@ -31,10 +28,7 @@ describe("advanced browser tools HTTP list", () => {
           maxPayloadBytes: 2 * 1024 * 1024,
         },
       }),
-      {
-        logger: silentLogger(),
-        tokenVerifier: { verify: async () => validAuth },
-      },
+      makeEdgeGatewayDependencies({ logger: silentLogger() }),
     );
     const http = await listen(gateway.app);
 
@@ -43,8 +37,8 @@ describe("advanced browser tools HTTP list", () => {
         method: "POST",
         headers: {
           accept: "application/json, text/event-stream",
-          authorization: "Bearer valid",
-          "content-type": "application/json",
+              "content-type": "application/json",
+      ...edgeHeaders(),
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -65,17 +59,13 @@ describe("advanced browser tools HTTP list", () => {
       for (const tool of advanced) {
         expect(tool.inputSchema).toMatchObject({ type: "object" });
         expect(tool.outputSchema).toMatchObject({ type: "object" });
-        expect(tool.securitySchemes).toEqual([
-          { type: "oauth2", scopes: ["workspaces:read"] },
-        ]);
+        expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({
-          securitySchemes: [
-            { type: "oauth2", scopes: ["workspaces:read"] },
-          ],
+          securitySchemes: [{ type: "noauth" }],
         });
       }
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });

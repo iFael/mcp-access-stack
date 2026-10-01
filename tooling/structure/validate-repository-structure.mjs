@@ -15,10 +15,6 @@ const REQUIRED_DIRECTORIES = [
   "services/browser-worker/test/integration",
   "services/browser-worker/test/e2e",
   "services/mcp-gateway",
-  "services/mcp-gateway/src/actions",
-  "services/mcp-gateway/src/actions/console",
-  "services/mcp-gateway/src/relay",
-  "services/mcp-gateway/src/auth",
   "services/mcp-gateway/src/browser",
   "services/mcp-gateway/src/http",
   "services/mcp-gateway/src/mcp",
@@ -31,14 +27,11 @@ const REQUIRED_DIRECTORIES = [
   "services/workspace-agent/src/filesystem",
   "services/workspace-agent/src/git",
   "services/workspace-agent/src/shell",
-  "services/workspace-agent/src/connection",
   "services/workspace-agent/test/unit",
   "services/workspace-agent/test/integration",
-  "services/workspace-agent/test/e2e",
   "services/workspace-agent/test/support",
   "packages/mcp-core",
   "operations/browser",
-  "operations/gpt-actions",
   "operations/inspector",
   "operations/validation",
   "deploy/windows",
@@ -46,6 +39,16 @@ const REQUIRED_DIRECTORIES = [
   "tooling/benchmarks/mcp",
   "tooling/smoke/browser",
   "docs/architecture",
+];
+
+const RETIRED_PATHS = [
+  "services/mcp-gateway/src/actions",
+  "services/mcp-gateway/src/relay",
+  "services/mcp-gateway/src/auth",
+  "services/mcp-gateway/src/server.ts",
+  "services/workspace-agent/src/connection",
+  "services/workspace-agent/src/remote",
+  "operations/gpt-actions",
 ];
 
 const REQUIRED_FILES = [
@@ -153,6 +156,11 @@ export function validateRepositoryStructure(root = process.cwd()) {
   }
   for (const file of REQUIRED_FILES) {
     if (!existsSync(path.join(root, file))) issues.push(`Missing integration guide: ${file}`);
+  }
+  for (const retiredPath of RETIRED_PATHS) {
+    if (existsSync(path.join(root, retiredPath))) {
+      issues.push(`Retired architecture path still exists: ${retiredPath}`);
+    }
   }
   for (const directory of FORBIDDEN_ROOT_DIRECTORIES) {
     if (existsSync(path.join(root, directory))) issues.push(`Legacy root directory still exists: ${directory}`);

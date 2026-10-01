@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "tooling/smoke/**/*.ts",
+    "jest.config.ts",
+    "jest.preset.ts",
+    "packages/*/jest.config.ts",
+    "services/*/jest.config.ts"
+  ]
+}

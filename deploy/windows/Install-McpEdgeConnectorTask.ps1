@@ -20,15 +20,9 @@ param(
     [string]$ConnectorTokenFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$OwnerTokenFile,
-
-    [Parameter(Mandatory = $true)]
     [string]$PolicyPath,
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
-    [string]$OwnerOAuthScopes = 'workspaces:read',
-    [ValidateSet('stateless', 'stateful-experiment')]
-    [string]$McpSessionMode = 'stateless',
     [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
     [string]$BrowserWorkerTokenFile,
     [switch]$EnableBrowserWorker,
@@ -102,7 +96,6 @@ if (-not (Test-Path -LiteralPath $project -PathType Container)) {
 $releaseRoot = Join-Path $installation ("releases\$ReleaseId")
 $runtime = [IO.Path]::GetFullPath($RuntimeRoot)
 $connectorToken = Assert-McpEdgeTaskFile -Path $ConnectorTokenFile -Name 'Connector token'
-$ownerToken = Assert-McpEdgeTaskFile -Path $OwnerTokenFile -Name 'Owner token'
 $policy = Assert-McpEdgeTaskFile -Path $PolicyPath -Name 'Workspace policy'
 $browserTokenFile = $null
 $browserOrigin = $null
@@ -145,7 +138,6 @@ $plan = [ordered]@{
     validationLauncherPath = $validationLauncherPath
     edgeHostPath = $edgeHostPath
     runtimeRoot = $runtime
-    mcpSessionMode = $McpSessionMode
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
     execute = $edgeHostPath
@@ -251,11 +243,8 @@ $validationArguments = @(
     '-RuntimeRoot', $runtime,
     '-EdgeBaseUrl', $EdgeBaseUrl,
     '-ConnectorTokenFile', $connectorToken,
-    '-OwnerTokenFile', $ownerToken,
     '-PolicyPath', $policy,
     '-AllowedOrigins', $AllowedOrigins,
-    '-OwnerOAuthScopes', $OwnerOAuthScopes,
-    '-McpSessionMode', $McpSessionMode,
     '-MaxConcurrentRequests', [string]$MaxConcurrentRequests,
     '-ValidateOnly'
 )
@@ -274,7 +263,6 @@ $validation = $validationJson[0] | ConvertFrom-Json
 if ([string]$validation.status -ne 'validated' -or
     [string]$validation.projectRoot -ne $project -or
     [string]$validation.executionManifestSha256 -ne $manifestSha256 -or
-    [string]$validation.mcpSessionMode -ne $McpSessionMode -or
     [bool]$validation.browserEnabled -ne [bool]$EnableBrowserWorker) {
     throw 'Edge Connector launcher validation returned unexpected evidence.'
 }
@@ -287,11 +275,8 @@ $hostArguments = @(
     '--runtime-root', $runtime,
     '--edge-base-url', $edgeOrigin,
     '--connector-token-file', $connectorToken,
-    '--owner-token-file', $ownerToken,
     '--policy-path', $policy,
     '--allowed-origins', $AllowedOrigins,
-    '--owner-oauth-scopes', $OwnerOAuthScopes,
-    '--mcp-session-mode', $McpSessionMode,
     '--max-concurrent-requests', [string]$MaxConcurrentRequests,
     '--restart-count', '5',
     '--restart-interval-seconds', '60',
@@ -387,7 +372,6 @@ else {
     executionManifestSha256 = $manifestSha256
     launcherValidated = $true
     edgeHostValidated = $true
-    mcpSessionMode = $McpSessionMode
     browserEnabled = [bool]$EnableBrowserWorker
     browserWorkerUrl = if ($EnableBrowserWorker) { $browserOrigin } else { $null }
 } | ConvertTo-Json -Compress

@@ -25,14 +25,25 @@ foreach ($required in @(
     'EnableBrowserWorker',
     'BrowserWorkerTokenFile',
     'BROWSER_WORKER_URL',
-    'OWNER_OAUTH_STATE_PATH',
-    'MCP_SESSION_MODE',
-    'McpSessionMode',
-    'OWNER_TOKEN = $ownerToken',
     'ValidateOnly'
 )) {
     if (-not $launcherContent.Contains($required)) {
         throw "Edge Connector launcher contract is missing: $required"
+    }
+}
+foreach ($forbidden in @(
+    '$env:AUTH_MODE',
+    '$env:OWNER_TOKEN',
+    '$env:OWNER_OAUTH_SCOPES',
+    '$env:OWNER_OAUTH_STATE_PATH',
+    '$env:MCP_SESSION_MODE',
+    'OwnerTokenFile',
+    'OwnerOAuthScopes',
+    'McpSessionMode',
+    'Read-McpEdgeOwnerToken'
+)) {
+    if ($launcherContent.Contains($forbidden)) {
+        throw "Edge Connector launcher still contains retired local auth wiring: $forbidden"
     }
 }
 foreach ($required in @(
@@ -46,8 +57,6 @@ foreach ($required in @(
     'ProjectRoot',
     '--project-root',
     '--connector-token-file',
-    '--owner-token-file',
-    '--mcp-session-mode',
     '--browser-worker-token-file',
     '--browser-enabled',
     'EnableBrowserWorker',
@@ -68,7 +77,7 @@ foreach ($required in @(
 if ($installerContent -match 'OWNER_TOKEN\s*=\s*["''][^$]') {
     throw 'Edge Connector task installer must not embed an Owner token value.'
 }
-foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OWNER_TOKEN=', 'Assert-McpWindowsExecutionNodeRelease', '@(& $edgeHostPath')) {
+foreach ($forbidden in @("'--env'", "'--env-file'", 'BROWSER_WORKER_TOKEN=', 'OWNER_TOKEN=', '--owner-token-file', '--owner-oauth-scopes', '--mcp-session-mode', 'Assert-McpWindowsExecutionNodeRelease', '@(& $edgeHostPath')) {
     if ($installerContent.Contains($forbidden)) {
         throw "Edge Connector fixed host installer must not use generic environment injection: $forbidden"
     }
@@ -87,11 +96,9 @@ $browserLauncher = Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'
 $browserBroker = Join-Path $releaseRoot 'compat\McpCredentialBroker.exe'
 $elevationBroker = Join-Path $releaseRoot 'native\McpElevationBroker.exe'
 $connectorTokenFile = Join-Path $runtimeRoot 'connector-token.txt'
-$ownerTokenFile = Join-Path $runtimeRoot 'owner-token.txt'
 $browserTokenFile = Join-Path $runtimeRoot 'browser-token.txt'
 $policyPath = Join-Path $runtimeRoot 'policy.json'
 $connectorToken = 'c' * 64
-$ownerToken = 'o' * 64
 $browserToken = 'b' * 64
 
 try {
@@ -113,7 +120,6 @@ try {
     [IO.File]::WriteAllText($browserBroker, 'browser-broker-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($elevationBroker, 'elevation-broker-fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($connectorTokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($ownerTokenFile, $ownerToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($browserTokenFile, $browserToken, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($policyPath, "{}`n", [Text.UTF8Encoding]::new($false))
 
@@ -170,7 +176,6 @@ try {
         '-RuntimeRoot', $runtimeRoot,
         '-EdgeBaseUrl', 'https://mcp-access-stack.example.workers.dev',
         '-ConnectorTokenFile', $connectorTokenFile,
-        '-OwnerTokenFile', $ownerTokenFile,
         '-PolicyPath', $policyPath,
         '-ValidateOnly'
     )
@@ -179,7 +184,7 @@ try {
         throw 'Edge Connector launcher fixture validation failed.'
     }
     $validationText = [string]$validationOutput[0]
-    if ($validationText.Contains($connectorToken) -or $validationText.Contains($ownerToken)) {
+    if ($validationText.Contains($connectorToken)) {
         throw 'Edge Connector launcher leaked a fixture secret.'
     }
     $validation = $validationText | ConvertFrom-Json
@@ -188,24 +193,10 @@ try {
     if ([string]$validation.status -ne 'validated' -or
         -not $observedProjectRoot.Equals($expectedProjectRoot, [StringComparison]::OrdinalIgnoreCase) -or
         [string]$validation.executionManifestSha256 -ne $manifestHash -or
-        [string]$validation.mcpSessionMode -ne 'stateless' -or
         $validation.browserEnabled -ne $false) {
         throw 'Edge Connector launcher returned unexpected validation evidence.'
     }
 
-    $statefulValidateArgs = @($validateArgs[0..($validateArgs.Count - 2)]) + @(
-        '-McpSessionMode', 'stateful-experiment',
-        '-ValidateOnly'
-    )
-    $statefulValidationOutput = @(& pwsh @statefulValidateArgs 2>&1)
-    if ($LASTEXITCODE -ne 0 -or $statefulValidationOutput.Count -ne 1) {
-        throw 'Edge Connector stateful launcher fixture validation failed.'
-    }
-    $statefulValidation = [string]$statefulValidationOutput[0] | ConvertFrom-Json
-    if ([string]$statefulValidation.status -ne 'validated' -or
-        [string]$statefulValidation.mcpSessionMode -ne 'stateful-experiment') {
-        throw 'Edge Connector stateful launcher returned unexpected validation evidence.'
-    }
     $enabledValidateArgs = @($validateArgs[0..($validateArgs.Count - 2)]) + @(
         '-EnableBrowserWorker',
         '-BrowserWorkerUrl', 'http://127.0.0.1:3350',
@@ -218,7 +209,6 @@ try {
     }
     $enabledValidationText = [string]$enabledValidationOutput[0]
     if ($enabledValidationText.Contains($connectorToken) -or
-        $enabledValidationText.Contains($ownerToken) -or
         $enabledValidationText.Contains($browserToken)) {
         throw 'Edge Connector browser-enabled validation leaked a fixture secret.'
     }
@@ -237,20 +227,19 @@ try {
         -RuntimeRoot $runtimeRoot `
         -EdgeBaseUrl 'https://mcp-access-stack.example.workers.dev' `
         -ConnectorTokenFile $connectorTokenFile `
-        -OwnerTokenFile $ownerTokenFile `
         -PolicyPath $policyPath `
         -EnableBrowserWorker `
         -BrowserWorkerUrl 'http://127.0.0.1:3350' `
         -BrowserWorkerTokenFile $browserTokenFile 2>&1)
     if ($LASTEXITCODE -ne 0 -or $planOutput.Count -ne 1) {
         $diagnostic = ($planOutput -join [Environment]::NewLine)
-        foreach ($secret in @($connectorToken, $ownerToken, $browserToken)) {
+        foreach ($secret in @($connectorToken, $browserToken)) {
             $diagnostic = $diagnostic.Replace($secret, '<redacted>')
         }
         throw "Edge Connector task installer plan smoke failed. exit=$LASTEXITCODE count=$($planOutput.Count) diagnostic=$diagnostic"
     }
     $planText = [string]$planOutput[0]
-    if ($planText.Contains($connectorToken) -or $planText.Contains($ownerToken) -or $planText.Contains($browserToken)) {
+    if ($planText.Contains($connectorToken) -or $planText.Contains($browserToken)) {
         throw 'Edge Connector task installer leaked a fixture secret.'
     }
     $plan = $planText | ConvertFrom-Json
@@ -260,7 +249,6 @@ try {
         [string]$plan.plan.multipleInstances -ne 'IgnoreNew' -or
         [string]$plan.plan.runLevel -ne 'Limited' -or
         [string]$plan.plan.processSubsystem -ne 'windows-gui' -or
-        [string]$plan.plan.mcpSessionMode -ne 'stateless' -or
         $plan.plan.browserEnabled -ne $true -or
         [string]$plan.plan.browserWorkerUrl -ne 'http://127.0.0.1:3350' -or
         $plan.plan.consoleAttached -ne $false -or
@@ -279,7 +267,7 @@ try {
         -not $tamperedText.Contains('artifact hash mismatch')) {
         throw 'Edge Connector launcher tamper failure did not identify artifact integrity.'
     }
-    if ($tamperedText.Contains($connectorToken) -or $tamperedText.Contains($ownerToken)) {
+    if ($tamperedText.Contains($connectorToken)) {
         throw 'Edge Connector launcher leaked a fixture secret on failure.'
     }
 }

@@ -244,7 +244,7 @@ jobs:
       - name: Test Workspace Agent unit
         run: npm run test:workspace-agent:unit
 
-  pr-workspace-agent-integration-shard-1-e2e:
+  pr-workspace-agent-integration-shard-1:
     needs: impact
     if: >-
       always() &&
@@ -281,9 +281,6 @@ jobs:
 
       - name: Test Workspace Agent integration shard 1/2
         run: npm run test:workspace-agent:integration -- --shard=1/2
-
-      - name: Test Workspace Agent e2e
-        run: npm run test:workspace-agent:e2e
 
   pr-workspace-agent-integration-shard-2:
     needs: impact
@@ -327,7 +324,7 @@ jobs:
     needs:
       - impact
       - pr-workspace-agent-unit
-      - pr-workspace-agent-integration-shard-1-e2e
+      - pr-workspace-agent-integration-shard-1
       - pr-workspace-agent-integration-shard-2
     if: >-
       always() &&
@@ -340,12 +337,12 @@ jobs:
         shell: bash
         env:
           UNIT_RESULT: ${{ needs.pr-workspace-agent-unit.result }}
-          INTEGRATION_SHARD_1_E2E_RESULT: ${{ needs.pr-workspace-agent-integration-shard-1-e2e.result }}
+          INTEGRATION_SHARD_1_RESULT: ${{ needs.pr-workspace-agent-integration-shard-1.result }}
           INTEGRATION_SHARD_2_RESULT: ${{ needs.pr-workspace-agent-integration-shard-2.result }}
         run: |
           set -euo pipefail
           test "$UNIT_RESULT" = "success"
-          test "$INTEGRATION_SHARD_1_E2E_RESULT" = "success"
+          test "$INTEGRATION_SHARD_1_RESULT" = "success"
           test "$INTEGRATION_SHARD_2_RESULT" = "success"
   pr-windows-distribution:
     needs: impact

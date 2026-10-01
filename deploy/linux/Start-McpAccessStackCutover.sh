@@ -15,11 +15,8 @@ Usage: Start-McpAccessStackCutover.sh
   --edge-runtime-root PATH
   --edge-base-url HTTPS_ORIGIN
   --connector-token-file PATH
-  --owner-token-file PATH
   --policy-path PATH
   --allowed-origins VALUE
-  --owner-oauth-scopes VALUE
-  --mcp-session-mode stateless|stateful-experiment
   --edge-task-name NAME
   --max-concurrent-requests N
   --handover-delay-seconds N
@@ -69,7 +66,9 @@ done
 $execute || fail 'Cutover is intentionally gated. Re-run with --execute.'
 [[ "$expected_release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail 'Expected release id is invalid.'
 [[ "$edge_base_url" =~ ^https://[^/?#@]+$ ]] || fail 'Edge base URL must be a credential-free HTTPS origin.'
-[[ "$mcp_session_mode" == stateless || "$mcp_session_mode" == stateful-experiment ]] || fail 'Invalid MCP session mode.'
+if [[ -n "$mcp_session_mode" && "$mcp_session_mode" != stateless ]]; then
+  fail 'Retired MCP session mode must be stateless when supplied by an older release.'
+fi
 [[ "$max_concurrent_requests" =~ ^[0-9]+$ ]] || fail 'maxConcurrentRequests must be an integer.'
 (( max_concurrent_requests >= 1 && max_concurrent_requests <= 64 )) || fail 'maxConcurrentRequests must be between 1 and 64.'
 [[ "$handover_delay_seconds" =~ ^[0-9]+$ ]] || fail 'handoverDelaySeconds must be an integer.'
@@ -83,7 +82,6 @@ installation_root="$(readlink -f -- "$installation_root")"
 project_root="$(readlink -f -- "$project_root")"
 edge_runtime_root="$(readlink -f -- "$edge_runtime_root")"
 connector_token_file="$(readlink -f -- "$connector_token_file")"
-owner_token_file="$(readlink -f -- "$owner_token_file")"
 policy_path="$(readlink -f -- "$policy_path")"
 
 state_root="$installation_root/state"
@@ -104,7 +102,7 @@ broker="$candidate_root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 observed_manifest_sha="$(sha256sum "$manifest" | awk '{print $1}')"
 [[ "$observed_manifest_sha" == "$candidate_sha" ]] || fail 'Candidate Linux release manifest hash mismatch.'
 
-for file in "$connector_token_file" "$owner_token_file" "$policy_path"; do
+for file in "$connector_token_file" "$policy_path"; do
   [[ -f "$file" ]] || fail "Required runtime file is missing: $file"
 done
 [[ -d "$project_root" && -d "$edge_runtime_root" ]] || fail 'Project/runtime root is unavailable.'
@@ -124,11 +122,8 @@ jq -n \
   --arg edgeRuntimeRoot "$edge_runtime_root" \
   --arg edgeBaseUrl "$edge_base_url" \
   --arg connectorTokenFile "$connector_token_file" \
-  --arg ownerTokenFile "$owner_token_file" \
   --arg policyPath "$policy_path" \
   --arg allowedOrigins "$allowed_origins" \
-  --arg ownerOAuthScopes "$owner_oauth_scopes" \
-  --arg mcpSessionMode "$mcp_session_mode" \
   --arg edgeTaskName "$edge_task_name" \
   --argjson maxConcurrentRequests "$max_concurrent_requests" \
   --argjson handoverDelaySeconds "$handover_delay_seconds" \
@@ -141,11 +136,8 @@ jq -n \
     edgeRuntimeRoot:$edgeRuntimeRoot,
     edgeBaseUrl:$edgeBaseUrl,
     connectorTokenFile:$connectorTokenFile,
-    ownerTokenFile:$ownerTokenFile,
     policyPath:$policyPath,
     allowedOrigins:$allowedOrigins,
-    ownerOAuthScopes:$ownerOAuthScopes,
-    mcpSessionMode:$mcpSessionMode,
     edgeTaskName:$edgeTaskName,
     maxConcurrentRequests:$maxConcurrentRequests,
     handoverDelaySeconds:$handoverDelaySeconds

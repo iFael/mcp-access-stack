@@ -9,6 +9,8 @@ import {
 
 jest.setTimeout(60_000);
 
+const powerShell: "powershell" | "pwsh" = process.platform === "win32" ? "powershell" : "pwsh";
+
 let fixture: Fixture | undefined;
 
 afterEach(async () => {
@@ -24,7 +26,7 @@ describe("background task integration", () => {
     const started = await agent.startBackgroundTask({
       workspaceId: "test",
       operation: "integration-check",
-      shell: "powershell",
+      shell: powerShell,
       command:
         "Write-Output 'background-ok'; Write-Output 'token=integration-secret'",
       timeoutMs: 30_000,
@@ -59,7 +61,7 @@ describe("background task integration", () => {
     const input = {
       workspaceId: "test",
       operation: "integration-soak",
-      shell: "powershell" as const,
+      shell: powerShell,
       command: "Start-Sleep -Seconds 30",
       timeoutMs: 60_000,
     };
@@ -88,7 +90,7 @@ describe("background task integration", () => {
     const input = {
       workspaceId: "test",
       operation: "owner-isolation",
-      shell: "powershell" as const,
+      shell: powerShell,
       command: "Start-Sleep -Seconds 30",
       timeoutMs: 60_000,
     };
@@ -161,7 +163,7 @@ describe("background task integration", () => {
     const input = {
       workspaceId: "test",
       operation: "interactive-session",
-      shell: "powershell" as const,
+      shell: powerShell,
       command:
         "$line = [Console]::In.ReadLine(); [Console]::Out.WriteLine(('interactive:' + $line))",
       timeoutMs: 60_000,
@@ -243,7 +245,7 @@ describe("background task integration", () => {
     const input = {
       workspaceId: "test",
       operation: "confirmed-background-write",
-      shell: "powershell" as const,
+      shell: powerShell,
       command: "Set-Content -LiteralPath 'confirmed-background.txt' -Value 'ok'",
       timeoutMs: 30_000,
     };
@@ -307,7 +309,7 @@ async function createWritableShellFixture(): Promise<Fixture> {
       }),
       allowWrites: ["."],
       allowShell: ["."],
-      allowedShells: ["powershell"],
+      allowedShells: [powerShell],
     },
   ]);
   return created;

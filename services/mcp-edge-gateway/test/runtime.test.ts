@@ -17,22 +17,15 @@ const storage = {
 };
 
 describe("Edge control-plane runtime configuration", () => {
-  it("fails closed when auth mode or required auth configuration is missing", () => {
+  it("fails closed when required Owner auth configuration is missing", () => {
     expect(() => createEdgeControlPlaneRuntime({}, storage, offlineExecution)).toThrow(EdgeControlPlaneConfigurationError);
     expect(() => createEdgeControlPlaneRuntime({
-      MCP_EDGE_AUTH_MODE: "owner",
       MCP_PUBLIC_BASE_URL: "https://edge.example/",
     }, storage, offlineExecution)).toThrow(/MCP_OWNER_/u);
-    expect(() => createEdgeControlPlaneRuntime({
-      MCP_EDGE_AUTH_MODE: "oauth",
-      MCP_PUBLIC_BASE_URL: "https://edge.example/",
-      MCP_OAUTH_ISSUER: "https://issuer.example/",
-    }, storage, offlineExecution)).toThrow(/MCP_OAUTH_/u);
   });
 
   it("creates an Owner runtime whose discovery path stays local while execution is offline", async () => {
     const runtime = createEdgeControlPlaneRuntime({
-      MCP_EDGE_AUTH_MODE: "owner",
       MCP_PUBLIC_BASE_URL: "https://edge.example/",
       MCP_OWNER_TOKEN: "x".repeat(32),
       MCP_OWNER_OAUTH_SCOPES: "mcp:tools",

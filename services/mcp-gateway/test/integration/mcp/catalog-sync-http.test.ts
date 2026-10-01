@@ -6,7 +6,13 @@ import {
   createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "../../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+} from "../../support/helpers.js";
 
 const lateToolNames = [
   "patch_file",
@@ -48,7 +54,7 @@ describe("stateless MCP catalog identity", () => {
           maxPayloadBytes: 2 * 1024 * 1024,
         },
       }),
-      { logger: silentLogger() },
+      makeEdgeGatewayDependencies({ logger: silentLogger() }),
     );
     const http = await listen(gateway.app);
 
@@ -97,7 +103,7 @@ describe("stateless MCP catalog identity", () => {
         version: listCatalog.serverVersion,
       });
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });
@@ -112,6 +118,7 @@ async function postMcp(
     headers: {
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
+      ...edgeHeaders(),
     },
     body: JSON.stringify(payload),
   });

@@ -90,6 +90,12 @@ async function runAdvancedWorkerSmoke(viaMcp: boolean): Promise<SmokeResult> {
   const gatewayPort = viaMcp ? await findAvailablePort() : undefined;
   const mcpPath = `/mcp-browser-canary-${randomBytes(6).toString("hex")}`;
   const token = randomBytes(32).toString("hex");
+  const edgeAssertion = randomBytes(32).toString("base64url");
+  const edgePrincipal = Buffer.from(JSON.stringify({
+    subject: "advanced-browser-smoke",
+    scopes: ["workspaces:read"],
+    ownerScope: "owner",
+  }), "utf8").toString("base64url");
   const fixture = await startFixtureServer();
   const worker = startBrowserWorker({
     port: workerPort,
@@ -125,6 +131,7 @@ async function runAdvancedWorkerSmoke(viaMcp: boolean): Promise<SmokeResult> {
         mcpPath,
         workerPort,
         workerToken: token,
+        edgeAssertion,
       });
       gatewayLogs = captureWorkerLogs(gateway);
       const gatewayBaseUrl = new URL(`http://127.0.0.1:${gatewayPort}/`);
@@ -133,6 +140,10 @@ async function runAdvancedWorkerSmoke(viaMcp: boolean): Promise<SmokeResult> {
         gatewayBaseUrl,
         mcpPath,
         WORKER_OPERATION_TIMEOUT_MS,
+        {
+          "x-mcp-edge-internal-assertion": edgeAssertion,
+          "x-mcp-edge-principal": edgePrincipal,
+        },
       );
       publicAdvancedTools = assertPublicAdvancedTools(await mcpClient.listTools());
       client = mcpClient;
@@ -421,22 +432,17 @@ function startGateway(options: {
   mcpPath: string;
   workerPort: number;
   workerToken: string;
+  edgeAssertion: string;
 }): ChildProcessWithoutNullStreams {
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "test",
     PORT: String(options.port),
     PUBLIC_BASE_URL: `http://127.0.0.1:${options.port}`,
-    AUTH_MODE: "none",
     MCP_PATH: options.mcpPath,
     TRUST_PROXY: "0",
     ALLOWED_ORIGINS: "",
-    AGENT_ID: "browser-mcp-advanced-smoke",
-    AGENT_TOKEN_SHA256: "0".repeat(64),
-    AGENT_REQUEST_TIMEOUT_MS: "300000",
-    AGENT_HEARTBEAT_MS: "30000",
-    AGENT_MAX_CONCURRENCY: "4",
-    AGENT_MAX_PAYLOAD_BYTES: String(512 * 1024 * 1024),
+    MCP_TEST_EDGE_ASSERTION: options.edgeAssertion,
     BROWSER_WORKER_ENABLED: "true",
     BROWSER_WORKER_URL: `http://127.0.0.1:${options.workerPort}`,
     BROWSER_WORKER_TOKEN: options.workerToken,
@@ -448,7 +454,7 @@ function startGateway(options: {
   };
   const gateway = spawn(
     process.execPath,
-    [path.resolve("services/mcp-gateway/dist/server.js")],
+    [path.resolve("tooling/mcp/start-edge-trusted-gateway-harness.mjs")],
     {
       cwd: process.cwd(),
       env: environment,

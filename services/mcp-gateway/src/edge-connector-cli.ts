@@ -39,19 +39,14 @@ async function main(): Promise<void> {
   const processStartedAt = new Date().toISOString();
   const runtime = loadConnectorRuntimeConfig(process.env);
   const connectorToken = await readConnectorToken(runtime.tokenFile);
-  const gatewayConfig = {
-    ...loadGatewayConfig({
-      ...process.env,
-      NODE_ENV: "production",
-      PORT: "0",
-      PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
-      MCP_PATH: "/mcp",
-      TRUST_PROXY: "0",
-      WORKSPACE_BACKEND: "in-process",
-      AUTH_MODE: "none",
-    }),
-    authMode: "edge-trusted" as const,
-  };
+  const gatewayConfig = loadGatewayConfig({
+    ...process.env,
+    NODE_ENV: "production",
+    PORT: "0",
+    PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
+    MCP_PATH: "/mcp",
+    TRUST_PROXY: "0",
+  });
   const internalAssertion = randomBytes(32).toString("base64url");
 
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
@@ -158,7 +153,7 @@ async function main(): Promise<void> {
     toolCount: catalogMetadata.toolCount,
     serverVersion: catalogMetadata.serverVersion,
     edgeOrigin: runtime.edgeBaseUrl.origin,
-    authMode: gatewayConfig.authMode,
+    authMode: "edge-trusted",
     browserAvailable: browserPool !== undefined,
     ...(browserEpoch === undefined ? {} : { browserEpoch }),
   });

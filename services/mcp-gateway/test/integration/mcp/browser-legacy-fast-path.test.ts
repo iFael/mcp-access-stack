@@ -1,12 +1,19 @@
 import { AppError, type BrowserExecutor } from "@vs-code-gpt/shared";
 import { describe, expect, it } from "@jest/globals";
 import { createGatewayApplication } from "../../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+} from "../../support/helpers.js";
 
 const headers = {
   accept: "application/json, text/event-stream",
   "content-type": "application/json",
   "mcp-protocol-version": "2025-06-18",
+  ...edgeHeaders(),
 };
 
 describe("legacy browser MCP fast path", () => {
@@ -27,8 +34,8 @@ describe("legacy browser MCP fast path", () => {
       },
     } as unknown as BrowserExecutor;
     const gateway = createGatewayApplication(
-      makeGatewayConfig({ authMode: "none" }),
-      { logger: silentLogger(), browser },
+      makeGatewayConfig(),
+      makeEdgeGatewayDependencies({ logger: silentLogger(), browser }),
     );
     const http = await listen(gateway.app);
 
@@ -60,7 +67,7 @@ describe("legacy browser MCP fast path", () => {
         "com.openai.gateway/route": "legacy-browser-fast-path-v1",
       });
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });
@@ -78,8 +85,8 @@ describe("legacy browser MCP fast path", () => {
       }),
     } as unknown as BrowserExecutor;
     const gateway = createGatewayApplication(
-      makeGatewayConfig({ authMode: "none" }),
-      { logger: silentLogger(), browser },
+      makeGatewayConfig(),
+      makeEdgeGatewayDependencies({ logger: silentLogger(), browser }),
     );
     const http = await listen(gateway.app);
 
@@ -123,7 +130,7 @@ describe("legacy browser MCP fast path", () => {
         worker: null,
       }));
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });
@@ -137,8 +144,8 @@ describe("legacy browser MCP fast path", () => {
       },
     } as unknown as BrowserExecutor;
     const gateway = createGatewayApplication(
-      makeGatewayConfig({ authMode: "none" }),
-      { logger: silentLogger(), browser },
+      makeGatewayConfig(),
+      makeEdgeGatewayDependencies({ logger: silentLogger(), browser }),
     );
     const http = await listen(gateway.app);
 
@@ -176,7 +183,7 @@ describe("legacy browser MCP fast path", () => {
       ).toBe(true);
       expect(calls).toBe(0);
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });
@@ -188,8 +195,8 @@ describe("legacy browser MCP fast path", () => {
       },
     } as unknown as BrowserExecutor;
     const gateway = createGatewayApplication(
-      makeGatewayConfig({ authMode: "none" }),
-      { logger: silentLogger(), browser },
+      makeGatewayConfig(),
+      makeEdgeGatewayDependencies({ logger: silentLogger(), browser }),
     );
     const http = await listen(gateway.app);
 
@@ -221,7 +228,7 @@ describe("legacy browser MCP fast path", () => {
         "com.openai.gateway/route": "legacy-browser-fast-path-v1",
       });
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     }
   });

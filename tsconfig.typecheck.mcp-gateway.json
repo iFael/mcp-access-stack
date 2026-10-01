@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "services/mcp-gateway/src/**/*.ts",
+    "services/mcp-gateway/test/**/*.ts"
+  ]
+}

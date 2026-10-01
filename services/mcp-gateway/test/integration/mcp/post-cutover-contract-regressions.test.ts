@@ -1,15 +1,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@jest/globals";
-import type { AgentRelay } from "../../../src/relay/service.js";
-import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
 import { createMcpServer } from "../../../src/mcp/server.js";
+import {
+  createTestExecutor,
+  type TestExecutor,
+} from "../../support/executors.js";
 
 async function withClient(
-  relay: AgentRelay,
+  overrides: Partial<TestExecutor>,
   callback: (client: Client) => Promise<void>,
 ): Promise<void> {
-  const executor = new RelayWorkspaceExecutor(relay);
+  const executor = createTestExecutor(overrides);
   const server = createMcpServer({
     workspaceExecutor: executor,
     sourceControlExecutor: executor,
@@ -35,25 +37,22 @@ async function withClient(
 describe("post-cutover MCP contract regressions", () => {
   it("accepts only known stale direct run_command transport fields while publishing the canonical schema", async () => {
     let runCommandCalls = 0;
-    const relay = {
-      call: async (operation: string) => {
-        if (operation === "runCommand") {
-          runCommandCalls += 1;
-          return {
-            status: "executed",
-            shell: "powershell",
-            cwd: ".",
-            exitCode: 0,
-            stdout: "transport-ok\n",
-            stderr: "",
-            timedOut: false,
-          };
-        }
-        throw new Error("Unexpected relay operation: " + operation);
+    const executor = {
+      runCommand: async () => {
+        runCommandCalls += 1;
+        return {
+          status: "executed" as const,
+          shell: "powershell" as const,
+          cwd: ".",
+          exitCode: 0,
+          stdout: "transport-ok\n",
+          stderr: "",
+          timedOut: false,
+        };
       },
-    } as unknown as AgentRelay;
+    };
 
-    await withClient(relay, async (client) => {
+    await withClient(executor, async (client) => {
       const listed = await client.listTools();
       const runCommand = listed.tools.find((tool) => tool.name === "run_command");
       const publishedInput = JSON.stringify(runCommand?.inputSchema);
@@ -117,34 +116,31 @@ describe("post-cutover MCP contract regressions", () => {
 
   it("returns start_background_task results through the MCP SDK output-validation path", async () => {
     let backgroundCalls = 0;
-    const relay = {
-      call: async (operation: string, input: Record<string, unknown>) => {
-        if (operation === "startBackgroundTask") {
-          backgroundCalls += 1;
-          return {
-            status: "background_task_started",
-            task: {
-              version: 1,
-              id: "123e4567-e89b-42d3-a456-426614174000",
-              workspaceId: input.workspaceId,
-              operation: input.operation,
-              commandHash: "0".repeat(64),
-              command: input.command,
-              shell: input.shell,
-              cwd: input.cwd ?? ".",
-              state: "running",
-              createdAt: "2026-09-15T22:00:00.000Z",
-              startedAt: "2026-09-15T22:00:01.000Z",
-              timeoutMs: input.timeoutMs ?? 120_000,
-              pid: 4242,
-            },
-          };
-        }
-        throw new Error("Unexpected relay operation: " + operation);
+    const executor = {
+      startBackgroundTask: async (input: any) => {
+        backgroundCalls += 1;
+        return {
+          status: "background_task_started" as const,
+          task: {
+            version: 1 as const,
+            id: "123e4567-e89b-42d3-a456-426614174000",
+            workspaceId: input.workspaceId,
+            operation: input.operation,
+            commandHash: "0".repeat(64),
+            command: input.command,
+            shell: input.shell,
+            cwd: input.cwd ?? ".",
+            state: "running" as const,
+            createdAt: "2026-09-15T22:00:00.000Z",
+            startedAt: "2026-09-15T22:00:01.000Z",
+            timeoutMs: input.timeoutMs ?? 120_000,
+            pid: 4242,
+          },
+        };
       },
-    } as unknown as AgentRelay;
+    };
 
-    await withClient(relay, async (client) => {
+    await withClient(executor, async (client) => {
       const listed = await client.listTools();
       const startBackground = listed.tools.find(
         (tool) => tool.name === "start_background_task",

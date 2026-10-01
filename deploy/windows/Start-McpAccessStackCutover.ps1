@@ -6,11 +6,12 @@ param(
     [Parameter(Mandatory = $true)][string]$EdgeRuntimeRoot,
     [Parameter(Mandatory = $true)][ValidatePattern('^https://')][string]$EdgeBaseUrl,
     [Parameter(Mandatory = $true)][string]$ConnectorTokenFile,
-    [Parameter(Mandatory = $true)][string]$OwnerTokenFile,
+    # Compatibility-only inputs accepted from beta.68; they are not persisted or propagated.
+    [string]$OwnerTokenFile,
     [Parameter(Mandatory = $true)][string]$PolicyPath,
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
-    [string]$OwnerOAuthScopes = 'workspaces:read',
-    [ValidateSet('stateless', 'stateful-experiment')]
+    [string]$OwnerOAuthScopes,
+    [ValidateSet('stateless')]
     [string]$McpSessionMode = 'stateless',
     [switch]$EnableBrowserWorker,
     [string]$BrowserWorkerTokenFile,
@@ -68,7 +69,7 @@ foreach ($directory in @($installation, $project, $edgeRuntime)) {
         throw "Cutover handover directory was not found: $directory"
     }
 }
-foreach ($required in @($ConnectorTokenFile, $OwnerTokenFile, $PolicyPath)) {
+foreach ($required in @($ConnectorTokenFile, $PolicyPath)) {
     if (-not (Test-Path -LiteralPath ([IO.Path]::GetFullPath($required)) -PathType Leaf)) {
         throw "Cutover handover file was not found: $required"
     }
@@ -131,11 +132,8 @@ $request = [ordered]@{
         runtimeRoot = $edgeRuntime
         edgeBaseUrl = $EdgeBaseUrl
         connectorTokenFile = [IO.Path]::GetFullPath($ConnectorTokenFile)
-        ownerTokenFile = [IO.Path]::GetFullPath($OwnerTokenFile)
         policyPath = [IO.Path]::GetFullPath($PolicyPath)
         allowedOrigins = $AllowedOrigins
-        ownerOAuthScopes = $OwnerOAuthScopes
-        mcpSessionMode = $McpSessionMode
         maxConcurrentRequests = 8
         delaySeconds = 15
     }

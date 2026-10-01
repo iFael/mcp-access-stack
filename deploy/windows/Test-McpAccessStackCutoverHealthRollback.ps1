@@ -234,11 +234,8 @@ param(
     [Parameter(Mandatory = $true)][string]$RuntimeRoot,
     [Parameter(Mandatory = $true)][string]$EdgeBaseUrl,
     [Parameter(Mandatory = $true)][string]$ConnectorTokenFile,
-    [Parameter(Mandatory = $true)][string]$OwnerTokenFile,
     [Parameter(Mandatory = $true)][string]$PolicyPath,
     [string]$AllowedOrigins,
-    [string]$OwnerOAuthScopes,
-    [string]$McpSessionMode,
     [int]$MaxConcurrentRequests,
     [int]$DelaySeconds,
     [string]$TaskName,
@@ -745,11 +742,8 @@ try {
             runtimeRoot = $runtimeRoot
             edgeBaseUrl = $edgeBaseUrl
             connectorTokenFile = $connectorToken
-            ownerTokenFile = $ownerToken
             policyPath = $policyPath
             allowedOrigins = 'https://chatgpt.com'
-            ownerOAuthScopes = 'workspaces:read'
-            mcpSessionMode = 'stateless'
             maxConcurrentRequests = 1
             delaySeconds = 0
         }

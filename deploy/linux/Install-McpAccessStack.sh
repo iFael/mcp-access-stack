@@ -16,11 +16,8 @@ Usage: Install-McpAccessStack.sh
   --edge-runtime-root PATH
   --edge-base-url HTTPS_ORIGIN
   --connector-token-file PATH
-  --owner-token-file PATH
   --policy-path PATH
   --allowed-origins VALUE
-  --owner-oauth-scopes VALUE
-  --mcp-session-mode stateless|stateful-experiment
   [--edge-task-name NAME]
   [--max-concurrent-requests N]
   [--handover-delay-seconds N]
@@ -37,11 +34,8 @@ release_id=""
 edge_runtime_root=""
 edge_base_url=""
 connector_token_file=""
-owner_token_file=""
 policy_path=""
 allowed_origins=""
-owner_oauth_scopes=""
-mcp_session_mode=""
 edge_task_name="mcp-access-stack-edge-connector.service"
 max_concurrent_requests=8
 handover_delay_seconds=2
@@ -57,11 +51,8 @@ while (($#)); do
     --edge-runtime-root) shift; edge_runtime_root="${1:-}" ;;
     --edge-base-url) shift; edge_base_url="${1:-}" ;;
     --connector-token-file) shift; connector_token_file="${1:-}" ;;
-    --owner-token-file) shift; owner_token_file="${1:-}" ;;
     --policy-path) shift; policy_path="${1:-}" ;;
     --allowed-origins) shift; allowed_origins="${1:-}" ;;
-    --owner-oauth-scopes) shift; owner_oauth_scopes="${1:-}" ;;
-    --mcp-session-mode) shift; mcp_session_mode="${1:-}" ;;
     --edge-task-name) shift; edge_task_name="${1:-}" ;;
     --max-concurrent-requests) shift; max_concurrent_requests="${1:-}" ;;
     --handover-delay-seconds) shift; handover_delay_seconds="${1:-}" ;;
@@ -75,7 +66,6 @@ done
 $execute || fail 'Installation is intentionally gated. Re-run with --execute.'
 [[ "$release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail 'Release id is invalid.'
 [[ "$edge_base_url" =~ ^https://[^/?#@]+$ ]] || fail 'Edge base URL must be a credential-free HTTPS origin.'
-[[ "$mcp_session_mode" == stateless || "$mcp_session_mode" == stateful-experiment ]] || fail 'Invalid MCP session mode.'
 [[ "$max_concurrent_requests" =~ ^[0-9]+$ ]] || fail 'maxConcurrentRequests must be an integer.'
 (( max_concurrent_requests >= 1 && max_concurrent_requests <= 64 )) || fail 'maxConcurrentRequests must be between 1 and 64.'
 [[ "$handover_delay_seconds" =~ ^[0-9]+$ ]] || fail 'handoverDelaySeconds must be an integer.'
@@ -89,7 +79,7 @@ done
 for directory in "$source_root" "$project_root" "$installation_root" "$edge_runtime_root"; do
   [[ -d "$directory" ]] || fail "Required directory is missing: $directory"
 done
-for file in "$connector_token_file" "$owner_token_file" "$policy_path"; do
+for file in "$connector_token_file" "$policy_path"; do
   [[ -f "$file" ]] || fail "Required runtime file is missing: $file"
 done
 
@@ -98,7 +88,6 @@ project_root="$(readlink -f -- "$project_root")"
 installation_root="$(readlink -f -- "$installation_root")"
 edge_runtime_root="$(readlink -f -- "$edge_runtime_root")"
 connector_token_file="$(readlink -f -- "$connector_token_file")"
-owner_token_file="$(readlink -f -- "$owner_token_file")"
 policy_path="$(readlink -f -- "$policy_path")"
 
 [[ "$(git -C "$source_root" status --porcelain=v1 --untracked-files=all)" == "" ]] ||
@@ -243,7 +232,7 @@ jq -n   --arg releaseId "$release_id"   --arg manifestSha256 "$manifest_sha"   -
 mv -f -- "$state_path.tmp" "$state_path"
 chmod 600 "$state_path"
 
-jq -n   --arg taskName "$edge_task_name"   --arg projectRoot "$project_root"   --arg runtimeRoot "$edge_runtime_root"   --arg edgeBaseUrl "$edge_base_url"   --arg connectorTokenFile "$connector_token_file"   --arg ownerTokenFile "$owner_token_file"   --arg policyPath "$policy_path"   --arg allowedOrigins "$allowed_origins"   --arg ownerOAuthScopes "$owner_oauth_scopes"   --arg mcpSessionMode "$mcp_session_mode"   --argjson maxConcurrentRequests "$max_concurrent_requests"   --argjson delaySeconds "$handover_delay_seconds"   --arg updatedAt "$updated_at"   '{schemaVersion:1,taskName:$taskName,projectRoot:$projectRoot,runtimeRoot:$runtimeRoot,edgeBaseUrl:$edgeBaseUrl,connectorTokenFile:$connectorTokenFile,ownerTokenFile:$ownerTokenFile,policyPath:$policyPath,allowedOrigins:$allowedOrigins,ownerOAuthScopes:$ownerOAuthScopes,mcpSessionMode:$mcpSessionMode,maxConcurrentRequests:$maxConcurrentRequests,delaySeconds:$delaySeconds,browserEnabled:false,browserWorkerUrl:null,browserWorkerTokenFile:null,updatedAt:$updatedAt}'   > "$state_root/edge-task-config.v1.json.tmp"
+jq -n   --arg taskName "$edge_task_name"   --arg projectRoot "$project_root"   --arg runtimeRoot "$edge_runtime_root"   --arg edgeBaseUrl "$edge_base_url"   --arg connectorTokenFile "$connector_token_file"   --arg policyPath "$policy_path"   --arg allowedOrigins "$allowed_origins"   --argjson maxConcurrentRequests "$max_concurrent_requests"   --argjson delaySeconds "$handover_delay_seconds"   --arg updatedAt "$updated_at"   '{schemaVersion:1,taskName:$taskName,projectRoot:$projectRoot,runtimeRoot:$runtimeRoot,edgeBaseUrl:$edgeBaseUrl,connectorTokenFile:$connectorTokenFile,policyPath:$policyPath,allowedOrigins:$allowedOrigins,maxConcurrentRequests:$maxConcurrentRequests,delaySeconds:$delaySeconds,browserEnabled:false,browserWorkerUrl:null,browserWorkerTokenFile:null,updatedAt:$updatedAt}'   > "$state_root/edge-task-config.v1.json.tmp"
 mv -f -- "$state_root/edge-task-config.v1.json.tmp" "$state_root/edge-task-config.v1.json"
 chmod 600 "$state_root/edge-task-config.v1.json"
 
@@ -255,12 +244,9 @@ MCP_ACCESS_STACK_RUNTIME_ROOT=$edge_runtime_root
 MCP_ACCESS_STACK_INSTALLATION_ROOT=$installation_root
 MCP_EDGE_BASE_URL=$edge_base_url
 MCP_CONNECTOR_TOKEN_FILE=$connector_token_file
-MCP_OWNER_TOKEN_FILE=$owner_token_file
 VS_CODE_GPT_POLICY_PATH=$policy_path
 MCP_NODE_BINARY=/usr/local/bin/node
 MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=$max_concurrent_requests
-MCP_SESSION_MODE=$mcp_session_mode
-OWNER_OAUTH_SCOPES=$owner_oauth_scopes
 ALLOWED_ORIGINS=$allowed_origins
 EOF
 mv -f -- "$env_path.tmp" "$env_path"

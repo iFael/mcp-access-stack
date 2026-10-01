@@ -1,9 +1,3 @@
-import {
-  createRemoteJWKSet,
-  jwtVerify,
-  type JWTVerifyGetKey,
-  type JWTPayload,
-} from "jose";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 
 export interface EdgeAuthenticator {
@@ -30,53 +24,6 @@ export class EdgeAuthenticationError extends Error {
       },
     });
   }
-}
-
-export interface ExternalOAuthEdgeConfig {
-  issuer: string;
-  audience: string;
-  jwksUrl: URL;
-  allowedSubjects: ReadonlySet<string>;
-  requiredScope: string;
-  resourceMetadataUrl: URL;
-}
-
-export function createExternalOAuthAuthenticator(
-  config: ExternalOAuthEdgeConfig,
-  getKey: JWTVerifyGetKey = createRemoteJWKSet(config.jwksUrl),
-): EdgeAuthenticator {
-  const challenge = createBearerChallenge(config.resourceMetadataUrl, config.requiredScope);
-  return {
-    async authenticate(request: Request): Promise<AuthenticatedEdgePrincipal> {
-      const token = readBearerToken(request.headers.get("authorization"));
-      if (!token) throw new EdgeAuthenticationError(401, "invalid_token", challenge);
-
-      let payload: JWTPayload;
-      try {
-        const verified = await jwtVerify(token, getKey, {
-          issuer: config.issuer,
-          audience: config.audience,
-        });
-        payload = verified.payload;
-      } catch {
-        throw new EdgeAuthenticationError(401, "invalid_token", challenge);
-      }
-
-      if (!payload.sub || payload.exp === undefined) {
-        throw new EdgeAuthenticationError(401, "invalid_token", challenge);
-      }
-      if (!config.allowedSubjects.has(payload.sub)) {
-        throw new EdgeAuthenticationError(403, "insufficient_scope", challenge);
-      }
-
-      const scopes = parseScopes(payload.scope);
-      if (!scopes.includes(config.requiredScope)) {
-        throw new EdgeAuthenticationError(403, "insufficient_scope", challenge);
-      }
-
-      return { subject: payload.sub, scopes };
-    },
-  };
 }
 
 export function createBearerChallenge(resourceMetadataUrl: URL, requiredScope: string): string {

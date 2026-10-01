@@ -77,11 +77,8 @@ internal static class Program
         public string RuntimeRoot = string.Empty;
         public string EdgeBaseUrl = string.Empty;
         public string ConnectorTokenFile = string.Empty;
-        public string OwnerTokenFile = string.Empty;
         public string PolicyPath = string.Empty;
         public string AllowedOrigins = string.Empty;
-        public string OwnerOAuthScopes = string.Empty;
-        public string McpSessionMode = "stateless";
         public int MaxConcurrentRequests;
         public int RestartCount;
         public int RestartIntervalSeconds;
@@ -105,7 +102,6 @@ internal static class Program
     {
         Options options = null;
         IntPtr job = IntPtr.Zero;
-        string ownerToken = null;
         string browserToken = null;
 
         try
@@ -122,9 +118,7 @@ internal static class Program
             ValidateSelf(release.EdgeHostPath);
 
             string connectorTokenPath = ValidateSecretFile(options.ConnectorTokenFile, "Connector token", 16, 2048);
-            string ownerTokenPath = ValidateSecretFile(options.OwnerTokenFile, "Owner token", 16, 2048);
             string policyPath = RequireFile(options.PolicyPath, "Workspace policy");
-            ownerToken = ReadSecretValue(ownerTokenPath, "Owner token", 16, 2048);
 
             Uri edgeUri = ValidateEdgeOrigin(options.EdgeBaseUrl);
             Uri browserUri = null;
@@ -162,7 +156,6 @@ internal static class Program
                         edgeUri,
                         browserUri,
                         connectorTokenPath,
-                        ownerToken,
                         browserToken,
                         policyPath,
                         stdoutLog,
@@ -213,7 +206,6 @@ internal static class Program
         }
         finally
         {
-            ownerToken = null;
             browserToken = null;
             if (job != IntPtr.Zero)
             {
@@ -264,11 +256,8 @@ internal static class Program
             else if (name == "--runtime-root") options.RuntimeRoot = value;
             else if (name == "--edge-base-url") options.EdgeBaseUrl = value;
             else if (name == "--connector-token-file") options.ConnectorTokenFile = value;
-            else if (name == "--owner-token-file") options.OwnerTokenFile = value;
             else if (name == "--policy-path") options.PolicyPath = value;
             else if (name == "--allowed-origins") options.AllowedOrigins = value;
-            else if (name == "--owner-oauth-scopes") options.OwnerOAuthScopes = value;
-            else if (name == "--mcp-session-mode") options.McpSessionMode = value;
             else if (name == "--max-concurrent-requests") options.MaxConcurrentRequests = ParseInteger(name, value, 1, 64);
             else if (name == "--restart-count") options.RestartCount = ParseInteger(name, value, 0, 100);
             else if (name == "--restart-interval-seconds") options.RestartIntervalSeconds = ParseInteger(name, value, 1, 3600);
@@ -288,11 +277,8 @@ internal static class Program
             value == "--runtime-root" ||
             value == "--edge-base-url" ||
             value == "--connector-token-file" ||
-            value == "--owner-token-file" ||
             value == "--policy-path" ||
             value == "--allowed-origins" ||
-            value == "--owner-oauth-scopes" ||
-            value == "--mcp-session-mode" ||
             value == "--max-concurrent-requests" ||
             value == "--restart-count" ||
             value == "--restart-interval-seconds" ||
@@ -307,7 +293,6 @@ internal static class Program
         options.ProjectRoot = RequireDirectory(options.ProjectRoot, "Project root");
         options.RuntimeRoot = RequireDirectory(options.RuntimeRoot, "Runtime root");
         options.ConnectorTokenFile = RequireAbsolutePath(options.ConnectorTokenFile, "Connector token file");
-        options.OwnerTokenFile = RequireAbsolutePath(options.OwnerTokenFile, "Owner token file");
         options.PolicyPath = RequireAbsolutePath(options.PolicyPath, "Workspace policy path");
 
         if (!IsSha256(options.ExpectedManifestSha256))
@@ -321,14 +306,6 @@ internal static class Program
         if (!IsBoundedText(options.AllowedOrigins, 4096))
         {
             throw new ArgumentException("Allowed origins value is invalid.");
-        }
-        if (options.McpSessionMode != "stateless" && options.McpSessionMode != "stateful-experiment")
-        {
-            throw new ArgumentException("MCP session mode is invalid.");
-        }
-        if (!IsBoundedText(options.OwnerOAuthScopes, 2048))
-        {
-            throw new ArgumentException("Owner OAuth scopes value is invalid.");
         }
         if (options.MaxConcurrentRequests < 1)
         {
@@ -524,7 +501,6 @@ internal static class Program
         Uri edgeUri,
         Uri browserUri,
         string connectorTokenPath,
-        string ownerToken,
         string browserToken,
         string policyPath,
         string stdoutLog,
@@ -551,11 +527,6 @@ internal static class Program
         startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_BACKGROUND_TASKS_DIR");
         startInfo.EnvironmentVariables.Remove("VS_CODE_GPT_COMMAND_INVOCATIONS_DIR");
         startInfo.EnvironmentVariables["MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS"] = options.MaxConcurrentRequests.ToString();
-        startInfo.EnvironmentVariables["MCP_SESSION_MODE"] = options.McpSessionMode;
-        startInfo.EnvironmentVariables["AUTH_MODE"] = "owner";
-        startInfo.EnvironmentVariables["OWNER_TOKEN"] = ownerToken;
-        startInfo.EnvironmentVariables["OWNER_OAUTH_SCOPES"] = options.OwnerOAuthScopes;
-        startInfo.EnvironmentVariables["OWNER_OAUTH_STATE_PATH"] = Path.Combine(options.RuntimeRoot, "owner-oauth-state.json");
         startInfo.EnvironmentVariables["ALLOWED_ORIGINS"] = options.AllowedOrigins;
         startInfo.EnvironmentVariables["BROWSER_WORKER_ENABLED"] = options.BrowserEnabled ? "true" : "false";
         if (options.BrowserEnabled)

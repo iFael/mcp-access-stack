@@ -15,6 +15,8 @@ import {
 
 jest.setTimeout(15_000);
 
+const runtimePowerShell = process.platform === "win32" ? "powershell" : "pwsh";
+
 let fixture: Fixture | undefined;
 
 afterEach(async () => {
@@ -186,8 +188,7 @@ describe("command confirmations", () => {
         workspaceId: "test",
         shell: "powershell" as const,
         cwd: ".",
-        command: "Remove-Item file.txt",
-      executionContext: "foreground" as const,
+        command: "Remove-Item file.txt",      executionContext: "foreground" as const,
       operation: "run_command",
       elevated: false,
       };
@@ -211,13 +212,13 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command: "Write-Output 'agent-shell-ok'",
         timeoutMs: 30_000,
       }),
     ).resolves.toMatchObject({
       status: "executed",
-      shell: "powershell",
+      shell: runtimePowerShell,
       cwd: ".",
       exitCode: 0,
     });
@@ -231,14 +232,14 @@ describe("run command", () => {
 
     const first = await agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       timeoutMs: 30_000,
     });
 
     expect(first).toMatchObject({
       status: "confirmation_required",
-      shell: "powershell",
+      shell: runtimePowerShell,
       cwd: ".",
     });
     if (first.status !== "confirmation_required") {
@@ -248,7 +249,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command,
         confirmationId: "wrong",
         timeoutMs: 30_000,
@@ -258,7 +259,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command,
         confirmationId: first.confirmationId,
         timeoutMs: 30_000,
@@ -272,7 +273,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command,
         confirmationId: first.confirmationId,
         timeoutMs: 30_000,
@@ -291,7 +292,7 @@ describe("run command", () => {
     });
     const first = await firstAgent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       timeoutMs: 30_000,
     });
@@ -306,7 +307,7 @@ describe("run command", () => {
     await expect(
       reloadedAgent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command,
         confirmationId: first.confirmationId,
         timeoutMs: 30_000,
@@ -335,7 +336,7 @@ describe("run command", () => {
 
     await expect(agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command: "Write-Output 'uac-ok'",
       elevated: true,
       timeoutMs: 30_000,
@@ -348,7 +349,7 @@ describe("run command", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
-        shell: "powershell",
+        shell: runtimePowerShell,
         command: "Write-Output 'uac-ok'",
         logicalCwd: ".",
       }),
@@ -374,7 +375,7 @@ describe("run command", () => {
 
     const normalConfirmation = await agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       elevated: false,
       timeoutMs: 30_000,
@@ -385,7 +386,7 @@ describe("run command", () => {
 
     await expect(agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       elevated: true,
       confirmationId: normalConfirmation.confirmationId,
@@ -395,7 +396,7 @@ describe("run command", () => {
 
     const elevatedConfirmation = await agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       elevated: true,
       timeoutMs: 30_000,
@@ -409,7 +410,7 @@ describe("run command", () => {
 
     await expect(agent.runCommand({
       workspaceId: "test",
-      shell: "powershell",
+      shell: runtimePowerShell,
       command,
       elevated: true,
       confirmationId: elevatedConfirmation.confirmationId,
@@ -422,7 +423,7 @@ describe("run command", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
-        shell: "powershell",
+        shell: runtimePowerShell,
         command,
         logicalCwd: ".",
       }),
@@ -437,7 +438,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command: "git push origin main",
         timeoutMs: 30_000,
       }),
@@ -448,7 +449,7 @@ describe("run command", () => {
 
     for (const command of ["git -C . push origin feature/safe", "git push --mirror origin"]) {
       await expect(
-        agent.runCommand({ workspaceId: "test", shell: "powershell", command, timeoutMs: 30_000 }),
+        agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command, timeoutMs: 30_000 }),
       ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     }
   });
@@ -460,7 +461,7 @@ describe("run command", () => {
     await expect(
       agent.runCommand({
         workspaceId: "test",
-        shell: "powershell",
+        shell: runtimePowerShell,
         command: "git push origin feature/safe",
         timeoutMs: 30_000,
       }),
@@ -498,7 +499,7 @@ describe("run command", () => {
       "Remove-Item -LiteralPath 'trusted-dir' -Recurse -Force",
       "Remove-Item -LiteralPath 'trusted-moved.txt' -Force",
     ]) {
-      await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command, timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+      await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command, timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
     }
     await expect(access(`${fixture.workspacePath}/trusted-moved.txt`)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(`${fixture.workspacePath}/trusted-dir`)).rejects.toMatchObject({ code: "ENOENT" });
@@ -512,14 +513,14 @@ describe("run command", () => {
     git(fixture.workspacePath, ["commit", "-m", "fixture"]);
     await writeWorkspaceFile(fixture.workspacePath, "tracked.txt", "after\n");
     const agent = await LocalAgent.create(fixture.policyPath);
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git restore --staged -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "git restore --staged -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
     expect(git(fixture.workspacePath, ["diff", "--cached", "--name-only"]).trim()).toBe("");
     expect((await readFile(`${fixture.workspacePath}/tracked.txt`, "utf8")).trim()).toBe("after");
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git reset HEAD -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "git add -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "git reset HEAD -- tracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
     await writeWorkspaceFile(fixture.workspacePath, "untracked.txt", "temporary\n");
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "git clean -f -- untracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "git clean -f -- untracked.txt", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "executed", exitCode: 0 });
     await expect(access(`${fixture.workspacePath}/untracked.txt`)).rejects.toMatchObject({ code: "ENOENT" });
   }, 45_000);
 
@@ -531,7 +532,7 @@ describe("run command", () => {
       await expect(
         agent.runCommand({
           workspaceId: "test",
-          shell: "powershell",
+          shell: runtimePowerShell,
           command,
           timeoutMs: 30_000,
         }),
@@ -543,13 +544,13 @@ describe("run command", () => {
     fixture = await createWritableShellFixture("trusted-workspace");
     await writeWorkspaceFile(fixture.workspacePath, "secret/.env", "SECRET=value\n");
     const agent = await LocalAgent.create(fixture.policyPath);
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "Remove-Item -LiteralPath 'secret' -Recurse -Force", timeoutMs: 30_000 })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
-    await expect(agent.runCommand({ workspaceId: "test", shell: "powershell", command: "Remove-Item '..\\outside.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required" });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "Remove-Item -LiteralPath 'secret' -Recurse -Force", timeoutMs: 30_000 })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "Remove-Item '..\\outside.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required" });
   });
 });
 
 async function createWritableShellFixture(confirmationMode: "standard" | "trusted-workspace" = "standard"): Promise<Fixture> {
   const created = await createFixture({ profile: "full-repo-write", allowedRoots: ["."], confirmationMode });
-  await writePolicy(created.policyPath, [{ ...makeWorkspacePolicy(created.workspacePath, { profile: "full-repo-write", allowedRoots: ["."], confirmationMode }), allowWrites: ["."], allowShell: ["."], allowedShells: ["powershell"] }]);
+  await writePolicy(created.policyPath, [{ ...makeWorkspacePolicy(created.workspacePath, { profile: "full-repo-write", allowedRoots: ["."], confirmationMode }), allowWrites: ["."], allowShell: ["."], allowedShells: [runtimePowerShell] }]);
   return created;
 }

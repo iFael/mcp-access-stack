@@ -19,8 +19,6 @@ printf '// fixture\n' > "$release/services/mcp-gateway/dist/edge-connector-cli.j
 printf '// browser fixture\n' > "$release/services/browser-worker/dist/server.js"
 printf '{}\n' > "$tmp/policy.json"
 printf '%s' 'cccccccccccccccccccccccccccccccc' > "$secrets/connector-token"
-printf '%s' 'oooooooooooooooo' > "$secrets/owner-token"
-chmod 600 "$secrets/connector-token" "$secrets/owner-token"
 
 fake_node="$tmp/node"
 cat > "$fake_node" <<'EOF'
@@ -37,17 +35,16 @@ printf 'unexpected fake node invocation: %s\n' "${1:-}" >&2
 exit 99
 EOF
 chmod +x "$fake_node"
+chmod 600 "$secrets/connector-token"
 
 export VS_CODE_GPT_STACK_ROOT="$project"
 export MCP_RELEASE_ROOT="$release"
 export MCP_ACCESS_STACK_RUNTIME_ROOT="$runtime"
 export MCP_EDGE_BASE_URL='https://mcp-access-stack.example.workers.dev'
 export MCP_CONNECTOR_TOKEN_FILE="$secrets/connector-token"
-export MCP_OWNER_TOKEN_FILE="$secrets/owner-token"
 export VS_CODE_GPT_POLICY_PATH="$tmp/policy.json"
 export MCP_NODE_BINARY="$fake_node"
 export MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=8
-export MCP_SESSION_MODE=stateless
 
 output="$(bash "$launcher" --from-environment --validate-only)"
 grep -Fq 'status=validated' <<<"$output"
@@ -59,7 +56,6 @@ grep -Fq 'playwrightBrowsersPath=0' <<<"$output"
 grep -Fq "browserNativeLibPath=$release/runtime/native-libs/usr/lib/x86_64-linux-gnu" <<<"$output"
 grep -Fq "browserNativeFontPath=$release/runtime/native-libs/usr/share/fonts" <<<"$output"
 grep -Fq "fontconfigFile=$runtime/browser-fontconfig/fonts.conf" <<<"$output"
-grep -Fq 'mcpSessionMode=stateless' <<<"$output"
 
 legacy_release="$tmp/legacy-release"
 mkdir -p "$legacy_release/services/mcp-gateway/dist"
@@ -72,12 +68,6 @@ grep -Fq 'browserRuntimeReason=Built Browser Worker was not found:' <<<"$legacy_
 grep -Fq 'connector-executed' <<<"$(bash "$launcher" --from-environment)"
 export MCP_RELEASE_ROOT="$release"
 
-chmod 640 "$secrets/owner-token"
-if bash "$launcher" --from-environment --validate-only >/dev/null 2>&1; then
-  echo 'expected group-readable owner token to be rejected' >&2
-  exit 1
-fi
-chmod 600 "$secrets/owner-token"
 
 export MCP_EDGE_BASE_URL='http://example.invalid'
 if bash "$launcher" --from-environment --validate-only >/dev/null 2>&1; then

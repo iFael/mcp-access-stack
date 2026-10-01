@@ -146,27 +146,29 @@ export async function startIsolatedGateway(options) {
 
 async function startIsolatedProcessGateway(options) {
   const root = path.resolve(options.root);
-  await assertBuilt(root, "services/mcp-gateway/dist/server.js", "candidate MCP gateway");
+  await assertBuilt(root, "services/mcp-gateway/dist/app.js", "candidate MCP gateway");
   const port = await findAvailablePort();
   const mcpPath = "/mcp-benchmark";
+  const edgeAssertion = randomBytes(32).toString("base64url");
+  const edgePrincipal = Buffer.from(JSON.stringify({
+    subject: "benchmark",
+    scopes: ["workspaces:read"],
+    ownerScope: "owner",
+  }), "utf8").toString("base64url");
   const managed = spawnManagedProcess({
     label: "candidate MCP gateway",
     command: process.execPath,
-    args: [path.join(root, "services", "mcp-gateway", "dist", "server.js")],
+    args: [path.join(root, "tooling", "mcp", "start-edge-trusted-gateway-harness.mjs")],
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: "test",
       PORT: String(port),
       PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
-      AUTH_MODE: "none",
       MCP_PATH: mcpPath,
-      AGENT_ID: "benchmark-isolated",
-      AGENT_TOKEN_SHA256: "0".repeat(64),
-      AGENT_REQUEST_TIMEOUT_MS: "120000",
-      AGENT_MAX_CONCURRENCY: "4",
       RATE_LIMIT_MAX: "100000",
       LOG_LEVEL: "error",
+      MCP_TEST_EDGE_ASSERTION: edgeAssertion,
       BROWSER_WORKER_ENABLED: "true",
       BROWSER_WORKER_URL: `http://127.0.0.1:${options.worker.port}`,
       BROWSER_WORKER_TOKEN: options.worker.token,
@@ -184,24 +186,31 @@ async function startIsolatedProcessGateway(options) {
     port,
     mcpPath,
     provenance: {
-      mode: "host-process",
+      mode: "host-process-edge-trusted-harness",
       image: null,
       imageId: null,
       mcpServerLifecycle: "per-request-stateless-fallback",
       legacyBrowserFastPath: "json-rpc-v1",
       benchmarkTiming: "opt-in-header",
     },
+    headers: {
+      "x-mcp-edge-internal-assertion": edgeAssertion,
+      "x-mcp-edge-principal": edgePrincipal,
+    },
     closeRuntime: managed.close,
   });
 }
 
 
-function createGatewayClientHandle({ port, mcpPath, provenance, closeRuntime }) {
+function createGatewayClientHandle({ port, mcpPath, provenance, headers, closeRuntime }) {
   const client = new McpBenchmarkClient({
     name: "candidate-isolated-gateway",
     url: `http://127.0.0.1:${port}${mcpPath}`,
     timeoutMs: 125_000,
-    headers: { "x-mcp-benchmark-timing": "1" },
+    headers: {
+      "x-mcp-benchmark-timing": "1",
+      ...headers,
+    },
   });
   return {
     port,

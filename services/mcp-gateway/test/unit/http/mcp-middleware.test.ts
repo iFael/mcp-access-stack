@@ -3,28 +3,12 @@ import { describe, expect, test, jest } from "@jest/globals";
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import {
-  createChallenge,
   createMcpRequestLifecycleMiddleware,
   createOriginMiddleware,
-  isToolCall,
   type AuthenticatedRequest,
 } from "../../../src/http/mcp-middleware.js";
 
 describe("MCP HTTP middleware helpers", () => {
-  test("builds the OAuth challenge and detects only tool calls", () => {
-    expect(
-      createChallenge(
-        new URL("https://gateway.example/.well-known/oauth-protected-resource/mcp"),
-        "workspaces:read",
-      ),
-    ).toBe(
-      'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/mcp", scope="workspaces:read"',
-    );
-    expect(isToolCall({ method: "tools/call" })).toBe(true);
-    expect(isToolCall({ method: "tools/list" })).toBe(false);
-    expect(isToolCall(null)).toBe(false);
-  });
-
   test("logs final transport mode and only session-id presence", () => {
     const info = jest.fn();
     const logger = { info } as unknown as Logger;
@@ -44,13 +28,10 @@ describe("MCP HTTP middleware helpers", () => {
     }) as unknown as Response;
     const next = jest.fn();
 
-    createMcpRequestLifecycleMiddleware(
-      logger,
-      "stateful-experiment",
-    )(request, response, next);
+    createMcpRequestLifecycleMiddleware(logger)(request, response, next);
 
     expect(next).toHaveBeenCalledTimes(1);
-    expect(request.mcpTransportMode).toBe("stateful");
+    expect(request.mcpTransportMode).toBe("stateless");
     expect(info).toHaveBeenCalledTimes(1);
     expect(info.mock.calls[0]?.[0]).toMatchObject({
       event: "mcp_http_request_started",
@@ -63,7 +44,7 @@ describe("MCP HTTP middleware helpers", () => {
     expect(info).toHaveBeenCalledTimes(2);
     expect(info.mock.calls[1]?.[0]).toMatchObject({
       event: "mcp_http_request_completed",
-      mcpTransportMode: "stateful",
+      mcpTransportMode: "stateless",
       hasMcpSessionId: true,
       status: "completed",
       statusCode: 200,
@@ -91,10 +72,11 @@ describe("MCP HTTP middleware helpers", () => {
       writableEnded: true,
     }) as unknown as Response;
 
-    createMcpRequestLifecycleMiddleware(
-      logger,
-      "stateless",
-    )(request, response, jest.fn());
+    createMcpRequestLifecycleMiddleware(logger)(
+      request,
+      response,
+      jest.fn(),
+    );
     (response as unknown as EventEmitter).emit("finish");
 
     expect(request.mcpTransportMode).toBe("stateless");

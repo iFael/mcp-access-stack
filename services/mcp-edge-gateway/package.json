@@ -15,7 +15,6 @@
     "wrangler": "4.135.0"
   },
   "dependencies": {
-    "@mcp-access-stack/edge-protocol": "0.1.0",
-    "jose": "6.2.3"
+    "@mcp-access-stack/edge-protocol": "0.1.0"
   }
 }

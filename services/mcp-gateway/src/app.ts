@@ -1,10 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import type {
   BrowserExecutor,
   RepositoryExecutor,
   SourceControlExecutor,
-  ToolOperationContextFactory,
   WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -18,19 +15,12 @@ import express, {
 } from "express";
 import helmet from "helmet";
 import type { Logger } from "pino";
-import { AgentRelay } from "./relay/service.js";
-import { RelayWorkspaceExecutor } from "./relay/workspace-executor.js";
-import {
-  JwtAccessTokenVerifier,
-  type AccessTokenVerifier,
-} from "./auth/jwt-verifier.js";
 import type { GatewayConfig } from "./config.js";
 import { BrowserWorkerClient } from "./browser/client.js";
 import { createLogger } from "./logger.js";
-import { createMcpServer, type McpServerAuthOptions } from "./mcp/server.js";
+import { createMcpServer } from "./mcp/server.js";
 import { tryHandleLegacyBrowserFastPath } from "./mcp/browser-legacy-fast-path.js";
-import {
-  McpOperationRegistry,
+import {  McpOperationRegistry,
   createGatewayOperationContextFactory,
   createMcpCancellationScopeKey,
   createMcpOperationScopeKey,
@@ -38,38 +28,27 @@ import {
   extractMcpCancellationNotifications,
   extractMcpToolCallRequestIds,
 } from "./mcp/operation-registry.js";
-import {
-  createOwnerAuthenticationMiddleware,
-  mountOwnerOAuth,
-} from "./auth/owner-mount.js";
-import { mountGptActions } from "./actions/service.js";
 import type { CompanionRepositoryBinder } from "./companion/internal-repository-tools.js";
 import {
   createEdgeTrustedAuthenticationMiddleware,
   type EdgeTrustConfig,
 } from "./edge/internal-trust.js";
 import {
-  createAuthenticationMiddleware,
-  createChallenge,
   createIpRateLimiter,
   createMcpRequestLifecycleMiddleware,
   createOriginMiddleware,
   createSubjectRateLimiter,
-  isToolCall,
   type AuthenticatedRequest,
 } from "./http/mcp-middleware.js";
 
 export interface GatewayApplication {
   app: Express;
-  relay?: AgentRelay;
   logger: Logger;
-  resourceMetadataUrl?: URL | undefined;
   close(): Promise<void>;
 }
 
 export interface GatewayApplicationDependencies {
   logger?: Logger;
-  tokenVerifier?: AccessTokenVerifier;
   browser?: BrowserExecutor;
   browserLiveFrame?: (
     input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
@@ -94,30 +73,18 @@ export function createGatewayApplication(
   dependencies: GatewayApplicationDependencies = {},
 ): GatewayApplication {
   const logger = dependencies.logger ?? createLogger(config.logLevel);
-  const relay = config.workspaceBackend.kind === "relay"
-    ? new AgentRelay(
-        {
-          agentId: config.agent.id!,
-          tokenSha256: config.agent.tokenSha256!,
-          requestTimeoutMs: config.agent.requestTimeoutMs,
-          heartbeatMs: config.agent.heartbeatMs,
-          maxConcurrency: config.agent.maxConcurrency,
-          maxPayloadBytes: config.agent.maxPayloadBytes,
-          allowedOrigins: config.allowedOrigins,
-        },
-        logger,
-      )
-    : undefined;
-  const relayExecutor = relay ? new RelayWorkspaceExecutor(relay) : undefined;
-  const workspaceExecutor = dependencies.workspaceExecutor ?? relayExecutor;
-  const sourceControlExecutor = dependencies.sourceControlExecutor ?? relayExecutor;
+  const workspaceExecutor = dependencies.workspaceExecutor;
+  const sourceControlExecutor = dependencies.sourceControlExecutor;
   if (!workspaceExecutor) {
-    throw new Error("A workspace executor is required when the relay backend is disabled.");
+    throw new Error("An in-process workspace executor is required.");
   }
   if (!sourceControlExecutor) {
-    throw new Error("A source-control executor is required when the relay backend is disabled.");
+    throw new Error("An in-process source-control executor is required.");
   }
-  const workspaceReady = dependencies.workspaceReady ?? (() => relay?.isConnected ?? false);
+  if (!dependencies.edgeTrust) {
+    throw new Error("Edge-trusted authentication requires an internal Edge trust assertion.");
+  }
+  const workspaceReady = dependencies.workspaceReady ?? (() => true);
   const browser = dependencies.browser ?? (config.browserWorker
     ? new BrowserWorkerClient({
         url: config.browserWorker.url,
@@ -128,22 +95,6 @@ export function createGatewayApplication(
       })
     : undefined);
   const operationRegistry = new McpOperationRegistry();
-  const statefulRequestContext =
-    new AsyncLocalStorage<ToolOperationContextFactory>();
-  type ExperimentalMcpSession = {
-    principalKey: string;
-    server: ReturnType<typeof createMcpServer>;
-    transport: StreamableHTTPServerTransport;
-    lastUsedAtMs: number;
-    activeRequests: number;
-    expiryTimer?: NodeJS.Timeout;
-    capacityReserved: boolean;
-    closed: boolean;
-  };
-  const statefulSessions = new Map<string, ExperimentalMcpSession>();
-  const statefulSessionInstances = new Set<ExperimentalMcpSession>();
-  let statefulSessionCreations = 0;
-  let gatewayClosed = false;
   const app = express();
 
   app.disable("x-powered-by");
@@ -166,84 +117,17 @@ export function createGatewayApplication(
     }),
   );
 
-  if (config.authMode === "owner") {
-    app.use(express.urlencoded({ extended: false }));
-  }
-
-  let resourceMetadataUrl: URL | undefined;
-  let challenge: string | undefined;
-  let mcpAuth: McpServerAuthOptions | undefined;
-  let ownerChallenge: string | undefined;
-  let ownerAuthMiddleware: RequestHandler | undefined;
-  let edgeTrustedAuthMiddleware: RequestHandler | undefined;
-
+  const edgeTrustedAuthMiddleware =
+    createEdgeTrustedAuthenticationMiddleware(dependencies.edgeTrust);
   const mcpMiddlewares: RequestHandler[] = [
     express.json({
-      limit: config.agent.maxPayloadBytes,
+      limit: config.maxPayloadBytes,
       type: ["application/json", "application/*+json"],
     }),
+    edgeTrustedAuthMiddleware,
+    createIpRateLimiter(config),
+    createSubjectRateLimiter(config),
   ];
-
-  if (config.authMode === "oauth") {
-    const oauth = config.oauth;
-    if (!oauth) {
-      throw new Error("OAuth configuration is required when authMode is oauth.");
-    }
-    const mcpUrl = new URL(config.mcpPath, config.publicBaseUrl);
-    resourceMetadataUrl = new URL(
-      `/.well-known/oauth-protected-resource${config.mcpPath}`,
-      config.publicBaseUrl,
-    );
-    challenge = createChallenge(resourceMetadataUrl, oauth.requiredScope);
-    mcpAuth = {
-      requiredScope: oauth.requiredScope,
-      resourceMetadataUrl,
-    };
-    const tokenVerifier =
-      dependencies.tokenVerifier ?? new JwtAccessTokenVerifier(oauth);
-    const protectedResourceMetadata = {
-      resource: mcpUrl.href,
-      authorization_servers: [oauth.issuer],
-      scopes_supported: [oauth.requiredScope],
-      resource_name: "VS Code - GPT",
-    };
-    app.get(
-      [
-        "/.well-known/oauth-protected-resource",
-        `/.well-known/oauth-protected-resource${config.mcpPath}`,
-      ],
-      (_request, response) => response.json(protectedResourceMetadata),
-    );
-    mcpMiddlewares.push(createAuthenticationMiddleware(tokenVerifier, challenge));
-  }
-
-  if (config.authMode === "owner") {
-    const ownerMount = mountOwnerOAuth(app, config);
-    mcpAuth = {
-      requiredScope: ownerMount.requiredScope,
-      resourceMetadataUrl: ownerMount.resourceMetadataUrl,
-    };
-    ownerChallenge = ownerMount.challenge;
-    resourceMetadataUrl = ownerMount.resourceMetadataUrl;
-    ownerAuthMiddleware = createOwnerAuthenticationMiddleware(
-      ownerMount.provider,
-      ownerMount.challenge,
-    );
-    mcpMiddlewares.push(ownerAuthMiddleware);
-  }
-
-  if (config.authMode === "edge-trusted") {
-    if (!dependencies.edgeTrust) {
-      throw new Error("edge-trusted authentication requires an internal Edge trust assertion.");
-    }
-    edgeTrustedAuthMiddleware = createEdgeTrustedAuthenticationMiddleware(dependencies.edgeTrust);
-    mcpMiddlewares.push(edgeTrustedAuthMiddleware);
-  }
-
-  mcpMiddlewares.push(createIpRateLimiter(config));
-  if (config.authMode === "oauth" || config.authMode === "edge-trusted") {
-    mcpMiddlewares.push(createSubjectRateLimiter(config));
-  }
 
   if (edgeTrustedAuthMiddleware && dependencies.browserLiveFrame) {
     app.get(
@@ -285,206 +169,15 @@ export function createGatewayApplication(
     );
   }
 
-  const statefulOperationContextFactory: ToolOperationContextFactory = (
-    extra,
-    requestedTimeoutMs,
-  ) => {
-    const factory = statefulRequestContext.getStore();
-    if (!factory) {
-      throw new Error(
-        "Stateful MCP operation context is unavailable for the current HTTP request.",
-      );
-    }
-    return factory(extra, requestedTimeoutMs);
-  };
-
-  const releaseExperimentalSessionCapacity = (
-    session: ExperimentalMcpSession,
-  ): void => {
-    if (!session.capacityReserved) return;
-    session.capacityReserved = false;
-    statefulSessionCreations -= 1;
-  };
-
-  const closeExperimentalMcpSession = async (
-    session: ExperimentalMcpSession,
-  ): Promise<void> => {
-    if (session.closed) return;
-    session.closed = true;
-    releaseExperimentalSessionCapacity(session);
-    if (session.expiryTimer) clearTimeout(session.expiryTimer);
-    const sessionId = session.transport.sessionId;
-    if (sessionId && statefulSessions.get(sessionId) === session) {
-      statefulSessions.delete(sessionId);
-    }
-    statefulSessionInstances.delete(session);
-    await session.server.close();
-  };
-
-  const scheduleExperimentalSessionExpiry = (
-    sessionId: string,
-    session: ExperimentalMcpSession,
-  ): void => {
-    if (session.closed) return;
-    if (session.expiryTimer) clearTimeout(session.expiryTimer);
-    const remainingMs = Math.max(
-      1,
-      session.lastUsedAtMs + config.mcpStatefulSessionTtlMs - Date.now(),
-    );
-    session.expiryTimer = setTimeout(() => {
-      if (session.closed) return;
-      if (session.activeRequests > 0) {
-        session.lastUsedAtMs = Date.now();
-        scheduleExperimentalSessionExpiry(sessionId, session);
-        return;
-      }
-      if (
-        Date.now() - session.lastUsedAtMs <
-        config.mcpStatefulSessionTtlMs
-      ) {
-        scheduleExperimentalSessionExpiry(sessionId, session);
-        return;
-      }
-      void closeExperimentalMcpSession(session).catch((error) => {
-        logger.warn({
-          event: "stateful_mcp_session_expiry_failed",
-          reason: errorName(error),
-        });
-      });
-    }, remainingMs);
-    session.expiryTimer.unref();
-  };
-
-  const touchExperimentalMcpSession = (
-    sessionId: string,
-    session: ExperimentalMcpSession,
-  ): void => {
-    if (session.closed) return;
-    session.lastUsedAtMs = Date.now();
-    scheduleExperimentalSessionExpiry(sessionId, session);
-  };
-
-  const createExperimentalMcpSession = async (
-    principalKey: string,
-  ): Promise<ExperimentalMcpSession | undefined> => {
-    if (
-      gatewayClosed ||
-      statefulSessions.size + statefulSessionCreations >=
-        config.mcpStatefulMaxSessions
-    ) {
-      return undefined;
-    }
-    statefulSessionCreations += 1;
-    let session!: ExperimentalMcpSession;
-    try {
-      const server = createMcpServer({
-        workspaceExecutor,
-        sourceControlExecutor,
-        ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),
-        ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
-        ...(browser === undefined ? {} : { browser }),
-        auth: mcpAuth,
-        operationContextFactory: statefulOperationContextFactory,
-      });
-      const transport = new StreamableHTTPServerTransport({
-        enableJsonResponse: true,
-        sessionIdGenerator: randomUUID,
-        onsessioninitialized: (sessionId) => {
-          if (session.closed) return;
-          statefulSessions.set(sessionId, session);
-          releaseExperimentalSessionCapacity(session);
-          touchExperimentalMcpSession(sessionId, session);
-        },
-        onsessionclosed: () => {
-          void closeExperimentalMcpSession(session).catch((error) => {
-            logger.warn({
-              event: "stateful_mcp_session_close_failed",
-              reason: errorName(error),
-            });
-          });
-        },
-      });
-      session = {
-        principalKey,
-        server,
-        transport,
-        lastUsedAtMs: Date.now(),
-        activeRequests: 0,
-        capacityReserved: true,
-        closed: false,
-      };
-      statefulSessionInstances.add(session);
-      await server.connect(transport as Transport);
-      return session;
-    } catch (error) {
-      if (session) {
-        await closeExperimentalMcpSession(session).catch(() => undefined);
-      } else {
-        statefulSessionCreations -= 1;
-      }
-      throw error;
-    }
-  };
-
-  mountGptActions(app, config, workspaceExecutor, logger, browser);
-
-  app.use(
-    config.mcpPath,
-    createMcpRequestLifecycleMiddleware(logger, config.mcpSessionMode),
-  );
+  app.use(config.mcpPath, createMcpRequestLifecycleMiddleware(logger));
   app.use(config.mcpPath, ...mcpMiddlewares);
 
   app.post(config.mcpPath, async (request: AuthenticatedRequest, response, next) => {
-    if ((challenge || ownerChallenge) && !request.auth && isToolCall(request.body)) {
-      response.setHeader("WWW-Authenticate", challenge ?? ownerChallenge ?? "");
-    }
-
-    const requestedSessionId =
-      config.mcpSessionMode === "stateful-experiment"
-        ? readMcpSessionId(request)
-        : undefined;
-    const requestedSession =
-      requestedSessionId === undefined
-        ? undefined
-        : statefulSessions.get(requestedSessionId);
-    request.mcpTransportMode =
-      config.mcpSessionMode === "stateful-experiment" &&
-      (requestedSessionId !== undefined || isMcpInitializeRequest(request.body))
-        ? "stateful"
-        : "stateless";
-    const principalKey =
-      config.mcpSessionMode === "stateful-experiment"
-        ? createMcpPrincipalKey(request, { ignoreMcpSessionId: true })
-        : createMcpPrincipalKey(request);
-
-    if (
-      requestedSessionId !== undefined &&
-      (requestedSession === undefined ||
-        requestedSession.principalKey !== principalKey)
-    ) {
-      response.status(404).json({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32001, message: "MCP session not found." },
-      });
-      return;
-    }
-
+    request.mcpTransportMode = "stateless";
+    const principalKey = createMcpPrincipalKey(request);
     const operationScopeKey = createMcpOperationScopeKey(request, principalKey);
     const cancellationScopeKey = createMcpCancellationScopeKey(request, principalKey);
     const requestLifecycleId = request.mcpRequestId;
-    const cancellationOnlyBody =
-      config.mcpSessionMode === "stateful-experiment" &&
-      isCancellationOnlyMcpBody(request.body);
-
-    if (cancellationOnlyBody && requestedSessionId === undefined) {
-      response.status(400).json({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32000, message: "Mcp-Session-Id is required." },
-      });
-      return;
-    }
 
     const pendingRegistrations = requestLifecycleId === undefined
       ? []
@@ -515,17 +208,6 @@ export function createGatewayApplication(
       });
     }
 
-    if (
-      config.mcpSessionMode === "stateful-experiment" &&
-      requestedSessionId !== undefined &&
-      requestedSession !== undefined &&
-      isCancellationOnlyMcpBody(request.body)
-    ) {
-      releasePendingRegistrations();
-      response.status(202).end();
-      return;
-    }
-
     const requestAbort = bindMcpHttpRequestAbort(request, response);
     const authenticatedUserId = request.auth?.extra?.userId;
     const operationContextFactory = createGatewayOperationContextFactory({
@@ -533,7 +215,7 @@ export function createGatewayApplication(
       principalKey,
       operationScopeKey,
       cancellationScopeKey,
-      ...(config.authMode === "edge-trusted" && typeof authenticatedUserId === "string"
+      ...(typeof authenticatedUserId === "string"
         ? { ownerScopeKey: `user:${authenticatedUserId}` }
         : {}),
       ...(requestLifecycleId === undefined ? {} : { requestLifecycleId }),
@@ -544,7 +226,7 @@ export function createGatewayApplication(
         request,
         response,
         browser,
-        auth: mcpAuth,
+        auth: undefined,
         operationContextFactory,
         requestSignal: requestAbort.signal,
       });
@@ -559,71 +241,12 @@ export function createGatewayApplication(
       next(error);
       return;
     }
-    if (
-      config.mcpSessionMode === "stateful-experiment" &&
-      (requestedSession !== undefined || isMcpInitializeRequest(request.body))
-    ) {
-      let session = requestedSession;
-      let createdForRequest = false;
-      try {
-        if (!session) {
-          session = await createExperimentalMcpSession(principalKey);
-          createdForRequest = true;
-          if (!session) {
-            response.status(503).json({
-              jsonrpc: "2.0",
-              id: null,
-              error: {
-                code: -32002,
-                message: "MCP stateful session capacity reached.",
-              },
-            });
-            return;
-          }
-        }
-        const sessionId = requestedSessionId ?? session.transport.sessionId;
-        session.activeRequests += 1;
-        if (sessionId) touchExperimentalMcpSession(sessionId, session);
-        try {
-          await statefulRequestContext.run(operationContextFactory, () =>
-            session!.transport.handleRequest(request, response, request.body),
-          );
-        } finally {
-          session.activeRequests -= 1;
-          const activeSessionId =
-            requestedSessionId ?? session.transport.sessionId;
-          if (activeSessionId && !session.closed) {
-            touchExperimentalMcpSession(activeSessionId, session);
-          }
-        }
-      } catch (error) {
-        next(error);
-      } finally {
-        releasePendingRegistrations();
-        requestAbort.release();
-        if (
-          createdForRequest &&
-          session !== undefined &&
-          session.transport.sessionId === undefined
-        ) {
-          await closeExperimentalMcpSession(session).catch((error) => {
-            logger.warn({
-              event: "stateful_mcp_session_close_failed",
-              reason: errorName(error),
-            });
-          });
-        }
-      }
-      return;
-    }
-
     const server = createMcpServer({
       workspaceExecutor,
       sourceControlExecutor,
       ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),
       ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
       ...(browser === undefined ? {} : { browser }),
-      auth: mcpAuth,
       operationContextFactory,
     });
     const transport = new StreamableHTTPServerTransport({
@@ -640,66 +263,6 @@ export function createGatewayApplication(
       await server.close().catch(() => undefined);
     }
   });
-  const handleExperimentalSessionRequest = async (
-    request: AuthenticatedRequest,
-    response: Response,
-    next: NextFunction,
-  ): Promise<void> => {
-    request.mcpTransportMode =
-      config.mcpSessionMode === "stateful-experiment"
-        ? "stateful"
-        : "stateless";
-    if (config.mcpSessionMode !== "stateful-experiment") {
-      response.status(405).json({ error: "method_not_allowed" });
-      return;
-    }
-
-    const sessionId = readMcpSessionId(request);
-    if (!sessionId) {
-      response.status(400).json({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32000, message: "Mcp-Session-Id is required." },
-      });
-      return;
-    }
-    const session = statefulSessions.get(sessionId);
-    const principalKey = createMcpPrincipalKey(request, {
-      ignoreMcpSessionId: true,
-    });
-    if (!session || session.principalKey !== principalKey) {
-      response.status(404).json({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32001, message: "MCP session not found." },
-      });
-      return;
-    }
-
-    session.activeRequests += 1;
-    touchExperimentalMcpSession(sessionId, session);
-    try {
-      await session.transport.handleRequest(request, response);
-    } catch (error) {
-      next(error);
-    } finally {
-      session.activeRequests -= 1;
-      if (request.method === "DELETE") {
-        await closeExperimentalMcpSession(session).catch((error) => {
-          logger.warn({
-            event: "stateful_mcp_session_close_failed",
-            reason: errorName(error),
-          });
-        });
-      } else if (!session.closed) {
-        touchExperimentalMcpSession(sessionId, session);
-      }
-    }
-  };
-
-  app.get(config.mcpPath, handleExperimentalSessionRequest);
-  app.delete(config.mcpPath, handleExperimentalSessionRequest);
-
   app.use((error: unknown, request: AuthenticatedRequest, response: Response, _next: NextFunction) => {
     logger.error({
       event: "http_request_failed",
@@ -715,18 +278,8 @@ export function createGatewayApplication(
 
   return {
     app,
-    ...(relay === undefined ? {} : { relay }),
     logger,
-    resourceMetadataUrl,
-    close: async () => {
-      if (gatewayClosed) return;
-      gatewayClosed = true;
-      relay?.close();
-      const sessions = [...statefulSessionInstances];
-      await Promise.all(
-        sessions.map((session) => closeExperimentalMcpSession(session)),
-      );
-    },
+    close: async () => undefined,
   };
 }
 
@@ -760,33 +313,6 @@ function bindMcpHttpRequestAbort(
       response.removeListener("close", onClose);
     },
   };
-}
-
-function isMcpInitializeRequest(body: unknown): boolean {
-  return (
-    typeof body === "object" &&
-    body !== null &&
-    !Array.isArray(body) &&
-    (body as { method?: unknown }).method === "initialize"
-  );
-}
-
-function isCancellationOnlyMcpBody(body: unknown): boolean {
-  const messages = Array.isArray(body) ? body : [body];
-  return (
-    messages.length > 0 &&
-    messages.every(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        (message as { method?: unknown }).method === "notifications/cancelled",
-    )
-  );
-}
-
-function readMcpSessionId(request: AuthenticatedRequest): string | undefined {
-  const value = request.header("mcp-session-id")?.trim();
-  return value ? value : undefined;
 }
 
 function errorName(error: unknown): string {

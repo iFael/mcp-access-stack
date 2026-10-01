@@ -1,402 +1,146 @@
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { describe, expect, it } from "@jest/globals";
-import { BROWSER_TOOL_NAMES, MCP_FULL_TOOL_CATALOG_NAMES } from "@vs-code-gpt/shared";
-import { AuthenticationError, type AccessTokenVerifier } from "../../../src/auth/jwt-verifier.js";
+import { describe, expect, it, jest } from "@jest/globals";
+import { MCP_FULL_TOOL_CATALOG_NAMES } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "../../../src/app.js";
 import type { GatewayConfig } from "../../../src/config.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+} from "../../support/helpers.js";
 
-const validAuth: AuthInfo = {
-  token: "valid",
-  clientId: "test-client",
-  scopes: ["workspaces:read"],
-  expiresAt: Math.floor(Date.now() / 1_000) + 300,
-  extra: { subject: "allowed-user" },
-};
+jest.setTimeout(15_000);
 
-describe("gateway HTTP surface", () => {
-  it("publishes protected resource metadata", async () => {
-    const fixture = await createHttpFixture();
-    try {
-      const response = await fetch(
-        new URL("/.well-known/oauth-protected-resource/mcp", fixture.url),
-      );
-
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
-        resource: "http://127.0.0.1/mcp",
-        authorization_servers: ["https://issuer.example/"],
-        scopes_supported: ["workspaces:read"],
-      });
-    } finally {
-      await fixture.close();
-    }
-  });
-
+describe("embedded gateway HTTP surface", () => {
   it("rejects an untrusted Origin", async () => {
     const fixture = await createHttpFixture();
     try {
       const response = await fetch(new URL("/health/live", fixture.url), {
         headers: { origin: "https://evil.example" },
       });
-
       expect(response.status).toBe(403);
     } finally {
       await fixture.close();
     }
   });
 
-  it("returns HTTP OAuth challenges for invalid access tokens", async () => {
-    const fixture = await createHttpFixture({
-      verify: async () => {
-        throw new AuthenticationError(401, "invalid_token");
-      },
-    });
-    try {
-      const response = await postMcp(fixture.url, toolsListRequest(), "invalid");
-
-      expect(response.status).toBe(401);
-      expect(response.headers.get("www-authenticate")).toContain(
-        "oauth-protected-resource/mcp",
-      );
-      await expect(response.json()).resolves.toEqual({ error: "invalid_token" });
-    } finally {
-      await fixture.close();
-    }
-  });
-
-  it("describes workspace tools with stable schemas", async () => {
+  it("rejects MCP requests without the connector-owned Edge assertion", async () => {
     const fixture = await createHttpFixture();
     try {
-      const response = await postMcp(fixture.url, toolsListRequest(), "valid");
-      const body = await response.json() as {
-        result: { tools: Array<Record<string, unknown>> };
-      };
-
-      expect(response.status).toBe(200);
-      expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([...MCP_FULL_TOOL_CATALOG_NAMES].sort());
-      const writeTool = body.result.tools.find((tool) => tool.name === "write_file");
-      expect(writeTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: false,
-        idempotentHint: true,
-      });
-      const patchTool = body.result.tools.find((tool) => tool.name === "patch_file");
-      expect(patchTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      });
-      const patchFilesTool = body.result.tools.find((tool) => tool.name === "patch_files");
-      expect(patchFilesTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      });
-      const stdinTool = body.result.tools.find(
-        (tool) => tool.name === "write_background_task_stdin",
+      const missing = await postMcp(
+        fixture.url,
+        toolsListRequest(),
+        {},
       );
-      expect(stdinTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: false,
-        idempotentHint: false,
-      });
-      const prepareReleaseTool = body.result.tools.find(
-        (tool) => tool.name === "prepare_release",
-      );
-      expect(prepareReleaseTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      });
-      const promoteReleaseTool = body.result.tools.find(
-        (tool) => tool.name === "promote_release",
-      );
-      expect(promoteReleaseTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: true,
-        idempotentHint: false,
-      });
-      const inspectBatchTool = body.result.tools.find(
-        (tool) => tool.name === "inspect_workspace_batch",
-      );
-      expect(inspectBatchTool?.annotations).toEqual({
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      });
-      const syncBranchTool = body.result.tools.find(
-        (tool) => tool.name === "git_sync_branch",
-      );
-      expect(syncBranchTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      });
-      const startChecksWatchTool = body.result.tools.find(
-        (tool) => tool.name === "github_start_commit_checks_watch",
-      );
-      expect(startChecksWatchTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      });
-      const getChecksWatchesTool = body.result.tools.find(
-        (tool) => tool.name === "github_get_commit_checks_watches",
-      );
-      expect(getChecksWatchesTool?.annotations).toEqual({
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      });
-      const waitChecksWatchTool = body.result.tools.find(
-        (tool) => tool.name === "github_wait_commit_checks_watch",
-      );
-      expect(waitChecksWatchTool?.annotations).toEqual({
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      });
-      for (const name of [
-        "create_repository",
-        "import_repositories",
-        "materialize_repository",
-        "sync_repository",
-      ]) {
-        const tool = body.result.tools.find((entry) => entry.name === name);
-        expect(tool?.annotations).toEqual({
-          readOnlyHint: false,
-          destructiveHint: false,
-          openWorldHint: false,
-          idempotentHint: false,
-        });
-        expect(typeof tool?.inputSchema).toBe("object");
-        expect(typeof tool?.outputSchema).toBe("object");
-        expect(tool?.securitySchemes).toEqual([
-          { type: "oauth2", scopes: ["workspaces:read"] },
-        ]);
-        expect(tool?._meta).toEqual({
-          securitySchemes: [{ type: "oauth2", scopes: ["workspaces:read"] }],
-        });
-      }
-
-      const revokeDeviceTool = body.result.tools.find(
-        (entry) => entry.name === "revoke_device",
-      );
-      expect(revokeDeviceTool?.annotations).toEqual({
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: false,
-        idempotentHint: false,
-      });
-      expect(typeof revokeDeviceTool?.inputSchema).toBe("object");
-      expect(typeof revokeDeviceTool?.outputSchema).toBe("object");
-      expect(revokeDeviceTool?.securitySchemes).toEqual([
-        { type: "oauth2", scopes: ["workspaces:read"] },
-      ]);
-      expect(revokeDeviceTool?._meta).toEqual({
-        securitySchemes: [{ type: "oauth2", scopes: ["workspaces:read"] }],
+      expect(missing.status).toBe(401);
+      await expect(missing.json()).resolves.toEqual({
+        error: "edge_trust_invalid",
       });
 
-      for (const tool of body.result.tools.filter(
-        (entry) =>
-          !(BROWSER_TOOL_NAMES as readonly string[]).includes(entry.name as string) &&
-          ![
-            "create_repository",
-            "import_repositories",
-            "materialize_repository",
-            "sync_repository",
-            "revoke_device",
-            "write_file",
-            "patch_file",
-            "patch_files",
-            "inspect_workspace_batch",
-            "prepare_release",
-            "promote_release",
-            "run_command",
-            "start_background_task",
-            "cancel_background_task",
-            "write_background_task_stdin",
-            "git_create_branch",
-            "git_stage_paths",
-            "git_unstage_paths",
-            "git_commit",
-            "git_commit_paths",
-            "git_merge_branch",
-            "git_sync_branch",
-            "git_push_branch",
-            "github_get_repository",
-            "github_get_commit_checks",
-            "github_start_commit_checks_watch",
-            "github_get_commit_checks_watches",
-            "github_wait_commit_checks_watch",
-            "github_create_repository",
-            "github_get_pull_request",
-            "github_create_pull_request",
-            "github_merge_pull_request",
-          ].includes(entry.name as string),
-      )) {
-        expect(tool.annotations).toEqual({
-          readOnlyHint: true,
-          destructiveHint: false,
-          openWorldHint: false,
-          idempotentHint: true,
-        });
-        expect(typeof tool.inputSchema).toBe("object");
-        expect(typeof tool.outputSchema).toBe("object");
-        expect(tool.securitySchemes).toEqual([
-          { type: "oauth2", scopes: ["workspaces:read"] },
-        ]);
-        expect(tool._meta).toEqual({
-          securitySchemes: [{ type: "oauth2", scopes: ["workspaces:read"] }],
-        });
-      }
+      const wrong = await postMcp(
+        fixture.url,
+        toolsListRequest(),
+        {
+          ...edgeHeaders(),
+          "x-mcp-edge-internal-assertion": "b".repeat(43),
+        },
+      );
+      expect(wrong.status).toBe(401);
+      await expect(wrong.json()).resolves.toEqual({
+        error: "edge_trust_invalid",
+      });
     } finally {
       await fixture.close();
     }
   });
 
-  it("returns an MCP OAuth challenge when a tool is called without a token", async () => {
+  it("publishes the complete internal MCP catalog through edge-trusted auth", async () => {
     const fixture = await createHttpFixture();
-    try {
-      const response = await postMcp(fixture.url, {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/call",
-        params: { name: "list_workspaces", arguments: {} },
-      });
-      const body = await response.json() as {
-        result: { isError: boolean; _meta: Record<string, unknown> };
-      };
-
-      expect(response.headers.get("www-authenticate")).toContain("workspaces:read");
-      expect(body.result.isError).toBe(true);
-      const challenges = body.result._meta["mcp/www_authenticate"] as string[];
-      expect(challenges).toBeDefined();
-      expect(challenges[0]).toContain('error="insufficient_scope"');
-      expect(challenges[0]).toContain("error_description=");
-    } finally {
-      await fixture.close();
-    }
-  });
-
-  it("limits repeated requests per ip", async () => {
-    const fixture = await createHttpFixture(undefined, {
-      rateLimit: { windowMs: 60_000, max: 2 },
-    });
-    try {
-      await postMcp(fixture.url, toolsListRequest());
-      await postMcp(fixture.url, toolsListRequest());
-      const limited = await postMcp(fixture.url, toolsListRequest());
-
-      expect(limited.status).toBe(429);
-      await expect(limited.json()).resolves.toEqual({ error: "rate_limit_exceeded" });
-    } finally {
-      await fixture.close();
-    }
-  });
-});
-
-describe("gateway personal mode without oauth", () => {
-  const personalOverrides: Partial<GatewayConfig> = {
-    authMode: "none",
-    mcpPath: "/mcp-a8f3k2x9",
-  };
-
-  it("serves tools on the secret path without authentication", async () => {
-    const fixture = await createHttpFixture(undefined, personalOverrides);
-    try {
-      const response = await postMcp(fixture.url, toolsListRequest(), undefined, "/mcp-a8f3k2x9");
-      const body = await response.json() as {
-        result: { tools: Array<Record<string, unknown>> };
-      };
-
-      expect(response.status).toBe(200);
-      expect(body.result.tools).toHaveLength(MCP_FULL_TOOL_CATALOG_NAMES.length);
-      for (const tool of body.result.tools) {
-        expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
-        expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
-      }
-    } finally {
-      await fixture.close();
-    }
-  });
-
-  it("executes tool calls without a token and without oauth challenges", async () => {
-    const fixture = await createHttpFixture(undefined, personalOverrides);
     try {
       const response = await postMcp(
         fixture.url,
-        {
-          jsonrpc: "2.0",
-          id: 3,
-          method: "tools/call",
-          params: { name: "list_workspaces", arguments: {} },
-        },
-        undefined,
-        "/mcp-a8f3k2x9",
+        toolsListRequest(),
+        edgeHeaders(),
       );
       const body = await response.json() as {
-        result: {
-          isError: boolean;
-          content: Array<{ text: string }>;
-          _meta?: Record<string, unknown>;
-        };
+        result: { tools: Array<Record<string, unknown>> };
       };
 
       expect(response.status).toBe(200);
-      expect(response.headers.get("www-authenticate")).toBeNull();
-      expect(body.result.isError).toBe(true);
-      expect(body.result.content[0]?.text).toContain("AGENT_UNAVAILABLE");
-      expect(body.result._meta?.["mcp/www_authenticate"]).toBeUndefined();
-    } finally {
-      await fixture.close();
-    }
-  });
-
-  it("accepts requests from the ChatGPT origin without an allowlist", async () => {
-    const fixture = await createHttpFixture(undefined, {
-      ...personalOverrides,
-      allowedOrigins: new Set(),
-    });
-    try {
-      const response = await fetch(new URL("/mcp-a8f3k2x9", fixture.url), {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          "content-type": "application/json",
-          origin: "https://chatgpt.com",
-        },
-        body: JSON.stringify(toolsListRequest()),
-      });
-
-      expect(response.status).toBe(200);
-    } finally {
-      await fixture.close();
-    }
-  });
-
-  it("hides the default path and oauth metadata", async () => {
-    const fixture = await createHttpFixture(undefined, personalOverrides);
-    try {
-      const defaultPath = await postMcp(fixture.url, toolsListRequest());
-      const metadata = await fetch(
-        new URL("/.well-known/oauth-protected-resource", fixture.url),
+      expect(body.result.tools.map((tool) => tool.name).sort()).toEqual(
+        [...MCP_FULL_TOOL_CATALOG_NAMES].sort(),
       );
 
+      for (const tool of body.result.tools) {
+        expect(typeof tool.inputSchema).toBe("object");
+        expect(typeof tool.outputSchema).toBe("object");
+        expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
+        expect(tool._meta).toEqual({
+          securitySchemes: [{ type: "noauth" }],
+        });
+      }
+
+      expect(
+        body.result.tools.find((tool) => tool.name === "write_file")?.annotations,
+      ).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+        idempotentHint: true,
+      });
+      expect(
+        body.result.tools.find((tool) => tool.name === "inspect_workspace_batch")
+          ?.annotations,
+      ).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("limits repeated MCP requests per ip", async () => {
+    const fixture = await createHttpFixture({
+      rateLimit: { windowMs: 60_000, max: 2 },
+    });
+    try {
+      await postMcp(fixture.url, toolsListRequest(), edgeHeaders());
+      await postMcp(fixture.url, toolsListRequest(), edgeHeaders());
+      const limited = await postMcp(
+        fixture.url,
+        toolsListRequest(),
+        edgeHeaders(),
+      );
+
+      expect(limited.status).toBe(429);
+      await expect(limited.json()).resolves.toEqual({
+        error: "rate_limit_exceeded",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("serves only the configured internal MCP path", async () => {
+    const fixture = await createHttpFixture({ mcpPath: "/mcp-a8f3k2x9" });
+    try {
+      const configured = await postMcp(
+        fixture.url,
+        toolsListRequest(),
+        edgeHeaders(),
+        "/mcp-a8f3k2x9",
+      );
+      expect(configured.status).toBe(200);
+
+      const defaultPath = await postMcp(
+        fixture.url,
+        toolsListRequest(),
+        edgeHeaders(),
+      );
       expect(defaultPath.status).toBe(404);
-      expect(metadata.status).toBe(404);
     } finally {
       await fixture.close();
     }
@@ -404,31 +148,35 @@ describe("gateway personal mode without oauth", () => {
 });
 
 async function createHttpFixture(
-  verifier?: AccessTokenVerifier,
   overrides: Partial<GatewayConfig> = {},
 ) {
-  const gateway = createGatewayApplication(makeGatewayConfig(overrides), {
-    logger: silentLogger(),
-    tokenVerifier: verifier ?? { verify: async () => validAuth },
-  });
+  const gateway = createGatewayApplication(
+    makeGatewayConfig(overrides),
+    makeEdgeGatewayDependencies(),
+  );
   const http = await listen(gateway.app);
   return {
     ...http,
     close: async () => {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     },
   };
 }
 
 function toolsListRequest() {
-  return { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {},
+  };
 }
 
 function postMcp(
   url: URL,
   body: unknown,
-  token?: string,
+  headers: Record<string, string>,
   path = "/mcp",
 ): Promise<Response> {
   return fetch(new URL(path, url), {
@@ -436,7 +184,7 @@ function postMcp(
     headers: {
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
-      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+      ...headers,
     },
     body: JSON.stringify(body),
   });
