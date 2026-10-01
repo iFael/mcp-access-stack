@@ -51,6 +51,8 @@ const RETIRED_PATHS = [
   "operations/inspector",
   "operations/browser/Enable-PersistentBrowserProfile.ps1",
   "operations/browser/Test-BrowserProfileConfiguration.ps1",
+  "deploy/windows/Test-McpEdgeConnectorTerminalIndependence.ps1",
+  "tooling/benchmarks/browser/flow-benchmark-dev.test.mjs",
 ];
 
 const REQUIRED_FILES = [
@@ -152,6 +154,8 @@ const LEGACY_PATHS = [
   "operations/inspector/",
   "operations/browser/Enable-PersistentBrowserProfile.ps1",
   "operations/browser/Test-BrowserProfileConfiguration.ps1",
+  "deploy/windows/Test-McpEdgeConnectorTerminalIndependence.ps1",
+  "tooling/benchmarks/browser/flow-benchmark-dev.test.mjs",
 ];
 
 export function validateRepositoryStructure(root = process.cwd()) {
