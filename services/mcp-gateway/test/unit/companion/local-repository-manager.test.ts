@@ -109,6 +109,25 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     });
   });
 
+  it("resolves the canonical MCP Access Stack root from a persisted GitHub binding", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+    });
+    const binding = {
+      ...repositoryBinding(fixture.repository),
+      name: "mcp-access-stack",
+      workspaceId: "mcp-access-stack-local-test",
+      remoteUrls: ["https://github.com/iFael/mcp-access-stack.git"],
+    };
+
+    expect(manager.resolveCanonicalStackRoot()).toBeUndefined();
+    await manager.bindRepositories([binding]);
+    expect(manager.resolveCanonicalStackRoot()).toBe(fixture.repository);
+  });
+
   it("rebinds the same repository to a new workspace id without keeping the old binding", async () => {
     const fixture = await createGitFixture();
     const manager = await LocalRepositoryManager.create({

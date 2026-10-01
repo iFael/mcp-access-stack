@@ -78,6 +78,24 @@ async function main(): Promise<void> {
     homeDirectory: os.homedir(),
     onChanged: reloadLocalRuntime,
   });
+  if (process.platform === "win32" && process.env.MCP_V3_RELEASE_ROOT?.trim()) {
+    const stackRoot = repositories.resolveCanonicalStackRoot();
+    if (stackRoot) {
+      const configuredRoot = process.env.VS_CODE_GPT_STACK_ROOT?.trim();
+      if (configuredRoot &&
+          path.resolve(configuredRoot).toLocaleLowerCase("en-US") !==
+            path.resolve(stackRoot).toLocaleLowerCase("en-US")) {
+        throw new AppError(
+          "EXECUTION_STATE_INVALID",
+          "Configured MCP stack root conflicts with the canonical local repository binding.",
+        );
+      }
+      process.env.VS_CODE_GPT_STACK_ROOT = stackRoot;
+      writeLog({ event: "mcp_v3_local_stack_root_resolved", stackRoot });
+    } else {
+      writeLog({ event: "mcp_v3_local_stack_root_unavailable" });
+    }
+  }
   await reloadable.reload(await repositories.buildPolicy());
 
   let browserWorker: LocalBrowserWorker | undefined;

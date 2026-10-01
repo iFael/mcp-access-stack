@@ -128,6 +128,20 @@ export class LocalRepositoryManager implements RepositoryExecutor {
     return this.state.repositories.map((repository) => ({ ...repository, remoteUrls: [...repository.remoteUrls] }));
   }
 
+  resolveCanonicalStackRoot(): string | undefined {
+    const matches = this.state.repositories.filter((repository) =>
+      repository.remoteUrls.some(isCanonicalStackRemote)
+    );
+    if (matches.length === 0) return undefined;
+    if (matches.length > 1) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Multiple canonical MCP Access Stack repository bindings were found.",
+      );
+    }
+    return matches[0]?.path;
+  }
+
   listMaterializationAnnouncements(): Array<{ repositoryId: string; workspaceId: string; path: string }> {
     return this.state.repositories.map((repository) => ({
       repositoryId: repository.repositoryId,
@@ -712,6 +726,13 @@ export class LocalRepositoryManager implements RepositoryExecutor {
     await writeFile(temporary, JSON.stringify(this.state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
     await rename(temporary, this.statePath);
   }
+}
+
+function isCanonicalStackRemote(value: string): boolean {
+  const remote = value.trim();
+  return /^https:\/\/github\.com\/ifael\/mcp-access-stack(?:\.git)?\/?$/iu.test(remote) ||
+    /^git@github\.com:ifael\/mcp-access-stack(?:\.git)?$/iu.test(remote) ||
+    /^ssh:\/\/git@github\.com\/ifael\/mcp-access-stack(?:\.git)?\/?$/iu.test(remote);
 }
 
 function defaultStateDirectory(platform: NodeJS.Platform): string {
