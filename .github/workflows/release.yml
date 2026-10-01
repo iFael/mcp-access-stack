@@ -532,6 +532,21 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy --workspace @mcp-access-stack/edge-gateway
 
+      - name: Verify Edge break-glass authentication without mutation
+        shell: bash
+        env:
+          MCP_OWNER_TOKEN: ${{ secrets.MCP_OWNER_TOKEN }}
+          EDGE_BASE_URL: ${{ needs.metadata.outputs.edge-base-url }}
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error             --output "$RUNNER_TEMP/edge-breakglass-probe.json"             --write-out '%{http_code}'             -X POST             -H "Authorization: Bearer $MCP_OWNER_TOKEN"             -H "Content-Type: text/plain"             --data 'probe'             "${EDGE_BASE_URL%/}/_internal/owner-oauth/recover-access")"
+          error="$(jq -r '.error // empty' "$RUNNER_TEMP/edge-breakglass-probe.json")"
+          if [[ "$status" != "415" || "$error" != "invalid_owner_recovery_content_type" ]]; then
+            echo "Edge break-glass verification failed: HTTP $status / $error" >&2
+            exit 1
+          fi
+          echo "Edge break-glass route authenticated and rejected the non-mutating probe as expected."
+
       - name: Verify prepared Edge contract before publication
         env:
           EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}

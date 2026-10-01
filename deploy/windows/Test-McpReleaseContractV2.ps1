@@ -141,7 +141,8 @@ try {
         'CLOUDFLARE_ACCOUNT_ID',
         'MCP_OWNER_TOKEN',
         'wrangler secret put MCP_OWNER_TOKEN',
-        'invalid_single_user_migration_content_type',
+        'invalid_owner_recovery_content_type',
+        '/_internal/owner-oauth/recover-access',
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
         'Preflight contract rollout compatibility',
@@ -177,7 +178,10 @@ try {
         'environment: public-release',
         'MCP_OWNER_TOKEN',
         'wrangler secret put MCP_OWNER_TOKEN',
-        'invalid_single_user_migration_content_type'
+        'invalid_owner_recovery_content_type',
+        '/_internal/owner-oauth/recover-access',
+        'migrate-single-user',
+        'MIGRATE_OWNER_TO_RAFAEL'
     )) {
         if (-not $breakGlassWorkflow.Contains($requiredToken)) {
             throw "Edge break-glass provisioning workflow is missing required token: $requiredToken"
