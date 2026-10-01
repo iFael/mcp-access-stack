@@ -76,11 +76,13 @@ export class BrowserModeRouter implements BrowserExecutor {
       const personal = this.requirePersonal();
       const result = await personal.open(browserInput, context);
       this.personalTabIds.add(result.tab.tabId);
-      if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "personal");
+      if (input.taskId) this.taskModes.set(input.taskId, "personal");
+      else if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "personal");
       return result;
     }
     const result = await this.managed.open(browserInput, context);
-    if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "managed");
+    if (input.taskId) this.taskModes.set(input.taskId, "managed");
+    else if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "managed");
     return result;
   }
 
