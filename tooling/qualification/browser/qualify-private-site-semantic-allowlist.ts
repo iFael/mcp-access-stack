@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
@@ -16,10 +16,6 @@ import {
   TRANSIENT_SEMANTIC_QUALIFICATION_CODES,
   retryTransientSemanticOperation,
 } from "./semantic-allowlist-retry.mjs";
-
-interface PrivateBrowserConfiguration {
-  privateDirectory?: string;
-}
 
 interface SanitizedRoute {
   originKind: "private" | "external" | "denied";
@@ -85,22 +81,15 @@ const PANEL_POSTBACK_RETRY_CODES = Object.freeze([
 ]);
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const startedAt = new Date().toISOString();
-const privateConfigPath = path.resolve(
-  process.env.MCP_QUALIFICATION_PRIVATE_CONFIG ??
-    path.join(ROOT, ".runtime-private", "docker", "production", "browser.json"),
-);
 const brokerPath = process.env.MCP_QUALIFICATION_BROKER_PATH;
 if (!brokerPath || !path.isAbsolute(brokerPath)) {
   throw new Error("Qualification broker path is unavailable.");
 }
-const privateConfig = JSON.parse(
-  await readFile(privateConfigPath, "utf8"),
-) as PrivateBrowserConfiguration;
-if (!privateConfig.privateDirectory) {
-  throw new Error("Private Browser Worker directory is unavailable.");
-}
-
-const credentialPrivateDirectory = path.resolve(privateConfig.privateDirectory);
+const credentialPrivateDirectory = path.resolve(
+  process.env.MCP_QUALIFICATION_PRIVATE_DIR ??
+    process.env.BROWSER_WORKER_PRIVATE_DIR ??
+    path.join(ROOT, ".runtime-private", "browser"),
+);
 const publicQualificationRoot = path.join(
   ROOT,
   "runtime",

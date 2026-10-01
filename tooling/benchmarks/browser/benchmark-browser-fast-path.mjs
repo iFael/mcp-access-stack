@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -92,7 +91,6 @@ export function evaluateBrowserPerformanceGates(candidate, references) {
 }
 
 export async function runFastPathBenchmark(options = {}) {
-  const cwd = options.cwd ?? process.cwd();
   const iterations = positiveInteger(options.iterations ?? browserFastPathDefaults.iterations, "iterations", 1_000);
   const warmupIterations = positiveInteger(
     options.warmupIterations ?? browserFastPathDefaults.warmupIterations,
@@ -105,7 +103,7 @@ export async function runFastPathBenchmark(options = {}) {
     200,
   );
   const unitsPerRun = positiveInteger(options.unitsPerRun ?? browserFastPathDefaults.unitsPerRun, "unitsPerRun", 20);
-  const config = await readProductionConfig(cwd);
+  const config = resolveBrowserWorkerEndpoint(options.environment ?? process.env);
   const call = createBrowserWorkerClient(config);
   const benchmarkSite = await startBenchmarkSite();
   const individualRuns = [];
@@ -219,13 +217,11 @@ export async function startBenchmarkSite() {
   };
 }
 
-async function readProductionConfig(cwd) {
-  const configPath = path.join(cwd, ".runtime-private", "gpt-only-production.json");
-  const config = JSON.parse((await readFile(configPath, "utf8")).replace(/^\uFEFF/u, ""));
-  const port = Number(config?.ports?.browser);
-  const token = config?.browser?.token;
+export function resolveBrowserWorkerEndpoint(environment = process.env) {
+  const port = Number(environment.BROWSER_WORKER_PORT);
+  const token = environment.BROWSER_WORKER_TOKEN;
   if (!Number.isInteger(port) || port <= 0 || typeof token !== "string" || token.length < 32) {
-    throw new Error("Production Browser Worker configuration is incomplete.");
+    throw new Error("Browser Worker endpoint environment is incomplete.");
   }
   return { port, token };
 }

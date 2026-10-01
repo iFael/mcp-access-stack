@@ -32,7 +32,6 @@ const REQUIRED_DIRECTORIES = [
   "services/workspace-agent/test/support",
   "packages/mcp-core",
   "operations/browser",
-  "operations/inspector",
   "operations/validation",
   "deploy/windows",
   "tooling/benchmarks/browser",
@@ -49,6 +48,9 @@ const RETIRED_PATHS = [
   "services/workspace-agent/src/connection",
   "services/workspace-agent/src/remote",
   "operations/gpt-actions",
+  "operations/inspector",
+  "operations/browser/Enable-PersistentBrowserProfile.ps1",
+  "operations/browser/Test-BrowserProfileConfiguration.ps1",
 ];
 
 const REQUIRED_FILES = [
@@ -147,6 +149,9 @@ const LEGACY_PATHS = [
   "scripts/gpt-only-supervisor.mjs",
   "refactor/gpt-only/start-production.mjs",
   "docker-config/",
+  "operations/inspector/",
+  "operations/browser/Enable-PersistentBrowserProfile.ps1",
+  "operations/browser/Test-BrowserProfileConfiguration.ps1",
 ];
 
 export function validateRepositoryStructure(root = process.cwd()) {
@@ -218,6 +223,10 @@ export function validateRepositoryStructure(root = process.cwd()) {
   const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   if (JSON.stringify(packageJson.workspaces) !== JSON.stringify(EXPECTED_WORKSPACES)) {
     issues.push(`Unexpected npm workspaces: ${JSON.stringify(packageJson.workspaces)}`);
+  }
+
+  if (packageJson.devDependencies?.["@modelcontextprotocol/inspector"]) {
+    issues.push("Retired MCP Inspector dependency remains in package.json");
   }
 
   const packageLock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
