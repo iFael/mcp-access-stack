@@ -7,7 +7,7 @@ import {
 
 function managedExecutor(): BrowserExecutor {
   return {
-    open: jest.fn(async (input) => ({
+    open: jest.fn(async (input: Parameters<BrowserExecutor["open"]>[0]) => ({
       tab: {
         tabId: "managed:1",
         ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -41,7 +41,7 @@ function managedExecutor(): BrowserExecutor {
 function personalExecutor(connected = true): PersonalBrowserExecutor {
   return {
     isConnected: () => connected,
-    open: jest.fn(async (input) => ({
+    open: jest.fn(async (input: Parameters<BrowserExecutor["open"]>[0]) => ({
       tab: {
         tabId: "personal:42",
         ...(input.taskId ? { taskId: input.taskId } : {}),
