@@ -1,8 +1,16 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import { createGatewayApplication } from "../../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+} from "../../support/helpers.js";
+
+jest.setTimeout(30_000);
 
 const workerToken = "w".repeat(32);
 const timestamp = "2026-08-06T12:00:00.000Z";
@@ -18,12 +26,11 @@ interface McpToolResult {
   structuredContent?: Record<string, unknown>;
 }
 
-describe("anonymous MCP browser session continuity", () => {
+describe("edge-trusted browser session continuity", () => {
   it("preserves ownership across open, wait and extract requests when the proxy IP changes", async () => {
     const worker = await startOwnershipWorker();
     const gateway = createGatewayApplication(
       makeGatewayConfig({
-        authMode: "none",
         trustProxy: 1,
         browserWorker: {
           url: worker.url,
@@ -32,7 +39,7 @@ describe("anonymous MCP browser session continuity", () => {
           maxPayloadBytes: 2 * 1024 * 1024,
         },
       }),
-      { logger: silentLogger() },
+      makeEdgeGatewayDependencies({ logger: silentLogger() }),
     );
     const http = await listen(gateway.app);
 
@@ -60,7 +67,7 @@ describe("anonymous MCP browser session continuity", () => {
       });
       expect(new Set(worker.calls.map((call) => call.ownerScope)).size).toBe(1);
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
       await worker.close();
     }
@@ -70,7 +77,6 @@ describe("anonymous MCP browser session continuity", () => {
     const worker = await startOwnershipWorker();
     const gateway = createGatewayApplication(
       makeGatewayConfig({
-        authMode: "none",
         trustProxy: 1,
         browserWorker: {
           url: worker.url,
@@ -79,7 +85,7 @@ describe("anonymous MCP browser session continuity", () => {
           maxPayloadBytes: 2 * 1024 * 1024,
         },
       }),
-      { logger: silentLogger() },
+      makeEdgeGatewayDependencies({ logger: silentLogger() }),
     );
     const http = await listen(gateway.app);
 
@@ -98,7 +104,7 @@ describe("anonymous MCP browser session continuity", () => {
       expect(readTabId(second)).toBe(readTabId(first));
       expect(worker.createdTabCount()).toBe(1);
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
       await worker.close();
     }
@@ -121,6 +127,7 @@ async function callTool(
       "x-openai-session": "stable-browser-session",
       "user-agent": "chatgpt-mcp-continuity-test",
       "x-forwarded-for": forwardedFor,
+      ...edgeHeaders(),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",

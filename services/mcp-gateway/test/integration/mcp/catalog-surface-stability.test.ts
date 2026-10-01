@@ -17,8 +17,7 @@ import {
 } from "@vs-code-gpt/shared";
 import { LocalRepositoryManager } from "../../../src/companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "../../../src/companion/reloadable-local-agent.js";
-import type { AgentRelay } from "../../../src/relay/service.js";
-import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
+import { createTestExecutor } from "../../support/executors.js";
 import {
   createMcpServer,
   getMcpServerCatalogMetadata,
@@ -28,7 +27,7 @@ const execFileAsync = promisify(execFile);
 
 describe("MCP public catalog stability", () => {
   it("publishes the complete catalog and advertises catalog changes even when browser execution is unavailable", async () => {
-    const executor = new RelayWorkspaceExecutor({} as AgentRelay);
+    const executor = createTestExecutor();
     const server = createMcpServer({
       workspaceExecutor: executor,
       sourceControlExecutor: executor,
@@ -69,7 +68,7 @@ describe("MCP public catalog stability", () => {
   });
 
   it("keeps companion-internal tools executable but outside the published MCP catalog", async () => {
-    const executor = new RelayWorkspaceExecutor({} as AgentRelay);
+    const executor = createTestExecutor();
     const bindRepositories = jest.fn(async (bindings: Array<{
       repositoryId: string;
       workspaceId: string;

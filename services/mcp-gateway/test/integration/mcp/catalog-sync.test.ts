@@ -6,8 +6,7 @@ import {
   MCP_TOOL_CATALOG_META_KEY,
   createMcpToolContractRevision,
 } from "@vs-code-gpt/shared";
-import type { AgentRelay } from "../../../src/relay/service.js";
-import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
+import { createTestExecutor } from "../../support/executors.js";
 import { createMcpServer } from "../../../src/mcp/server.js";
 
 const expectedLateTools = [
@@ -206,7 +205,7 @@ describe("MCP server instance catalog continuity", () => {
 });
 
 function createFullServer() {
-  const executor = new RelayWorkspaceExecutor({} as AgentRelay);
+  const executor = createTestExecutor();
   return createMcpServer({
     workspaceExecutor: executor,
     sourceControlExecutor: executor,

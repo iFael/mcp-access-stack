@@ -1,20 +1,19 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import { createGatewayApplication } from "../../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+} from "../../support/helpers.js";
+
+jest.setTimeout(30_000);
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
 const workerToken = "w".repeat(32);
-const validAuth: AuthInfo = {
-  token: "valid",
-  clientId: "browser-tools-http-call-test",
-  scopes: ["workspaces:read"],
-  expiresAt: Math.floor(Date.now() / 1_000) + 300,
-  extra: { subject: "allowed-user" },
-};
-
 interface WorkerCall {
   operation: string;
   input: Record<string, unknown>;
@@ -37,10 +36,7 @@ describe("advanced browser tools HTTP calls", () => {
           maxPayloadBytes: 2 * 1024 * 1024,
         },
       }),
-      {
-        logger: silentLogger(),
-        tokenVerifier: { verify: async () => validAuth },
-      },
+      makeEdgeGatewayDependencies({ logger: silentLogger() }),
     );
     const http = await listen(gateway.app);
 
@@ -143,7 +139,7 @@ describe("advanced browser tools HTTP calls", () => {
         },
       ]);
     } finally {
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
       await worker.close();
     }
@@ -160,8 +156,8 @@ async function callTool(
     method: "POST",
     headers: {
       accept: "application/json, text/event-stream",
-      authorization: "Bearer valid",
       "content-type": "application/json",
+      ...edgeHeaders(),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",

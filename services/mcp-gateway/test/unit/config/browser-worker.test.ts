@@ -5,10 +5,7 @@ const baseEnvironment = {
   NODE_ENV: "test",
   PORT: "0",
   PUBLIC_BASE_URL: "https://example.test",
-  AUTH_MODE: "none",
   MCP_PATH: "/mcp-test",
-  AGENT_ID: "agent",
-  AGENT_TOKEN_SHA256: "a".repeat(64),
 };
 
 describe("browser worker gateway configuration", () => {

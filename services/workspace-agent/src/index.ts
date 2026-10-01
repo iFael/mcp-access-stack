@@ -1,4 +1,3 @@
-export { AgentConnection } from "./connection/service.js";
 export { InProcessWorkspaceExecutor } from "./in-process-workspace-executor.js";
 export { LocalAgent, type LocalAgentOptions } from "./local-agent.js";
 export { CommandConfirmationRegistry, type CommandConfirmationBinding } from "./shell/confirmation.js";
@@ -20,6 +19,3 @@ export {
   type PolicyValidationResult,
 } from "./policy-deployment.js";
 export { SubprocessWorkspaceExecutor } from "./subprocess-workspace-executor.js";
-
-export { SshWorkspaceExecutor, type SshWorkspaceExecutorOptions } from "./remote/ssh-workspace-executor.js";
-export { SshWindowsTransport, type SshWindowsTransportConfig } from "./remote/ssh-windows-transport.js";

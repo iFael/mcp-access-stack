@@ -6,6 +6,7 @@ export class McpBrowserSmokeClient implements BrowserExecutor {
     private readonly baseUrl: URL,
     private readonly mcpPath: string,
     private readonly timeoutMs: number,
+    private readonly headers: Record<string, string> = {},
   ) {}
 
   async listTools(): Promise<Array<Record<string, unknown>>> {
@@ -279,6 +280,7 @@ export class McpBrowserSmokeClient implements BrowserExecutor {
       headers: {
         accept: "application/json, text/event-stream",
         "content-type": "application/json",
+        ...this.headers,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",

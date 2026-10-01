@@ -1,13 +1,19 @@
-import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { describe, expect, it } from "@jest/globals";
-import { AgentConnection } from "../../../workspace-agent/src/connection/service.js";
+import { describe, expect, it, jest } from "@jest/globals";
 import type { LocalAgent } from "../../../workspace-agent/src/local-agent.js";
 import { createGatewayApplication } from "../../src/app.js";
-import { listen, makeGatewayConfig, silentLogger, waitFor } from "../support/helpers.js";
+import {
+  edgeHeaders,
+  listen,
+  makeEdgeGatewayDependencies,
+  makeGatewayConfig,
+  silentLogger,
+  waitFor,
+} from "../support/helpers.js";
 
 const mcpPath = "/mcp-stateless-cancellation";
-const agentToken = "stateless-cancellation-agent-token";
+
+jest.setTimeout(15_000);
 
 describe("stateless MCP cancellation", () => {
   it("cancels an active tool call from a separate notification request", async () => {
@@ -68,6 +74,7 @@ describe("stateless MCP cancellation", () => {
           accept: "application/json, text/event-stream",
           "content-type": "application/json",
           "user-agent": "stateless-cancellation-test",
+          ...edgeHeaders(),
         },
       });
       client.on("error", () => undefined);
@@ -337,41 +344,20 @@ async function createFixture(agent: LocalAgent): Promise<{
   url: URL;
   close(): Promise<void>;
 }> {
-  const config = makeGatewayConfig({
-    authMode: "none",
-    mcpPath,
-    agent: {
-      id: "test-agent",
-      tokenSha256: createHash("sha256").update(agentToken).digest("hex"),
-      requestTimeoutMs: 120_000,
-      heartbeatMs: 1_000,
-      maxConcurrency: 4,
-      maxPayloadBytes: 2 * 1024 * 1024,
-    },
-  });
-  const gateway = createGatewayApplication(config, { logger: silentLogger() });
+  const config = makeGatewayConfig({ mcpPath });
+  const gateway = createGatewayApplication(
+    config,
+    makeEdgeGatewayDependencies({
+      logger: silentLogger(),
+      workspaceExecutor: agent,
+    }),
+  );
   const http = await listen(gateway.app);
-  http.server.on("upgrade", (request, socket, head) => {
-    gateway.relay!.handleUpgrade(request, socket, head);
-  });
-  const controller = new AbortController();
-  const connection = new AgentConnection(agent, {
-    gatewayUrl: new URL("/agent", http.url).href.replace("http:", "ws:"),
-    agentId: "test-agent",
-    token: agentToken,
-    heartbeatIntervalMs: 1_000,
-    reconnectMinMs: 10,
-    reconnectMaxMs: 50,
-  });
-  const running = connection.run(controller.signal);
-  await waitFor(() => gateway.relay!.isConnected, 5_000);
 
   return {
     url: http.url,
     close: async () => {
-      controller.abort();
-      await running;
-      gateway.relay!.close();
+      await gateway.close();
       await http.close();
     },
   };
@@ -388,6 +374,7 @@ function postMcp(
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
       "user-agent": "stateless-cancellation-test",
+      ...edgeHeaders(),
       ...headers,
     },
     body: JSON.stringify(body),

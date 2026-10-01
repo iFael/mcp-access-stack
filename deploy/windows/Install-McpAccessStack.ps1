@@ -14,14 +14,10 @@ param(
     [string]$ConnectorTokenFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$OwnerTokenFile,
-
-    [Parameter(Mandatory = $true)]
     [string]$PolicyPath,
 
     [string]$EdgeRuntimeRoot,
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
-    [string]$OwnerOAuthScopes = 'workspaces:read',
 
     [switch]$EnableBrowserWorker,
     [string]$BrowserWorkerTokenFile,
@@ -65,7 +61,6 @@ if (-not (Test-Path -LiteralPath $project -PathType Container)) {
 }
 foreach ($requiredFile in @(
     [pscustomobject]@{ Name = 'Connector token'; Path = $ConnectorTokenFile },
-    [pscustomobject]@{ Name = 'Owner token'; Path = $OwnerTokenFile },
     [pscustomobject]@{ Name = 'Workspace policy'; Path = $PolicyPath }
 )) {
     $resolved = [IO.Path]::GetFullPath([string]$requiredFile.Path)
@@ -161,10 +156,8 @@ $handoverParameters = @{
     EdgeRuntimeRoot = $edgeRuntime
     EdgeBaseUrl = $EdgeBaseUrl
     ConnectorTokenFile = [IO.Path]::GetFullPath($ConnectorTokenFile)
-    OwnerTokenFile = [IO.Path]::GetFullPath($OwnerTokenFile)
     PolicyPath = [IO.Path]::GetFullPath($PolicyPath)
     AllowedOrigins = $AllowedOrigins
-    OwnerOAuthScopes = $OwnerOAuthScopes
     EnableBrowserWorker = [bool]$EnableBrowserWorker
     BrowserPort = $BrowserPort
     Execute = $true

@@ -37,7 +37,6 @@ $edgeBaseUrl = 'https://edge.example'
 $taskName = 'MCP Access Stack production edge-connector'
 $edgeHostPath = Join-Path $releaseRoot 'native\McpEdgeHost.exe'
 $nodePath = Join-Path $releaseRoot 'runtime\embedded-node\node.exe'
-$ownerTokenPath = Join-Path $fixtureRoot 'owner-token.txt'
 $policyPath = Join-Path $fixtureRoot 'policy.json'
 $healthFixture = [pscustomobject]@{
     service = 'mcp-edge-gateway'
@@ -101,7 +100,6 @@ $sessionEventsFixture = @(
 try {
     New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
     [IO.File]::WriteAllText($tokenFile, $connectorToken, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($ownerTokenPath, ('o' * 64), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($policyPath, "{}`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText(
         (Join-Path $releaseRoot 'execution-node-manifest.json'),
@@ -114,7 +112,7 @@ try {
         State = 'Running'
         Actions = @([pscustomobject]@{
             Execute = $edgeHostPath
-            Arguments = ('--release-root "{0}" --runtime-root "{1}" --edge-base-url "{2}" --connector-token-file "{3}" --owner-token-file "{4}" --policy-path "{5}"' -f $releaseRoot, (Join-Path $fixtureRoot 'runtime'), $edgeBaseUrl, $tokenFile, $ownerTokenPath, $policyPath)
+            Arguments = ('--release-root "{0}" --runtime-root "{1}" --edge-base-url "{2}" --connector-token-file "{3}" --policy-path "{4}"' -f $releaseRoot, (Join-Path $fixtureRoot 'runtime'), $edgeBaseUrl, $tokenFile, $policyPath)
             WorkingDirectory = $releaseRoot
         })
     }

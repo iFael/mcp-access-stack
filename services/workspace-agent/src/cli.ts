@@ -7,7 +7,6 @@ import {
   QUICK_OPERATION_TIMEOUT_MS,
 } from "@vs-code-gpt/shared";
 import { LocalAgent } from "./local-agent.js";
-import { AgentConnection } from "./connection/service.js";
 import { applyPolicyFile, validatePolicyFile } from "./policy-deployment.js";
 
 const processStartedAt = Date.now();
@@ -40,64 +39,12 @@ async function main(): Promise<void> {
       return;
     }
     const agent = await LocalAgent.create(args.policyPath);
-    if (args.command === "connect") {
-      await connectAgent(agent, args.options);
-      return;
-    }
     const result = await executeCommand(agent, args);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     const appError = asAppError(error);
     process.stderr.write(`${JSON.stringify(appError.toJSON())}\n`);
     process.exitCode = 1;
-  }
-}
-
-async function connectAgent(
-  agent: LocalAgent,
-  options: Map<string, string | true>,
-): Promise<void> {
-  const maxPayloadBytes = readPositiveInteger(
-    process.env.VS_CODE_GPT_MAX_PAYLOAD_BYTES,
-    "VS_CODE_GPT_MAX_PAYLOAD_BYTES",
-  );
-  const maxConcurrentSynchronousShells = readPositiveInteger(
-    process.env.VS_CODE_GPT_MAX_CONCURRENT_SYNCHRONOUS_SHELLS,
-    "VS_CODE_GPT_MAX_CONCURRENT_SYNCHRONOUS_SHELLS",
-  );
-  const connection = new AgentConnection(agent, {
-    gatewayUrl: requireValue(
-      getString(options, "gateway") ?? process.env.VS_CODE_GPT_GATEWAY_URL,
-      "--gateway or VS_CODE_GPT_GATEWAY_URL",
-    ),
-    agentId: requireValue(
-      getString(options, "agent-id") ?? process.env.VS_CODE_GPT_AGENT_ID,
-      "--agent-id or VS_CODE_GPT_AGENT_ID",
-    ),
-    token: requireValue(
-      getString(options, "agent-token") ?? process.env.VS_CODE_GPT_AGENT_TOKEN,
-      "--agent-token or VS_CODE_GPT_AGENT_TOKEN",
-    ),
-    ...(maxPayloadBytes === undefined ? {} : { maxPayloadBytes }),
-    ...(maxConcurrentSynchronousShells === undefined
-      ? {}
-      : { maxConcurrentSynchronousShells }),
-    log: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
-  });
-  const controller = new AbortController();
-  const stop = (signal: NodeJS.Signals) => {
-    writeDiagnostic({ event: "agent_process_signal", signal });
-    controller.abort();
-  };
-  const stopOnSigint = () => stop("SIGINT");
-  const stopOnSigterm = () => stop("SIGTERM");
-  process.once("SIGINT", stopOnSigint);
-  process.once("SIGTERM", stopOnSigterm);
-  try {
-    await connection.run(controller.signal);
-  } finally {
-    process.removeListener("SIGINT", stopOnSigint);
-    process.removeListener("SIGTERM", stopOnSigterm);
   }
 }
 

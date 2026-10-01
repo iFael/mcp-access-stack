@@ -3,10 +3,6 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import type { Logger } from "pino";
-import {
-  AuthenticationError,
-  type AccessTokenVerifier,
-} from "../auth/jwt-verifier.js";
 import type { GatewayConfig } from "../config.js";
 
 export type AuthenticatedRequest = Request & {
@@ -14,12 +10,11 @@ export type AuthenticatedRequest = Request & {
   mcpRequestId?: string;
   mcpRequestStartedAt?: number;
   mcpBenchmarkTiming?: boolean;
-  mcpTransportMode?: "stateless" | "stateful";
+  mcpTransportMode?: "stateless";
 };
 
 export function createMcpRequestLifecycleMiddleware(
   logger: Logger,
-  mcpSessionMode: GatewayConfig["mcpSessionMode"] = "stateless",
 ): RequestHandler {
   return (request: AuthenticatedRequest, response, next) => {
     const requestId = randomUUID();
@@ -30,10 +25,7 @@ export function createMcpRequestLifecycleMiddleware(
     request.mcpRequestStartedAt = startedAt;
     request.mcpBenchmarkTiming =
       request.header("x-mcp-benchmark-timing") === "1";
-    request.mcpTransportMode =
-      mcpSessionMode === "stateful-experiment" && hasMcpSessionId
-        ? "stateful"
-        : "stateless";
+    request.mcpTransportMode = "stateless";
     response.setHeader("x-mcp-request-id", requestId);
 
     const base = {
@@ -67,43 +59,6 @@ export function createMcpRequestLifecycleMiddleware(
       }
     });
     next();
-  };
-}
-
-export function createAuthenticationMiddleware(
-  verifier: AccessTokenVerifier,
-  challenge: string,
-): (request: AuthenticatedRequest, response: Response, next: NextFunction) => void {
-  return (request, response, next) => {
-    const header = request.header("authorization");
-    if (!header) {
-      next();
-      return;
-    }
-    if (!header.startsWith("Bearer ") || header.length === "Bearer ".length) {
-      response.setHeader("WWW-Authenticate", `${challenge}, error="invalid_token"`);
-      response.status(401).json({ error: "invalid_token" });
-      return;
-    }
-    void verifier.verify(header.slice("Bearer ".length)).then(
-      (authInfo) => {
-        request.auth = authInfo;
-        next();
-      },
-      (error: unknown) => {
-        const authenticationError =
-          error instanceof AuthenticationError
-            ? error
-            : new AuthenticationError(401, "invalid_token");
-        response.setHeader(
-          "WWW-Authenticate",
-          `${challenge}, error="${authenticationError.oauthError}"`,
-        );
-        response.status(authenticationError.status).json({
-          error: authenticationError.oauthError,
-        });
-      },
-    );
   };
 }
 
@@ -147,19 +102,6 @@ export function createSubjectRateLimiter(config: GatewayConfig): RequestHandler 
     handler: (_request, response) =>
       response.status(429).json({ error: "rate_limit_exceeded" }),
   });
-}
-
-export function createChallenge(resourceMetadataUrl: URL, scope: string): string {
-  return `Bearer resource_metadata="${resourceMetadataUrl.href}", scope="${scope}"`;
-}
-
-export function isToolCall(body: unknown): boolean {
-  return (
-    typeof body === "object" &&
-    body !== null &&
-    "method" in body &&
-    body.method === "tools/call"
-  );
 }
 
 function subjectFromRequest(request: AuthenticatedRequest): string | undefined {

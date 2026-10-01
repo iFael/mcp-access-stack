@@ -249,6 +249,9 @@ describe("ReleaseLifecycleService", () => {
     expect(executedInput.command).toContain("-ExecutionPolicy AllSigned");
     expect(executedInput.command).toContain(CANDIDATE);
     expect(executedInput.command).toContain("connector-token.txt");
+    expect(executedInput.command).not.toContain("-OwnerTokenFile");
+    expect(executedInput.command).not.toContain("-OwnerOAuthScopes");
+    expect(executedInput.command).not.toContain("-McpSessionMode");
     expect(executedInput.command).not.toContain("AllowUnsignedDevelopment");
   });
 
@@ -366,6 +369,9 @@ describe("ReleaseLifecycleService", () => {
     expect(executedInput.command).toContain("Start-McpAccessStackCutover.sh");
     expect(executedInput.command).toContain("--expected-release-id");
     expect(executedInput.command).toContain("--connector-token-file");
+    expect(executedInput.command).not.toContain("--owner-token-file");
+    expect(executedInput.command).not.toContain("--owner-oauth-scopes");
+    expect(executedInput.command).not.toContain("--mcp-session-mode");
     expect(executedInput.command).not.toContain("AllSigned");
     expect(executedInput.command).not.toContain("pwsh.exe");
   });

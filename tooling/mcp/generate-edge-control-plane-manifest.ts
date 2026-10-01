@@ -7,7 +7,6 @@ import {
   type SourceControlExecutor,
   type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
-import { loadGatewayConfig } from "../../services/mcp-gateway/src/config.js";
 import { createMcpServer } from "../../services/mcp-gateway/src/mcp/server.js";
 
 const outputUrl = new URL(
@@ -17,16 +16,16 @@ const outputUrl = new URL(
 const outputPath = fileURLToPath(outputUrl);
 const checkOnly = process.argv.slice(2).includes("--check");
 
-const gatewayConfig = loadGatewayConfig({
-  NODE_ENV: "test",
-  PUBLIC_BASE_URL: "https://edge.invalid/",
-  AUTH_MODE: "owner",
-  OWNER_TOKEN: "x".repeat(32),
-  WORKSPACE_BACKEND: "in-process",
-});
-const requiredScope = gatewayConfig.ownerOAuth?.scopes[0];
+const wranglerConfig = await readFile(
+  new URL("../../services/mcp-edge-gateway/wrangler.jsonc", import.meta.url),
+  "utf8",
+);
+const requiredScope = /"MCP_OWNER_OAUTH_SCOPES"\s*:\s*"([^"]+)"/u
+  .exec(wranglerConfig)?.[1]
+  ?.split(",")[0]
+  ?.trim();
 if (!requiredScope) {
-  throw new Error("Canonical Gateway Owner configuration did not publish an MCP scope");
+  throw new Error("Canonical Edge Owner OAuth configuration did not publish an MCP scope");
 }
 
 const server = createMcpServer({
@@ -86,7 +85,7 @@ function renderEdgeManifestModule(value: {
 }): string {
   return [
     "// GENERATED FILE. DO NOT EDIT.",
-    "// Source authority: services/mcp-gateway/src/mcp/server.ts createMcpServer() + canonical Gateway auth config.",
+    "// Source authority: services/mcp-gateway/src/mcp/server.ts createMcpServer() + canonical Edge Owner OAuth config.",
     "",
     `export const EDGE_MCP_REQUIRED_SCOPE = ${JSON.stringify(value.requiredScope)} as const;`,
     "",

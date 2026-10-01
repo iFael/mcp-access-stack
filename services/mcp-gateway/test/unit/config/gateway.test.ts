@@ -4,17 +4,10 @@ import { loadGatewayConfig } from "../../../src/config.js";
 const requiredEnv = {
   PORT: "3000",
   PUBLIC_BASE_URL: "https://mcp.example.com",
-  AUTH_MODE: "oauth",
-  OAUTH_ISSUER: "https://issuer.example/",
-  OAUTH_AUDIENCE: "https://mcp.example.com",
-  OAUTH_JWKS_URL: "https://issuer.example/.well-known/jwks.json",
-  OAUTH_ALLOWED_SUBJECTS: "user-1,user-2",
-  AGENT_ID: "local-agent",
-  AGENT_TOKEN_SHA256: "a".repeat(64),
 };
 
-describe("gateway configuration loader", () => {
-  it("loads from a realistic process environment with unknown variables", () => {
+describe("gateway internal configuration loader", () => {
+  it("loads the canonical embedded gateway defaults", () => {
     const config = loadGatewayConfig({
       ...process.env,
       ...requiredEnv,
@@ -22,125 +15,72 @@ describe("gateway configuration loader", () => {
     });
 
     expect(config.port).toBe(3000);
-    expect(config.authMode).toBe("oauth");
     expect(config.mcpPath).toBe("/mcp");
-    expect(config.mcpSessionMode).toBe("stateless");
-    expect(config.mcpStatefulSessionTtlMs).toBe(30 * 60_000);
-    expect(config.mcpStatefulMaxSessions).toBe(100);
     expect(config.trustProxy).toBe(0);
-    expect(config.oauth?.allowedSubjects).toEqual(new Set(["user-1", "user-2"]));
-    expect(config.agent.maxConcurrency).toBe(4);
-    expect(config.agent.requestTimeoutMs).toBe(60_000);
-    expect(config.agent.maxPayloadBytes).toBe(512 * 1024 * 1024);
+    expect(config.maxPayloadBytes).toBe(512 * 1024 * 1024);
+    expect(config.browserWorker).toBeUndefined();
+    expect(config.rateLimit).toEqual({ windowMs: 60_000, max: 60 });
   });
 
-  it.each([
-    ["AGENT_MAX_CONCURRENCY", "5"],
-    ["AGENT_REQUEST_TIMEOUT_MS", "300001"],
-    ["AGENT_MAX_PAYLOAD_BYTES", String(512 * 1024 * 1024 + 1)],
-  ])("rejects %s above the plan maximum", (variable, value) => {
-    expect(() =>
-      loadGatewayConfig({ ...requiredEnv, NODE_ENV: "test", [variable]: value }),
-    ).toThrow();
-  });
-
-  it("does not allow edge-trusted authentication to be selected from public environment", () => {
-    expect(() => loadGatewayConfig({
-      NODE_ENV: "test",
-      PUBLIC_BASE_URL: "https://mcp.example.com",
-      AUTH_MODE: "edge-trusted",
-      WORKSPACE_BACKEND: "in-process",
-    })).toThrow();
-  });
-  it("supports auth mode none without oauth variables", () => {
+  it("ignores retired standalone gateway variables", () => {
     const config = loadGatewayConfig({
-      NODE_ENV: "test",
-      PUBLIC_BASE_URL: "https://mcp.example.com",
-      AUTH_MODE: "none",
-      MCP_PATH: "/mcp-a8f3k2x9",
-      AGENT_ID: "local-agent",
-      AGENT_TOKEN_SHA256: "b".repeat(64),
-    });
-
-    expect(config.authMode).toBe("none");
-    expect(config.oauth).toBeUndefined();
-    expect(config.mcpPath).toBe("/mcp-a8f3k2x9");
-  });
-
-  it("supports auth mode owner with owner token", () => {
-    const config = loadGatewayConfig({
-      NODE_ENV: "test",
-      PUBLIC_BASE_URL: "https://mcp.example.com",
-      AUTH_MODE: "owner",
-      OWNER_TOKEN: "c".repeat(24),
-      OWNER_OAUTH_STATE_PATH: "C:\\private\\owner-oauth-state.json",
-      MCP_PATH: "/mcp-owner",
-      AGENT_ID: "local-agent",
-      AGENT_TOKEN_SHA256: "b".repeat(64),
-    });
-
-    expect(config.authMode).toBe("owner");
-    expect(config.ownerOAuth?.scopes).toEqual(["workspaces:read"]);
-    expect(config.ownerOAuth?.statePath).toBe("C:\\private\\owner-oauth-state.json");
-    expect(config.oauth).toBeUndefined();
-  });
-
-  it("requires oauth variables when auth mode is oauth", () => {
-    const environment: Record<string, string> = {
       ...requiredEnv,
       NODE_ENV: "test",
-    };
-    delete environment.OAUTH_ISSUER;
+      AUTH_MODE: "owner",
+      OWNER_TOKEN: "x".repeat(32),
+      OAUTH_ISSUER: "https://issuer.example/",
+      WORKSPACE_BACKEND: "relay",
+      AGENT_ID: "legacy-agent",
+      AGENT_TOKEN_SHA256: "a".repeat(64),
+      MCP_SESSION_MODE: "stateful-experiment",
+    });
 
-    expect(() => loadGatewayConfig(environment)).toThrow(/AUTH_MODE=oauth requires/u);
+    for (const key of [
+      "authMode",
+      "oauth",
+      "ownerOAuth",
+      "workspaceBackend",
+      "agent",
+      "mcpSessionMode",
+    ]) {
+      expect(config).not.toHaveProperty(key);
+    }
   });
 
-  it.each([["/agent"], ["/health"], ["mcp"], ["/mcp/sub"], ["/.well-known"]])(
+  it.each([["/health"], ["mcp"], ["/mcp/sub"], ["/.well-known"]])(
     "rejects the MCP path %s",
     (mcpPath) => {
       expect(() =>
-        loadGatewayConfig({ ...requiredEnv, NODE_ENV: "test", MCP_PATH: mcpPath }),
+        loadGatewayConfig({
+          ...requiredEnv,
+          NODE_ENV: "test",
+          MCP_PATH: mcpPath,
+        }),
       ).toThrow();
     },
   );
 
+  it("allows /agent because the relay endpoint no longer exists", () => {
+    expect(loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "test",
+      MCP_PATH: "/agent",
+    }).mcpPath).toBe("/agent");
+  });
+
   it("parses explicit proxy trust hops", () => {
-    const config = loadGatewayConfig({
+    expect(loadGatewayConfig({
       ...requiredEnv,
       NODE_ENV: "test",
       TRUST_PROXY: "1",
-    });
-
-    expect(config.trustProxy).toBe(1);
+    }).trustProxy).toBe(1);
     expect(() =>
-      loadGatewayConfig({ ...requiredEnv, NODE_ENV: "test", TRUST_PROXY: "-1" }),
+      loadGatewayConfig({
+        ...requiredEnv,
+        NODE_ENV: "test",
+        TRUST_PROXY: "-1",
+      }),
     ).toThrow();
-  });
-
-  it("keeps stateless as default and allows an explicit stateful production mode", () => {
-    const experimental = loadGatewayConfig({
-      ...requiredEnv,
-      NODE_ENV: "test",
-      MCP_SESSION_MODE: "stateful-experiment",
-    });
-    expect(experimental.mcpSessionMode).toBe("stateful-experiment");
-
-    const bounded = loadGatewayConfig({
-      ...requiredEnv,
-      NODE_ENV: "test",
-      MCP_SESSION_MODE: "stateful-experiment",
-      MCP_STATEFUL_SESSION_TTL_MS: "45000",
-      MCP_STATEFUL_MAX_SESSIONS: "12",
-    });
-    expect(bounded.mcpStatefulSessionTtlMs).toBe(45_000);
-    expect(bounded.mcpStatefulMaxSessions).toBe(12);
-
-    const production = loadGatewayConfig({
-      ...requiredEnv,
-      NODE_ENV: "production",
-      MCP_SESSION_MODE: "stateful-experiment",
-    });
-    expect(production.mcpSessionMode).toBe("stateful-experiment");
   });
 
   it("keeps requiring https for the public base url in production", () => {
@@ -152,98 +92,35 @@ describe("gateway configuration loader", () => {
       }),
     ).toThrow(/HTTPS/u);
   });
-  it("loads an explicitly configured GPT Actions workspace allowlist", () => {
+
+  it("loads a configured loopback Browser Worker", () => {
     const config = loadGatewayConfig({
       ...requiredEnv,
       NODE_ENV: "test",
-      GPT_ACTIONS_ENABLED: "true",
-      GPT_ACTIONS_TOKEN_SHA256: "c".repeat(64),
-      GPT_ACTIONS_WORKSPACE_IDS: "workspace-a,workspace-b",
-      GPT_ACTIONS_ALLOW_WRITE: "true",
-      GPT_ACTIONS_ALLOW_SHELL: "true",
+      BROWSER_WORKER_ENABLED: "true",
+      BROWSER_WORKER_URL: "http://127.0.0.1:3350",
+      BROWSER_WORKER_TOKEN: "x".repeat(32),
     });
-
-    expect(config.actions).toEqual({
-      tokenSha256: "c".repeat(64),
-      workspaceIds: ["workspace-a", "workspace-b"],
-      allowWrite: true,
-      allowShell: true,
-    });
+    expect(config.browserWorker?.url.href).toBe("http://127.0.0.1:3350/");
   });
 
-  it("accepts arbitrary syntactically valid workspace IDs from local configuration", () => {
+  it("requires an explicit allowlist for a non-loopback Browser Worker", () => {
+    expect(() => loadGatewayConfig({
+      ...requiredEnv,
+      NODE_ENV: "test",
+      BROWSER_WORKER_ENABLED: "true",
+      BROWSER_WORKER_URL: "http://browser-worker:3350",
+      BROWSER_WORKER_TOKEN: "x".repeat(32),
+    })).toThrow(/allowed loopback/u);
+
     const config = loadGatewayConfig({
       ...requiredEnv,
       NODE_ENV: "test",
-      GPT_ACTIONS_ENABLED: "true",
-      GPT_ACTIONS_TOKEN_SHA256: "c".repeat(64),
-      GPT_ACTIONS_WORKSPACE_IDS: "workspace-a,development",
-    });
-    expect(config.actions?.workspaceIds).toEqual(["workspace-a", "development"]);
-  });
-
-  it("loads the SSH workspace backend without a legacy Agent identity", () => {
-    const environment: Record<string, string> = {
-      ...requiredEnv,
-      NODE_ENV: "test",
-      WORKSPACE_BACKEND: "ssh",
-      SSH_WORKSPACE_HOST: "workspace.example.internal",
-      SSH_WORKSPACE_PORT: "2222",
-      SSH_WORKSPACE_USERNAME: "developer",
-      SSH_WORKSPACE_PRIVATE_KEY_PATH: "/run/secrets/workspace-key",
-      SSH_WORKSPACE_KNOWN_HOSTS_PATH: "/run/secrets/known-hosts",
-      SSH_WORKSPACE_POLICY_PATH: "/run/secrets/workspace-policy",
       BROWSER_WORKER_ENABLED: "true",
       BROWSER_WORKER_URL: "http://browser-worker:3350",
       BROWSER_WORKER_ALLOWED_HOSTS: "browser-worker",
       BROWSER_WORKER_TOKEN: "x".repeat(32),
-    };
-    delete environment.AGENT_ID;
-    delete environment.AGENT_TOKEN_SHA256;
-    const config = loadGatewayConfig(environment);
-
-    expect(config.workspaceBackend).toMatchObject({
-      kind: "ssh",
-      host: "workspace.example.internal",
-      port: 2222,
-      username: "developer",
     });
     expect(config.browserWorker?.url.href).toBe("http://browser-worker:3350/");
-  });
-
-  it("loads the in-process workspace backend without a legacy Agent identity", () => {
-    const environment: Record<string, string> = {
-      ...requiredEnv,
-      NODE_ENV: "test",
-      WORKSPACE_BACKEND: "in-process",
-    };
-    delete environment.AGENT_ID;
-    delete environment.AGENT_TOKEN_SHA256;
-
-    const config = loadGatewayConfig(environment);
-
-    expect(config.workspaceBackend).toEqual({ kind: "in-process" });
-    expect(config.agent.id).toBeUndefined();
-    expect(config.agent.tokenSha256).toBeUndefined();
-  });
-  it("fails closed when the SSH backend is missing trust material", () => {
-    expect(() =>
-      loadGatewayConfig({
-        ...requiredEnv,
-        NODE_ENV: "test",
-        WORKSPACE_BACKEND: "ssh",
-        SSH_WORKSPACE_HOST: "workspace.example.internal",
-      }),
-    ).toThrow(/SSH_WORKSPACE_USERNAME/u);
-  });
-  it("requires a token hash when GPT Actions are enabled", () => {
-    expect(() =>
-      loadGatewayConfig({
-        ...requiredEnv,
-        NODE_ENV: "test",
-        GPT_ACTIONS_ENABLED: "true",
-        GPT_ACTIONS_WORKSPACE_IDS: "workspace-a,workspace-b",
-      }),
-    ).toThrow(/GPT_ACTIONS_TOKEN_SHA256/u);
   });
 });

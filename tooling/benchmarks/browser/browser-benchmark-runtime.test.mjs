@@ -149,7 +149,7 @@ import path from "node:path";
 const targets = [
   ["packages/mcp-core", "index.js", "mcp-core"],
   ["services/browser-worker", "server.js", "browser-worker"],
-  ["services/mcp-gateway", "server.js", "mcp-gateway"],
+  ["services/mcp-gateway", "app.js", "mcp-gateway"],
 ];
 for (const [directory, filename, label] of targets) {
   const source = (await readFile(path.join(directory, "source.txt"), "utf8")).trim();
@@ -177,7 +177,7 @@ async function writeFixtureBuild(root, marker) {
   for (const [directory, filename] of [
     ["packages/mcp-core", "index.js"],
     ["services/browser-worker", "server.js"],
-    ["services/mcp-gateway", "server.js"],
+    ["services/mcp-gateway", "app.js"],
   ]) {
     const output = path.join(root, directory, "dist");
     await mkdir(output, { recursive: true });

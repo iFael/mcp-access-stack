@@ -1,5 +1,5 @@
 // GENERATED FILE. DO NOT EDIT.
-// Source authority: services/mcp-gateway/src/mcp/server.ts createMcpServer() + canonical Gateway auth config.
+// Source authority: services/mcp-gateway/src/mcp/server.ts createMcpServer() + canonical Edge Owner OAuth config.
 
 export const EDGE_MCP_REQUIRED_SCOPE = "workspaces:read" as const;
 

@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "@jest/globals";
 import {
   MCP_TOOL_CATALOG_META_KEY,
@@ -7,7 +8,6 @@ import {
   type SourceControlExecutor,
   type WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
-import { loadGatewayConfig } from "../../mcp-gateway/src/config.js";
 import { createMcpServer } from "../../mcp-gateway/src/mcp/server.js";
 import {
   EDGE_MCP_CATALOG_METADATA,
@@ -18,14 +18,14 @@ import {
 
 describe("Edge MCP generated manifest parity", () => {
   it("matches the canonical createMcpServer workspace catalog and auth scope exactly", async () => {
-    const gatewayConfig = loadGatewayConfig({
-      NODE_ENV: "test",
-      PUBLIC_BASE_URL: "https://edge.invalid/",
-      AUTH_MODE: "owner",
-      OWNER_TOKEN: "x".repeat(32),
-      WORKSPACE_BACKEND: "in-process",
-    });
-    const canonicalScope = gatewayConfig.ownerOAuth?.scopes[0];
+    const wranglerConfig = readFileSync(
+      new URL("../wrangler.jsonc", import.meta.url),
+      "utf8",
+    );
+    const canonicalScope = /"MCP_OWNER_OAUTH_SCOPES"\s*:\s*"([^"]+)"/u
+      .exec(wranglerConfig)?.[1]
+      ?.split(",")[0]
+      ?.trim();
     expect(canonicalScope).toBeDefined();
 
     const server = createMcpServer({

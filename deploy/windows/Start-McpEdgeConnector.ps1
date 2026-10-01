@@ -20,15 +20,9 @@ param(
     [string]$ConnectorTokenFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$OwnerTokenFile,
-
-    [Parameter(Mandatory = $true)]
     [string]$PolicyPath,
 
     [string]$AllowedOrigins = 'https://chatgpt.com,https://chat.openai.com',
-    [string]$OwnerOAuthScopes = 'workspaces:read',
-    [ValidateSet('stateless', 'stateful-experiment')]
-    [string]$McpSessionMode = 'stateless',
     [string]$BrowserWorkerUrl = 'http://127.0.0.1:3350',
     [string]$BrowserWorkerTokenFile,
     [switch]$EnableBrowserWorker,
@@ -103,17 +97,6 @@ function Assert-McpEdgeSecretFile {
     return $resolved
 }
 
-function Read-McpEdgeOwnerToken {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
-    $token = $raw.Trim()
-    if ($token.Length -lt 16 -or $token.Length -gt 2048 -or $token -match '[\r\n\0]') {
-        throw 'Owner token file contains an invalid token.'
-    }
-    return $token
-}
-
 function Read-McpEdgeBrowserToken {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -169,12 +152,10 @@ if (-not $edgeUri.IsAbsoluteUri -or
 }
 
 $connectorTokenPath = Assert-McpEdgeSecretFile -Path $ConnectorTokenFile -Name 'Connector token'
-$ownerTokenPath = Assert-McpEdgeSecretFile -Path $OwnerTokenFile -Name 'Owner token'
 $policy = [IO.Path]::GetFullPath($PolicyPath)
 if (-not (Test-Path -LiteralPath $policy -PathType Leaf)) {
     throw 'Workspace policy file was not found.'
 }
-$ownerToken = Read-McpEdgeOwnerToken -Path $ownerTokenPath
 $browserTokenPath = $null
 $browserToken = $null
 $browserUri = $null
@@ -208,7 +189,6 @@ if ($ValidateOnly) {
         projectRoot = $project
         executionManifestSha256 = $actualManifestSha256
         edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority)
-        mcpSessionMode = $McpSessionMode
         nodePath = $nodePath
         edgeConnectorPath = $edgeCliPath
         browserEnabled = [bool]$EnableBrowserWorker
@@ -227,11 +207,6 @@ $env:MCP_CONNECTOR_TOKEN_FILE = $connectorTokenPath
 $env:VS_CODE_GPT_POLICY_PATH = $policy
 $env:VS_CODE_GPT_STACK_ROOT = $project
 $env:MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS = [string]$MaxConcurrentRequests
-$env:MCP_SESSION_MODE = $McpSessionMode
-$env:AUTH_MODE = 'owner'
-$env:OWNER_TOKEN = $ownerToken
-$env:OWNER_OAUTH_SCOPES = $OwnerOAuthScopes
-$env:OWNER_OAUTH_STATE_PATH = Join-Path $runtime 'owner-oauth-state.json'
 $env:ALLOWED_ORIGINS = $AllowedOrigins
 if ($EnableBrowserWorker) {
     $env:BROWSER_WORKER_ENABLED = 'true'
@@ -249,11 +224,8 @@ try {
     $exitCode = $LASTEXITCODE
 }
 finally {
-    $env:MCP_SESSION_MODE = $null
     $env:VS_CODE_GPT_STACK_ROOT = $null
-    $env:OWNER_TOKEN = $null
     $env:BROWSER_WORKER_TOKEN = $null
-    $ownerToken = $null
     $browserToken = $null
 }
 if ($exitCode -ne 0) {

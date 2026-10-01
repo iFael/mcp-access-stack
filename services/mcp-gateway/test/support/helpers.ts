@@ -2,56 +2,66 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Express } from "express";
 import pino, { type Logger } from "pino";
+import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import type { GatewayConfig } from "../../src/config.js";
+import {
+  EDGE_INTERNAL_ASSERTION_HEADER,
+  EDGE_INTERNAL_PRINCIPAL_HEADER,
+  encodeEdgeAuthenticatedPrincipal,
+} from "../../src/edge/internal-trust.js";
+import type { GatewayApplicationDependencies } from "../../src/app.js";
+import { createTestExecutor } from "./executors.js";
+
+export const TEST_EDGE_ASSERTION = "a".repeat(43);
+export const TEST_EDGE_PRINCIPAL: AuthenticatedEdgePrincipal = {
+  subject: "user:test",
+  scopes: ["workspaces:read"],
+  ownerScope: "owner",
+  userId: "usr_11111111-1111-4111-8111-111111111111",
+};
 
 export function makeGatewayConfig(
-  overrides: Partial<GatewayConfig> = {},
+  overrides: Partial<GatewayConfig> & Record<string, unknown> = {},
 ): GatewayConfig {
   const base: GatewayConfig = {
     nodeEnv: "test",
     port: 0,
     publicBaseUrl: new URL("http://127.0.0.1"),
-    authMode: "oauth",
-    mcpSessionMode: "stateless",
-    mcpStatefulSessionTtlMs: 30 * 60_000,
-    mcpStatefulMaxSessions: 100,
     mcpPath: "/mcp",
     trustProxy: 0,
-    oauth: {
-      issuer: "https://issuer.example/",
-      audience: "https://mcp.example",
-      jwksUrl: new URL("https://issuer.example/.well-known/jwks.json"),
-      allowedSubjects: new Set(["allowed-user"]),
-      requiredScope: "workspaces:read",
-    },
     allowedOrigins: new Set(["https://chatgpt.com"]),
-    workspaceBackend: { kind: "relay" },
-    agent: {
-      id: "test-agent",
-      tokenSha256:
-        "4f6e1f65055263866dedb3c5f66153ed5f9ea1e187d4dd67d821c9f89c71c7f4",
-      requestTimeoutMs: 500,
-      heartbeatMs: 1_000,
-      maxConcurrency: 4,
-      maxPayloadBytes: 2 * 1024 * 1024,
-    },
+    maxPayloadBytes: 512 * 1024 * 1024,
     rateLimit: { windowMs: 60_000, max: 100 },
     logLevel: "silent",
   };
-  const merged: GatewayConfig = {
+  return {
     ...base,
     ...overrides,
-    oauth:
-      "oauth" in overrides
-        ? overrides.oauth && { ...base.oauth!, ...overrides.oauth }
-        : base.oauth,
-    agent: { ...base.agent, ...overrides.agent },
     rateLimit: { ...base.rateLimit, ...overrides.rateLimit },
   };
-  if (merged.authMode === "none") {
-    merged.oauth = undefined;
-  }
-  return merged;
+}
+
+export function edgeHeaders(
+  principal: AuthenticatedEdgePrincipal = TEST_EDGE_PRINCIPAL,
+): Record<string, string> {
+  return {
+    [EDGE_INTERNAL_ASSERTION_HEADER]: TEST_EDGE_ASSERTION,
+    [EDGE_INTERNAL_PRINCIPAL_HEADER]: encodeEdgeAuthenticatedPrincipal(principal),
+  };
+}
+
+export function makeEdgeGatewayDependencies(
+  overrides: Partial<GatewayApplicationDependencies> = {},
+): GatewayApplicationDependencies {
+  const executor = createTestExecutor();
+  return {
+    logger: silentLogger(),
+    workspaceExecutor: executor,
+    sourceControlExecutor: executor,
+    workspaceReady: () => true,
+    edgeTrust: { internalAssertion: TEST_EDGE_ASSERTION },
+    ...overrides,
+  };
 }
 
 export function silentLogger(): Logger {

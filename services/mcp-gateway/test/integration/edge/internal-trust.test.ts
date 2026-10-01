@@ -4,8 +4,7 @@ import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { EDGE_PROTOCOL_VERSION } from "@mcp-access-stack/edge-protocol";
 import { createGatewayApplication } from "../../../src/app.js";
-import type { AgentRelay } from "../../../src/relay/service.js";
-import { RelayWorkspaceExecutor } from "../../../src/relay/workspace-executor.js";
+import { createTestExecutor } from "../../support/executors.js";
 import { EdgeConnector } from "../../../src/edge/connector.js";
 import { assertLoopbackMcpCompatibility } from "../../../src/edge/loopback-health.js";
 import { listen as listenGateway, makeGatewayConfig, silentLogger } from "../../support/helpers.js";
@@ -125,14 +124,11 @@ describe("Edge Connector internal trust boundary", () => {
 
 describe("embedded Gateway edge-trusted mode", () => {
   it("rejects missing or wrong internal assertions before MCP handling", async () => {
-    const config = {
-      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
-      authMode: "edge-trusted" as const,
-    };
+    const config = makeGatewayConfig();
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceExecutor: createTestExecutor(),
+      sourceControlExecutor: createTestExecutor(),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });
@@ -156,16 +152,12 @@ describe("embedded Gateway edge-trusted mode", () => {
     }
   });
 
-  it("passes the loopback compatibility probe without session negotiation in stateful mode", async () => {
-    const config = {
-      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
-      authMode: "edge-trusted" as const,
-      mcpSessionMode: "stateful-experiment" as const,
-    };
+  it("passes the loopback compatibility probe without session negotiation", async () => {
+    const config = makeGatewayConfig();
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceExecutor: createTestExecutor(),
+      sourceControlExecutor: createTestExecutor(),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });
@@ -180,15 +172,12 @@ describe("embedded Gateway edge-trusted mode", () => {
   });
 
   it("serves the internal live-view frame route only through the signed Edge principal", async () => {
-    const config = {
-      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
-      authMode: "edge-trusted" as const,
-    };
+    const config = makeGatewayConfig();
     const calls: unknown[] = [];
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceExecutor: createTestExecutor(),
+      sourceControlExecutor: createTestExecutor(),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
       browserLiveFrame: async (input, context) => {
@@ -226,14 +215,11 @@ describe("embedded Gateway edge-trusted mode", () => {
   });
 
   it("accepts a sanitized principal only with the connector-owned assertion", async () => {
-    const config = {
-      ...makeGatewayConfig({ authMode: "none", workspaceBackend: { kind: "in-process" } }),
-      authMode: "edge-trusted" as const,
-    };
+    const config = makeGatewayConfig();
     const gateway = createGatewayApplication(config, {
       logger: silentLogger(),
-      workspaceExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
-      sourceControlExecutor: new RelayWorkspaceExecutor({} as AgentRelay),
+      workspaceExecutor: createTestExecutor(),
+      sourceControlExecutor: createTestExecutor(),
       workspaceReady: () => true,
       edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
     });

@@ -18,6 +18,13 @@ function Write-JsonAtomic([string]$Path,[object]$Value) {
   [IO.File]::WriteAllText($tmp,(($Value|ConvertTo-Json -Depth 20)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
   [IO.File]::Move($tmp,$Path,$true)
 }
+function Write-TextAtomic([string]$Path,[string]$Value) {
+  $dir=Split-Path -Parent $Path
+  if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $tmp=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+  [IO.File]::WriteAllText($tmp,$Value,[Text.UTF8Encoding]::new($false))
+  [IO.File]::Move($tmp,$Path,$true)
+}
 function Health([string]$Base) {
   Invoke-RestMethod -Uri ($Base.TrimEnd('/')+'/health') -Method Get -TimeoutSec 3 -ErrorAction Stop
 }
@@ -124,12 +131,9 @@ function Start-Connector([string]$ReleaseRoot,[string]$RuntimeRoot,[string]$LogP
     MCP_ACCESS_STACK_INSTALLATION_ROOT=$installationRoot
     MCP_EDGE_BASE_URL=$edgeBaseUrl
     MCP_CONNECTOR_TOKEN_FILE=$connectorTokenFile
-    MCP_OWNER_TOKEN_FILE=$ownerTokenFile
     VS_CODE_GPT_POLICY_PATH=$policyPath
     MCP_NODE_BINARY='/usr/local/bin/node'
     MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=[string]$maxConcurrentRequests
-    MCP_SESSION_MODE=$mcpSessionMode
-    OWNER_OAUTH_SCOPES=$ownerOAuthScopes
     ALLOWED_ORIGINS=$allowedOrigins
   }
   Start-Process -FilePath '/usr/bin/bash' -ArgumentList @($launcher,'--from-environment') -WorkingDirectory $projectRoot -Environment $envMap -RedirectStandardOutput ($LogPrefix+'.stdout.log') -RedirectStandardError ($LogPrefix+'.stderr.log') -PassThru
@@ -177,11 +181,8 @@ $projectRoot=[IO.Path]::GetFullPath([string]$request.projectRoot)
 $edgeRuntimeRoot=[IO.Path]::GetFullPath([string]$request.edgeRuntimeRoot)
 $edgeBaseUrl=[string]$request.edgeBaseUrl
 $connectorTokenFile=[IO.Path]::GetFullPath([string]$request.connectorTokenFile)
-$ownerTokenFile=[IO.Path]::GetFullPath([string]$request.ownerTokenFile)
 $policyPath=[IO.Path]::GetFullPath([string]$request.policyPath)
 $allowedOrigins=[string]$request.allowedOrigins
-$ownerOAuthScopes=[string]$request.ownerOAuthScopes
-$mcpSessionMode=[string]$request.mcpSessionMode
 $maxConcurrentRequests=[int]$request.maxConcurrentRequests
 $edgeTaskName=[string]$request.edgeTaskName
 $handoverDelaySeconds=[int]$request.handoverDelaySeconds
@@ -189,6 +190,9 @@ $startedAt=[DateTimeOffset]::UtcNow.ToString('O')
 
 $statePath=Join-Path $installationRoot 'state/lifecycle-state.v1.json'
 $recoveryConfigPath=Join-Path $installationRoot 'state/edge-task-config.v1.json'
+$connectorEnvPath=Join-Path $installationRoot 'edge-connector.env'
+$connectorEnvBefore=if(Test-Path -LiteralPath $connectorEnvPath -PathType Leaf){Get-Content -LiteralPath $connectorEnvPath -Raw}else{$null}
+$connectorEnvRewritten=$false
 $runRoot=Split-Path -Parent $ResultPath
 $stateBeforeJson=Get-Content -LiteralPath $statePath -Raw
 $stateBefore=$stateBeforeJson|ConvertFrom-Json
@@ -258,8 +262,25 @@ try {
   $handover=$null
   $final=Wait-Selected $edgeBaseUrl $expectedRevision @($previousId,$handoverId)
 
-  $config=[ordered]@{schemaVersion=1;taskName=$edgeTaskName;projectRoot=$projectRoot;runtimeRoot=$edgeRuntimeRoot;edgeBaseUrl=$edgeBaseUrl;connectorTokenFile=$connectorTokenFile;ownerTokenFile=$ownerTokenFile;policyPath=$policyPath;allowedOrigins=$allowedOrigins;ownerOAuthScopes=$ownerOAuthScopes;mcpSessionMode=$mcpSessionMode;maxConcurrentRequests=$maxConcurrentRequests;delaySeconds=2;browserEnabled=$false;browserWorkerUrl=$null;browserWorkerTokenFile=$null;updatedAt=[DateTimeOffset]::UtcNow.ToString('O')}
+  $config=[ordered]@{schemaVersion=1;taskName=$edgeTaskName;projectRoot=$projectRoot;runtimeRoot=$edgeRuntimeRoot;edgeBaseUrl=$edgeBaseUrl;connectorTokenFile=$connectorTokenFile;policyPath=$policyPath;allowedOrigins=$allowedOrigins;maxConcurrentRequests=$maxConcurrentRequests;delaySeconds=2;browserEnabled=$false;browserWorkerUrl=$null;browserWorkerTokenFile=$null;updatedAt=[DateTimeOffset]::UtcNow.ToString('O')}
   Write-JsonAtomic $recoveryConfigPath $config
+
+  $connectorEnv=@(
+    "VS_CODE_GPT_STACK_ROOT=$projectRoot"
+    "MCP_RELEASE_ROOT=$installationRoot/current"
+    "MCP_ACCESS_STACK_RUNTIME_ROOT=$edgeRuntimeRoot"
+    "MCP_ACCESS_STACK_INSTALLATION_ROOT=$installationRoot"
+    "MCP_EDGE_BASE_URL=$edgeBaseUrl"
+    "MCP_CONNECTOR_TOKEN_FILE=$connectorTokenFile"
+    "VS_CODE_GPT_POLICY_PATH=$policyPath"
+    "MCP_NODE_BINARY=/usr/local/bin/node"
+    "MCP_CONNECTOR_MAX_CONCURRENT_REQUESTS=$maxConcurrentRequests"
+    "ALLOWED_ORIGINS=$allowedOrigins"
+  ) -join [Environment]::NewLine
+  Write-TextAtomic $connectorEnvPath ($connectorEnv+[Environment]::NewLine)
+  & /usr/bin/chmod 600 $connectorEnvPath
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to secure canonical Edge Connector environment file.' }
+  $connectorEnvRewritten=$true
 
   $result=[ordered]@{schemaVersion=1;requestId=$requestId;releaseId=$releaseId;status='passed';startedAt=$startedAt;completedAt=[DateTimeOffset]::UtcNow.ToString('O');ownershipMode='edge-only';edgeTask=$edgeTaskName;browserTask=$null;healthGate=[ordered]@{status='passed';connectorInstanceId=[string]$final.connectorInstanceId;catalogContractRevision=[string]$final.catalogContractRevision;executionPlaneReady=[bool]$final.executionPlaneReady;connectorReady=[bool]$final.connectorReady;contractCompatible=[bool]$final.contractCompatible};contractPromotion=[ordered]@{required=[bool]$promotionRequired;status=[string]$promotion.status;activeContractRevision=[string]$final.activeContractRevision;requestError=Optional $promotion 'requestError'};recoveryConfig=$recoveryConfigPath}
   Write-JsonAtomic $ResultPath $result
@@ -276,6 +297,15 @@ catch {
       Set-Current $previousReleaseRoot
       [IO.File]::WriteAllText(($statePath+'.rollback.tmp'),$stateBeforeJson,[Text.UTF8Encoding]::new($false))
       [IO.File]::Move(($statePath+'.rollback.tmp'),$statePath,$true)
+      if ($connectorEnvRewritten) {
+        if ($null -eq $connectorEnvBefore) {
+          Remove-Item -LiteralPath $connectorEnvPath -Force -ErrorAction SilentlyContinue
+        } else {
+          Write-TextAtomic $connectorEnvPath $connectorEnvBefore
+          & /usr/bin/chmod 600 $connectorEnvPath
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to restore previous Edge Connector environment permissions.' }
+        }
+      }
     } catch { $recoveryErrors.Add("local rollback: $($_.Exception.Message)") }
   }
 

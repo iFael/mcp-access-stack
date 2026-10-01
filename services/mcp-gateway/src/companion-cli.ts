@@ -100,19 +100,14 @@ async function main(): Promise<void> {
     ? await browserWorker.supportsLiveView()
     : false;
 
-  const gatewayConfig = {
-    ...loadGatewayConfig({
-      ...process.env,
-      NODE_ENV: "production",
-      PORT: "0",
-      PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
-      MCP_PATH: "/mcp",
-      TRUST_PROXY: "0",
-      WORKSPACE_BACKEND: "in-process",
-      AUTH_MODE: "none",
-    }),
-    authMode: "edge-trusted" as const,
-  };
+  const gatewayConfig = loadGatewayConfig({
+    ...process.env,
+    NODE_ENV: "production",
+    PORT: "0",
+    PUBLIC_BASE_URL: runtime.edgeBaseUrl.href,
+    MCP_PATH: "/mcp",
+    TRUST_PROXY: "0",
+  });
 
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor: reloadable.workspaceExecutor,
