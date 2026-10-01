@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AppError, type OperationContext } from "@vs-code-gpt/shared";
 import { loadBrowserWorkerConfig } from "../../../services/browser-worker/config/browser-worker-config.js";
@@ -10,10 +10,6 @@ import {
   type CredentialBrokerReadRequest,
   type CredentialBrokerReadResult,
 } from "../../../services/browser-worker/services/windows-credential-broker-client.js";
-
-interface PrivateBrowserConfiguration {
-  privateDirectory?: string;
-}
 
 type AuthStatus =
   | "not-required"
@@ -51,22 +47,15 @@ class SingleReadCredentialBroker implements BrowserCredentialBroker {
 const root = process.cwd();
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const startedAt = new Date().toISOString();
-const privateConfigPath = path.resolve(
-  process.env.MCP_QUALIFICATION_PRIVATE_CONFIG ??
-    path.join(root, ".runtime-private", "docker", "production", "browser.json"),
-);
 const brokerPath = process.env.MCP_QUALIFICATION_BROKER_PATH;
 if (!brokerPath || !path.isAbsolute(brokerPath)) {
   throw new Error("Qualification broker path is unavailable.");
 }
-const privateConfig = JSON.parse(
-  await readFile(privateConfigPath, "utf8"),
-) as PrivateBrowserConfiguration;
-if (!privateConfig.privateDirectory) {
-  throw new Error("Private Browser Worker directory is unavailable.");
-}
-
-const privateDirectory = path.resolve(privateConfig.privateDirectory);
+const privateDirectory = path.resolve(
+  process.env.MCP_QUALIFICATION_PRIVATE_DIR ??
+    process.env.BROWSER_WORKER_PRIVATE_DIR ??
+    path.join(root, ".runtime-private", "browser"),
+);
 const qualificationRoot = path.join(
   root,
   "runtime",

@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $scriptPaths = @(
-    (Join-Path $PSScriptRoot 'Initialize-ValidationTools.ps1'),
-    (Join-Path $PSScriptRoot '..\inspector\Start-McpInspector.ps1')
+    (Join-Path $PSScriptRoot 'Initialize-ValidationTools.ps1')
 )
 
 foreach ($scriptPath in $scriptPaths) {

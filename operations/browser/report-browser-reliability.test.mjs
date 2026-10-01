@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { resolveBrowserAuditPath, summarizeBrowserAudit } from "./report-browser-reliability.mjs";
@@ -56,25 +54,21 @@ test("summarizes browser reliability without exposing operation payloads", () =>
 });
 
 
-test("resolves the production audit log from private configuration by default", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "browser-reliability-report-"));
-  try {
-    const runtimeDirectory = path.join(root, "production-browser-runtime");
-    await mkdir(path.join(root, ".runtime-private"), { recursive: true });
-    await writeFile(
-      path.join(root, ".runtime-private", "gpt-only-production.json"),
-      JSON.stringify({ browser: { runtimeDirectory } }),
-      "utf8",
-    );
-    assert.equal(
-      await resolveBrowserAuditPath(undefined, root),
-      path.join(runtimeDirectory, "browser-audit.ndjson"),
-    );
-    assert.equal(
-      await resolveBrowserAuditPath("explicit.ndjson", root),
-      "explicit.ndjson",
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+test("resolves the Browser Worker audit log from the canonical runtime directory", async () => {
+  const root = path.join("tmp", "browser-reliability-report");
+  const runtimeDirectory = "production-browser-runtime";
+  assert.equal(
+    await resolveBrowserAuditPath(undefined, root, {
+      BROWSER_WORKER_RUNTIME_DIR: runtimeDirectory,
+    }),
+    path.resolve(root, runtimeDirectory, "browser-audit.ndjson"),
+  );
+  assert.equal(
+    await resolveBrowserAuditPath(undefined, root, {}),
+    path.join(root, "runtime", "browser", "browser-audit.ndjson"),
+  );
+  assert.equal(
+    await resolveBrowserAuditPath("explicit.ndjson", root, {}),
+    "explicit.ndjson",
+  );
 });

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   browserFastPathDefaults,
   evaluateBrowserPerformanceGates,
+  resolveBrowserWorkerEndpoint,
   summarizeFastPathBenchmark,
   summarizeOperationBenchmark,
 } from "./benchmark-browser-fast-path.mjs";
@@ -14,6 +15,20 @@ test("uses bounded local qualification defaults", () => {
     flowIterations: 10,
     unitsPerRun: 10,
   });
+});
+
+test("resolves the Browser Worker endpoint from canonical environment variables", () => {
+  assert.deepEqual(
+    resolveBrowserWorkerEndpoint({
+      BROWSER_WORKER_PORT: "3350",
+      BROWSER_WORKER_TOKEN: "x".repeat(32),
+    }),
+    { port: 3350, token: "x".repeat(32) },
+  );
+  assert.throws(
+    () => resolveBrowserWorkerEndpoint({}),
+    /Browser Worker endpoint environment is incomplete/u,
+  );
 });
 
 test("summarizes browser sequence speedup per effective action", () => {

@@ -103,19 +103,13 @@ function round(value, digits) {
 export async function resolveBrowserAuditPath(
   argument = process.argv[2],
   cwd = process.cwd(),
+  environment = process.env,
 ) {
   if (argument) return argument;
-  try {
-    const configPath = path.join(cwd, ".runtime-private", "gpt-only-production.json");
-    const config = JSON.parse((await readFile(configPath, "utf8")).replace(/^﻿/u, ""));
-    const runtimeDirectory = config?.browser?.runtimeDirectory;
-    if (typeof runtimeDirectory === "string" && runtimeDirectory.length > 0) {
-      return path.join(runtimeDirectory, "browser-audit.ndjson");
-    }
-  } catch {
-    // Development and test environments may not have a private production config.
-  }
-  return path.join(cwd, "runtime", "browser", "browser-audit.ndjson");
+  const runtimeDirectory = environment.BROWSER_WORKER_RUNTIME_DIR
+    ? path.resolve(cwd, environment.BROWSER_WORKER_RUNTIME_DIR)
+    : path.join(cwd, "runtime", "browser");
+  return path.join(runtimeDirectory, "browser-audit.ndjson");
 }
 
 async function main() {
