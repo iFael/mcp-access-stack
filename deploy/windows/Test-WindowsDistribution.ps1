@@ -140,6 +140,7 @@ Assert-ContainsNone -Label 'Public distribution builder' -Source $distributionBu
     'Install-McpWindowsExecutionNodeCutoverTask.ps1',
     'Invoke-McpWindowsExecutionNodeCutoverTask.ps1',
     'Request-McpWindowsExecutionNodeCutover.ps1',
+    'Test-McpEdgeConnectorTerminalIndependence.ps1',
     'deploy\docker'
 )
 

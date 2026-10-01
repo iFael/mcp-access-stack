@@ -154,7 +154,6 @@ $runtimeFiles = @(
     'deploy\windows\Repair-McpEdgeConnectorTask.ps1',
     'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
-    'deploy\windows\Test-McpEdgeConnectorTerminalIndependence.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',
     'deploy\windows\mcp-access-stack-code-signing.cer',
     'deploy\windows\Update-McpAccessStack.ps1',
