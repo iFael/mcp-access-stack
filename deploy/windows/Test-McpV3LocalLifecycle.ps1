@@ -249,6 +249,9 @@ $companion = Read-ProjectFile 'services\mcp-gateway\src\companion-cli.ts'
 Assert-ContainsAll -Label 'MCP V3 companion runtime' -Source $companion -Tokens @(
     'LocalBrowserWorker',
     'WindowsElevationBroker',
+    'resolveCanonicalStackRoot',
+    'VS_CODE_GPT_STACK_ROOT',
+    'mcp_v3_local_stack_root_resolved',
     '"browser"',
     '"elevation"',
     'Repositórios'

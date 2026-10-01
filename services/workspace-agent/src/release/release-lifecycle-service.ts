@@ -69,6 +69,17 @@ const handoverResultSchema = z
   })
   .strict();
 
+const localUpdateHandoffSchema = z
+  .object({
+    status: z.literal("accepted"),
+    operationId: z.string().regex(/^[a-f0-9]{32}$/iu),
+    tag: z.string().nullable(),
+    taskName: z.string().min(1),
+    resultPath: z.string().min(1),
+    activeReleaseId: z.string().min(1),
+  })
+  .strict();
+
 export class ReleaseLifecycleService {
   constructor(
     private readonly shellService: ReleaseShellService,
@@ -81,7 +92,10 @@ export class ReleaseLifecycleService {
     const installationRoot = resolveInstallationRoot();
     const state = await readLifecycleState(installationRoot);
     const activeReleaseId = state.active?.releaseId;
-    const bootstrap = resolveLifecycleBootstrap(this.platform);
+    const bootstrap = resolveLifecycleBootstrap(
+      this.platform,
+      isLocalReleaseRuntime(this.platform),
+    );
     const updateScriptPresent = activeReleaseId
       ? await fileExists(activeBootstrapPath(installationRoot, activeReleaseId, bootstrap.directory, bootstrap.updateScript))
       : false;
@@ -122,7 +136,10 @@ export class ReleaseLifecycleService {
         "Release preparation requires an active execution-node release.",
       );
     }
-    const bootstrap = resolveLifecycleBootstrap(this.platform);
+    const bootstrap = resolveLifecycleBootstrap(
+      this.platform,
+      isLocalReleaseRuntime(this.platform),
+    );
     const updater = activeBootstrapPath(
       installationRoot,
       state.active.releaseId,
@@ -206,7 +223,10 @@ export class ReleaseLifecycleService {
       );
     }
 
-    const bootstrap = resolveLifecycleBootstrap(this.platform);
+    const bootstrap = resolveLifecycleBootstrap(
+      this.platform,
+      isLocalReleaseRuntime(this.platform),
+    );
     const cutover = activeBootstrapPath(
       installationRoot,
       state.active.releaseId,
@@ -214,6 +234,66 @@ export class ReleaseLifecycleService {
       bootstrap.cutoverScript,
     );
     await assertBootstrapPresent(cutover, bootstrap.cutoverScript);
+    if (isLocalReleaseRuntime(this.platform)) {
+      const stateRoot = resolveLocalStateRoot(installationRoot);
+      const command = buildLocalPromoteCommand(
+        cutover,
+        installationRoot,
+        stateRoot,
+        input.releaseId,
+      );
+      const execution = await this.shellService.runCommand(
+        workspace,
+        runCommandInputSchema.parse({
+          workspaceId: workspace.id,
+          shell: "pwsh",
+          cwd: ".",
+          command,
+          timeoutMs: PROMOTE_TIMEOUT_MS,
+          ...(input.confirmationId === undefined
+            ? {}
+            : { confirmationId: input.confirmationId }),
+        }),
+        context,
+      );
+      if (execution.status === "confirmation_required") {
+        return promoteReleaseResultSchema.parse({
+          status: "confirmation_required",
+          releaseId: input.releaseId,
+          confirmationId: execution.confirmationId,
+          expiresAt: execution.expiresAt,
+          reasons: execution.reasons?.length
+            ? execution.reasons
+            : ["release promotion requires confirmation"],
+        });
+      }
+      if (execution.status !== "executed" || execution.exitCode !== 0) {
+        throw new AppError(
+          "SHELL_FAILED",
+          "Local release handoff bootstrap did not complete successfully.",
+        );
+      }
+      const handoff = parseLastJsonObject(
+        execution.stdout,
+        localUpdateHandoffSchema,
+      );
+      if (handoff.tag !== `v${input.releaseId}`) {
+        throw new AppError(
+          "EXECUTION_OUTCOME_UNKNOWN",
+          "Local release handoff returned a different release identity.",
+        );
+      }
+      return promoteReleaseResultSchema.parse({
+        status: "handover_started",
+        releaseId: input.releaseId,
+        requestId: operationIdToUuid(handoff.operationId),
+        brokerTaskName: handoff.taskName,
+        resultPath: handoff.resultPath,
+        installationRoot,
+        projectRoot,
+      });
+    }
+
     const config = await readEdgeRecoveryConfig(installationRoot);
     const persistedProjectRoot = path.resolve(config.projectRoot);
     const samePersistedProjectRoot =
@@ -425,21 +505,30 @@ async function fileExists(filePath: string): Promise<boolean> {
 type LifecycleBootstrap = {
   directory: "windows" | "linux";
   updateScript: "Update-McpAccessStack.ps1" | "Update-McpAccessStack.sh";
-  cutoverScript: "Start-McpAccessStackCutover.ps1" | "Start-McpAccessStackCutover.sh";
+  cutoverScript:
+    | "Start-McpAccessStackCutover.ps1"
+    | "Start-McpAccessStackCutover.sh"
+    | "Start-McpV3LocalUpdate.ps1";
 };
 
-export function resolveLifecycleBootstrap(platform: NodeJS.Platform): LifecycleBootstrap {
-  return platform === "win32"
-    ? {
-        directory: "windows",
-        updateScript: "Update-McpAccessStack.ps1",
-        cutoverScript: "Start-McpAccessStackCutover.ps1",
-      }
-    : {
-        directory: "linux",
-        updateScript: "Update-McpAccessStack.sh",
-        cutoverScript: "Start-McpAccessStackCutover.sh",
-      };
+export function resolveLifecycleBootstrap(
+  platform: NodeJS.Platform,
+  localReleaseRuntime = false,
+): LifecycleBootstrap {
+  if (platform === "win32") {
+    return {
+      directory: "windows",
+      updateScript: "Update-McpAccessStack.ps1",
+      cutoverScript: localReleaseRuntime
+        ? "Start-McpV3LocalUpdate.ps1"
+        : "Start-McpAccessStackCutover.ps1",
+    };
+  }
+  return {
+    directory: "linux",
+    updateScript: "Update-McpAccessStack.sh",
+    cutoverScript: "Start-McpAccessStackCutover.sh",
+  };
 }
 
 function buildPrepareCommand(
@@ -478,6 +567,31 @@ function buildPrepareCommand(
     "--tag",
     quotePowerShell(tag),
     "--execute",
+  ].join(" ");
+}
+
+function buildLocalPromoteCommand(
+  handoff: string,
+  installationRoot: string,
+  stateRoot: string,
+  releaseId: string,
+): string {
+  return [
+    "pwsh.exe",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "AllSigned",
+    "-File",
+    quotePowerShell(handoff),
+    "-InstallationRoot",
+    quotePowerShell(installationRoot),
+    "-StateRoot",
+    quotePowerShell(stateRoot),
+    "-Tag",
+    quotePowerShell(`v${releaseId}`),
+    "-Execute",
   ].join(" ");
 }
 
@@ -547,6 +661,25 @@ function buildPromoteCommand(
     String(config.delaySeconds),
     "--execute",
   ].join(" ");
+}
+
+function isLocalReleaseRuntime(platform: NodeJS.Platform): boolean {
+  return platform === "win32" && Boolean(process.env.MCP_V3_RELEASE_ROOT?.trim());
+}
+
+function resolveLocalStateRoot(installationRoot: string): string {
+  const configured = process.env.MCP_V3_STATE_ROOT?.trim();
+  return path.resolve(configured || path.dirname(installationRoot));
+}
+
+function operationIdToUuid(operationId: string): string {
+  return [
+    operationId.slice(0, 8),
+    operationId.slice(8, 12),
+    operationId.slice(12, 16),
+    operationId.slice(16, 20),
+    operationId.slice(20),
+  ].join("-");
 }
 
 function quotePowerShell(value: string): string {

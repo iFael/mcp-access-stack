@@ -14,6 +14,7 @@ describe("ReleaseLifecycleService", () => {
   let previousInstallationRoot: string | undefined;
   let previousStackRoot: string | undefined;
   let previousLocalReleaseRoot: string | undefined;
+  let previousLocalStateRoot: string | undefined;
   let workspace: ResolvedWorkspace;
 
   beforeEach(async () => {
@@ -21,7 +22,9 @@ describe("ReleaseLifecycleService", () => {
     previousInstallationRoot = process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
     previousStackRoot = process.env.VS_CODE_GPT_STACK_ROOT;
     previousLocalReleaseRoot = process.env.MCP_V3_RELEASE_ROOT;
+    previousLocalStateRoot = process.env.MCP_V3_STATE_ROOT;
     delete process.env.MCP_V3_RELEASE_ROOT;
+    delete process.env.MCP_V3_STATE_ROOT;
     process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT = installationRoot;
     workspace = {
       id: "ws",
@@ -47,6 +50,11 @@ describe("ReleaseLifecycleService", () => {
     } else {
       process.env.MCP_V3_RELEASE_ROOT = previousLocalReleaseRoot;
     }
+    if (previousLocalStateRoot === undefined) {
+      delete process.env.MCP_V3_STATE_ROOT;
+    } else {
+      process.env.MCP_V3_STATE_ROOT = previousLocalStateRoot;
+    }
     await rm(installationRoot, { recursive: true, force: true });
   });
 
@@ -70,7 +78,7 @@ describe("ReleaseLifecycleService", () => {
     process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
     await writeState({ candidate: null });
     await writeBootstrap("Update-McpAccessStack.ps1");
-    await writeBootstrap("Start-McpAccessStackCutover.ps1");
+    await writeBootstrap("Start-McpV3LocalUpdate.ps1");
 
     const service = new ReleaseLifecycleService({} as any, {} as any, "win32");
     const result = await service.getState(workspace);
@@ -104,6 +112,66 @@ describe("ReleaseLifecycleService", () => {
         {},
       ),
     ).rejects.toMatchObject({ code: "CAPABILITY_UNSUPPORTED" });
+  });
+
+  it("promotes an R10 local candidate through the detached local update handoff", async () => {
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    process.env.MCP_V3_STATE_ROOT = path.join(installationRoot, "local-state");
+    await writeState({
+      candidate: {
+        releaseId: CANDIDATE,
+        manifestSha256: "1".repeat(64),
+        materializedAt: ISO,
+      },
+    });
+    await writeBootstrap("Start-McpV3LocalUpdate.ps1");
+
+    let executedInput: any;
+    const shell = {
+      authorizeBackgroundCommand: async () => {
+        throw new Error("not used");
+      },
+      runCommand: async (_workspace: ResolvedWorkspace, input: any) => {
+        executedInput = input;
+        return {
+          status: "executed" as const,
+          shell: "pwsh" as const,
+          cwd: ".",
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: "accepted",
+            operationId: "123e4567e89b42d3a456426614174000",
+            tag: `v${CANDIDATE}`,
+            taskName: "MCP V3 local updater",
+            resultPath: path.join(installationRoot, "local-state", "updates", "result.json"),
+            activeReleaseId: ACTIVE,
+          }) + "\n",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+    const service = new ReleaseLifecycleService(shell as any, {} as any, "win32");
+
+    const result = await service.promote(
+      workspace,
+      { workspaceId: "ws", releaseId: CANDIDATE },
+      {},
+    );
+
+    expect(result).toMatchObject({
+      status: "handover_started",
+      releaseId: CANDIDATE,
+      requestId: "123e4567-e89b-42d3-a456-426614174000",
+      brokerTaskName: "MCP V3 local updater",
+      projectRoot: workspace.rootPath,
+    });
+    expect(executedInput.command).toContain("Start-McpV3LocalUpdate.ps1");
+    expect(executedInput.command).toContain("-ExecutionPolicy AllSigned");
+    expect(executedInput.command).toContain(`v${CANDIDATE}`);
+    expect(executedInput.command).toContain(process.env.MCP_V3_STATE_ROOT);
+    expect(executedInput.command).not.toContain("Start-McpAccessStackCutover.ps1");
+    expect(executedInput.command).not.toContain("connector-token.txt");
   });
 
   it("reports whether the active release contains signed lifecycle bootstraps", async () => {
