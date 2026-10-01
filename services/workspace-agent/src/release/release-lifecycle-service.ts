@@ -156,11 +156,12 @@ export class ReleaseLifecycleService {
       input.tag,
     );
 
+    const lifecycleShell = resolveLifecycleShell(this.platform);
     const parsed = startBackgroundTaskInputSchema.parse({
       workspaceId: workspace.id,
       operation: "prepare_release",
       command,
-      shell: "pwsh",
+      shell: lifecycleShell,
       cwd: ".",
       timeoutMs: PREPARE_TIMEOUT_MS,
       ...(input.confirmationId === undefined
@@ -189,7 +190,7 @@ export class ReleaseLifecycleService {
         workspaceId: workspace.id,
         operation: "prepare_release",
         command,
-        shell: "pwsh",
+        shell: lifecycleShell,
         cwd: authorization.logicalCwd,
         timeoutMs: PREPARE_TIMEOUT_MS,
       },
@@ -246,7 +247,7 @@ export class ReleaseLifecycleService {
         workspace,
         runCommandInputSchema.parse({
           workspaceId: workspace.id,
-          shell: "pwsh",
+          shell: resolveLifecycleShell(this.platform),
           cwd: ".",
           command,
           timeoutMs: PROMOTE_TIMEOUT_MS,
@@ -665,6 +666,10 @@ function buildPromoteCommand(
 
 function isLocalReleaseRuntime(platform: NodeJS.Platform): boolean {
   return platform === "win32" && Boolean(process.env.MCP_V3_RELEASE_ROOT?.trim());
+}
+
+function resolveLifecycleShell(platform: NodeJS.Platform): "powershell" | "pwsh" {
+  return isLocalReleaseRuntime(platform) ? "powershell" : "pwsh";
 }
 
 function resolveLocalStateRoot(installationRoot: string): string {

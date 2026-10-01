@@ -114,6 +114,58 @@ describe("ReleaseLifecycleService", () => {
     ).rejects.toMatchObject({ code: "CAPABILITY_UNSUPPORTED" });
   });
 
+  it("prepares an R10 local candidate through the Windows workspace shell", async () => {
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    await writeState({ candidate: null });
+    await writeBootstrap("Update-McpAccessStack.ps1");
+
+    let authorizedInput: any;
+    let startedInput: any;
+    const shell = {
+      authorizeBackgroundCommand: async (_workspace: ResolvedWorkspace, input: any) => {
+        authorizedInput = input;
+        return { logicalCwd: ".", absoluteCwd: workspace.rootPath };
+      },
+      runCommand: async () => {
+        throw new Error("not used");
+      },
+    };
+    const background = {
+      start_background_task: async (input: any) => {
+        startedInput = input;
+        return {
+          version: 1 as const,
+          id: "123e4567-e89b-42d3-a456-426614174000",
+          workspaceId: "ws",
+          operation: "prepare_release",
+          commandHash: "0".repeat(64),
+          command: input.command,
+          shell: input.shell,
+          cwd: ".",
+          state: "running" as const,
+          createdAt: ISO,
+          startedAt: ISO,
+          timeoutMs: input.timeoutMs,
+          pid: 4242,
+        };
+      },
+    };
+    const service = new ReleaseLifecycleService(shell as any, background as any, "win32");
+
+    const result = await service.prepare(
+      workspace,
+      "iFael/mcp-access-stack",
+      { workspaceId: "ws", tag: "v1.1.0-beta.51" },
+      {},
+    );
+
+    expect(result.status).toBe("background_task_started");
+    expect(authorizedInput.shell).toBe("powershell");
+    expect(startedInput.shell).toBe("powershell");
+    expect(authorizedInput.command).toContain("pwsh.exe");
+    expect(authorizedInput.command).toContain("-ExecutionPolicy AllSigned");
+  });
+
   it("promotes an R10 local candidate through the detached local update handoff", async () => {
     process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
     process.env.MCP_V3_STATE_ROOT = path.join(installationRoot, "local-state");
@@ -166,6 +218,7 @@ describe("ReleaseLifecycleService", () => {
       brokerTaskName: "MCP V3 local updater",
       projectRoot: workspace.rootPath,
     });
+    expect(executedInput.shell).toBe("powershell");
     expect(executedInput.command).toContain("Start-McpV3LocalUpdate.ps1");
     expect(executedInput.command).toContain("-ExecutionPolicy AllSigned");
     expect(executedInput.command).toContain(`v${CANDIDATE}`);
