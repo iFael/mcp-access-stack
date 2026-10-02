@@ -18825,33 +18825,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "browser_screenshot",
-    "outputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "type": "string"
-        },
-        "sizeBytes": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "tabId": {
-          "maxLength": 128,
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "tabId",
-        "path",
-        "sizeBytes"
-      ],
-      "type": "object"
-    },
     "title": "browser_screenshot"
   },
   {
@@ -20579,13 +20552,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1247fba117fcb3ff7c14c8a922fa05824ba256a8b5fcc92332e9205928a28dc4",
-  "serverVersion": "0.4.0-catalog.c1247fba117fc.s8b73637247cd",
+  "contractRevision": "0cf918949808d2bc8b3c02b9052111cfb16b879a3fdb4d8bd13164f564b0ea16",
+  "serverVersion": "0.4.0-catalog.c0cf918949808.s8b73637247cd",
   "toolCount": 91,
   "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1247fba117fc.s8b73637247cd"
+  "version": "0.4.0-catalog.c0cf918949808.s8b73637247cd"
 } as const;
