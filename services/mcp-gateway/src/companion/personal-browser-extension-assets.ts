@@ -30,9 +30,24 @@ const BRIDGE_PORT = ${port};
 const BRIDGE_URL = "ws://127.0.0.1:" + BRIDGE_PORT + "/?token=" + encodeURIComponent(BRIDGE_TOKEN);
 const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs";
+const MUTATING_OPERATIONS = new Set([
+  "open",
+  "navigate",
+  "click",
+  "fill",
+  "press",
+  "sequence",
+  "goBack",
+  "goForward",
+  "closeTab",
+  "finishTask",
+]);
 
 let socket;
 let reconnectTimer;
+let ownershipTail = Promise.resolve();
+const inFlightRequests = new Map();
+const mutationQueues = new Map();
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -60,63 +75,110 @@ async function handleMessage(raw) {
   } catch {
     return;
   }
+  if (message?.type === "cancel" && typeof message.id === "string") {
+    inFlightRequests.get(message.id)?.abort("cancelled");
+    return;
+  }
   if (message?.type !== "request" || typeof message.id !== "string") return;
+
+  const operation = String(message.operation);
+  const controller = new AbortController();
+  inFlightRequests.set(message.id, controller);
+  const deadlineMs = typeof message.deadlineAt === "string"
+    ? Date.parse(message.deadlineAt) - Date.now()
+    : Number.POSITIVE_INFINITY;
+  let deadlineTimer;
+  if (Number.isFinite(deadlineMs)) {
+    if (deadlineMs <= 0) controller.abort("deadline");
+    else deadlineTimer = setTimeout(() => controller.abort("deadline"), Math.min(deadlineMs, 125000));
+  }
+
   try {
-    const result = await perform(String(message.operation), message.input ?? {});
+    const result = await runRequest(operation, message.input ?? {}, controller.signal);
     send({ type: "response", id: message.id, ok: true, result });
   } catch (error) {
+    const normalized = normalizeRequestError(operation, controller.signal, error);
     send({
       type: "response",
       id: message.id,
       ok: false,
       error: {
-        code: typeof error?.code === "string" ? error.code : "INTERNAL_ERROR",
-        message: error instanceof Error ? error.message : String(error),
+        code: typeof normalized?.code === "string" ? normalized.code : "INTERNAL_ERROR",
+        message: normalized instanceof Error ? normalized.message : String(normalized),
       },
     });
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    inFlightRequests.delete(message.id);
   }
 }
 
-async function perform(operation, input) {
+async function runRequest(operation, input, signal) {
+  const queueKey = mutationQueueKey(operation, input);
+  if (!queueKey) {
+    throwIfAborted(signal, operation, false);
+    const result = await perform(operation, input, signal);
+    throwIfAborted(signal, operation, false);
+    return result;
+  }
+
+  return enqueueMutation(queueKey, async () => {
+    throwIfAborted(signal, operation, false);
+    let started = false;
+    try {
+      started = true;
+      const result = await perform(operation, input, signal);
+      throwIfAborted(signal, operation, started);
+      return result;
+    } catch (error) {
+      if (signal.aborted) throw cancellationError(operation, signal, started);
+      throw error;
+    }
+  });
+}
+
+async function perform(operation, input, signal) {
   switch (operation) {
-    case "tabs": return tabs(input);
-    case "open": return open(input);
-    case "navigate": return navigate(input);
-    case "snapshot": return snapshot(input);
-    case "click": return click(input);
-    case "fill": return fill(input);
-    case "press": return press(input);
-    case "wait": return wait(input);
-    case "extract": return extract(input);
-    case "sequence": return sequence(input);
-    case "goBack": return goBack(input);
-    case "goForward": return goForward(input);
-    case "closeTab": return closeTab(input);
-    case "finishTask": return finishTask(input);
+    case "tabs": return tabs(input, signal);
+    case "open": return open(input, signal);
+    case "navigate": return navigate(input, signal);
+    case "snapshot": return snapshot(input, signal);
+    case "click": return click(input, signal);
+    case "fill": return fill(input, signal);
+    case "press": return press(input, signal);
+    case "wait": return wait(input, signal);
+    case "extract": return extract(input, signal);
+    case "sequence": return sequence(input, signal);
+    case "goBack": return goBack(input, signal);
+    case "goForward": return goForward(input, signal);
+    case "closeTab": return closeTab(input, signal);
+    case "finishTask": return finishTask(input, signal);
     default: throw coded("BROWSER_CAPABILITY_UNSUPPORTED", operation + " is not supported by personal browser mode.");
   }
 }
 
 async function tabs(input) {
-  const owned = await readOwnedTabs();
-  const result = [];
-  let changed = false;
-  for (const [key, metadata] of Object.entries(owned)) {
-    if (input.taskId && metadata.taskId !== input.taskId) continue;
-    const chromeTabId = Number(key);
-    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
-    if (!tab) {
-      delete owned[key];
-      changed = true;
-      continue;
+  return withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const result = [];
+    let changed = false;
+    for (const [key, metadata] of Object.entries(owned)) {
+      if (input.taskId && metadata.taskId !== input.taskId) continue;
+      const chromeTabId = Number(key);
+      const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+      if (!tab) {
+        delete owned[key];
+        changed = true;
+        continue;
+      }
+      result.push(toBrowserTab(metadata, tab));
     }
-    result.push(toBrowserTab(metadata, tab));
-  }
-  if (changed) await writeOwnedTabs(owned);
-  return { tabs: result };
+    if (changed) await writeOwnedTabs(owned);
+    return { tabs: result };
+  });
 }
 
-async function open(input) {
+async function open(input, signal) {
   if (typeof input.url !== "string" ||
       (!input.url.startsWith("http://") && !input.url.startsWith("https://"))) {
     throw coded("INVALID_ARGUMENT", "Personal browser mode requires an explicit http(s) URL.");
@@ -124,28 +186,38 @@ async function open(input) {
   if (input.url === "about:blank") {
     throw coded("NAVIGATION_BLOCKED", "about:blank is not a valid personal browser target.");
   }
-  const owned = await readOwnedTabs();
+
   if (input.reusable) {
-    for (const [key, metadata] of Object.entries(owned)) {
-      if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? input.url)) continue;
-      const chromeTabId = Number(key);
-      const existing = await chrome.tabs.get(chromeTabId).catch(() => undefined);
-      if (!existing) {
-        delete owned[key];
-        continue;
+    const restored = await withOwnershipLock(async () => {
+      const owned = await readOwnedTabs();
+      for (const [key, metadata] of Object.entries(owned)) {
+        if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? input.url)) continue;
+        const chromeTabId = Number(key);
+        const existing = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+        if (!existing) {
+          delete owned[key];
+          continue;
+        }
+        await chrome.tabs.update(chromeTabId, { active: true });
+        metadata.lastUsedAt = new Date().toISOString();
+        owned[key] = metadata;
+        await writeOwnedTabs(owned);
+        return { tab: toBrowserTab(metadata, existing), restoredFromCache: true };
       }
-      await chrome.tabs.update(chromeTabId, { active: true });
-      metadata.lastUsedAt = new Date().toISOString();
-      owned[key] = metadata;
       await writeOwnedTabs(owned);
-      return { tab: toBrowserTab(metadata, existing), restoredFromCache: true };
-    }
+      return undefined;
+    });
+    if (restored) return restored;
   }
 
+  throwIfAborted(signal, "open", false);
   const tab = await chrome.tabs.create({ url: input.url, active: true });
   if (typeof tab.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
-  await waitForTabComplete(tab.id, 30000).catch(() => undefined);
-  const refreshed = await chrome.tabs.get(tab.id);
+  try {
+    await waitForTabComplete(tab.id, 30000, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   const now = new Date().toISOString();
   const metadata = {
     tabId: PERSONAL_PREFIX + tab.id,
@@ -160,16 +232,27 @@ async function open(input) {
     lastUsedAt: now,
     requestedUrl: input.url,
   };
-  owned[String(tab.id)] = metadata;
-  await writeOwnedTabs(owned);
+  const refreshed = await withOwnershipLock(async () => {
+    const current = await chrome.tabs.get(tab.id).catch(() => undefined);
+    if (!current) throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
+    const owned = await readOwnedTabs();
+    owned[String(tab.id)] = metadata;
+    await writeOwnedTabs(owned);
+    return current;
+  });
   return { tab: toBrowserTab(metadata, refreshed) };
 }
 
-async function navigate(input) {
+async function navigate(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "navigate", false);
   await chrome.tabs.update(chromeTabId, { url: input.url, active: true });
-  await waitForTabComplete(chromeTabId, 30000).catch(() => undefined);
+  try {
+    await waitForTabComplete(chromeTabId, 30000, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   metadata.lastUsedAt = new Date().toISOString();
   metadata.requestedUrl = input.url;
   await updateMetadata(chromeTabId, metadata);
@@ -231,23 +314,24 @@ async function press(input) {
   return { tabId: input.tabId, completed: true };
 }
 
-async function wait(input) {
+async function wait(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 30000;
   if (!input.text && !input.ref) {
-    await delay(timeoutMs);
+    await delay(timeoutMs, signal);
     return { tabId: input.tabId, completed: true };
   }
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfAborted(signal, "wait", false);
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: waitProbe,
       args: [input.text ?? null, input.ref ?? null],
     }).catch(() => []);
     if (result?.result) return { tabId: input.tabId, completed: true };
-    await delay(200);
+    await delay(200, signal);
   }
   throw coded("STATE_NOT_REACHED", "The requested personal browser state was not reached before timeout.");
 }
@@ -268,17 +352,18 @@ async function extract(input) {
   };
 }
 
-async function sequence(input) {
+async function sequence(input, signal) {
   const results = [];
   for (let index = 0; index < input.steps.length; index += 1) {
+    throwIfAborted(signal, "sequence", true);
     const step = input.steps[index];
     let value;
-    if (step.action === "navigate") value = await navigate({ tabId: input.tabId, url: step.url });
-    else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref });
-    else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value });
-    else if (step.action === "press") value = await press({ tabId: input.tabId, key: step.key });
-    else if (step.action === "wait") value = await wait({ tabId: input.tabId, timeoutMs: step.timeoutMs, text: step.text, ref: step.ref });
-    else if (step.action === "extract") value = await extract({ tabId: input.tabId, ref: step.ref, selector: step.selector, format: step.format });
+    if (step.action === "navigate") value = await navigate({ tabId: input.tabId, url: step.url }, signal);
+    else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref }, signal);
+    else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value }, signal);
+    else if (step.action === "press") value = await press({ tabId: input.tabId, key: step.key }, signal);
+    else if (step.action === "wait") value = await wait({ tabId: input.tabId, timeoutMs: step.timeoutMs, text: step.text, ref: step.ref }, signal);
+    else if (step.action === "extract") value = await extract({ tabId: input.tabId, ref: step.ref, selector: step.selector, format: step.format }, signal);
     results.push({
       index,
       action: step.action,
@@ -287,24 +372,34 @@ async function sequence(input) {
     });
   }
   const response = { tabId: input.tabId, completed: true, steps: results };
-  if (input.finalSnapshot) response.snapshot = await snapshot({ tabId: input.tabId });
+  if (input.finalSnapshot) response.snapshot = await snapshot({ tabId: input.tabId }, signal);
   return response;
 }
 
-async function goBack(input) {
+async function goBack(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "goBack", false);
   await chrome.tabs.goBack(chromeTabId);
-  await waitForTabComplete(chromeTabId, 10000).catch(() => undefined);
+  try {
+    await waitForTabComplete(chromeTabId, 10000, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   const tab = await chrome.tabs.get(chromeTabId);
   return { tab: toBrowserTab(metadata, tab) };
 }
 
-async function goForward(input) {
+async function goForward(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "goForward", false);
   await chrome.tabs.goForward(chromeTabId);
-  await waitForTabComplete(chromeTabId, 10000).catch(() => undefined);
+  try {
+    await waitForTabComplete(chromeTabId, 10000, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
   const tab = await chrome.tabs.get(chromeTabId);
   return { tab: toBrowserTab(metadata, tab) };
 }
@@ -313,49 +408,67 @@ async function closeTab(input) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   await chrome.tabs.remove(chromeTabId).catch(() => undefined);
-  const owned = await readOwnedTabs();
-  delete owned[String(chromeTabId)];
-  await writeOwnedTabs(owned);
+  await removeOwnedTab(chromeTabId);
   return { tabId: input.tabId, completed: true };
 }
 
 async function finishTask(input) {
-  const owned = await readOwnedTabs();
-  const closedTabIds = [];
-  for (const [key, metadata] of Object.entries(owned)) {
-    if (input.taskId && metadata.taskId !== input.taskId) continue;
-    const chromeTabId = Number(key);
-    await chrome.tabs.remove(chromeTabId).catch(() => undefined);
-    closedTabIds.push(metadata.tabId);
-    delete owned[key];
+  const targets = await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    return Object.entries(owned)
+      .filter(([, metadata]) => !input.taskId || metadata.taskId === input.taskId)
+      .map(([key, metadata]) => ({ chromeTabId: Number(key), tabId: metadata.tabId }));
+  });
+  for (const target of targets) {
+    await chrome.tabs.remove(target.chromeTabId).catch(() => undefined);
   }
-  await writeOwnedTabs(owned);
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    for (const target of targets) delete owned[String(target.chromeTabId)];
+    await writeOwnedTabs(owned);
+  });
   return {
     completed: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
-    closedTabs: closedTabIds.length,
-    closedTabIds,
+    closedTabs: targets.length,
+    closedTabIds: targets.map((target) => target.tabId),
     browserClosed: false,
   };
 }
 
 async function requireOwnedMetadata(chromeTabId) {
-  const owned = await readOwnedTabs();
-  const metadata = owned[String(chromeTabId)];
-  if (!metadata) throw coded("TAB_NOT_OWNED", "The Chrome tab is not owned by MCP V3 personal browser mode.");
-  const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
-  if (!tab) {
-    delete owned[String(chromeTabId)];
-    await writeOwnedTabs(owned);
-    throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
-  }
-  return metadata;
+  return withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const metadata = owned[String(chromeTabId)];
+    if (!metadata) throw coded("TAB_NOT_OWNED", "The Chrome tab is not owned by MCP V3 personal browser mode.");
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (!tab) {
+      delete owned[String(chromeTabId)];
+      await writeOwnedTabs(owned);
+      throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
+    }
+    return { ...metadata };
+  });
 }
 
 async function updateMetadata(chromeTabId, metadata) {
-  const owned = await readOwnedTabs();
-  owned[String(chromeTabId)] = metadata;
-  await writeOwnedTabs(owned);
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    if (!owned[String(chromeTabId)]) {
+      throw coded("TAB_NOT_OWNED", "The Chrome tab is not owned by MCP V3 personal browser mode.");
+    }
+    owned[String(chromeTabId)] = metadata;
+    await writeOwnedTabs(owned);
+  });
+}
+
+async function removeOwnedTab(chromeTabId) {
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    if (!owned[String(chromeTabId)]) return;
+    delete owned[String(chromeTabId)];
+    await writeOwnedTabs(owned);
+  });
 }
 
 async function readOwnedTabs() {
@@ -385,20 +498,30 @@ function chromeTabIdFrom(tabId) {
   return Number(match[1]);
 }
 
-async function waitForTabComplete(tabId, timeoutMs) {
+async function waitForTabComplete(tabId, timeoutMs, signal) {
+  throwIfAborted(signal, "navigation", false);
   const current = await chrome.tabs.get(tabId);
   if (current.status === "complete") return;
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error("Tab load timeout"));
-    }, timeoutMs);
-    function onUpdated(updatedTabId, changeInfo) {
-      if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
+    const cleanup = () => {
       clearTimeout(timeout);
       chrome.tabs.onUpdated.removeListener(onUpdated);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Tab load timeout"));
+    }, timeoutMs);
+    const onAbort = () => {
+      cleanup();
+      reject(cancellationError("navigation", signal, true));
+    };
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
+      cleanup();
       resolve();
     }
+    signal?.addEventListener("abort", onAbort, { once: true });
     chrome.tabs.onUpdated.addListener(onUpdated);
   });
 }
@@ -552,9 +675,73 @@ function coded(code, message) {
   return error;
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function mutationQueueKey(operation, input) {
+  if (!MUTATING_OPERATIONS.has(operation)) return null;
+  if (typeof input?.tabId === "string") return "tab:" + input.tabId;
+  if (operation === "open" && typeof input?.taskId === "string") return "task:" + input.taskId;
+  if (operation === "finishTask" && typeof input?.taskId === "string") return "task:" + input.taskId;
+  return "operation:" + operation;
 }
+
+function enqueueMutation(key, work) {
+  const previous = mutationQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => undefined).then(work);
+  const tail = current.then(() => undefined, () => undefined);
+  mutationQueues.set(key, tail);
+  void tail.finally(() => {
+    if (mutationQueues.get(key) === tail) mutationQueues.delete(key);
+  });
+  return current;
+}
+
+function withOwnershipLock(work) {
+  const current = ownershipTail.catch(() => undefined).then(work);
+  ownershipTail = current.then(() => undefined, () => undefined);
+  return current;
+}
+
+function cancellationError(operation, signal, started) {
+  if (started && MUTATING_OPERATIONS.has(operation)) {
+    return coded(
+      "EXECUTION_OUTCOME_UNKNOWN",
+      "Personal browser mutation outcome is unknown after cancellation: " + operation,
+    );
+  }
+  if (signal?.reason === "deadline") {
+    return coded("BROWSER_WORKER_TIMEOUT", "Personal browser operation deadline elapsed: " + operation);
+  }
+  return coded("OPERATION_CANCELLED", "Personal browser operation was cancelled: " + operation);
+}
+
+function normalizeRequestError(operation, signal, error) {
+  if (error && typeof error.code === "string") return error;
+  if (!signal.aborted) return error;
+  return cancellationError(operation, signal, false);
+}
+
+function throwIfAborted(signal, operation, started) {
+  if (signal?.aborted) throw cancellationError(operation, signal, started);
+}
+
+function delay(ms, signal) {
+  throwIfAborted(signal, "wait", false);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(cancellationError("wait", signal, false));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void removeOwnedTab(tabId);
+});
 
 setInterval(() => {
   if (socket?.readyState === WebSocket.OPEN) send({ type: "heartbeat", at: Date.now() });

@@ -139,6 +139,34 @@ describe("BrowserModeRouter", () => {
     });
   });
 
+  it("releases task mode affinity after finishTask", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    const router = new BrowserModeRouter(managed, personal);
+
+    await router.open({
+      taskId: "task-reusable-after-finish",
+      url: "https://chatgpt.com/",
+      browserMode: "personal",
+    });
+    await expect(router.finishTask({
+      taskId: "task-reusable-after-finish",
+    })).resolves.toMatchObject({
+      completed: true,
+      closedTabs: 1,
+    });
+
+    await expect(router.open({
+      taskId: "task-reusable-after-finish",
+      url: "https://example.test/",
+      browserMode: "managed",
+    })).resolves.toMatchObject({
+      tab: { tabId: "managed:1" },
+    });
+    expect(personal.finishTask).toHaveBeenCalledTimes(1);
+    expect(managed.open).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed when personal mode is requested without a connected extension", async () => {
     const router = new BrowserModeRouter(
       managedExecutor(),

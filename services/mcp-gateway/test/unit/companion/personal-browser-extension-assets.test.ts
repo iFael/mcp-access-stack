@@ -66,7 +66,95 @@ describe("personal browser extension assets", () => {
     expect(clickRef(currentRef)).toBe(true);
     expect(second.clickCount).toBe(1);
   });
+
+  it("serializes mutations that share the same queue key", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ Map, Promise });
+    vm.runInContext("const mutationQueues = new Map();", context);
+    const enqueueMutation = vm.runInContext(
+      `(${extractFunction(serviceWorker, "enqueueMutation")})`,
+      context,
+    ) as <T>(key: string, work: () => Promise<T>) => Promise<T>;
+
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const events: string[] = [];
+
+    const first = enqueueMutation("tab:personal:1", async () => {
+      events.push("first:start");
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      events.push("first:end");
+      return "first";
+    });
+    await firstStarted.promise;
+
+    const second = enqueueMutation("tab:personal:1", async () => {
+      events.push("second:start");
+      return "second";
+    });
+    await Promise.resolve();
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst.resolve();
+
+    await expect(Promise.all([first, second])).resolves.toEqual(["first", "second"]);
+    expect(events).toEqual(["first:start", "first:end", "second:start"]);
+  });
+
+  it("serializes ownership read-modify-write sections", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ Promise });
+    vm.runInContext("let ownershipTail = Promise.resolve();", context);
+    const withOwnershipLock = vm.runInContext(
+      `(${extractFunction(serviceWorker, "withOwnershipLock")})`,
+      context,
+    ) as <T>(work: () => Promise<T>) => Promise<T>;
+
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const events: string[] = [];
+
+    const first = withOwnershipLock(async () => {
+      events.push("first:start");
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      events.push("first:end");
+      return 1;
+    });
+    await firstStarted.promise;
+
+    const second = withOwnershipLock(async () => {
+      events.push("second:start");
+      return 2;
+    });
+    await Promise.resolve();
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+    expect(events).toEqual(["first:start", "first:end", "second:start"]);
+  });
+
+  it("materializes cooperative cancellation and owned-tab removal hooks", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+
+    expect(serviceWorker).toContain('message?.type === "cancel"');
+    expect(serviceWorker).toContain('inFlightRequests.get(message.id)?.abort("cancelled")');
+    expect(serviceWorker).toContain("chrome.tabs.onRemoved.addListener");
+    expect(serviceWorker).toContain("void removeOwnedTab(tabId)");
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
