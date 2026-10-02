@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "@jest/globals";
@@ -105,8 +105,9 @@ describe("shell process runner", () => {
   test("terminates descendants and leaves no orphan after timeout", async () => {
     fixture = await createFixture();
     const pidPath = path.join(fixture.workspacePath, "child.pid");
+    const leasePath = path.join(fixture.workspacePath, "child.lease");
     const command = isWindows
-      ? windowsDescendantCommand(pidPath)
+      ? windowsDescendantCommand(pidPath, leasePath)
       : posixDescendantCommand(pidPath);
     const execution = runShellCommand(
       sleepShell,
@@ -123,7 +124,11 @@ describe("shell process runner", () => {
       lifecycle: { terminatedBy: "child_process", reason: "timeout" },
     });
     expect(Number.isSafeInteger(childPid)).toBe(true);
-    await expectProcessToExit(childPid);
+    if (isWindows) {
+      await expectExclusiveLeaseReleased(leasePath);
+    } else {
+      await expectProcessToExit(childPid);
+    }
   }, 90_000);
 
   test("distinguishes caller cancellation from timeout", async () => {
@@ -270,11 +275,17 @@ function longSleepCommand(): string {
   return isWindows ? "Start-Sleep -Seconds 10" : "sleep 10";
 }
 
-function windowsDescendantCommand(pidPath: string): string {
+function windowsDescendantCommand(pidPath: string, leasePath: string): string {
   const escapedPidPath = pidPath.replaceAll("'", "''");
+  const escapedLeasePath = leasePath.replaceAll("'", "''");
+  const childScript = [
+    `$lease = [IO.File]::Open('${escapedLeasePath}', 'OpenOrCreate', 'ReadWrite', 'None')`,
+    `Set-Content -LiteralPath '${escapedPidPath}' -Value $PID`,
+    "Start-Sleep -Seconds 60",
+  ].join("; ");
+  const encoded = Buffer.from(childScript, "utf16le").toString("base64");
   return [
-    "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru",
-    `Set-Content -LiteralPath '${escapedPidPath}' -Value $child.Id`,
+    `$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','${encoded}' -PassThru`,
     "Start-Sleep -Seconds 60",
   ].join("; ");
 }
@@ -296,6 +307,25 @@ async function waitForPidFile(pidPath: string, timeoutMs: number): Promise<numbe
     await delay(25);
   }
   throw new Error(`Descendant PID marker was not created within ${timeoutMs}ms.`);
+}
+
+async function expectExclusiveLeaseReleased(
+  leasePath: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const handle = await open(leasePath, "r+");
+      await handle.close();
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" && code !== "EPERM" && code !== "EACCES") throw error;
+    }
+    await delay(50);
+  }
+  throw new Error("Descendant process kept its exclusive lease after tree termination.");
 }
 
 async function expectProcessToExit(pid: number, timeoutMs = 20_000): Promise<void> {
