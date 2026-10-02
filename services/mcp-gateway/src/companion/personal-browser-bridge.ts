@@ -206,10 +206,46 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     throw unsupported("browser_navigate_path");
   }
 
-  screenshot(
-    ..._args: Parameters<BrowserExecutor["screenshot"]>
+  async screenshot(
+    ...args: Parameters<BrowserExecutor["screenshot"]>
   ): ReturnType<BrowserExecutor["screenshot"]> {
-    throw unsupported("browser_screenshot");
+    const result = await this.call("screenshot", args[0], args[1]);
+    const transport = result as typeof result & {
+      mimeType?: string;
+      contentBase64?: string;
+    };
+    if (!transport.mimeType || !transport.contentBase64) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Personal browser screenshot returned no image payload.",
+      );
+    }
+    const bytes = Buffer.from(transport.contentBase64, "base64");
+    if (bytes.length === 0 || bytes.toString("base64") !== transport.contentBase64) {
+      throw new AppError(
+        "RELAY_PROTOCOL_ERROR",
+        "Personal browser screenshot returned invalid base64 image data.",
+      );
+    }
+    const extension = transport.mimeType === "image/png"
+      ? "png"
+      : transport.mimeType === "image/webp"
+        ? "webp"
+        : "jpg";
+    const directory = path.join(
+      path.resolve(this.options.stateRoot),
+      "browser",
+      "personal-artifacts",
+      "screenshots",
+    );
+    await mkdir(directory, { recursive: true });
+    const absolutePath = path.join(directory, `${randomUUID()}.${extension}`);
+    await writeFile(absolutePath, bytes, { mode: 0o600 });
+    return {
+      ...transport,
+      path: absolutePath,
+      sizeBytes: bytes.length,
+    };
   }
 
   goBack(...args: Parameters<BrowserExecutor["goBack"]>): ReturnType<BrowserExecutor["goBack"]> {

@@ -18794,7 +18794,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Stores a screenshot in private runtime storage.",
+    "description": "Captures an MCP-owned tab, stores it in private runtime storage, and returns image content to the model when the active browser backend can provide it.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19409,7 +19409,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Closes only an unprotected MCP-owned tab.",
+    "description": "Closes only an unprotected, non-sticky MCP-owned tab. Task finalization is a separate lifecycle operation.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19602,7 +19602,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.",
+    "description": "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user; managed mode rejects keepOpen. protected/sticky affect browser_close_tab, not default task finalization.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19613,6 +19613,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
+        },
+        "keepOpen": {
+          "type": "boolean"
         },
         "runtimeId": {
           "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -19651,6 +19654,20 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "releasedTabIds": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "releasedTabs": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
         "taskId": {
           "maxLength": 128,
@@ -20562,13 +20579,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "52773d55e477a77d4e155d20c32b492aced138e73d166c974d5fad0139019f9e",
-  "serverVersion": "0.4.0-catalog.c52773d55e477.s8b73637247cd",
+  "contractRevision": "1247fba117fcb3ff7c14c8a922fa05824ba256a8b5fcc92332e9205928a28dc4",
+  "serverVersion": "0.4.0-catalog.c1247fba117fc.s8b73637247cd",
   "toolCount": 91,
   "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c52773d55e477.s8b73637247cd"
+  "version": "0.4.0-catalog.c1247fba117fc.s8b73637247cd"
 } as const;

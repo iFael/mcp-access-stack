@@ -235,6 +235,12 @@ export class BrowserModeRouter implements BrowserExecutor {
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
     const [input] = args;
+    if (input.keepOpen === true && !input.taskId) {
+      throw new AppError(
+        "INVALID_ARGUMENT",
+        "browser_finish_task keepOpen requires an explicit taskId.",
+      );
+    }
     if (input.taskId) {
       let mode = this.taskModes.get(input.taskId);
       if (!mode && this.personal?.isConnected()) {
@@ -243,9 +249,18 @@ export class BrowserModeRouter implements BrowserExecutor {
       }
       if (mode === "personal") {
         const result = await this.requirePersonal().finishTask(...args);
-        for (const tabId of result.closedTabIds ?? []) this.personalTabIds.delete(tabId);
+        for (const tabId of [
+          ...(result.closedTabIds ?? []),
+          ...(result.releasedTabIds ?? []),
+        ]) this.personalTabIds.delete(tabId);
         this.taskModes.delete(input.taskId);
         return result;
+      }
+      if (input.keepOpen === true) {
+        throw new AppError(
+          "BROWSER_OPERATION_MODE_UNSUPPORTED",
+          "keepOpen is supported only for an explicit personal-browser task.",
+        );
       }
       const result = await this.managed.finishTask(...args);
       this.taskModes.delete(input.taskId);

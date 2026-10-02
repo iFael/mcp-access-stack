@@ -645,6 +645,19 @@ export const browserScreenshotResultSchema = z
   })
   .strict();
 export type BrowserScreenshotResult = z.infer<typeof browserScreenshotResultSchema>;
+export const browserScreenshotTransportResultSchema = browserScreenshotResultSchema
+  .extend({
+    mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional(),
+    contentBase64: z.string().min(1).max(3_200_000).optional(),
+  })
+  .superRefine((result, context) => {
+    if ((result.mimeType === undefined) !== (result.contentBase64 === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Screenshot image transport requires mimeType and contentBase64 together.",
+      });
+    }
+  });
 
 export const browserTabActionInputSchema = z.object({ tabId: tabIdSchema }).strict();
 export type BrowserTabActionInput = z.infer<typeof browserTabActionInputSchema>;
@@ -658,8 +671,20 @@ export const browserCloseTabInputSchema = z
 export type BrowserCloseTabInput = z.infer<typeof browserCloseTabInputSchema>;
 
 export const browserFinishTaskInputSchema = z
-  .object({ taskId: taskIdSchema.optional() })
-  .strict();
+  .object({
+    taskId: taskIdSchema.optional(),
+    keepOpen: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (input.keepOpen === true && input.taskId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskId"],
+        message: "browser_finish_task keepOpen requires an explicit taskId.",
+      });
+    }
+  });
 export type BrowserFinishTaskInput = z.infer<typeof browserFinishTaskInputSchema>;
 export const browserFinishTaskResultSchema = z
   .object({
@@ -667,6 +692,8 @@ export const browserFinishTaskResultSchema = z
     taskId: taskIdSchema.optional(),
     closedTabs: z.number().int().nonnegative(),
     closedTabIds: z.array(tabIdSchema).max(100).optional(),
+    releasedTabs: z.number().int().nonnegative().optional(),
+    releasedTabIds: z.array(tabIdSchema).max(100).optional(),
     browserClosed: z.boolean(),
   })
   .strict();
@@ -1109,7 +1136,7 @@ export const browserOperationResultSchemas = {
   domIndex: browserDomIndexResultSchema,
   frameSequence: browserFrameSequenceResultSchema,
   navigatePath: browserNavigatePathResultSchema,
-  screenshot: browserScreenshotResultSchema,
+  screenshot: browserScreenshotTransportResultSchema,
   goBack: browserTabResultSchema,
   goForward: browserTabResultSchema,
   closeTab: browserActionResultSchema,

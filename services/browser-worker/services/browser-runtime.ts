@@ -1434,6 +1434,12 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserFinishTaskResult> {
     return this.withLifecycleLock(async () => {
+      if (input.keepOpen === true) {
+        throw new AppError(
+          "BROWSER_OPERATION_MODE_UNSUPPORTED",
+          "keepOpen is supported only by personal browser mode.",
+        );
+      }
       const resolved = this.taskRegistry.resolveScoped(input.taskId, context, true);
       if (resolved.state === "finished") {
         this.telemetry?.record({

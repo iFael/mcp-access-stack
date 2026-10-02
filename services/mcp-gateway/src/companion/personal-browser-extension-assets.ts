@@ -4,7 +4,7 @@ export interface PersonalBrowserExtensionAssets {
 }
 
 export const PERSONAL_BROWSER_PROTOCOL_VERSION = 1;
-export const PERSONAL_BROWSER_EXTENSION_VERSION = "0.2.0";
+export const PERSONAL_BROWSER_EXTENSION_VERSION = "0.3.0";
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
   "open",
@@ -16,6 +16,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "wait",
   "extract",
   "sequence",
+  "screenshot",
+  "tabGroups",
   "closeTab",
   "finishTask",
 ] as const;
@@ -31,7 +33,7 @@ export function buildPersonalBrowserExtensionAssets(
     version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
-    permissions: ["tabs", "scripting", "storage"],
+    permissions: ["tabs", "scripting", "storage", "debugger", "tabGroups"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser" },
@@ -52,6 +54,8 @@ const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
 const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs";
+const MAX_SCREENSHOT_BASE64_CHARS = 3000000;
+const MAX_FULL_PAGE_PIXELS = 40000000;
 const MUTATING_OPERATIONS = new Set([
   "open",
   "navigate",
@@ -70,6 +74,7 @@ let reconnectTimer;
 let ownershipTail = Promise.resolve();
 const inFlightRequests = new Map();
 const mutationQueues = new Map();
+const taskGroups = new Map();
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -178,6 +183,7 @@ async function perform(operation, input, signal) {
     case "wait": return wait(input, signal);
     case "extract": return extract(input, signal);
     case "sequence": return sequence(input, signal);
+    case "screenshot": return screenshot(input, signal);
     case "goBack": return goBack(input, signal);
     case "goForward": return goForward(input, signal);
     case "closeTab": return closeTab(input, signal);
@@ -242,27 +248,40 @@ async function open(input, signal) {
     if (signal?.aborted) throw error;
   }
   const now = new Date().toISOString();
-  const metadata = {
-    tabId: PERSONAL_PREFIX + tab.id,
-    ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
-    lifecycle: typeof input.taskId === "string" ? "task-scoped" : "persistent",
-    ownership: "mcp",
-    purpose: input.purpose ?? targetUrl,
-    reusable: Boolean(input.reusable),
-    protected: Boolean(input.protected),
-    sticky: Boolean(input.sticky),
-    createdAt: now,
-    lastUsedAt: now,
-    requestedUrl: targetUrl,
-  };
-  const refreshed = await withOwnershipLock(async () => {
-    const current = await chrome.tabs.get(tab.id).catch(() => undefined);
-    if (!current) throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
-    const owned = await readOwnedTabs();
-    owned[String(tab.id)] = metadata;
-    await writeOwnedTabs(owned);
-    return current;
-  });
+  const sticky = input.sticky === true;
+  let metadata;
+  let refreshed;
+  try {
+    refreshed = await withOwnershipLock(async () => {
+      const current = await chrome.tabs.get(tab.id).catch(() => undefined);
+      if (!current) throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
+      const owned = await readOwnedTabs();
+      const mcpGroupId = typeof input.taskId === "string"
+        ? await assignMcpTaskGroup(tab.id, input.taskId, owned)
+        : undefined;
+      metadata = {
+        tabId: PERSONAL_PREFIX + tab.id,
+        ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
+        lifecycle: typeof input.taskId === "string" ? "task-scoped" : "persistent",
+        ownership: "mcp",
+        purpose: input.purpose ?? targetUrl,
+        reusable: sticky ? false : Boolean(input.reusable),
+        protected: sticky ? true : Boolean(input.protected),
+        sticky,
+        ...(sticky ? { lockedUrl: targetUrl } : {}),
+        ...(Number.isInteger(mcpGroupId) ? { mcpGroupId } : {}),
+        createdAt: now,
+        lastUsedAt: now,
+        requestedUrl: targetUrl,
+      };
+      owned[String(tab.id)] = metadata;
+      await writeOwnedTabs(owned);
+      return current;
+    });
+  } catch (error) {
+    await chrome.tabs.remove(tab.id).catch(() => undefined);
+    throw error;
+  }
   return { tab: toBrowserTab(metadata, refreshed) };
 }
 
@@ -270,6 +289,9 @@ async function navigate(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
   const targetUrl = assertPersonalNavigationTarget(input.url);
+  if (metadata.sticky && metadata.lockedUrl && targetUrl !== metadata.lockedUrl) {
+    throw coded("NAVIGATION_BLOCKED", "The sticky personal browser tab cannot navigate away from its locked URL.");
+  }
   throwIfAborted(signal, "navigate", false);
   await chrome.tabs.update(chromeTabId, { url: targetUrl, active: true });
   try {
@@ -400,6 +422,73 @@ async function sequence(input, signal) {
   return response;
 }
 
+async function screenshot(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "screenshot", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    let clip;
+    if (input.fullPage === true) {
+      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const contentSize = metrics?.cssContentSize ?? metrics?.contentSize;
+      const width = Math.ceil(Number(contentSize?.width));
+      const height = Math.ceil(Number(contentSize?.height));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome did not expose full-page layout metrics.");
+      }
+      if (width * height > MAX_FULL_PAGE_PIXELS) {
+        throw coded("LIMIT_EXCEEDED", "The personal browser page is too large for a bounded full-page screenshot.");
+      }
+      clip = { x: 0, y: 0, width, height, scale: 1 };
+    }
+
+    let data = "";
+    for (const quality of [80, 65, 50]) {
+      throwIfAborted(signal, "screenshot", false);
+      const captured = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+        format: "jpeg",
+        quality,
+        fromSurface: true,
+        captureBeyondViewport: input.fullPage === true,
+        ...(clip ? { clip } : {}),
+      });
+      data = typeof captured?.data === "string" ? captured.data : "";
+      if (data && data.length <= MAX_SCREENSHOT_BASE64_CHARS) break;
+    }
+    if (!data) throw coded("BROWSER_DISCONNECTED", "Chrome returned no screenshot data.");
+    if (data.length > MAX_SCREENSHOT_BASE64_CHARS) {
+      throw coded("LIMIT_EXCEEDED", "The personal browser screenshot exceeds the bounded MCP payload budget.");
+    }
+    throwIfAborted(signal, "screenshot", false);
+    return {
+      tabId: input.tabId,
+      path: "personal://screenshot/" + crypto.randomUUID() + ".jpg",
+      sizeBytes: base64ByteLength(data),
+      mimeType: "image/jpeg",
+      contentBase64: data,
+    };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("screenshot", signal, false);
+    if (error && typeof error.code === "string") throw error;
+    throw coded(
+      "BROWSER_CAPABILITY_UNSUPPORTED",
+      "Personal browser screenshot requires Chrome debugger access for the MCP-owned tab.",
+    );
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+function base64ByteLength(value) {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.floor(value.length * 3 / 4) - padding;
+}
+
 async function goBack(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
@@ -430,7 +519,10 @@ async function goForward(input, signal) {
 
 async function closeTab(input) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
-  await requireOwnedMetadata(chromeTabId);
+  const metadata = await requireOwnedMetadata(chromeTabId);
+  if (metadata.protected || metadata.sticky) {
+    throw coded("TAB_PROTECTED", "The personal browser tab is protected and cannot be closed directly.");
+  }
   await chrome.tabs.remove(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   return { tabId: input.tabId, completed: true };
@@ -441,8 +533,39 @@ async function finishTask(input) {
     const owned = await readOwnedTabs();
     return Object.entries(owned)
       .filter(([, metadata]) => !input.taskId || metadata.taskId === input.taskId)
-      .map(([key, metadata]) => ({ chromeTabId: Number(key), tabId: metadata.tabId }));
+      .map(([key, metadata]) => ({
+        chromeTabId: Number(key),
+        tabId: metadata.tabId,
+        mcpGroupId: metadata.mcpGroupId,
+      }));
   });
+
+  if (input.keepOpen === true) {
+    const groupedTabIds = [];
+    for (const target of targets) {
+      const current = await chrome.tabs.get(target.chromeTabId).catch(() => undefined);
+      if (current && Number.isInteger(target.mcpGroupId) && current.groupId === target.mcpGroupId) {
+        groupedTabIds.push(target.chromeTabId);
+      }
+    }
+    if (groupedTabIds.length > 0) await chrome.tabs.ungroup(groupedTabIds);
+    await withOwnershipLock(async () => {
+      const owned = await readOwnedTabs();
+      for (const target of targets) delete owned[String(target.chromeTabId)];
+      await writeOwnedTabs(owned);
+    });
+    if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+    return {
+      completed: true,
+      taskId: input.taskId,
+      closedTabs: 0,
+      closedTabIds: [],
+      releasedTabs: targets.length,
+      releasedTabIds: targets.map((target) => target.tabId),
+      browserClosed: false,
+    };
+  }
+
   for (const target of targets) {
     await chrome.tabs.remove(target.chromeTabId).catch(() => undefined);
   }
@@ -451,6 +574,7 @@ async function finishTask(input) {
     for (const target of targets) delete owned[String(target.chromeTabId)];
     await writeOwnedTabs(owned);
   });
+  if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
   return {
     completed: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -458,6 +582,26 @@ async function finishTask(input) {
     closedTabIds: targets.map((target) => target.tabId),
     browserClosed: false,
   };
+}
+
+async function assignMcpTaskGroup(chromeTabId, taskId, owned) {
+  const persistedGroupId = Object.values(owned || {})
+    .find((metadata) => metadata?.taskId === taskId && Number.isInteger(metadata?.mcpGroupId))
+    ?.mcpGroupId;
+  const existingGroupId = taskGroups.get(taskId) ?? persistedGroupId;
+  if (Number.isInteger(existingGroupId)) {
+    try {
+      const groupId = await chrome.tabs.group({ tabIds: chromeTabId, groupId: existingGroupId });
+      taskGroups.set(taskId, groupId);
+      return groupId;
+    } catch {
+      taskGroups.delete(taskId);
+    }
+  }
+  const groupId = await chrome.tabs.group({ tabIds: chromeTabId });
+  await chrome.tabGroups.update(groupId, { title: "MCP" });
+  taskGroups.set(taskId, groupId);
+  return groupId;
 }
 
 async function requireOwnedMetadata(chromeTabId) {
@@ -506,8 +650,9 @@ async function writeOwnedTabs(owned) {
 }
 
 function toBrowserTab(metadata, tab) {
+  const { mcpGroupId: _mcpGroupId, ...publicMetadata } = metadata;
   return {
-    ...metadata,
+    ...publicMetadata,
     ...(typeof tab.url === "string" &&
       (tab.url.startsWith("http://") || tab.url.startsWith("https://"))
       ? { url: tab.url }
@@ -560,12 +705,24 @@ function snapshotPage(generation) {
     "input",
     "textarea",
     "select",
+    "summary",
     "[role='button']",
     "[role='link']",
     "[role='textbox']",
+    "[role='checkbox']",
+    "[role='radio']",
+    "[role='combobox']",
+    "[role='listbox']",
+    "[role='option']",
+    "[role='menuitem']",
+    "[role='tab']",
+    "[role='switch']",
+    "[role='slider']",
+    "[role='spinbutton']",
     "[contenteditable='true']",
   ].join(",");
   const refs = [];
+  const refLines = [];
   const elements = Array.from(document.querySelectorAll(selector)).slice(0, 2000);
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
@@ -575,12 +732,19 @@ function snapshotPage(generation) {
     const ref = "p-" + generation + "-" + (refs.length + 1);
     element.setAttribute("data-mcp-v3-ref", ref);
     const role = element.getAttribute("role") || defaultRole(element);
-    const name = accessibleName(element).slice(0, 500);
+    const name = normalizeText(accessibleName(element)).slice(0, 500);
+    const states = semanticStates(element, role);
     refs.push({ ref, role, name });
+    refLines.push(
+      "- " + role +
+      (name ? " " + JSON.stringify(name) : "") +
+      (states.length ? " " + states.map((state) => "[" + state + "]").join(" ") : "") +
+      " [ref=" + ref + "]",
+    );
     if (refs.length >= 1000) break;
   }
   const pageText = (document.body?.innerText || "").slice(0, 180000);
-  const refText = refs.map((item) => "[" + item.ref + "] " + item.role + " " + item.name).join("\\n");
+  const refText = refLines.join("\\n");
   return {
     url: location.href,
     title: document.title || "",
@@ -591,16 +755,62 @@ function snapshotPage(generation) {
   function defaultRole(element) {
     const tag = element.tagName.toLowerCase();
     if (tag === "a") return "link";
-    if (tag === "button") return "button";
-    if (tag === "input" || tag === "textarea") return "textbox";
-    if (tag === "select") return "combobox";
+    if (tag === "button" || tag === "summary") return "button";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return element.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      const type = String(element.getAttribute("type") || "text").toLowerCase();
+      if (["button", "submit", "reset", "image", "file"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "number") return "spinbutton";
+      return "textbox";
+    }
     return "generic";
+  }
+
+  function semanticStates(element, role) {
+    const states = [];
+    if (element.disabled === true || element.getAttribute("aria-disabled") === "true") states.push("disabled");
+    if (element.required === true || element.getAttribute("aria-required") === "true") states.push("required");
+    if (["checkbox", "radio", "switch"].includes(role)) {
+      const ariaChecked = element.getAttribute("aria-checked");
+      const checked = typeof element.checked === "boolean"
+        ? element.checked
+        : ariaChecked === "true"
+          ? true
+          : ariaChecked === "false"
+            ? false
+            : undefined;
+      if (checked !== undefined) states.push(checked ? "checked" : "unchecked");
+    }
+    if (role === "option") {
+      const ariaSelected = element.getAttribute("aria-selected");
+      const selected = typeof element.selected === "boolean"
+        ? element.selected
+        : ariaSelected === "true"
+          ? true
+          : ariaSelected === "false"
+            ? false
+            : undefined;
+      if (selected !== undefined) states.push(selected ? "selected" : "unselected");
+    }
+    const expanded = element.getAttribute("aria-expanded");
+    if (expanded === "true" || expanded === "false") states.push("expanded=" + expanded);
+    const pressed = element.getAttribute("aria-pressed");
+    if (pressed === "true" || pressed === "false" || pressed === "mixed") states.push("pressed=" + pressed);
+    return states;
+  }
+
+  function normalizeText(value) {
+    return String(value || "").replace(/\\s+/gu, " ").trim();
   }
 
   function accessibleName(element) {
     const labelledBy = element.getAttribute("aria-labelledby");
     const labelledByText = labelledBy
-      ? labelledBy.split(/\s+/u)
+      ? labelledBy.split(/\\s+/u)
         .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
         .filter(Boolean)
         .join(" ")

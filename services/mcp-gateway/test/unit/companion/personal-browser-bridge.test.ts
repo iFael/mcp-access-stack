@@ -56,6 +56,7 @@ describe("PersonalBrowserBridge", () => {
       "tabs",
       "scripting",
       "storage",
+      "debugger",
     ]));
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(() => new Script(workerSource)).not.toThrow();
@@ -132,6 +133,39 @@ describe("PersonalBrowserBridge", () => {
       'const BLOCKED_PRIVATE_ORIGINS = new Set(["https://api.private.example.test","https://private.example.test"]);',
     );
     await bridge.close();
+  });
+
+  it("persists personal screenshot bytes returned by the extension", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      extension.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (message.type !== "request" || message.operation !== "screenshot" || !message.id) return;
+        extension.send(JSON.stringify({
+          type: "response",
+          id: message.id,
+          ok: true,
+          result: {
+            tabId: "personal:7",
+            path: "personal://screenshot/test.jpg",
+            sizeBytes: 3,
+            mimeType: "image/jpeg",
+            contentBase64: "YWJj",
+          },
+        }));
+      });
+
+      const result = await bridge.screenshot({ tabId: "personal:7" });
+      expect(result.path).toMatch(/personal-artifacts[\\/]screenshots/u);
+      expect(result.sizeBytes).toBe(3);
+      await expect(readFile(result.path)).resolves.toEqual(Buffer.from("abc"));
+      expect(result).toMatchObject({
+        mimeType: "image/jpeg",
+        contentBase64: "YWJj",
+      });
+    } finally {
+      await close();
+    }
   });
 
   it("requires a compatible hello before activating an authenticated socket", async () => {
