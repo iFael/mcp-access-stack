@@ -5,6 +5,7 @@ import { describe, expect, it, jest } from "@jest/globals";
 import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
+  browserFinishTaskInputSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserUploadFileSchema,
@@ -31,6 +32,13 @@ describe("browser mode contract", () => {
       tabId: "tab-1",
       url: "https://chatgpt.com/",
       browserMode: "personal",
+    }).success).toBe(false);
+    expect(browserFinishTaskInputSchema.safeParse({
+      taskId: "task-1",
+      keepOpen: true,
+    }).success).toBe(true);
+    expect(browserFinishTaskInputSchema.safeParse({
+      keepOpen: true,
     }).success).toBe(false);
   });
 });
@@ -224,6 +232,37 @@ describe("registerBrowserTools", () => {
 
     expect(executor.tabs).toHaveBeenNthCalledWith(1, {});
     expect(executor.tabs).toHaveBeenNthCalledWith(2, {});
+  });
+
+  it("returns screenshot bytes as MCP image content without exposing base64 in structured content", async () => {
+    const executor = mockExecutor();
+    executor.screenshot = jest.fn(async ({ tabId }) => ({
+      tabId,
+      path: "C:/private/personal-screenshot.jpg",
+      sizeBytes: 3,
+      mimeType: "image/jpeg",
+      contentBase64: "YWJj",
+    })) as unknown as BrowserExecutor["screenshot"];
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerBrowserTools(server, executor);
+
+    const result = await callTool(server, "browser_screenshot", {
+      tabId: "personal:42",
+    });
+
+    expect(result.structuredContent).toEqual({
+      tabId: "personal:42",
+      path: "C:/private/personal-screenshot.jpg",
+      sizeBytes: 3,
+    });
+    expect(result.structuredContent).not.toHaveProperty("contentBase64");
+    expect(result.structuredContent).not.toHaveProperty("mimeType");
+    expect(result.content).toEqual(expect.arrayContaining([
+      { type: "image", data: "YWJj", mimeType: "image/jpeg" },
+    ]));
   });
 
   it("routes private-site confirmation through the typed executor", async () => {

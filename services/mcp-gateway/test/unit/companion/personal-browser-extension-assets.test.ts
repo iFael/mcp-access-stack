@@ -11,10 +11,21 @@ describe("personal browser extension assets", () => {
       3361,
       ["https://private.example.test"],
     );
-    const parsedManifest = JSON.parse(manifest) as { version: string };
-    expect(parsedManifest.version).toBe("0.2.0");
+    const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
+    expect(parsedManifest.version).toBe("0.3.0");
+    expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
+    expect(serviceWorker).toContain('"screenshot"');
+    expect(serviceWorker).toContain('"tabGroups"');
+    expect(serviceWorker).toContain('chrome.tabs.group({ tabIds: chromeTabId');
+    expect(serviceWorker).toContain('chrome.tabs.ungroup(groupedTabIds)');
+    expect(serviceWorker).toContain('await requireOwnedMetadata(chromeTabId);');
+    expect(serviceWorker).toContain('chrome.debugger.attach(target, "1.3")');
+    expect(serviceWorker).toContain('"Page.captureScreenshot"');
+    expect(serviceWorker).toContain('chrome.debugger.detach(target)');
+    expect(serviceWorker).toContain('input.keepOpen === true');
+    expect(serviceWorker).toContain('throw coded("TAB_PROTECTED"');
 
     const context = vm.createContext({ URL, Set, String, Number, Error });
     vm.runInContext(
@@ -51,6 +62,36 @@ describe("personal browser extension assets", () => {
     }
   });
 
+  it("keeps private ownership metadata out of public tab responses", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ String });
+    const toBrowserTab = vm.runInContext(
+      `(${extractFunction(serviceWorker, "toBrowserTab")})`,
+      context,
+    ) as (metadata: Record<string, unknown>, tab: Record<string, unknown>) => Record<string, unknown>;
+
+    const result = toBrowserTab(
+      {
+        tabId: "personal:41",
+        sticky: true,
+        protected: true,
+        mcpGroupId: 17,
+        lockedUrl: "https://example.com/locked",
+      },
+      { url: "https://example.com/current", title: "Current" },
+    );
+
+    expect(result).toMatchObject({
+      tabId: "personal:41",
+      sticky: true,
+      protected: true,
+      url: "https://example.com/current",
+      title: "Current",
+    });
+    expect(result).not.toHaveProperty("mcpGroupId");
+    expect(result).not.toHaveProperty("lockedUrl");
+  });
+
   it("never exposes a password input value as an accessible name", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const password = fakeElement({
@@ -78,6 +119,31 @@ describe("personal browser extension assets", () => {
       name: "Password",
     });
     expect(JSON.stringify(result)).not.toContain("fictional-super-secret");
+  });
+
+  it("emits richer safe DOM semantics without exposing input values", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const checkbox = fakeElement({
+      tagName: "INPUT",
+      attributes: { type: "checkbox", "aria-label": "Remember me" },
+      checked: true,
+      required: true,
+      value: "must-not-leak",
+    });
+    const dom = createDom([checkbox]);
+    const snapshotPage = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`,
+      dom.context,
+    ) as (generation: string) => {
+      content: string;
+      refs: Array<{ ref: string; role: string; name: string }>;
+    };
+
+    const result = snapshotPage("generation-semantic");
+
+    expect(result.refs[0]).toMatchObject({ role: "checkbox", name: "Remember me" });
+    expect(result.content).toContain('checkbox "Remember me" [required] [checked] [ref=p-generation-semantic-1]');
+    expect(JSON.stringify(result)).not.toContain("must-not-leak");
   });
 
   it("invalidates refs from an older snapshot generation", () => {
@@ -111,6 +177,76 @@ describe("personal browser extension assets", () => {
     expect(first.clickCount).toBe(0);
     expect(clickRef(currentRef)).toBe(true);
     expect(second.clickCount).toBe(1);
+  });
+
+  it("groups only explicit MCP-created tab ids for the same task", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const groupCalls: Array<Record<string, unknown>> = [];
+    const updates: Array<{ groupId: number; value: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      Map,
+      Number,
+      chrome: {
+        tabs: {
+          group: async (input: Record<string, unknown>) => {
+            groupCalls.push(input);
+            return typeof input.groupId === "number" ? input.groupId : 17;
+          },
+        },
+        tabGroups: {
+          update: async (groupId: number, value: Record<string, unknown>) => {
+            updates.push({ groupId, value });
+          },
+        },
+      },
+    });
+    vm.runInContext("const taskGroups = new Map();", context);
+    const assignMcpTaskGroup = vm.runInContext(
+      `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
+      context,
+    ) as (tabId: number, taskId: string, owned: Record<string, unknown>) => Promise<number>;
+
+    const owned: Record<string, unknown> = {};
+    await expect(assignMcpTaskGroup(41, "task-a", owned)).resolves.toBe(17);
+    owned["41"] = { taskId: "task-a", mcpGroupId: 17 };
+    await expect(assignMcpTaskGroup(42, "task-a", owned)).resolves.toBe(17);
+
+    expect(groupCalls).toEqual([
+      { tabIds: 41 },
+      { tabIds: 42, groupId: 17 },
+    ]);
+    expect(updates).toEqual([{ groupId: 17, value: { title: "MCP" } }]);
+  });
+
+  it("recovers a task group from persisted MCP-owned metadata after worker state loss", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const groupCalls: Array<Record<string, unknown>> = [];
+    const context = vm.createContext({
+      Map,
+      Number,
+      Object,
+      chrome: {
+        tabs: {
+          group: async (input: Record<string, unknown>) => {
+            groupCalls.push(input);
+            return Number(input.groupId);
+          },
+        },
+        tabGroups: { update: async () => undefined },
+      },
+    });
+    vm.runInContext("const taskGroups = new Map();", context);
+    const assignMcpTaskGroup = vm.runInContext(
+      `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
+      context,
+    ) as (tabId: number, taskId: string, owned: Record<string, unknown>) => Promise<number>;
+
+    await expect(assignMcpTaskGroup(52, "task-recovered", {
+      "51": { taskId: "task-recovered", mcpGroupId: 23 },
+      "90": { taskId: "other-task", mcpGroupId: 99 },
+    })).resolves.toBe(23);
+
+    expect(groupCalls).toEqual([{ tabIds: 52, groupId: 23 }]);
   });
 
   it("serializes mutations that share the same queue key", async () => {
@@ -203,9 +339,12 @@ function deferred<T>() {
 }
 
 function extractFunction(source: string, name: string): string {
-  const start = source.indexOf(`function ${name}(`);
-  if (start < 0) throw new Error(`Function not found: ${name}`);
-  const brace = source.indexOf("{", start);
+  const functionStart = source.indexOf(`function ${name}(`);
+  if (functionStart < 0) throw new Error(`Function not found: ${name}`);
+  const start = source.slice(Math.max(0, functionStart - 6), functionStart) === "async "
+    ? functionStart - 6
+    : functionStart;
+  const brace = source.indexOf("{", functionStart);
   if (brace < 0) throw new Error(`Function body not found: ${name}`);
   let depth = 0;
   for (let index = brace; index < source.length; index += 1) {
@@ -267,6 +406,11 @@ function fakeElement(options: {
   value?: string;
   attributes?: Record<string, string>;
   labels?: Array<{ innerText?: string; textContent?: string }>;
+  checked?: boolean;
+  disabled?: boolean;
+  required?: boolean;
+  selected?: boolean;
+  multiple?: boolean;
 }) {
   const attributes = new Map(Object.entries(options.attributes ?? {}));
   let clickCount = 0;
@@ -276,6 +420,11 @@ function fakeElement(options: {
     textContent: options.text ?? "",
     value: options.value ?? "",
     labels: options.labels ?? [],
+    checked: options.checked,
+    disabled: options.disabled,
+    required: options.required,
+    selected: options.selected,
+    multiple: options.multiple,
     get clickCount() {
       return clickCount;
     },

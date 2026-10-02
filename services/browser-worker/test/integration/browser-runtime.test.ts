@@ -487,6 +487,29 @@ describe("BrowserRuntime Playwright layer", () => {
     expect(fake.connectCount).toBe(2);
   });
 
+  it("rejects keepOpen in managed mode without finalizing the task", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    fake.setTabs([]);
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+    const opened = await runtime.open({ url: "https://example.com/keep-open" });
+
+    await expect(runtime.finishTask({
+      taskId: opened.tab.taskId,
+      keepOpen: true,
+    })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    await expect(runtime.tabs({ taskId: opened.tab.taskId })).resolves.toMatchObject({
+      tabs: [expect.objectContaining({ tabId: opened.tab.tabId })],
+    });
+
+    await expect(runtime.finishTask({ taskId: opened.tab.taskId })).resolves.toMatchObject({
+      completed: true,
+      closedTabs: 1,
+    });
+  });
+
   it("closes the dedicated browser when Chromium leaves one unclaimed blank page after the task tab closes", async () => {
     const directory = await makeTemporaryDirectory();
     const config = makeConfig(directory);

@@ -253,7 +253,11 @@ export function registerBrowserTools(
                 (context) => definition.run(parsedInput, context),
               )
             : await definition.run(parsedInput);
-          const outputResult = definition.output.safeParse(executed);
+          const structuredExecuted = browserStructuredOutput(
+            definition.name,
+            executed,
+          );
+          const outputResult = definition.output.safeParse(structuredExecuted);
           if (!outputResult.success) {
             throw new AppError(
               "RELAY_PROTOCOL_ERROR",
@@ -261,8 +265,16 @@ export function registerBrowserTools(
             );
           }
           const result = outputResult.data as Record<string, unknown>;
+          const content: CallToolResult["content"] = [
+            { type: "text", text: summarize(definition.name, result) },
+          ];
+          const screenshotImage = browserScreenshotImageContent(
+            definition.name,
+            executed,
+          );
+          if (screenshotImage) content.push(screenshotImage);
           return {
-            content: [{ type: "text", text: summarize(definition.name, result) }],
+            content,
             structuredContent: result,
           };
         } catch (error) {
@@ -284,6 +296,35 @@ export function registerBrowserTools(
       },
     );
   }
+}
+
+function browserStructuredOutput(
+  name: BrowserToolName,
+  executed: unknown,
+): unknown {
+  if (name !== "browser_screenshot" || typeof executed !== "object" || executed === null) {
+    return executed;
+  }
+  const { mimeType: _mimeType, contentBase64: _contentBase64, ...publicResult } =
+    executed as Record<string, unknown>;
+  return publicResult;
+}
+
+function browserScreenshotImageContent(
+  name: BrowserToolName,
+  executed: unknown,
+): { type: "image"; data: string; mimeType: string } | undefined {
+  if (name !== "browser_screenshot" || typeof executed !== "object" || executed === null) {
+    return undefined;
+  }
+  const candidate = executed as Record<string, unknown>;
+  const data = candidate.contentBase64;
+  const mimeType = candidate.mimeType;
+  if (typeof data !== "string" || data.length === 0 || data.length > 3_200_000) return undefined;
+  if (mimeType !== "image/png" && mimeType !== "image/jpeg" && mimeType !== "image/webp") {
+    return undefined;
+  }
+  return { type: "image", data, mimeType };
 }
 
 function definitions(
@@ -391,7 +432,7 @@ function definitions(
       () => e.navigatePath!(assumeParsed(v)),
       (activeContext) => e.navigatePath!(assumeParsed(v), activeContext),
     )),
-    d("browser_screenshot", "Stores a screenshot in private runtime storage.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_screenshot", "Captures an MCP-owned tab, stores it in private runtime storage, and returns image content to the model when the active browser backend can provide it.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.screenshot(assumeParsed(v)),
       (activeContext) => e.screenshot(assumeParsed(v), activeContext),
@@ -406,12 +447,12 @@ function definitions(
       () => e.goForward(assumeParsed(v)),
       (activeContext) => e.goForward(assumeParsed(v), activeContext),
     )),
-    d("browser_close_tab", "Closes only an unprotected MCP-owned tab.", c.browserCloseTabInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_close_tab", "Closes only an unprotected, non-sticky MCP-owned tab. Task finalization is a separate lifecycle operation.", c.browserCloseTabInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.closeTab(assumeParsed(v)),
       (activeContext) => e.closeTab(assumeParsed(v), activeContext),
     ), true),
-    d("browser_finish_task", "Call when browser work is complete: closes every MCP tab for the task and closes the dedicated browser when no other active task needs it, including residual unclaimed blank pages. Do not call this for a temporary pause.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_finish_task", "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user; managed mode rejects keepOpen. protected/sticky affect browser_close_tab, not default task finalization.", c.browserFinishTaskInputSchema, c.browserFinishTaskResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.finishTask(assumeParsed(v)),
       (activeContext) => e.finishTask(assumeParsed(v), activeContext),

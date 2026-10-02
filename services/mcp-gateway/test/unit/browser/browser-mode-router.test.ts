@@ -60,8 +60,8 @@ function personalExecutor(connected = true): PersonalBrowserExecutor {
       browser: "chrome" as const,
       profile: "personal" as const,
       protocolVersion: 1,
-      extensionVersion: connected ? "0.2.0" : undefined,
-      capabilities: ["tabs", "open", "snapshot"],
+      extensionVersion: connected ? "0.3.0" : undefined,
+      capabilities: ["tabs", "open", "snapshot", "screenshot", "tabGroups"],
     }),
     open: jest.fn(async (input: Parameters<BrowserExecutor["open"]>[0]) => ({
       tab: {
@@ -109,8 +109,8 @@ describe("BrowserModeRouter", () => {
         browser: "chrome",
         profile: "personal",
         protocolVersion: 1,
-        extensionVersion: "0.2.0",
-        capabilities: ["tabs", "open", "snapshot"],
+        extensionVersion: "0.3.0",
+        capabilities: ["tabs", "open", "snapshot", "screenshot", "tabGroups"],
       },
     });
   });
@@ -206,6 +206,59 @@ describe("BrowserModeRouter", () => {
     });
     expect(personal.finishTask).toHaveBeenCalledTimes(1);
     expect(managed.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases explicit personal task tabs when keepOpen is requested", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    personal.finishTask = jest.fn(async ({ taskId, keepOpen }) => ({
+      completed: true as const,
+      ...(taskId ? { taskId } : {}),
+      closedTabs: 0,
+      closedTabIds: [],
+      ...(keepOpen
+        ? { releasedTabs: 1, releasedTabIds: ["personal:42"] }
+        : {}),
+      browserClosed: false,
+    }));
+    const router = new BrowserModeRouter(managed, personal);
+
+    await router.open({
+      taskId: "task-keep-open",
+      url: "https://chatgpt.com/",
+      browserMode: "personal",
+    });
+    await expect(router.finishTask({
+      taskId: "task-keep-open",
+      keepOpen: true,
+    })).resolves.toMatchObject({
+      completed: true,
+      closedTabs: 0,
+      releasedTabs: 1,
+      releasedTabIds: ["personal:42"],
+    });
+    expect(personal.finishTask).toHaveBeenCalledWith({
+      taskId: "task-keep-open",
+      keepOpen: true,
+    });
+  });
+
+  it("rejects keepOpen for managed tasks", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    const router = new BrowserModeRouter(managed, personal);
+
+    await router.open({
+      taskId: "task-managed",
+      url: "https://example.test/",
+    });
+    await expect(router.finishTask({
+      taskId: "task-managed",
+      keepOpen: true,
+    })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    expect(managed.finishTask).not.toHaveBeenCalled();
   });
 
   it("fails closed when personal mode is requested without a connected extension", async () => {
