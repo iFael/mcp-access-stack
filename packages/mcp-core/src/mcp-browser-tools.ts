@@ -222,15 +222,7 @@ export function registerBrowserTools(
         title: definition.name,
         description: definition.description,
         inputSchema: withBrowserRuntimeSelectors(definition.input),
-        // browser_screenshot intentionally omits a published outputSchema. ChatGPT
-        // Code Mode materializes schema-backed MCP tools as structured-only
-        // wrappers, which hides CallToolResult.content image blocks. The handler
-        // still validates structuredContent with definition.output below, while
-        // omitting only the public descriptor lets the raw MCP image content
-        // remain available to the model/tool orchestrator.
-        ...(definition.name === "browser_screenshot"
-          ? {}
-          : { outputSchema: definition.output }),
+        outputSchema: definition.output,
         annotations: {
           readOnlyHint: definition.readOnly,
           destructiveHint: definition.destructive ?? false,
@@ -315,17 +307,20 @@ function browserStructuredOutput(
   }
   const { mimeType: _mimeType, contentBase64: _contentBase64, ...publicResult } =
     executed as Record<string, unknown>;
-  return publicResult;
+  const imageContent = browserScreenshotImageContent(name, executed);
+  return imageContent ? { ...publicResult, imageContent } : publicResult;
 }
 
 function browserScreenshotImageContent(
   name: BrowserToolName,
   executed: unknown,
-): { type: "image"; data: string; mimeType: string } | undefined {
+): c.BrowserScreenshotImageContent | undefined {
   if (name !== "browser_screenshot" || typeof executed !== "object" || executed === null) {
     return undefined;
   }
   const candidate = executed as Record<string, unknown>;
+  const existing = c.browserScreenshotImageContentSchema.safeParse(candidate.imageContent);
+  if (existing.success) return existing.data;
   const data = candidate.contentBase64;
   const mimeType = candidate.mimeType;
   if (typeof data !== "string" || data.length === 0 || data.length > 3_200_000) return undefined;
@@ -440,7 +435,7 @@ function definitions(
       () => e.navigatePath!(assumeParsed(v)),
       (activeContext) => e.navigatePath!(assumeParsed(v), activeContext),
     )),
-    d("browser_screenshot", "Captures an MCP-owned tab, stores it in private runtime storage, and returns image content to the model when the active browser backend can provide it.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_screenshot", "Captures an MCP-owned tab and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.screenshot(assumeParsed(v)),
       (activeContext) => e.screenshot(assumeParsed(v), activeContext),

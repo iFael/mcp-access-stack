@@ -73,11 +73,7 @@ describe("embedded gateway HTTP surface", () => {
 
       for (const tool of body.result.tools) {
         expect(typeof tool.inputSchema).toBe("object");
-        if (tool.name === "browser_screenshot") {
-          expect(tool.outputSchema).toBeUndefined();
-        } else {
-          expect(typeof tool.outputSchema).toBe("object");
-        }
+        expect(typeof tool.outputSchema).toBe("object");
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({
           securitySchemes: [{ type: "noauth" }],

@@ -637,11 +637,20 @@ export const browserScreenshotInputSchema = z
   })
   .strict();
 export type BrowserScreenshotInput = z.infer<typeof browserScreenshotInputSchema>;
+export const browserScreenshotImageContentSchema = z
+  .object({
+    type: z.literal("image"),
+    data: z.string().min(1).max(3_200_000),
+    mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  })
+  .strict();
+export type BrowserScreenshotImageContent = z.infer<typeof browserScreenshotImageContentSchema>;
 export const browserScreenshotResultSchema = z
   .object({
     tabId: tabIdSchema,
     path: z.string().min(1).max(4_096),
     sizeBytes: z.number().int().nonnegative(),
+    imageContent: browserScreenshotImageContentSchema.optional(),
   })
   .strict();
 export type BrowserScreenshotResult = z.infer<typeof browserScreenshotResultSchema>;
