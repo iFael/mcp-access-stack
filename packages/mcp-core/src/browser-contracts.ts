@@ -172,6 +172,17 @@ export const browserStatusResultSchema = z
       })
       .strict()
       .optional(),
+    personal: z
+      .object({
+        connected: z.boolean(),
+        browser: z.literal("chrome"),
+        profile: z.literal("personal"),
+        protocolVersion: z.number().int().positive(),
+        extensionVersion: z.string().min(1).max(100).optional(),
+        capabilities: z.array(z.string().min(1).max(64)).max(64),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type BrowserStatusResult = z.infer<typeof browserStatusResultSchema>;

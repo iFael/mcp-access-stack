@@ -10,11 +10,19 @@ import {
   type OperationContext,
 } from "@vs-code-gpt/shared";
 import WebSocket, { WebSocketServer } from "ws";
-import type { PersonalBrowserExecutor } from "../browser/browser-mode-router.js";
-import { buildPersonalBrowserExtensionAssets } from "./personal-browser-extension-assets.js";
+import type {
+  PersonalBrowserConnectionInfo,
+  PersonalBrowserExecutor,
+} from "../browser/browser-mode-router.js";
+import {
+  buildPersonalBrowserExtensionAssets,
+  PERSONAL_BROWSER_CAPABILITIES,
+  PERSONAL_BROWSER_PROTOCOL_VERSION,
+} from "./personal-browser-extension-assets.js";
 
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
+const HANDSHAKE_TIMEOUT_MS = 5_000;
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
 const ERROR_CODES = new Set<string>(errorCodes);
@@ -42,6 +50,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
+  private peerInfo: PersonalBrowserConnectionInfo | undefined;
   private server: WebSocketServer | undefined;
   private token = "";
   private closed = false;
@@ -64,13 +73,31 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   isConnected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
+    return this.socket?.readyState === WebSocket.OPEN && this.peerInfo !== undefined;
+  }
+
+  connectionInfo(): PersonalBrowserConnectionInfo {
+    if (this.isConnected() && this.peerInfo) {
+      return {
+        ...this.peerInfo,
+        capabilities: [...this.peerInfo.capabilities],
+      };
+    }
+    return {
+      connected: false,
+      browser: "chrome",
+      profile: "personal",
+      protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+      capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+    };
   }
 
   async close(): Promise<void> {
     this.closed = true;
     const socket = this.socket;
     this.socket = undefined;
+    this.socketGeneration = 0;
+    this.peerInfo = undefined;
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -270,7 +297,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const tokenPath = path.join(personalRoot, "bridge-token.txt");
     await mkdir(this.extensionDirectory, { recursive: true });
     this.token = await readOrCreateToken(tokenPath);
-    const assets = buildPersonalBrowserExtensionAssets(this.token, this.port);
+    const blockedPrivateOrigins = await readPrivateSiteOrigins(this.options.stateRoot);
+    const assets = buildPersonalBrowserExtensionAssets(
+      this.token,
+      this.port,
+      blockedPrivateOrigins,
+    );
     await Promise.all([
       writeFile(
         path.join(this.extensionDirectory, "manifest.json"),
@@ -298,36 +330,81 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         return;
       }
       const generation = ++this.nextConnectionGeneration;
-      const previous = this.socket;
-      this.socket = socket;
-      this.socketGeneration = generation;
-      if (previous && previous !== socket && previous.readyState < WebSocket.CLOSING) {
-        previous.close(4000, "personal browser connection replaced");
-      }
-      this.options.log?.({
-        event: "mcp_v3_personal_browser_connected",
-        port: this.port,
-        generation,
-      });
+      let activated = false;
+      const handshakeTimeout = setTimeout(() => {
+        if (!activated && socket.readyState < WebSocket.CLOSING) {
+          socket.close(1008, "personal browser handshake timeout");
+        }
+      }, HANDSHAKE_TIMEOUT_MS);
+      handshakeTimeout.unref();
+
       socket.on("message", (data, isBinary) => {
         if (isBinary) return;
-        this.handleMessage(socket, generation, data.toString());
+        const raw = data.toString();
+        if (!activated) {
+          const peerInfo = parsePersonalBrowserHello(raw);
+          if (!peerInfo) {
+            clearTimeout(handshakeTimeout);
+            socket.close(1008, "incompatible personal browser extension");
+            return;
+          }
+          activated = true;
+          clearTimeout(handshakeTimeout);
+          const previous = this.socket;
+          const previousGeneration = this.socketGeneration;
+          this.socket = socket;
+          this.socketGeneration = generation;
+          this.peerInfo = peerInfo;
+          if (previous && previous !== socket) {
+            this.rejectPendingForGeneration(
+              previousGeneration,
+              new AppError(
+                "BROWSER_DISCONNECTED",
+                "The MCP V3 personal Chrome extension connection was replaced.",
+              ),
+            );
+            if (previous.readyState < WebSocket.CLOSING) {
+              previous.close(4000, "personal browser connection replaced");
+            }
+          }
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+              type: "hello-ack",
+              protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+            }));
+          }
+          this.options.log?.({
+            event: "mcp_v3_personal_browser_connected",
+            port: this.port,
+            generation,
+            protocolVersion: peerInfo.protocolVersion,
+            extensionVersion: peerInfo.extensionVersion,
+            capabilities: peerInfo.capabilities,
+          });
+          return;
+        }
+        if (this.socket !== socket || this.socketGeneration !== generation) return;
+        this.handleMessage(socket, generation, raw);
       });
       socket.once("close", () => {
-        if (this.socket === socket) {
+        clearTimeout(handshakeTimeout);
+        const wasActive = this.socket === socket;
+        if (wasActive) {
           this.socket = undefined;
           this.socketGeneration = 0;
+          this.peerInfo = undefined;
+          this.rejectPendingForGeneration(
+            generation,
+            new AppError(
+              "BROWSER_DISCONNECTED",
+              "The MCP V3 personal Chrome extension disconnected.",
+            ),
+          );
         }
-        this.rejectPendingForGeneration(
-          generation,
-          new AppError(
-            "BROWSER_DISCONNECTED",
-            "The MCP V3 personal Chrome extension disconnected.",
-          ),
-        );
         this.options.log?.({
           event: "mcp_v3_personal_browser_disconnected",
           generation,
+          activated: wasActive,
         });
       });
       socket.on("error", () => undefined);
@@ -414,13 +491,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): Promise<ReturnType<(typeof browserOperationResultSchemas)[T]["parse"]>> {
     const socket = this.socket;
     const generation = this.socketGeneration;
-    if (!socket || socket.readyState !== WebSocket.OPEN || generation === 0) {
+    const peerInfo = this.peerInfo;
+    if (!socket || socket.readyState !== WebSocket.OPEN || generation === 0 || !peerInfo) {
       return Promise.reject(
         new AppError(
           "BROWSER_WORKER_UNAVAILABLE",
           "Personal browser mode requires the MCP V3 Chrome extension to be loaded and connected.",
         ),
       );
+    }
+    if (!peerInfo.capabilities.includes(operation)) {
+      return Promise.reject(unsupported(`browser_${operation}`));
     }
     if (context?.signal?.aborted) {
       return Promise.reject(
@@ -535,6 +616,106 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       pending.reject(error);
     }
   }
+}
+
+function parsePersonalBrowserHello(raw: string): PersonalBrowserConnectionInfo | undefined {
+  if (Buffer.byteLength(raw, "utf8") > MAX_PAYLOAD_BYTES) return undefined;
+  let message: unknown;
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(message) || message.type !== "hello") return undefined;
+  if (message.protocolVersion !== PERSONAL_BROWSER_PROTOCOL_VERSION) return undefined;
+  if (message.browser !== "chrome" || message.profile !== "personal") return undefined;
+  if (typeof message.extensionVersion !== "string" ||
+      message.extensionVersion.length < 1 || message.extensionVersion.length > 100) {
+    return undefined;
+  }
+  if (!Array.isArray(message.capabilities) || message.capabilities.length > 64) return undefined;
+  const capabilities = message.capabilities.filter(
+    (value): value is string => typeof value === "string" && value.length > 0 && value.length <= 64,
+  );
+  if (capabilities.length !== message.capabilities.length) return undefined;
+  const uniqueCapabilities = new Set(capabilities);
+  if (uniqueCapabilities.size !== capabilities.length) return undefined;
+  const expected = new Set<string>(PERSONAL_BROWSER_CAPABILITIES);
+  if (uniqueCapabilities.size !== expected.size ||
+      [...uniqueCapabilities].some((capability) => !expected.has(capability))) {
+    return undefined;
+  }
+  return {
+    connected: true,
+    browser: "chrome",
+    profile: "personal",
+    protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+    extensionVersion: message.extensionVersion,
+    capabilities: [...capabilities],
+  };
+}
+
+async function readPrivateSiteOrigins(stateRoot: string): Promise<string[]> {
+  const policyPath = path.join(
+    path.resolve(stateRoot),
+    "browser",
+    "private",
+    "site-policies.json",
+  );
+  let raw: string;
+  try {
+    raw = await readFile(policyPath, "utf8");
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return [];
+    throw new AppError(
+      "EXECUTION_STATE_INVALID",
+      "Unable to read Browser private-site policies for personal mode.",
+      { cause: error },
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new AppError(
+      "EXECUTION_STATE_INVALID",
+      "Browser private-site policies contain invalid JSON.",
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new AppError(
+      "EXECUTION_STATE_INVALID",
+      "Browser private-site policies must be an array.",
+    );
+  }
+
+  const origins = new Set<string>();
+  const addOrigin = (value: unknown) => {
+    if (typeof value !== "string") return;
+    try {
+      origins.add(new URL(value).origin);
+    } catch {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Browser private-site policy contains an invalid URL.",
+      );
+    }
+  };
+  for (const policy of parsed) {
+    if (!isRecord(policy)) {
+      throw new AppError(
+        "EXECUTION_STATE_INVALID",
+        "Browser private-site policy entry must be an object.",
+      );
+    }
+    addOrigin(policy.entryUrl);
+    if (Array.isArray(policy.allowedOrigins)) {
+      for (const origin of policy.allowedOrigins) addOrigin(origin);
+    }
+  }
+  return [...origins].sort();
 }
 
 async function readOrCreateToken(tokenPath: string): Promise<string> {

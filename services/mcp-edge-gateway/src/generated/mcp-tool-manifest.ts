@@ -12154,7 +12154,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Returns the persistent direct Playwright engine status and capabilities.",
+    "description": "Returns managed Browser Worker status and capabilities, plus connected personal Chrome provider details when available.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12282,6 +12282,49 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "conflicts",
             "evictions",
             "expirations"
+          ],
+          "type": "object"
+        },
+        "personal": {
+          "additionalProperties": false,
+          "properties": {
+            "browser": {
+              "const": "chrome",
+              "type": "string"
+            },
+            "capabilities": {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "connected": {
+              "type": "boolean"
+            },
+            "extensionVersion": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "profile": {
+              "const": "personal",
+              "type": "string"
+            },
+            "protocolVersion": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "connected",
+            "browser",
+            "profile",
+            "protocolVersion",
+            "capabilities"
           ],
           "type": "object"
         },
@@ -12554,6 +12597,49 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "conflicts",
             "evictions",
             "expirations"
+          ],
+          "type": "object"
+        },
+        "personal": {
+          "additionalProperties": false,
+          "properties": {
+            "browser": {
+              "const": "chrome",
+              "type": "string"
+            },
+            "capabilities": {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "connected": {
+              "type": "boolean"
+            },
+            "extensionVersion": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "profile": {
+              "const": "personal",
+              "type": "string"
+            },
+            "protocolVersion": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "connected",
+            "browser",
+            "profile",
+            "protocolVersion",
+            "capabilities"
           ],
           "type": "object"
         },
@@ -20476,13 +20562,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "dfe348e3fc22fe5b38e6034b9152b028b77849e7cc4afcbb7c3ef12672c82789",
-  "serverVersion": "0.4.0-catalog.cdfe348e3fc22.s8b73637247cd",
+  "contractRevision": "52773d55e477a77d4e155d20c32b492aced138e73d166c974d5fad0139019f9e",
+  "serverVersion": "0.4.0-catalog.c52773d55e477.s8b73637247cd",
   "toolCount": 91,
   "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cdfe348e3fc22.s8b73637247cd"
+  "version": "0.4.0-catalog.c52773d55e477.s8b73637247cd"
 } as const;

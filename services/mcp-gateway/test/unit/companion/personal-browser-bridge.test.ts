@@ -1,11 +1,16 @@
 import { createServer } from "node:net";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Script } from "node:vm";
 import { afterEach, describe, expect, it } from "@jest/globals";
 import WebSocket from "ws";
 import { PersonalBrowserBridge } from "../../../src/companion/personal-browser-bridge.js";
+import {
+  PERSONAL_BROWSER_CAPABILITIES,
+  PERSONAL_BROWSER_EXTENSION_VERSION,
+  PERSONAL_BROWSER_PROTOCOL_VERSION,
+} from "../../../src/companion/personal-browser-extension-assets.js";
 
 const temporaryRoots: string[] = [];
 
@@ -65,14 +70,16 @@ describe("PersonalBrowserBridge", () => {
     expect(rejectedCode).toBe(1008);
     expect(bridge.isConnected()).toBe(false);
 
-    const extension = new WebSocket(
-      `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token!)}`,
-    );
-    await new Promise<void>((resolve, reject) => {
-      extension.once("open", () => resolve());
-      extension.once("error", reject);
-    });
+    const extension = await connectExtension(port, token!);
     expect(bridge.isConnected()).toBe(true);
+    expect(bridge.connectionInfo()).toMatchObject({
+      connected: true,
+      browser: "chrome",
+      profile: "personal",
+      protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+      extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+      capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+    });
 
     extension.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
@@ -94,6 +101,74 @@ describe("PersonalBrowserBridge", () => {
 
     extension.close();
     await new Promise<void>((resolve) => extension.once("close", () => resolve()));
+    await bridge.close();
+  });
+
+  it("materializes configured private-site origins into the personal denylist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const privateDirectory = path.join(root, "browser", "private");
+    await mkdir(privateDirectory, { recursive: true });
+    await writeFile(
+      path.join(privateDirectory, "site-policies.json"),
+      JSON.stringify([{
+        siteId: "private-test",
+        entryUrl: "https://private.example.test/app",
+        allowedOrigins: [
+          "https://private.example.test",
+          "https://api.private.example.test",
+        ],
+      }]),
+      "utf8",
+    );
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const workerSource = await readFile(
+      path.join(root, "browser", "personal-extension", "service-worker.js"),
+      "utf8",
+    );
+
+    expect(workerSource).toContain(
+      'const BLOCKED_PRIVATE_ORIGINS = new Set(["https://api.private.example.test","https://private.example.test"]);',
+    );
+    await bridge.close();
+  });
+
+  it("requires a compatible hello before activating an authenticated socket", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const workerSource = await readFile(
+      path.join(root, "browser", "personal-extension", "service-worker.js"),
+      "utf8",
+    );
+    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
+    if (!token) throw new Error("Personal browser token was not materialized.");
+
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", () => resolve());
+      socket.once("error", reject);
+    });
+    expect(bridge.isConnected()).toBe(false);
+
+    const closed = new Promise<number>((resolve) => {
+      socket.once("close", (code) => resolve(code));
+    });
+    socket.send(JSON.stringify({
+      type: "hello",
+      protocolVersion: 999,
+      extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+      browser: "chrome",
+      profile: "personal",
+      capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+    }));
+
+    await expect(closed).resolves.toBe(1008);
+    expect(bridge.isConnected()).toBe(false);
     await bridge.close();
   });
 
@@ -260,6 +335,19 @@ async function connectExtension(port: number, token: string): Promise<WebSocket>
     extension.once("open", () => resolve());
     extension.once("error", reject);
   });
+  const acknowledged = nextWireMessage(
+    extension,
+    (message) => message.type === "hello-ack",
+  );
+  extension.send(JSON.stringify({
+    type: "hello",
+    protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+    extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+    browser: "chrome",
+    profile: "personal",
+    capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+  }));
+  await acknowledged;
   return extension;
 }
 

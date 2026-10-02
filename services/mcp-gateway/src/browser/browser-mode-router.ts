@@ -1,7 +1,17 @@
 import { AppError, type BrowserExecutor } from "@vs-code-gpt/shared";
 
+export interface PersonalBrowserConnectionInfo {
+  connected: boolean;
+  browser: "chrome";
+  profile: "personal";
+  protocolVersion: number;
+  extensionVersion?: string;
+  capabilities: string[];
+}
+
 export interface PersonalBrowserExecutor extends BrowserExecutor {
   isConnected(): boolean;
+  connectionInfo(): PersonalBrowserConnectionInfo;
 }
 
 const PERSONAL_TAB_PREFIX = "personal:";
@@ -15,12 +25,28 @@ export class BrowserModeRouter implements BrowserExecutor {
     private readonly personal?: PersonalBrowserExecutor,
   ) {}
 
-  status(...args: Parameters<BrowserExecutor["status"]>): ReturnType<BrowserExecutor["status"]> {
-    return this.managed.status(...args);
+  async status(
+    ...args: Parameters<BrowserExecutor["status"]>
+  ): ReturnType<BrowserExecutor["status"]> {
+    const managed = await this.managed.status(...args);
+    return {
+      ...managed,
+      ...(this.personal === undefined
+        ? {}
+        : { personal: this.personal.connectionInfo() }),
+    };
   }
 
-  connect(...args: Parameters<BrowserExecutor["connect"]>): ReturnType<BrowserExecutor["connect"]> {
-    return this.managed.connect(...args);
+  async connect(
+    ...args: Parameters<BrowserExecutor["connect"]>
+  ): ReturnType<BrowserExecutor["connect"]> {
+    const managed = await this.managed.connect(...args);
+    return {
+      ...managed,
+      ...(this.personal === undefined
+        ? {}
+        : { personal: this.personal.connectionInfo() }),
+    };
   }
 
   async tabs(

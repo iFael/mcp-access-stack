@@ -6,7 +6,21 @@ import {
 } from "../../../src/browser/browser-mode-router.js";
 
 function managedExecutor(): BrowserExecutor {
+  const status = async () => ({
+    state: "connected" as const,
+    ready: true,
+    browser: "chrome" as const,
+    profile: "dedicated-persistent" as const,
+    autoLaunch: true as const,
+    tabGroup: "MCP" as const,
+    edgeFallback: "technical-necessity-only" as const,
+    tabCount: 0,
+    taskCount: 0,
+    engine: "playwright-direct" as const,
+  });
   return {
+    status: jest.fn(status),
+    connect: jest.fn(status),
     open: jest.fn(async (input: Parameters<BrowserExecutor["open"]>[0]) => ({
       tab: {
         tabId: "managed:1",
@@ -41,6 +55,14 @@ function managedExecutor(): BrowserExecutor {
 function personalExecutor(connected = true): PersonalBrowserExecutor {
   return {
     isConnected: () => connected,
+    connectionInfo: () => ({
+      connected,
+      browser: "chrome" as const,
+      profile: "personal" as const,
+      protocolVersion: 1,
+      extensionVersion: connected ? "0.2.0" : undefined,
+      capabilities: ["tabs", "open", "snapshot"],
+    }),
     open: jest.fn(async (input: Parameters<BrowserExecutor["open"]>[0]) => ({
       tab: {
         tabId: "personal:42",
@@ -74,6 +96,25 @@ function personalExecutor(connected = true): PersonalBrowserExecutor {
 }
 
 describe("BrowserModeRouter", () => {
+  it("adds personal provider state to managed browser status", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    const router = new BrowserModeRouter(managed, personal);
+
+    await expect(router.status({})).resolves.toMatchObject({
+      state: "connected",
+      engine: "playwright-direct",
+      personal: {
+        connected: true,
+        browser: "chrome",
+        profile: "personal",
+        protocolVersion: 1,
+        extensionVersion: "0.2.0",
+        capabilities: ["tabs", "open", "snapshot"],
+      },
+    });
+  });
+
   it("uses browserMode only for open and keeps personal affinity by tabId", async () => {
     const managed = managedExecutor();
     const personal = personalExecutor();
