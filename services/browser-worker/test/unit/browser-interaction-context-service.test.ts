@@ -75,11 +75,30 @@ describe("BrowserInteractionContextService", () => {
     );
 
     expect(merged).toEqual(expect.arrayContaining([
+      { ref: "container-ref", role: "generic", name: "" },
       { ref: "button-ref", role: "button", name: "Increment" },
       { ref: "help-ref", role: "link", name: "Help" },
       { ref: "status-ref", role: "status", name: "" },
     ]));
-    expect(service.currentReferences(tab.tabId)).toHaveLength(3);
+    expect(service.currentReferences(tab.tabId)).toHaveLength(4);
+  });
+
+  it("never lets one reference consume content from a later snapshot line", () => {
+    const service = new BrowserInteractionContextService();
+    const references = service.captureReferences(
+      tab.tabId,
+      [
+        '- option "Alpha"',
+        '- option "Beta"',
+        '- generic "Target" [ref=target-ref]',
+        '- <changed> textbox "Email" [focused] [ref=email-ref]',
+      ].join("\n"),
+    );
+
+    expect(references).toEqual([
+      { ref: "target-ref", role: "generic", name: "Target" },
+      { ref: "email-ref", role: "textbox", name: "Email" },
+    ]);
   });
 
   it("discards one tab or clears every cached reference", () => {

@@ -144,15 +144,32 @@ export class BrowserInteractionContextService {
 
 function parseElementReferences(content: string): BrowserElementReference[] {
   const references: BrowserElementReference[] = [];
-  const pattern = /^\s*-\s+([A-Za-z][\w-]*)(?:\s+(?:"([^"]*)"|'([^']*)'|([^\[]+?)))?(?:\s+\[(?!ref=)[^\]]+\])*\s+\[ref=([^\]]+)\]/gm;
-  for (const match of content.matchAll(pattern)) {
+  for (const rawLine of content.split(/\r?\n/u)) {
+    let line = rawLine.trim();
+    if (!line.startsWith("- ")) continue;
+    line = line.slice(2).trim();
+    line = line.replace(/^<[^>]+>\s+/u, "");
+
+    const refMatch = /\[ref=([^\]]+)\]/u.exec(line);
+    if (!refMatch?.[1]) continue;
+    const beforeRef = line.slice(0, refMatch.index).trim();
+    const withoutState = beforeRef.replace(/(?:\s+\[(?!ref=)[^\]]+\])+\s*$/u, "").trim();
+    const roleMatch = /^([A-Za-z][\w-]*)(?:\s+(.*))?$/u.exec(withoutState);
+    if (!roleMatch?.[1]) continue;
+
+    const rawName = (roleMatch[2] ?? "").trim();
+    let name = rawName;
+    if ((rawName.startsWith('"') && rawName.endsWith('"')) ||
+        (rawName.startsWith("'") && rawName.endsWith("'"))) {
+      name = rawName.slice(1, -1);
+    }
     references.push({
-      role: match[1] ?? "element",
-      name: (match[2] ?? match[3] ?? match[4] ?? "").trim(),
-      ref: match[5] ?? "",
+      role: roleMatch[1],
+      name: name.trim(),
+      ref: refMatch[1],
     });
   }
-  return references.filter((reference) => reference.ref.length > 0);
+  return references;
 }
 
 function classifyDangerousAction(
