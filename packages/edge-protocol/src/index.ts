@@ -4,7 +4,7 @@ export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";
 export const EDGE_RELAY_TIMEOUT_MS = 330_000;
 export const MAX_EDGE_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
-export const MAX_EDGE_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
+export const MAX_EDGE_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
 
 export type EdgeHttpMethod = "GET" | "POST" | "DELETE";
 

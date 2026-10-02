@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "@jest/globals";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { EDGE_PROTOCOL_VERSION, isAllowedEdgeRequest, parseConnectorToEdgeMessage } from "@mcp-access-stack/edge-protocol";
+import { EDGE_PROTOCOL_VERSION, MAX_EDGE_RESPONSE_BODY_BYTES, isAllowedEdgeRequest, parseConnectorToEdgeMessage } from "@mcp-access-stack/edge-protocol";
 import { EdgeConnector } from "../../../src/edge/connector.js";
 
 const servers: Array<{ close(): Promise<void> }> = [];
@@ -66,6 +66,10 @@ afterEach(async () => {
 });
 
 describe("edge protocol route allowlist", () => {
+  it("keeps the Edge response relay budget at 8 MiB for duplicated multimodal screenshot payloads", () => {
+    expect(MAX_EDGE_RESPONSE_BODY_BYTES).toBe(8 * 1024 * 1024);
+  });
+
   it("preserves only the MCP and Owner OAuth methods required by the embedded Gateway", () => {
     expect(isAllowedEdgeRequest("POST", "/mcp")).toBe(true);
     expect(isAllowedEdgeRequest("GET", "/authorize?client_id=test")).toBe(true);

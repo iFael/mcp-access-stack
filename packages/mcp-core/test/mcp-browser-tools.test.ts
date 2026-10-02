@@ -234,7 +234,7 @@ describe("registerBrowserTools", () => {
     expect(executor.tabs).toHaveBeenNthCalledWith(2, {});
   });
 
-  it("returns screenshot bytes as MCP image content without exposing base64 in structured content", async () => {
+  it("returns screenshot bytes as native MCP image content and structured imageContent", async () => {
     const executor = mockExecutor();
     executor.screenshot = jest.fn(async ({ tabId }) => ({
       tabId,
@@ -249,9 +249,7 @@ describe("registerBrowserTools", () => {
     );
     registerBrowserTools(server, executor);
 
-    // Multimodal screenshot content must stay visible to MCP/Code Mode instead
-    // of being collapsed to structuredContent by a published output schema.
-    expect(registeredTools(server).browser_screenshot?.outputSchema).toBeUndefined();
+    expect(typeof registeredTools(server).browser_screenshot?.outputSchema).toBe("object");
 
     const result = await callTool(server, "browser_screenshot", {
       tabId: "personal:42",
@@ -261,6 +259,7 @@ describe("registerBrowserTools", () => {
       tabId: "personal:42",
       path: "C:/private/personal-screenshot.jpg",
       sizeBytes: 3,
+      imageContent: { type: "image", data: "YWJj", mimeType: "image/jpeg" },
     });
     expect(result.structuredContent).not.toHaveProperty("contentBase64");
     expect(result.structuredContent).not.toHaveProperty("mimeType");

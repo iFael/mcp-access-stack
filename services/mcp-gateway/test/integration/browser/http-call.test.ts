@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, jest } from "@jest/globals";
+import type { BrowserExecutor } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "../../../src/app.js";
 import {
   edgeHeaders,
@@ -21,10 +22,46 @@ interface WorkerCall {
 
 interface McpToolResult {
   isError?: boolean;
+  content?: Array<Record<string, unknown>>;
   structuredContent?: Record<string, unknown>;
 }
 
 describe("advanced browser tools HTTP calls", () => {
+  it("preserves screenshot image content in both native MCP content and structuredContent", async () => {
+    const browser = {
+      screenshot: jest.fn(async ({ tabId }: { tabId: string }) => ({
+        tabId,
+        path: "C:/private/personal-screenshot.jpg",
+        sizeBytes: 3,
+        mimeType: "image/jpeg",
+        contentBase64: "YWJj",
+      })),
+    } as unknown as BrowserExecutor;
+    const gateway = createGatewayApplication(
+      makeGatewayConfig(),
+      makeEdgeGatewayDependencies({ logger: silentLogger(), browser }),
+    );
+    const http = await listen(gateway.app);
+
+    try {
+      const result = await callTool(http.url, 1, "browser_screenshot", {
+        tabId: "personal:42",
+      });
+      expect(result.structuredContent).toEqual({
+        tabId: "personal:42",
+        path: "C:/private/personal-screenshot.jpg",
+        sizeBytes: 3,
+        imageContent: { type: "image", data: "YWJj", mimeType: "image/jpeg" },
+      });
+      expect(result.content).toEqual(expect.arrayContaining([
+        { type: "image", data: "YWJj", mimeType: "image/jpeg" },
+      ]));
+    } finally {
+      await gateway.close();
+      await http.close();
+    }
+  });
+
   it("routes every public advanced action through the authenticated Browser Worker client", async () => {
     const worker = await startBrowserWorkerFixture();
     const gateway = createGatewayApplication(
