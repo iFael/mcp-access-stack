@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  BROWSER_LATENCY_ID_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL,
   COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
   COMPANION_PROTOCOL_VERSION,
@@ -126,11 +127,14 @@ type PendingRelay = {
   resolve: (response: Response) => void;
   timeout: ReturnType<typeof setTimeout>;
   releaseAbort: () => void;
+  observeResponseBytes?: (bytes: number) => void;
   unavailableResponse?: (() => Response) | undefined;
   connector: WebSocket;
 };
 
 export class McpSession extends DurableObject<EdgeGatewayEnv> {
+  private readonly requestEntries = new WeakMap<Request, number>();
+  private readonly recordLatency = createBrowserLatencyRecorder(e => console.log(JSON.stringify(e)), "relay");
   private readonly pending = new Map<string, PendingRelay>();
   private readonly connectorTelemetry: ConnectorTelemetryStore;
   private readonly accountStore: EdgeAccountStore;
@@ -493,6 +497,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    this.requestEntries.set(request, performance.now());
     const url = new URL(request.url);
 
     if (url.pathname === "/connector") {
@@ -694,6 +699,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const pending = this.pending.get(parsed.requestId);
     if (!pending || pending.connector !== webSocket) return;
 
+    pending.observeResponseBytes?.(utf8ByteLength(parsed.body));
     this.pending.delete(parsed.requestId);
     clearTimeout(pending.timeout);
     pending.releaseAbort();
@@ -2415,6 +2421,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
     const pending = this.pending.get(parsed.requestId);
     if (!pending || pending.connector !== webSocket) return;
+    pending.observeResponseBytes?.(utf8ByteLength(parsed.body));
     this.pending.delete(parsed.requestId);
     clearTimeout(pending.timeout);
     pending.releaseAbort();
@@ -2512,18 +2519,28 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     const requestId = crypto.randomUUID();
+    const rootId = latencyId(request.headers.get(BROWSER_LATENCY_ID_HEADER)) ?? requestId;
+    const measured = this.recordLatency({ requestId: rootId, relayRequestId: requestId }, browserLatencyOperation(body));
+    const dispatchedAt = performance.now();
+    const routingMs = this.requestEntries.has(request) ? Math.max(0, dispatchedAt - this.requestEntries.get(request)!) : undefined;
     const envelope: EdgeHttpRequestMessage | CompanionHttpRequestMessage = {
       type: "http-request",
       protocolVersion,
       requestId,
       method: request.method as EdgeHttpRequestMessage["method"],
       path,
-      headers: collectAllowedRequestHeaders(request.headers),
+      headers: { ...collectAllowedRequestHeaders(request.headers), [BROWSER_LATENCY_ID_HEADER]: rootId },
       body,
       principal,
     };
 
-    return new Promise<Response>((resolve) => {
+    let responseBytes: number | undefined;
+    return new Promise<Response>((settle) => {
+      const resolve = (response: Response) => {
+        measured.finish(response.status === 499 ? "cancelled" : response.status === 504 ? "timeout" : response.ok ? "success" : "error",
+          { responseBytes, routingMs, relayMs: Math.max(0, performance.now() - dispatchedAt), requestBytes: utf8ByteLength(body), responseStatus: response.status });
+        settle(response);
+      };
       const finishWithCancellation = (
         reason: EdgeHttpCancelMessage["reason"],
         response: Response,
@@ -2548,6 +2565,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         resolve,
         timeout,
         releaseAbort,
+        observeResponseBytes: bytes => { responseBytes = bytes; },
         connector,
         ...(unavailableResponse === undefined ? {} : { unavailableResponse }),
       });

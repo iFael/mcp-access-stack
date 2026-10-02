@@ -1,3 +1,4 @@
+import { createBrowserLatencyRecorder, extensionLatencyMetrics } from "@mcp-access-stack/edge-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -34,6 +35,8 @@ interface PendingCall {
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
   abort?: () => void;
+  timing?: unknown;
+  responseBytes?: number;
 }
 
 export interface PersonalBrowserBridgeOptions {
@@ -54,8 +57,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private server: WebSocketServer | undefined;
   private token = "";
   private closed = false;
+  private readonly recordLatency: ReturnType<typeof createBrowserLatencyRecorder>;
 
   private constructor(private readonly options: PersonalBrowserBridgeOptions) {
+    this.recordLatency = createBrowserLatencyRecorder(e => options.log?.(e), "bridge");
     this.port = options.port ?? DEFAULT_PORT;
     this.extensionDirectory = path.join(
       path.resolve(options.stateRoot),
@@ -505,6 +510,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.pending.delete(message.id);
     clearTimeout(pending.timeout);
     pending.abort?.();
+    pending.timing = message.timing;
+    pending.responseBytes = Buffer.byteLength(raw, "utf8");
 
     if (message.ok === true) {
       pending.resolve(message.result);
@@ -525,60 +532,74 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     input: unknown,
     context?: OperationContext,
   ): Promise<ReturnType<(typeof browserOperationResultSchemas)[T]["parse"]>> {
+    const id = randomUUID();
+    const started = performance.now();
+    const latency = this.recordLatency({ requestId: context?.latency?.requestId ?? context?.invocationId ?? id,
+      ...context?.latency, ...(context?.invocationId ? { invocationId: context.invocationId } : {}), bridgeRequestId: id }, operation);
+    let pendingMetrics: PendingCall | undefined;
+    const metrics: Record<string, unknown> = {};
+    const gatewayStartedAt = context?.latency?.gatewayStartedAt;
+    if (typeof gatewayStartedAt === "number" && Number.isFinite(gatewayStartedAt) && gatewayStartedAt <= started) metrics.gatewayBeforeBridgeMs = started - gatewayStartedAt;
+    const fail = (error: Error, outcome: "error" | "cancelled" | "timeout" = "error") => {
+      const code = error instanceof AppError && ERROR_CODES.has(error.code) ? error.code : "INTERNAL_ERROR";
+      latency.finish(outcome, { ...metrics, responseBytes: pendingMetrics?.responseBytes,
+        ...extensionLatencyMetrics(pendingMetrics?.timing), errorCode: code });
+      return error;
+    };
     const socket = this.socket;
     const generation = this.socketGeneration;
     const peerInfo = this.peerInfo;
     if (!socket || socket.readyState !== WebSocket.OPEN || generation === 0 || !peerInfo) {
       return Promise.reject(
-        new AppError(
+        fail(new AppError(
           "BROWSER_WORKER_UNAVAILABLE",
           "Personal browser mode requires the MCP V3 Chrome extension to be loaded and connected.",
-        ),
+        )),
       );
     }
     if (!peerInfo.capabilities.includes(operation)) {
-      return Promise.reject(unsupported(`browser_${operation}`));
+      return Promise.reject(fail(unsupported(`browser_${operation}`)));
     }
     if (context?.signal?.aborted) {
       return Promise.reject(
-        new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled."),
+        fail(new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled."), "cancelled"),
       );
     }
 
     const timeoutMs = resolveCallTimeoutMs(operation, input, context);
     if (timeoutMs <= 0) {
       return Promise.reject(
-        new AppError(
+        fail(new AppError(
           "BROWSER_WORKER_TIMEOUT",
           `Personal browser operation deadline already expired: ${operation}`,
-        ),
+        ), "timeout"),
       );
     }
 
-    const id = randomUUID();
     const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
     return new Promise((resolve, reject) => {
+      const rejectWithTiming = (error: Error, outcome?: "cancelled" | "timeout") => reject(fail(error, outcome));
       const rejectAfterDispatch = (reason: "cancelled" | "timeout") => {
         if (!this.pending.delete(id)) return;
         clearTimeout(timeout);
         pending.abort?.();
         sendCancel(socket, id);
         if (isMutatingOperation(operation)) {
-          reject(
+          rejectWithTiming(
             new AppError(
               "EXECUTION_OUTCOME_UNKNOWN",
               `Personal browser mutation outcome is unknown after ${reason}: ${operation}`,
-            ),
+            ), reason === "cancelled" ? "cancelled" : "timeout",
           );
           return;
         }
-        reject(
+        rejectWithTiming(
           reason === "cancelled"
             ? new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled.")
             : new AppError(
               "BROWSER_WORKER_TIMEOUT",
               `Personal browser operation timed out: ${operation}`,
-            ),
+            ), reason === "cancelled" ? "cancelled" : "timeout",
         );
       };
 
@@ -593,9 +614,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         timeout,
         resolve: (value) => {
           try {
-            resolve(browserOperationResultSchemas[operation].parse(value) as never);
+            const parsed = browserOperationResultSchemas[operation].parse(value);
+            latency.finish("success", { ...metrics, responseBytes: pending.responseBytes, ...extensionLatencyMetrics(pending.timing) });
+            resolve(parsed as never);
           } catch {
-            reject(
+            rejectWithTiming(
               new AppError(
                 "RELAY_PROTOCOL_ERROR",
                 `Personal browser returned an invalid result for ${operation}.`,
@@ -603,8 +626,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
             );
           }
         },
-        reject,
+        reject: rejectWithTiming,
       };
+      pendingMetrics = pending;
 
       if (context?.signal) {
         const abort = () => rejectAfterDispatch("cancelled");
@@ -614,18 +638,22 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
       this.pending.set(id, pending);
       try {
-        socket.send(JSON.stringify({
+        const wire = JSON.stringify({
           type: "request",
           id,
           operation,
           input,
           deadlineAt,
-        }));
+          measureTiming: latency.enabled,
+        });
+        metrics.requestBytes = Buffer.byteLength(wire, "utf8");
+        metrics.dispatchMs = performance.now() - started;
+        socket.send(wire);
       } catch (error) {
         this.pending.delete(id);
         clearTimeout(timeout);
         pending.abort?.();
-        reject(
+        rejectWithTiming(
           new AppError("BROWSER_DISCONNECTED", "Failed to dispatch personal browser operation.", {
             cause: error,
           }),

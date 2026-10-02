@@ -163,6 +163,9 @@ describe("CompanionConnector end-to-end", () => {
     let relayAssertion: string | undefined;
     let relayPrincipal: ReturnType<typeof decodeEdgeAuthenticatedPrincipal> = null;
     let relayAuthorization: string | undefined;
+    let latencyId: string | undefined;
+    let relayId: string | undefined;
+    const latencyEvents: Record<string, unknown>[] = [];
     let cancelStarted!: () => void;
     let cancelClosed!: () => void;
     const cancelStartedPromise = new Promise<void>((resolve) => { cancelStarted = resolve; });
@@ -181,6 +184,8 @@ describe("CompanionConnector end-to-end", () => {
         ? decodeEdgeAuthenticatedPrincipal(encodedPrincipal)
         : null;
       relayAuthorization = request.headers.authorization;
+      latencyId = request.headers["x-mcp-browser-latency-id"] as string | undefined;
+      relayId = request.headers["x-mcp-browser-relay-id"] as string | undefined;
       response.statusCode = 202;
       response.setHeader("content-type", "application/json");
       response.setHeader("www-authenticate", "Bearer local");
@@ -224,6 +229,7 @@ describe("CompanionConnector end-to-end", () => {
         return new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options);
       },
       log: (entry) => {
+        if (entry.event === "browser_latency") latencyEvents.push(entry);
         if (entry.event === "local_runtime_registered") registered();
       },
     });
@@ -285,8 +291,9 @@ describe("CompanionConnector end-to-end", () => {
         authorization: "Bearer must-not-forward",
         "content-type": "application/json",
         "x-openai-session": "relay-session",
+        "x-mcp-browser-latency-id": "11111111-1111-4111-8111-111111111111",
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_snapshot", arguments: {} } }),
       principal,
     }));
 
@@ -305,6 +312,10 @@ describe("CompanionConnector end-to-end", () => {
     expect((relayed.headers as Record<string, string>)["x-local-secret"]).toBeUndefined();
     expect(relayAssertion).toBe(INTERNAL_ASSERTION);
     expect(relayAuthorization).toBeUndefined();
+    expect(latencyId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(relayId).toBe("relay-1");
+    expect(latencyEvents[0]).toMatchObject({ requestId: latencyId, layer: "companion_connector", outcome: "success" });
+    expect(JSON.stringify(latencyEvents)).not.toMatch(/access-token|refresh-token|must-not-forward|relayed/);
     expect(relayPrincipal).toEqual(principal);
 
     edgeSocket.send(JSON.stringify({

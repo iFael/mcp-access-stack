@@ -220,6 +220,7 @@ export function createGatewayApplication(
         : {}),
       ...(requestLifecycleId === undefined ? {} : { requestLifecycleId }),
       requestSignal: requestAbort.signal,
+      ...(request.mcpLatency ? { latency: request.mcpLatency } : {}),
     });
     try {
       const handledByFastPath = await tryHandleLegacyBrowserFastPath({

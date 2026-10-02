@@ -823,6 +823,7 @@ export const operationContextSchema = z
 
 export type OperationContext = z.infer<typeof operationContextSchema> & {
   signal?: AbortSignal;
+  latency?: { requestId?: string; relayRequestId?: string; gatewayRequestId?: string; gatewayStartedAt?: number };
 };
 
 export const relayOperationContextSchema = operationContextSchema.pick({

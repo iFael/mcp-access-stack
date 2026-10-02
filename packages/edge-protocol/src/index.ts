@@ -1,4 +1,5 @@
 export * from "./companion.js";
+export * from "./browser-latency.js";
 
 export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";

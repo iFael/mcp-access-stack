@@ -1,5 +1,6 @@
 import os from "node:os";
 import {
+  BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_PROTOCOL_VERSION,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
@@ -86,6 +87,7 @@ export class CompanionConnector {
   private readonly reconnectMaxMs: number;
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
+  private readonly recordLatency = createBrowserLatencyRecorder(e => this.log(e), "companion_connector");
   private readonly activeRequests = new Map<string, AbortController>();
   private socket: WebSocket | undefined;
   private stopped = false;
@@ -334,47 +336,64 @@ export class CompanionConnector {
     message: Extract<ReturnType<typeof parseEdgeToCompanionMessage>, { type: "http-request" }>,
     signal: AbortSignal,
   ): Promise<void> {
-    if (utf8ByteLength(message.body) > MAX_EDGE_REQUEST_BODY_BYTES) {
-      this.sendErrorResponse(socket, message.requestId, 413, "request_too_large");
-      return;
-    }
-    if (!isAllowedEdgeRequest(message.method, message.path)) {
-      this.sendErrorResponse(socket, message.requestId, 404, "edge_route_not_allowed");
-      return;
-    }
-    const localUrl = new URL(message.path, this.localBaseUrl);
-    if (localUrl.origin !== this.localBaseUrl.origin) {
-      this.sendErrorResponse(socket, message.requestId, 400, "invalid_local_route");
-      return;
-    }
-    const headers = collectAllowedHeaders(message.headers, REQUEST_HEADER_ALLOWLIST);
-    headers.set(EDGE_INTERNAL_ASSERTION_HEADER, this.options.internalAssertion);
-    headers.set(EDGE_INTERNAL_PRINCIPAL_HEADER, encodeEdgeAuthenticatedPrincipal(message.principal));
+    const rootId = latencyId(message.headers[BROWSER_LATENCY_ID_HEADER]);
+    const measured = this.recordLatency({ requestId: rootId ?? message.requestId, relayRequestId: message.requestId }, browserLatencyOperation(message.body));
+    const metrics: Record<string, unknown> = { requestBytes: utf8ByteLength(message.body) };
+    let outcome: "success" | "error" = "error";
     try {
-      const response = await fetch(localUrl, {
-        method: message.method,
-        headers,
-        redirect: "manual",
-        signal,
-        ...(message.method === "GET" || message.body.length === 0 ? {} : { body: message.body }),
-      });
-      const body = await response.text();
-      if (utf8ByteLength(body) > MAX_EDGE_RESPONSE_BODY_BYTES) {
-        this.sendErrorResponse(socket, message.requestId, 502, "gateway_response_too_large");
+      if (utf8ByteLength(message.body) > MAX_EDGE_REQUEST_BODY_BYTES) {
+        this.sendErrorResponse(socket, message.requestId, 413, "request_too_large");
         return;
       }
-      this.sendResponse(socket, {
-        type: "http-response",
-        protocolVersion: COMPANION_PROTOCOL_VERSION,
-        requestId: message.requestId,
-        status: response.status,
-        headers: collectHeaders(response.headers, RESPONSE_HEADER_ALLOWLIST),
-        body,
-      });
-    } catch (error) {
-      if (signal.aborted) return;
-      this.log({ event: "local_runtime_gateway_error", reason: errorName(error) });
-      this.sendErrorResponse(socket, message.requestId, 502, "local_gateway_unavailable");
+      if (!isAllowedEdgeRequest(message.method, message.path)) {
+        this.sendErrorResponse(socket, message.requestId, 404, "edge_route_not_allowed");
+        return;
+      }
+      const localUrl = new URL(message.path, this.localBaseUrl);
+      if (localUrl.origin !== this.localBaseUrl.origin) {
+        this.sendErrorResponse(socket, message.requestId, 400, "invalid_local_route");
+        return;
+      }
+      const headers = collectAllowedHeaders(message.headers, REQUEST_HEADER_ALLOWLIST);
+      headers.set(BROWSER_LATENCY_ID_HEADER, rootId ?? message.requestId);
+      headers.set(BROWSER_LATENCY_RELAY_HEADER, message.requestId);
+      headers.set(EDGE_INTERNAL_ASSERTION_HEADER, this.options.internalAssertion);
+      headers.set(EDGE_INTERNAL_PRINCIPAL_HEADER, encodeEdgeAuthenticatedPrincipal(message.principal));
+      try {
+        const fetchingAt = performance.now();
+        const response = await fetch(localUrl, {
+          method: message.method,
+          headers,
+          redirect: "manual",
+          signal,
+          ...(message.method === "GET" || message.body.length === 0 ? {} : { body: message.body }),
+        });
+        metrics.fetchMs = performance.now() - fetchingAt;
+        const readingAt = performance.now();
+        const body = await response.text();
+        metrics.responseReadMs = performance.now() - readingAt;
+        metrics.responseBytes = utf8ByteLength(body);
+        metrics.responseStatus = response.status;
+        if (utf8ByteLength(body) > MAX_EDGE_RESPONSE_BODY_BYTES) {
+          this.sendErrorResponse(socket, message.requestId, 502, "gateway_response_too_large");
+          return;
+        }
+        outcome = response.ok ? "success" : "error";
+        metrics.serializationMs = this.sendResponse(socket, {
+          type: "http-response",
+          protocolVersion: COMPANION_PROTOCOL_VERSION,
+          requestId: message.requestId,
+          status: response.status,
+          headers: collectHeaders(response.headers, RESPONSE_HEADER_ALLOWLIST),
+          body,
+        });
+      } catch (error) {
+        if (signal.aborted) return;
+        this.log({ event: "local_runtime_gateway_error", reason: errorName(error) });
+        this.sendErrorResponse(socket, message.requestId, 502, "local_gateway_unavailable");
+      }
+    } finally {
+      measured.finish(signal.aborted ? signal.reason === "timeout" ? "timeout" : "cancelled" : outcome, metrics);
     }
   }
 
@@ -389,8 +408,13 @@ export class CompanionConnector {
     });
   }
 
-  private sendResponse(socket: WebSocket, response: CompanionHttpResponseMessage): void {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(response));
+  private sendResponse(socket: WebSocket, response: CompanionHttpResponseMessage): number {
+    if (socket.readyState !== WebSocket.OPEN) return 0;
+    const started = performance.now();
+    const raw = JSON.stringify(response);
+    const serializationMs = performance.now() - started;
+    socket.send(raw);
+    return serializationMs;
   }
 
   private log(entry: Record<string, unknown>): void {
