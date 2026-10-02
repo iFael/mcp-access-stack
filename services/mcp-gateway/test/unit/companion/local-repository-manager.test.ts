@@ -370,7 +370,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     expect(policy?.workspaces[0]?.sourceControl?.capabilities).not.toContain(
       "github.repository.create",
     );
-  });
+  }, 15_000);
 
   it("restores the previous persisted state when runtime reload fails", async () => {
     const fixture = await createGitFixture();

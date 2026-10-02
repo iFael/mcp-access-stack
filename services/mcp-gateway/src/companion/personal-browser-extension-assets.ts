@@ -180,9 +180,11 @@ async function navigate(input) {
 async function snapshot(input) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
+  const generation = crypto.randomUUID().replaceAll("-", "");
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
     func: snapshotPage,
+    args: [generation],
   });
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
   return {
@@ -401,7 +403,10 @@ async function waitForTabComplete(tabId, timeoutMs) {
   });
 }
 
-function snapshotPage() {
+function snapshotPage(generation) {
+  for (const stale of document.querySelectorAll("[data-mcp-v3-ref]")) {
+    stale.removeAttribute("data-mcp-v3-ref");
+  }
   const selector = [
     "a[href]",
     "button",
@@ -420,7 +425,7 @@ function snapshotPage() {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) continue;
-    const ref = "p" + (refs.length + 1);
+    const ref = "p-" + generation + "-" + (refs.length + 1);
     element.setAttribute("data-mcp-v3-ref", ref);
     const role = element.getAttribute("role") || defaultRole(element);
     const name = accessibleName(element).slice(0, 500);
@@ -446,10 +451,28 @@ function snapshotPage() {
   }
 
   function accessibleName(element) {
+    const labelledBy = element.getAttribute("aria-labelledby");
+    const labelledByText = labelledBy
+      ? labelledBy.split(/\s+/u)
+        .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+        .filter(Boolean)
+        .join(" ")
+      : "";
+    const labelsText = Array.from(element.labels || [])
+      .map((label) => label.innerText || label.textContent || "")
+      .filter(Boolean)
+      .join(" ");
+    const tag = element.tagName?.toLowerCase?.() || "";
+    const type = String(element.getAttribute("type") || "").toLowerCase();
+    const safeButtonValue = tag === "input" && ["button", "submit", "reset"].includes(type)
+      ? String(element.value || "")
+      : "";
     return element.getAttribute("aria-label") ||
+      labelledByText ||
+      labelsText ||
       element.getAttribute("placeholder") ||
       element.getAttribute("title") ||
-      ("value" in element ? String(element.value || "") : "") ||
+      safeButtonValue ||
       element.innerText ||
       element.textContent ||
       "";
