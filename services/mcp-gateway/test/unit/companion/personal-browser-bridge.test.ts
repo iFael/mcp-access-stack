@@ -96,7 +96,201 @@ describe("PersonalBrowserBridge", () => {
     await new Promise<void>((resolve) => extension.once("close", () => resolve()));
     await bridge.close();
   });
+
+  it("sends cooperative cancel and distinguishes read cancellation from unknown mutation outcome", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      const readController = new AbortController();
+      const readRequestPromise = nextWireMessage(
+        extension,
+        (message) => message.type === "request" && message.operation === "wait",
+      );
+      const read = bridge.wait(
+        { tabId: "personal:1", timeoutMs: 30_000 },
+        { signal: readController.signal },
+      );
+      const readRequest = await readRequestPromise;
+      const readCancelPromise = nextWireMessage(
+        extension,
+        (message) => message.type === "cancel" && message.id === readRequest.id,
+      );
+      readController.abort();
+
+      await expect(read).rejects.toMatchObject({ code: "OPERATION_CANCELLED" });
+      await expect(readCancelPromise).resolves.toMatchObject({
+        type: "cancel",
+        id: readRequest.id,
+      });
+
+      const mutationController = new AbortController();
+      const mutationRequestPromise = nextWireMessage(
+        extension,
+        (message) => message.type === "request" && message.operation === "click",
+      );
+      const mutation = bridge.click(
+        { tabId: "personal:1", ref: "p-generation-1" },
+        { signal: mutationController.signal },
+      );
+      const mutationRequest = await mutationRequestPromise;
+      const mutationCancelPromise = nextWireMessage(
+        extension,
+        (message) => message.type === "cancel" && message.id === mutationRequest.id,
+      );
+      mutationController.abort();
+
+      await expect(mutation).rejects.toMatchObject({
+        code: "EXECUTION_OUTCOME_UNKNOWN",
+      });
+      await expect(mutationCancelPromise).resolves.toMatchObject({
+        type: "cancel",
+        id: mutationRequest.id,
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  it("bounds calls by the upstream deadline and propagates the effective deadline", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      const deadlineAt = new Date(Date.now() + 500).toISOString();
+      const requestPromise = nextWireMessage(
+        extension,
+        (message) => message.type === "request" && message.operation === "tabs",
+      );
+      const call = bridge.tabs(
+        {},
+        {
+          deadline: {
+            requestedTimeoutMs: 500,
+            effectiveTimeoutMs: 500,
+            deadlineAt,
+          },
+        },
+      );
+      const request = await requestPromise;
+
+      expect(typeof request.deadlineAt).toBe("string");
+      expect(Date.parse(String(request.deadlineAt))).toBeLessThanOrEqual(
+        Date.parse(deadlineAt),
+      );
+      await expect(call).rejects.toMatchObject({ code: "BROWSER_WORKER_TIMEOUT" });
+    } finally {
+      await close();
+    }
+  });
+
+  it("isolates pending calls by connection generation", async () => {
+    const { bridge, extension: first, token, port, close } =
+      await startAuthenticatedBridge();
+    let second: WebSocket | undefined;
+    try {
+      const oldRequestPromise = nextWireMessage(
+        first,
+        (message) => message.type === "request" && message.operation === "tabs",
+      );
+      const oldCall = bridge.tabs({});
+      await oldRequestPromise;
+
+      second = await connectExtension(port, token);
+      await expect(oldCall).rejects.toMatchObject({ code: "BROWSER_DISCONNECTED" });
+
+      second.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (message.type !== "request" || message.operation !== "tabs" || !message.id) return;
+        second?.send(JSON.stringify({
+          type: "response",
+          id: message.id,
+          ok: true,
+          result: { tabs: [] },
+        }));
+      });
+
+      await expect(bridge.tabs({})).resolves.toEqual({ tabs: [] });
+    } finally {
+      second?.close();
+      await close();
+    }
+  });
 });
+
+interface WireMessage {
+  type?: string;
+  id?: string;
+  operation?: string;
+  deadlineAt?: string;
+  [key: string]: unknown;
+}
+
+async function startAuthenticatedBridge(): Promise<{
+  bridge: PersonalBrowserBridge;
+  extension: WebSocket;
+  token: string;
+  port: number;
+  close(): Promise<void>;
+}> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+  temporaryRoots.push(root);
+  const port = await reservePort();
+  const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+  const workerSource = await readFile(
+    path.join(root, "browser", "personal-extension", "service-worker.js"),
+    "utf8",
+  );
+  const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
+  if (!token) throw new Error("Personal browser token was not materialized.");
+  const extension = await connectExtension(port, token);
+  return {
+    bridge,
+    extension,
+    token,
+    port,
+    async close() {
+      if (extension.readyState < WebSocket.CLOSING) extension.close();
+      await bridge.close();
+    },
+  };
+}
+
+async function connectExtension(port: number, token: string): Promise<WebSocket> {
+  const extension = new WebSocket(
+    `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`,
+  );
+  await new Promise<void>((resolve, reject) => {
+    extension.once("open", () => resolve());
+    extension.once("error", reject);
+  });
+  return extension;
+}
+
+function nextWireMessage(
+  socket: WebSocket,
+  predicate: (message: WireMessage) => boolean,
+): Promise<WireMessage> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (data: WebSocket.RawData) => {
+      try {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (!predicate(message)) return;
+        cleanup();
+        resolve(message);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("WebSocket closed before the expected message."));
+    };
+    const cleanup = () => {
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+    };
+    socket.on("message", onMessage);
+    socket.once("close", onClose);
+  });
+}
 
 async function reservePort(): Promise<number> {
   const server = createServer();

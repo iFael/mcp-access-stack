@@ -20,6 +20,8 @@ const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
 const ERROR_CODES = new Set<string>(errorCodes);
 
 interface PendingCall {
+  generation: number;
+  operation: BrowserOperation;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
@@ -38,6 +40,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   private readonly pending = new Map<string, PendingCall>();
   private socket: WebSocket | undefined;
+  private socketGeneration = 0;
+  private nextConnectionGeneration = 0;
   private server: WebSocketServer | undefined;
   private token = "";
   private closed = false;
@@ -293,28 +297,38 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         socket.close(1008, "unauthorized personal browser bridge");
         return;
       }
+      const generation = ++this.nextConnectionGeneration;
       const previous = this.socket;
       this.socket = socket;
+      this.socketGeneration = generation;
       if (previous && previous !== socket && previous.readyState < WebSocket.CLOSING) {
         previous.close(4000, "personal browser connection replaced");
       }
       this.options.log?.({
         event: "mcp_v3_personal_browser_connected",
         port: this.port,
+        generation,
       });
       socket.on("message", (data, isBinary) => {
         if (isBinary) return;
-        this.handleMessage(data.toString());
+        this.handleMessage(socket, generation, data.toString());
       });
       socket.once("close", () => {
-        if (this.socket === socket) this.socket = undefined;
-        this.rejectPending(
+        if (this.socket === socket) {
+          this.socket = undefined;
+          this.socketGeneration = 0;
+        }
+        this.rejectPendingForGeneration(
+          generation,
           new AppError(
             "BROWSER_DISCONNECTED",
             "The MCP V3 personal Chrome extension disconnected.",
           ),
         );
-        this.options.log?.({ event: "mcp_v3_personal_browser_disconnected" });
+        this.options.log?.({
+          event: "mcp_v3_personal_browser_disconnected",
+          generation,
+        });
       });
       socket.on("error", () => undefined);
     });
@@ -353,7 +367,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
   }
 
-  private handleMessage(raw: string): void {
+  private handleMessage(
+    socket: WebSocket,
+    generation: number,
+    raw: string,
+  ): void {
     if (Buffer.byteLength(raw, "utf8") > MAX_PAYLOAD_BYTES) return;
     let message: unknown;
     try {
@@ -363,12 +381,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
     if (!isRecord(message)) return;
     if (message.type === "heartbeat") {
-      this.socket?.send(JSON.stringify({ type: "heartbeat-ack" }));
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "heartbeat-ack" }));
+      }
       return;
     }
     if (message.type !== "response" || typeof message.id !== "string") return;
     const pending = this.pending.get(message.id);
-    if (!pending) return;
+    if (!pending || pending.generation !== generation) return;
     this.pending.delete(message.id);
     clearTimeout(pending.timeout);
     pending.abort?.();
@@ -393,7 +413,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     context?: OperationContext,
   ): Promise<ReturnType<(typeof browserOperationResultSchemas)[T]["parse"]>> {
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const generation = this.socketGeneration;
+    if (!socket || socket.readyState !== WebSocket.OPEN || generation === 0) {
       return Promise.reject(
         new AppError(
           "BROWSER_WORKER_UNAVAILABLE",
@@ -401,21 +422,57 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         ),
       );
     }
+    if (context?.signal?.aborted) {
+      return Promise.reject(
+        new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled."),
+      );
+    }
+
+    const timeoutMs = resolveCallTimeoutMs(operation, input, context);
+    if (timeoutMs <= 0) {
+      return Promise.reject(
+        new AppError(
+          "BROWSER_WORKER_TIMEOUT",
+          `Personal browser operation deadline already expired: ${operation}`,
+        ),
+      );
+    }
 
     const id = randomUUID();
-    const timeoutMs = DEFAULT_TIMEOUT_MS;
+    const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
+      const rejectAfterDispatch = (reason: "cancelled" | "timeout") => {
+        if (!this.pending.delete(id)) return;
+        clearTimeout(timeout);
+        pending.abort?.();
+        sendCancel(socket, id);
+        if (isMutatingOperation(operation)) {
+          reject(
+            new AppError(
+              "EXECUTION_OUTCOME_UNKNOWN",
+              `Personal browser mutation outcome is unknown after ${reason}: ${operation}`,
+            ),
+          );
+          return;
+        }
         reject(
-          new AppError(
-            "BROWSER_WORKER_TIMEOUT",
-            `Personal browser operation timed out: ${operation}`,
-          ),
+          reason === "cancelled"
+            ? new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled.")
+            : new AppError(
+              "BROWSER_WORKER_TIMEOUT",
+              `Personal browser operation timed out: ${operation}`,
+            ),
         );
-      }, timeoutMs);
+      };
+
+      const timeout = setTimeout(
+        () => rejectAfterDispatch("timeout"),
+        timeoutMs,
+      );
 
       const pending: PendingCall = {
+        generation,
+        operation,
         timeout,
         resolve: (value) => {
           try {
@@ -433,22 +490,20 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       };
 
       if (context?.signal) {
-        const abort = () => {
-          if (!this.pending.delete(id)) return;
-          clearTimeout(timeout);
-          reject(new AppError("OPERATION_CANCELLED", "Personal browser operation was cancelled."));
-        };
-        if (context.signal.aborted) {
-          abort();
-          return;
-        }
+        const abort = () => rejectAfterDispatch("cancelled");
         context.signal.addEventListener("abort", abort, { once: true });
         pending.abort = () => context.signal?.removeEventListener("abort", abort);
       }
 
       this.pending.set(id, pending);
       try {
-        socket.send(JSON.stringify({ type: "request", id, operation, input }));
+        socket.send(JSON.stringify({
+          type: "request",
+          id,
+          operation,
+          input,
+          deadlineAt,
+        }));
       } catch (error) {
         this.pending.delete(id);
         clearTimeout(timeout);
@@ -460,6 +515,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         );
       }
     });
+  }
+
+  private rejectPendingForGeneration(generation: number, error: Error): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.generation !== generation) continue;
+      this.pending.delete(id);
+      clearTimeout(pending.timeout);
+      pending.abort?.();
+      pending.reject(error);
+    }
   }
 
   private rejectPending(error: Error): void {
@@ -480,6 +545,58 @@ async function readOrCreateToken(tokenPath: string): Promise<string> {
   const token = randomBytes(32).toString("base64url");
   await writeFile(tokenPath, token + "\n", { encoding: "utf8", mode: 0o600 });
   return token;
+}
+
+function resolveCallTimeoutMs(
+  operation: BrowserOperation,
+  input: unknown,
+  context?: OperationContext,
+): number {
+  let timeoutMs = DEFAULT_TIMEOUT_MS;
+  if (operation === "wait" && isRecord(input) &&
+      typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
+    timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);
+  }
+  if (operation === "sequence" && isRecord(input) && Array.isArray(input.steps)) {
+    const waitBudget = input.steps.reduce((total, step) => {
+      if (!isRecord(step) || step.action !== "wait") return total;
+      const stepTimeout = typeof step.timeoutMs === "number" && Number.isFinite(step.timeoutMs)
+        ? Math.max(1, Math.min(120_000, step.timeoutMs))
+        : 30_000;
+      return total + stepTimeout;
+    }, 0);
+    timeoutMs = Math.max(timeoutMs, Math.min(125_000, waitBudget + 5_000));
+  }
+  const deadlineAt = context?.deadline?.deadlineAt;
+  if (deadlineAt) {
+    const remainingMs = Date.parse(deadlineAt) - Date.now();
+    if (Number.isFinite(remainingMs)) timeoutMs = Math.min(timeoutMs, remainingMs);
+  }
+  return Math.max(0, Math.floor(timeoutMs));
+}
+
+function sendCancel(socket: WebSocket, id: string): void {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(JSON.stringify({ type: "cancel", id }));
+  } catch {
+    // The original request already has a deterministic terminal result locally.
+  }
+}
+
+function isMutatingOperation(operation: BrowserOperation): boolean {
+  return new Set<BrowserOperation>([
+    "open",
+    "navigate",
+    "click",
+    "fill",
+    "press",
+    "sequence",
+    "goBack",
+    "goForward",
+    "closeTab",
+    "finishTask",
+  ]).has(operation);
 }
 
 function unsupported(operation: string): AppError {
