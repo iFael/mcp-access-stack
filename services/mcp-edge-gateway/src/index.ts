@@ -1,3 +1,4 @@
+import { measureEdgeMcpRequest } from "./browser-latency.js";
 import { McpSession, type EdgeGatewayEnv } from "./mcp-session.js";
 import { createEdgeHealthStatus } from "./health.js";
 import {
@@ -11,6 +12,7 @@ export { McpSession };
 
 export default {
   async fetch(request: Request, env: EdgeGatewayEnv): Promise<Response> {
+    const latencyEntry = { monotonic: performance.now(), wall: Date.now() };
     const url = new URL(request.url);
     const sessionId = env.MCP_SESSION.idFromName(EDGE_SESSION_NAME);
     const session = env.MCP_SESSION.get(sessionId);
@@ -175,7 +177,7 @@ export default {
       if (env.MCP_EDGE_ENABLED !== "true") {
         return jsonResponse({ error: "edge_not_enabled" }, 503);
       }
-      return session.fetch(request);
+      return url.pathname === "/mcp" ? measureEdgeMcpRequest(request, r => session.fetch(r), latencyEntry) : session.fetch(request);
     }
 
     return jsonResponse({ error: "not_found" }, 404);

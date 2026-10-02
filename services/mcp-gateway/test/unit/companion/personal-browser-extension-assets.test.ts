@@ -5,6 +5,48 @@ import { buildPersonalBrowserExtensionAssets } from "../../../src/companion/pers
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("returns isolated bounded timing on concurrent and sequential requests without putting page data in telemetry", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const sent: Array<Record<string, unknown>> = [];
+    let clock = 0;
+    const context = vm.createContext({ URL, AbortController, TextEncoder, performance: { now: () => clock },
+      setTimeout, clearTimeout, setInterval: () => 0,
+      WebSocket: class { static OPEN = 1; static CONNECTING = 0; readyState = 1; send(raw: string) { sent.push(JSON.parse(raw) as Record<string, unknown>); } },
+      chrome: { tabs: { onRemoved: { addListener() {} } }, runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } } },
+      collect: (m: Record<string, unknown>) => sent.push(m), tick: () => { clock += 10; } });
+    vm.runInContext(serviceWorker, context);
+    vm.runInContext('perform = async (operation, input) => { tick(); await Promise.resolve(); return { tabId: input.tabId, completed: true, content: "secret-page" }; };', context);
+    const handle = vm.runInContext("handleMessage", context) as (raw: string) => Promise<void>;
+    const make = (id: string, tabId: string) => JSON.stringify({ type: "request", id, operation: "fill", input: { tabId, value: "secret-fill" }, measureTiming: true });
+    await Promise.all([handle(make("one", "personal:1")), handle(make("two", "personal:2"))]);
+    await handle(make("three", "personal:1"));
+    expect(sent.map(m => m.id)).toEqual(["one", "two", "three"]);
+    const times = sent.map(m => m.timing as Record<string, number>);
+    for (const t of times) {
+      expect(t).toBeDefined();
+      expect(t.totalMs).toBeGreaterThanOrEqual(t.queueMs! + t.actionMs! + t.snapshotMs! + t.serializationMs!);
+      expect(t.queueMs).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(t)).not.toMatch(/secret|personal|value|content/);
+      expect(JSON.stringify(t).length).toBeLessThan(256);
+    }
+    expect(times[2]?.actionMs).toBe(10);
+    expect(times[2]?.snapshotMs).toBe(0);
+    expect(vm.runInContext("inFlightRequests.size", context)).toBe(0);
+  });
+
+  it("measures final snapshot separately from action in the actual sequence", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let clock = 0;
+    const context = vm.createContext({ performance: { now: () => clock },
+      throwIfAborted() {}, fill: async () => { clock += 4; return { completed: true }; },
+      snapshot: async () => { clock += 7; return { content: "secret-dom", refs: [] }; } });
+    vm.runInContext(extractFunction(serviceWorker, "sequence"), context);
+    const sequence = vm.runInContext("sequence", context) as (input: unknown, signal: unknown, timing: Record<string, number>) => Promise<unknown>;
+    const timing = { snapshotMs: 0 };
+    await sequence({ tabId: "personal:1", steps: [{ action: "fill", value: "secret-fill" }], finalSnapshot: true }, undefined, timing);
+    expect(timing.snapshotMs).toBe(7);
+  });
+
   it("announces a versioned capability handshake and blocks private navigation targets", () => {
     const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
       "x".repeat(43),

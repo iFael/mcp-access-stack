@@ -98,11 +98,24 @@ function connect() {
   };
 }
 
-function send(value) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
+function send(value, timing) {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  const started = performance.now();
+  let raw = JSON.stringify(value);
+  if (timing) {
+    timing.serializationMs = performance.now() - started;
+    timing.totalMs = performance.now() - timing.started;
+    const safe = { receivedAt: timing.receivedAt, totalMs: timing.totalMs, queueMs: timing.queueMs,
+      actionMs: timing.actionMs, snapshotMs: timing.snapshotMs, serializationMs: timing.serializationMs };
+    // Append the small fixed metadata without serializing the result a second time.
+    raw = raw.slice(0, -1) + ',"timing":' + JSON.stringify(safe) + '}';
+  }
+  socket.send(raw);
 }
 
 async function handleMessage(raw) {
+  const received = performance.now();
+  const receivedAt = Date.now();
   let message;
   try {
     message = JSON.parse(String(raw));
@@ -116,6 +129,7 @@ async function handleMessage(raw) {
   if (message?.type !== "request" || typeof message.id !== "string") return;
 
   const operation = String(message.operation);
+  const timing = message.measureTiming === true ? { started: received, receivedAt, totalMs: 0, queueMs: 0, actionMs: 0, snapshotMs: 0, serializationMs: 0 } : undefined;
   const controller = new AbortController();
   inFlightRequests.set(message.id, controller);
   const deadlineMs = typeof message.deadlineAt === "string"
@@ -128,8 +142,8 @@ async function handleMessage(raw) {
   }
 
   try {
-    const result = await runRequest(operation, message.input ?? {}, controller.signal);
-    send({ type: "response", id: message.id, ok: true, result });
+    const result = await runRequest(operation, message.input ?? {}, controller.signal, timing);
+    send({ type: "response", id: message.id, ok: true, result }, timing);
   } catch (error) {
     const normalized = normalizeRequestError(operation, controller.signal, error);
     send({
@@ -140,28 +154,37 @@ async function handleMessage(raw) {
         code: typeof normalized?.code === "string" ? normalized.code : "INTERNAL_ERROR",
         message: normalized instanceof Error ? normalized.message : String(normalized),
       },
-    });
+    }, timing);
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
     inFlightRequests.delete(message.id);
   }
 }
 
-async function runRequest(operation, input, signal) {
+async function runRequest(operation, input, signal, timing) {
   const queueKey = mutationQueueKey(operation, input);
+  const queuedAt = performance.now();
+  const execute = async () => {
+    if (timing && queueKey) timing.queueMs = performance.now() - queuedAt;
+    const started = performance.now();
+    const previousSnapshot = timing?.snapshotMs ?? 0;
+    try { return await perform(operation, input, signal, timing); }
+    finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
+  };
   if (!queueKey) {
     throwIfAborted(signal, operation, false);
-    const result = await perform(operation, input, signal);
+    const result = await execute();
     throwIfAborted(signal, operation, false);
     return result;
   }
 
   return enqueueMutation(queueKey, async () => {
+    if (timing) timing.queueMs = performance.now() - queuedAt;
     throwIfAborted(signal, operation, false);
     let started = false;
     try {
       started = true;
-      const result = await perform(operation, input, signal);
+      const result = await execute();
       throwIfAborted(signal, operation, started);
       return result;
     } catch (error) {
@@ -171,7 +194,7 @@ async function runRequest(operation, input, signal) {
   });
 }
 
-async function perform(operation, input, signal) {
+async function perform(operation, input, signal, timing) {
   switch (operation) {
     case "tabs": return tabs(input, signal);
     case "open": return open(input, signal);
@@ -182,7 +205,7 @@ async function perform(operation, input, signal) {
     case "press": return press(input, signal);
     case "wait": return wait(input, signal);
     case "extract": return extract(input, signal);
-    case "sequence": return sequence(input, signal);
+    case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "goBack": return goBack(input, signal);
     case "goForward": return goForward(input, signal);
@@ -398,7 +421,7 @@ async function extract(input) {
   };
 }
 
-async function sequence(input, signal) {
+async function sequence(input, signal, timing) {
   const results = [];
   for (let index = 0; index < input.steps.length; index += 1) {
     throwIfAborted(signal, "sequence", true);
@@ -418,7 +441,11 @@ async function sequence(input, signal) {
     });
   }
   const response = { tabId: input.tabId, completed: true, steps: results };
-  if (input.finalSnapshot) response.snapshot = await snapshot({ tabId: input.tabId }, signal);
+  if (input.finalSnapshot) {
+    const started = performance.now();
+    try { response.snapshot = await snapshot({ tabId: input.tabId }, signal); }
+    finally { if (timing) timing.snapshotMs += performance.now() - started; }
+  }
   return response;
 }
 

@@ -23,6 +23,71 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("logs a safe peer error code with a terminal but never its private message", async () => {
+    const events: Record<string, unknown>[]=[];
+    const { bridge,extension,close }=await startAuthenticatedBridge(e => events.push(e));
+    extension.on("message", data => { const m=JSON.parse(data.toString()) as WireMessage; if(m.type==="request") extension.send(JSON.stringify({ type:"response",id:m.id,ok:false,error:{code:"LOCATOR_NOT_FOUND",message:"secret-user-message"} })); });
+    try {
+      await expect(bridge.fill({tabId:"personal:1",ref:"ref",value:"secret-fill"})).rejects.toMatchObject({code:"LOCATOR_NOT_FOUND"});
+      expect(events.filter(e=>e.event==="browser_latency")).toEqual([expect.objectContaining({outcome:"error",errorCode:"LOCATOR_NOT_FOUND"})]);
+      expect(JSON.stringify(events)).not.toContain("secret-");
+    } finally {await close();}
+  });
+  it("correlates concurrent tabs and fresh sequential calls without logging input or trusting peer metrics", async () => {
+    const events: Record<string, unknown>[] = [];
+    const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+    const requests: WireMessage[] = [];
+    extension.on("message", data => {
+      const m = JSON.parse(data.toString()) as WireMessage;
+      if (m.type !== "request") return;
+      requests.push(m);
+      extension.send(JSON.stringify({ type: "response", id: m.id, ok: true,
+        result: { tabId: (m.input as { tabId: string }).tabId, completed: true },
+        timing: { receivedAt: Date.now(), totalMs: 2, queueMs: 0, actionMs: 1, snapshotMs: 1, serializationMs: 0,
+          value: "secret-peer-value", contentBase64: "secret-image" } }));
+    });
+    try {
+      await Promise.all(ids.map((requestId, i) => bridge.fill({ tabId: "personal:" + (i+1), ref: "ref", value: "secret-fill-value" },
+        { latency: { requestId, gatewayRequestId: requestId }, invocationId: requestId } as never)));
+      await bridge.fill({ tabId: "personal:1", ref: "ref", value: "secret-sequential-value" },
+        { latency: { requestId: ids[0], gatewayRequestId: ids[0] }, invocationId: ids[0] } as never);
+      const terminal = events.filter(e => e.event === "browser_latency" && e.layer === "bridge");
+      expect(terminal).toHaveLength(3);
+      expect(terminal.map(e => e.requestId)).toEqual([ids[0], ids[1], ids[0]]);
+      expect(new Set(terminal.map(e => e.bridgeRequestId)).size).toBe(3);
+      for (const e of terminal) {
+        expect(e.outcome).toBe("success");
+        expect(e.durationMs).toEqual(expect.any(Number));
+        expect(e.durationMs as number).toBeGreaterThanOrEqual(0);
+        expect(e.requestBytes as number).toBeGreaterThan(0);
+        expect(e.responseBytes as number).toBeGreaterThan(0);
+        expect(e.extensionTotalMs).toBe(2);
+        expect(JSON.stringify(e).length).toBeLessThan(2048);
+      }
+      expect(requests.every(m => m.measureTiming === true)).toBe(true);
+      expect(JSON.stringify(terminal)).not.toMatch(/secret-|token|ownerScope/);
+    } finally { await close(); }
+  });
+
+  it("emits exactly one terminal event after mutation cancellation and ignores late replies", async () => {
+    const events: Record<string, unknown>[] = [];
+    const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
+    const controller = new AbortController();
+    try {
+      const dispatched = nextWireMessage(extension, m => m.type === "request");
+      const result = bridge.fill({ tabId: "personal:7", ref: "ref", value: "secret" }, { signal: controller.signal });
+      const rejection = expect(result).rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN" });
+      const request = await dispatched;
+      controller.abort();
+      await rejection;
+      extension.send(JSON.stringify({ type: "response", id: request.id, ok: true, result: { tabId: "personal:7", completed: true } }));
+      const terminal = events.filter(e => e.event === "browser_latency");
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]).toMatchObject({ outcome: "cancelled", errorCode: "EXECUTION_OUTCOME_UNKNOWN" });
+    } finally { await close(); }
+  });
+
   it("materializes the extension, rejects an invalid token and accepts authenticated RPC", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
@@ -260,7 +325,8 @@ describe("PersonalBrowserBridge", () => {
   });
 
   it("bounds calls by the upstream deadline and propagates the effective deadline", async () => {
-    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const events: Record<string, unknown>[] = [];
+    const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
     try {
       const deadlineAt = new Date(Date.now() + 500).toISOString();
       const requestPromise = nextWireMessage(
@@ -284,6 +350,7 @@ describe("PersonalBrowserBridge", () => {
         Date.parse(deadlineAt),
       );
       await expect(call).rejects.toMatchObject({ code: "BROWSER_WORKER_TIMEOUT" });
+      expect(events.filter(e => e.event === "browser_latency")).toEqual([expect.objectContaining({ outcome:"timeout",errorCode:"BROWSER_WORKER_TIMEOUT" })]);
     } finally {
       await close();
     }
@@ -331,7 +398,7 @@ interface WireMessage {
   [key: string]: unknown;
 }
 
-async function startAuthenticatedBridge(): Promise<{
+async function startAuthenticatedBridge(log?: (entry: Record<string, unknown>) => void): Promise<{
   bridge: PersonalBrowserBridge;
   extension: WebSocket;
   token: string;
@@ -341,7 +408,7 @@ async function startAuthenticatedBridge(): Promise<{
   const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
   temporaryRoots.push(root);
   const port = await reservePort();
-  const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+  const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port, ...(log ? { log } : {}) });
   const workerSource = await readFile(
     path.join(root, "browser", "personal-extension", "service-worker.js"),
     "utf8",

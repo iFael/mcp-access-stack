@@ -118,6 +118,18 @@ describe("McpOperationRegistry", () => {
 });
 
 describe("gateway MCP operation context", () => {
+  it("copies HTTP latency identity per lease and never inherits an earlier request's metadata", () => {
+    const registry=new McpOperationRegistry();
+    const ids={ requestId:"11111111-1111-4111-8111-111111111111", gatewayRequestId:"22222222-2222-4222-8222-222222222222" };
+    const options={ registry, principalKey:"p", operationScopeKey:"s", cancellationScopeKey:"c", requestSignal:new AbortController().signal };
+    const first=createGatewayOperationContextFactory({ ...options, latency:ids })({ signal:new AbortController().signal, requestId:1 },1000);
+    expect(first.context.latency).toEqual(ids);
+    expect(first.context.latency).not.toBe(ids);
+    first.release();
+    const second=createGatewayOperationContextFactory(options)({ signal:new AbortController().signal, requestId:2 },1000);
+    expect(second.context.latency).toBeUndefined();
+    second.release(); expect(registry.size).toBe(0);
+  });
   it("creates a unique invocation id while preserving the MCP correlation id", () => {
     const registry = new McpOperationRegistry();
     const factory = createGatewayOperationContextFactory({

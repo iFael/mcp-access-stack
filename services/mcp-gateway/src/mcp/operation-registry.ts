@@ -172,6 +172,7 @@ export interface GatewayOperationContextFactoryOptions {
   cancellationScopeKey: string;
   ownerScopeKey?: string;
   requestLifecycleId?: string;
+  latency?: { requestId?: string; relayRequestId?: string; gatewayRequestId?: string; gatewayStartedAt?: number };
   requestSignal: AbortSignal;
 }
 
@@ -256,6 +257,7 @@ export function createGatewayOperationContextFactory(
         signal: controller.signal,
         correlationId: String(extra.requestId),
         invocationId: randomUUID(),
+        ...(options.latency ? { latency: { ...options.latency } } : {}),
         ownerScope: options.ownerScopeKey ?? options.cancellationScopeKey,
         deadline,
       },
