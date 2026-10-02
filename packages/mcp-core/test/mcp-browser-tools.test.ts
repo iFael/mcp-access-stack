@@ -249,6 +249,10 @@ describe("registerBrowserTools", () => {
     );
     registerBrowserTools(server, executor);
 
+    // Multimodal screenshot content must stay visible to MCP/Code Mode instead
+    // of being collapsed to structuredContent by a published output schema.
+    expect(registeredTools(server).browser_screenshot?.outputSchema).toBeUndefined();
+
     const result = await callTool(server, "browser_screenshot", {
       tabId: "personal:42",
     });

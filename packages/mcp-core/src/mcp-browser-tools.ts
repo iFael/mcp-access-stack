@@ -222,7 +222,15 @@ export function registerBrowserTools(
         title: definition.name,
         description: definition.description,
         inputSchema: withBrowserRuntimeSelectors(definition.input),
-        outputSchema: definition.output,
+        // browser_screenshot intentionally omits a published outputSchema. ChatGPT
+        // Code Mode materializes schema-backed MCP tools as structured-only
+        // wrappers, which hides CallToolResult.content image blocks. The handler
+        // still validates structuredContent with definition.output below, while
+        // omitting only the public descriptor lets the raw MCP image content
+        // remain available to the model/tool orchestrator.
+        ...(definition.name === "browser_screenshot"
+          ? {}
+          : { outputSchema: definition.output }),
         annotations: {
           readOnlyHint: definition.readOnly,
           destructiveHint: definition.destructive ?? false,
