@@ -3,14 +3,32 @@ export interface PersonalBrowserExtensionAssets {
   serviceWorker: string;
 }
 
+export const PERSONAL_BROWSER_PROTOCOL_VERSION = 1;
+export const PERSONAL_BROWSER_EXTENSION_VERSION = "0.2.0";
+export const PERSONAL_BROWSER_CAPABILITIES = [
+  "tabs",
+  "open",
+  "navigate",
+  "snapshot",
+  "click",
+  "fill",
+  "press",
+  "wait",
+  "extract",
+  "sequence",
+  "closeTab",
+  "finishTask",
+] as const;
+
 export function buildPersonalBrowserExtensionAssets(
   token: string,
   port: number,
+  blockedPrivateOrigins: readonly string[] = [],
 ): PersonalBrowserExtensionAssets {
   const manifest = JSON.stringify({
     manifest_version: 3,
     name: "MCP V3 Personal Browser",
-    version: "0.1.0",
+    version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
     permissions: ["tabs", "scripting", "storage"],
@@ -28,6 +46,10 @@ export function buildPersonalBrowserExtensionAssets(
 const BRIDGE_TOKEN = ${JSON.stringify(token)};
 const BRIDGE_PORT = ${port};
 const BRIDGE_URL = "ws://127.0.0.1:" + BRIDGE_PORT + "/?token=" + encodeURIComponent(BRIDGE_TOKEN);
+const PROTOCOL_VERSION = ${PERSONAL_BROWSER_PROTOCOL_VERSION};
+const EXTENSION_VERSION = ${JSON.stringify(PERSONAL_BROWSER_EXTENSION_VERSION)};
+const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
+const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs";
 const MUTATING_OPERATIONS = new Set([
@@ -52,7 +74,14 @@ const mutationQueues = new Map();
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   socket = new WebSocket(BRIDGE_URL);
-  socket.onopen = () => send({ type: "hello", browser: "chrome", profile: "personal" });
+  socket.onopen = () => send({
+    type: "hello",
+    protocolVersion: PROTOCOL_VERSION,
+    extensionVersion: EXTENSION_VERSION,
+    browser: "chrome",
+    profile: "personal",
+    capabilities: CAPABILITIES,
+  });
   socket.onmessage = (event) => {
     void handleMessage(event.data);
   };
@@ -179,19 +208,13 @@ async function tabs(input) {
 }
 
 async function open(input, signal) {
-  if (typeof input.url !== "string" ||
-      (!input.url.startsWith("http://") && !input.url.startsWith("https://"))) {
-    throw coded("INVALID_ARGUMENT", "Personal browser mode requires an explicit http(s) URL.");
-  }
-  if (input.url === "about:blank") {
-    throw coded("NAVIGATION_BLOCKED", "about:blank is not a valid personal browser target.");
-  }
+  const targetUrl = assertPersonalNavigationTarget(input.url);
 
   if (input.reusable) {
     const restored = await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const [key, metadata] of Object.entries(owned)) {
-        if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? input.url)) continue;
+        if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? targetUrl)) continue;
         const chromeTabId = Number(key);
         const existing = await chrome.tabs.get(chromeTabId).catch(() => undefined);
         if (!existing) {
@@ -211,7 +234,7 @@ async function open(input, signal) {
   }
 
   throwIfAborted(signal, "open", false);
-  const tab = await chrome.tabs.create({ url: input.url, active: true });
+  const tab = await chrome.tabs.create({ url: targetUrl, active: true });
   if (typeof tab.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
   try {
     await waitForTabComplete(tab.id, 30000, signal);
@@ -224,13 +247,13 @@ async function open(input, signal) {
     ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
     lifecycle: typeof input.taskId === "string" ? "task-scoped" : "persistent",
     ownership: "mcp",
-    purpose: input.purpose ?? input.url,
+    purpose: input.purpose ?? targetUrl,
     reusable: Boolean(input.reusable),
     protected: Boolean(input.protected),
     sticky: Boolean(input.sticky),
     createdAt: now,
     lastUsedAt: now,
-    requestedUrl: input.url,
+    requestedUrl: targetUrl,
   };
   const refreshed = await withOwnershipLock(async () => {
     const current = await chrome.tabs.get(tab.id).catch(() => undefined);
@@ -246,15 +269,16 @@ async function open(input, signal) {
 async function navigate(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
+  const targetUrl = assertPersonalNavigationTarget(input.url);
   throwIfAborted(signal, "navigate", false);
-  await chrome.tabs.update(chromeTabId, { url: input.url, active: true });
+  await chrome.tabs.update(chromeTabId, { url: targetUrl, active: true });
   try {
     await waitForTabComplete(chromeTabId, 30000, signal);
   } catch (error) {
     if (signal?.aborted) throw error;
   }
   metadata.lastUsedAt = new Date().toISOString();
-  metadata.requestedUrl = input.url;
+  metadata.requestedUrl = targetUrl;
   await updateMetadata(chromeTabId, metadata);
   const tab = await chrome.tabs.get(chromeTabId);
   return { tab: toBrowserTab(metadata, tab) };
@@ -667,6 +691,62 @@ function extractPage(ref, selector, format) {
     };
   }
   return { found: true, value: target.innerText || target.textContent || "" };
+}
+
+function assertPersonalNavigationTarget(rawUrl) {
+  if (typeof rawUrl !== "string") {
+    throw coded("INVALID_ARGUMENT", "Personal browser mode requires an explicit http(s) URL.");
+  }
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    throw coded("INVALID_ARGUMENT", "Personal browser mode requires a valid http(s) URL.");
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    throw coded("NAVIGATION_BLOCKED", "Personal browser mode only permits http(s) navigation.");
+  }
+  if (target.username || target.password) {
+    throw coded("NAVIGATION_BLOCKED", "Credentials embedded in browser URLs are not permitted.");
+  }
+  if (BLOCKED_PRIVATE_ORIGINS.has(target.origin) || isPrivateHost(target.hostname)) {
+    throw coded(
+      "NAVIGATION_BLOCKED",
+      "Personal browser mode blocks private or local network targets; use browser_open_authorized_site in managed mode.",
+    );
+  }
+  return target.href;
+}
+
+function isPrivateHost(rawHost) {
+  const host = String(rawHost || "").toLowerCase().replace(/^\\[|\\]$/g, "");
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host.startsWith("::ffff:")) return isPrivateIpv4(host.slice(7));
+  if (host.includes(":")) {
+    return host === "::" ||
+      host === "::1" ||
+      host.startsWith("fc") ||
+      host.startsWith("fd") ||
+      /^fe[89ab]/u.test(host);
+  }
+  return isPrivateIpv4(host);
+}
+
+function isPrivateIpv4(host) {
+  if (!/^\\d{1,3}(?:\\.\\d{1,3}){3}$/u.test(host)) return false;
+  const parts = host.split(".").map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b] = parts;
+  return a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224;
 }
 
 function coded(code, message) {

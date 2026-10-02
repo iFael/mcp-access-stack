@@ -5,6 +5,52 @@ import { buildPersonalBrowserExtensionAssets } from "../../../src/companion/pers
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("announces a versioned capability handshake and blocks private navigation targets", () => {
+    const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
+      "x".repeat(43),
+      3361,
+      ["https://private.example.test"],
+    );
+    const parsedManifest = JSON.parse(manifest) as { version: string };
+    expect(parsedManifest.version).toBe("0.2.0");
+    expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
+    expect(serviceWorker).toContain("capabilities: CAPABILITIES");
+
+    const context = vm.createContext({ URL, Set, String, Number, Error });
+    vm.runInContext(
+      [
+        'const BLOCKED_PRIVATE_ORIGINS = new Set(["https://private.example.test"]);',
+        extractFunction(serviceWorker, "coded"),
+        extractFunction(serviceWorker, "isPrivateIpv4"),
+        extractFunction(serviceWorker, "isPrivateHost"),
+        extractFunction(serviceWorker, "assertPersonalNavigationTarget"),
+      ].join("\n"),
+      context,
+    );
+    const assertTarget = vm.runInContext(
+      "assertPersonalNavigationTarget",
+      context,
+    ) as (url: string) => string;
+
+    expect(assertTarget("https://example.com/path")).toBe(
+      "https://example.com/path",
+    );
+    for (const blocked of [
+      "http://localhost:3000/",
+      "http://127.0.0.1/",
+      "http://192.168.1.10/",
+      "https://private.example.test/app",
+      "file:///tmp/test",
+    ]) {
+      try {
+        assertTarget(blocked);
+        throw new Error(`Expected navigation to be blocked: ${blocked}`);
+      } catch (error) {
+        expect((error as { code?: string }).code).toBe("NAVIGATION_BLOCKED");
+      }
+    }
+  });
+
   it("never exposes a password input value as an accessible name", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const password = fakeElement({

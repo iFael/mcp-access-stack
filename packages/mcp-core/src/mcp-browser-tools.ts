@@ -291,7 +291,7 @@ function definitions(
   workspaceExecutor: WorkspaceExecutor | undefined,
 ): Definition[] {
   return [
-    d("browser_status", "Returns the persistent direct Playwright engine status and capabilities.", c.browserStatusInputSchema, c.browserStatusResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_status", "Returns managed Browser Worker status and capabilities, plus connected personal Chrome provider details when available.", c.browserStatusInputSchema, c.browserStatusResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.status(assumeParsed(v)),
       (activeContext) => e.status(assumeParsed(v), activeContext),
