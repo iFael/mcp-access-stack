@@ -650,7 +650,7 @@ async function writeOwnedTabs(owned) {
 }
 
 function toBrowserTab(metadata, tab) {
-  const { mcpGroupId: _mcpGroupId, ...publicMetadata } = metadata;
+  const { mcpGroupId: _mcpGroupId, lockedUrl: _lockedUrl, ...publicMetadata } = metadata;
   return {
     ...publicMetadata,
     ...(typeof tab.url === "string" &&

@@ -62,6 +62,36 @@ describe("personal browser extension assets", () => {
     }
   });
 
+  it("keeps private ownership metadata out of public tab responses", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ String });
+    const toBrowserTab = vm.runInContext(
+      `(${extractFunction(serviceWorker, "toBrowserTab")})`,
+      context,
+    ) as (metadata: Record<string, unknown>, tab: Record<string, unknown>) => Record<string, unknown>;
+
+    const result = toBrowserTab(
+      {
+        tabId: "personal:41",
+        sticky: true,
+        protected: true,
+        mcpGroupId: 17,
+        lockedUrl: "https://example.com/locked",
+      },
+      { url: "https://example.com/current", title: "Current" },
+    );
+
+    expect(result).toMatchObject({
+      tabId: "personal:41",
+      sticky: true,
+      protected: true,
+      url: "https://example.com/current",
+      title: "Current",
+    });
+    expect(result).not.toHaveProperty("mcpGroupId");
+    expect(result).not.toHaveProperty("lockedUrl");
+  });
+
   it("never exposes a password input value as an accessible name", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const password = fakeElement({
