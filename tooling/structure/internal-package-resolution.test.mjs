@@ -42,6 +42,7 @@ test("uses one canonical source-resolution contract for internal packages", asyn
     "services/mcp-edge-gateway/jest.config.ts",
     "services/mcp-gateway/jest.config.ts",
     "services/workspace-agent/jest.config.ts",
+    "services/oracle-release-orchestrator/jest.config.ts",
   ]) {
     const config = await readFile(path.join(repoRoot, relativePath), "utf8");
     assert.doesNotMatch(config, /sharedSourceUrl/u, `${relativePath} must rely on the shared preset mapping`);
@@ -103,6 +104,7 @@ test("uses one worktree-safe Jest runner instead of hardcoded node_modules paths
     "services/mcp-edge-gateway/package.json",
     "services/mcp-gateway/package.json",
     "services/workspace-agent/package.json",
+    "services/oracle-release-orchestrator/package.json",
   ];
 
   for (const relativePath of packageFiles) {

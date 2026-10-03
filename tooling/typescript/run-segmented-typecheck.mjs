@@ -8,6 +8,7 @@ const segments = [
   ["edge-protocol", "tsconfig.typecheck.edge-protocol.json"],
   ["browser-worker", "tsconfig.typecheck.browser-worker.json"],
   ["workspace-agent", "tsconfig.typecheck.workspace-agent.json"],
+  ["oracle-release-orchestrator", "tsconfig.typecheck.oracle-release-orchestrator.json"],
   ["mcp-gateway", "tsconfig.typecheck.mcp-gateway.json"],
   ["tooling", "tsconfig.typecheck.tooling.json"],
 ];

@@ -22,6 +22,8 @@
     "services/browser-worker/**/*.ts",
     "services/workspace-agent/src/**/*.ts",
     "services/workspace-agent/test/**/*.ts",
+    "services/oracle-release-orchestrator/src/**/*.ts",
+    "services/oracle-release-orchestrator/test/**/*.ts",
     "services/mcp-gateway/src/**/*.ts",
     "services/mcp-gateway/test/**/*.ts",
     "tooling/smoke/**/*.ts",

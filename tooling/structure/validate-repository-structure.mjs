@@ -30,6 +30,12 @@ const REQUIRED_DIRECTORIES = [
   "services/workspace-agent/test/unit",
   "services/workspace-agent/test/integration",
   "services/workspace-agent/test/support",
+  "services/oracle-release-orchestrator",
+  "services/oracle-release-orchestrator/src/engine",
+  "services/oracle-release-orchestrator/src/storage",
+  "services/oracle-release-orchestrator/src/workflows",
+  "services/oracle-release-orchestrator/test/unit",
+  "services/oracle-release-orchestrator/test/integration",
   "packages/mcp-core",
   "operations/browser",
   "operations/validation",
@@ -69,6 +75,7 @@ const REQUIRED_FILES = [
   "services/browser-worker/jest.config.ts",
   "services/mcp-gateway/jest.config.ts",
   "services/workspace-agent/jest.config.ts",
+  "services/oracle-release-orchestrator/jest.config.ts",
 ];
 
 const FORBIDDEN_ROOT_DIRECTORIES = [
@@ -216,6 +223,16 @@ export function validateRepositoryStructure(root = process.cwd()) {
       !["unit/", "integration/", "e2e/"].some((prefix) => relative.startsWith(prefix))
     ) {
       issues.push(`Workspace Agent test must live under unit/, integration/ or e2e/: ${relative}`);
+    }
+  }
+  const orchestratorTestRoot = path.join(root, "services/oracle-release-orchestrator/test");
+  for (const file of listTextFiles(orchestratorTestRoot)) {
+    const relative = path.relative(orchestratorTestRoot, file).replaceAll("\\", "/");
+    if (
+      relative.endsWith(".test.ts") &&
+      !["unit/", "integration/"].some((prefix) => relative.startsWith(prefix))
+    ) {
+      issues.push(`Oracle Release Orchestrator test must live under unit/ or integration/: ${relative}`);
     }
   }
   for (const file of FORBIDDEN_SERVICE_TOOLING_FILES) {

@@ -103,6 +103,10 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
         run: npm run check:syntax
 
+      - name: Build and test Oracle Release Orchestrator
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.rootBroad == 'true')
+        run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
+
       - name: Validate public MCP contracts
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
         run: npm run ci:contracts

@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "services/oracle-release-orchestrator/src/**/*.ts",
+    "services/oracle-release-orchestrator/test/**/*.ts"
+  ]
+}
