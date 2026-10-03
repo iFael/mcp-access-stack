@@ -4,7 +4,7 @@ export const BROWSER_LATENCY_RELAY_HEADER = "x-mcp-browser-relay-id";
 export const BROWSER_LATENCY_CAPTURE_LIMIT = 256;
 export type BrowserLatencyIds = {
   requestId?: string; relayRequestId?: string; gatewayRequestId?: string;
-  invocationId?: string; bridgeRequestId?: string;
+  invocationId?: string; bridgeRequestId?: string; mcpCallIdHash?: string;
 };
 // Exact public MCP names; the manifest parity test guards this list.
 export const BROWSER_LATENCY_OPERATIONS = [
@@ -46,12 +46,26 @@ const browserTools: ReadonlySet<string> = new Set(BROWSER_LATENCY_OPERATIONS);
 export function isBrowserLatencyOperation(operation: string): boolean {
   return browserTools.has(operation);
 }
-export function browserLatencyOperation(body: unknown): string {
+export type BrowserLatencyRequestInfo = { operation: string; jsonRpcId?: string | number };
+const MAX_JSON_RPC_ID_BYTES = 256;
+function boundedJsonRpcId(value: unknown): string | number | undefined {
+  if (typeof value === "string" && value.length <= MAX_JSON_RPC_ID_BYTES && new TextEncoder().encode(value).byteLength <= MAX_JSON_RPC_ID_BYTES) return value;
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+// The raw MCP id stays in memory only; callers may hash it with the session for private log correlation.
+export function browserLatencyRequestInfo(body: unknown): BrowserLatencyRequestInfo {
   try {
-    const value = (typeof body === "string" ? JSON.parse(body) : body) as { method?: unknown; params?: { name?: unknown } } | null;
+    const value = (typeof body === "string" ? JSON.parse(body) : body) as {
+      jsonrpc?: unknown; id?: unknown; method?: unknown; params?: { name?: unknown } | null;
+    } | null;
     const name = value?.method === "tools/call" ? value.params?.name : undefined;
-    return typeof name === "string" && isBrowserLatencyOperation(name) ? name : "mcp_http";
-  } catch { return "mcp_http"; }
+    const operation = typeof name === "string" && isBrowserLatencyOperation(name) ? name : "mcp_http";
+    const jsonRpcId = value?.jsonrpc === "2.0" && operation !== "mcp_http" ? boundedJsonRpcId(value.id) : undefined;
+    return jsonRpcId === undefined ? { operation } : { operation, jsonRpcId };
+  } catch { return { operation: "mcp_http" }; }
+}
+export function browserLatencyOperation(body: unknown): string {
+  return browserLatencyRequestInfo(body).operation;
 }
 // These are internal BrowserOperation RPC names, never accepted as MCP tool aliases.
 // Emit the corresponding canonical catalog name even at the bridge boundary.
@@ -92,11 +106,20 @@ export function createBrowserLatencyRecorder(log: (entry: Record<string, unknown
     const captureIndex = admitted;
     let finished = false;
     const safeIds: Record<string, string> = {};
-    for (const key of ["requestId", "relayRequestId", "gatewayRequestId", "invocationId", "bridgeRequestId"] as const) {
-      const id = latencyId(ids[key]); if (id) safeIds[key] = id;
-    }
+    const addSafeIds = (candidate: BrowserLatencyIds) => {
+      for (const key of ["requestId", "relayRequestId", "gatewayRequestId", "invocationId", "bridgeRequestId"] as const) {
+        const id = latencyId(candidate[key]); if (id) safeIds[key] = id;
+      }
+      if (typeof candidate.mcpCallIdHash === "string" && /^[0-9a-f]{64}$/u.test(candidate.mcpCallIdHash)) {
+        safeIds.mcpCallIdHash = candidate.mcpCallIdHash;
+      }
+    };
+    addSafeIds(ids);
     return {
       enabled,
+      addIds(candidate: BrowserLatencyIds) {
+        if (enabled && !finished) addSafeIds(candidate);
+      },
       finish(outcome: Outcome, values: Record<string, unknown> = {}) {
         if (finished || !enabled) return;
         finished = true;

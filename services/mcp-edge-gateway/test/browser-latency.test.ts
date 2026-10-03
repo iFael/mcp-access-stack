@@ -1,9 +1,9 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import { createBrowserLatencyRecorder, extensionLatencyMetrics, latencyId, browserLatencyOperation, BROWSER_LATENCY_OPERATIONS, BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER } from "@mcp-access-stack/edge-protocol";
+import { createBrowserLatencyRecorder, extensionLatencyMetrics, latencyId, browserLatencyOperation, browserLatencyRequestInfo, BROWSER_LATENCY_OPERATIONS, BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER } from "@mcp-access-stack/edge-protocol";
 import { measureEdgeMcpRequest } from "../src/browser-latency.js";
 import { EDGE_MCP_TOOL_MANIFEST } from "../src/generated/mcp-tool-manifest.js";
 import { browserOperationSchema } from "@vs-code-gpt/shared";
-const browserBody = JSON.stringify({ method: "tools/call", params: { name: "browser_fill", arguments: { value: "secret-body" } } });
+const browserBody = JSON.stringify({ jsonrpc: "2.0", id: "private-request-id", method: "tools/call", params: { name: "browser_fill", arguments: { value: "secret-body" } } });
 const id = "11111111-1111-4111-8111-111111111111";
 describe("bounded browser latency", () => {
   it("matches the exact canonical public Browser catalog and maps bridge RPCs to that catalog", () => {
@@ -19,6 +19,14 @@ describe("bounded browser latency", () => {
       expect(browserLatencyOperation(JSON.stringify({ method: "tools/call", params: { name } }))).toBe("mcp_http");
     }
     for (const body of [null, "invalid JSON", [], { method: "tools/list", params: { name: "browser_fill" } }, { method: "initialize" }]) expect(browserLatencyOperation(body)).toBe("mcp_http");
+    expect(browserLatencyRequestInfo({ jsonrpc: "2.0", id: "call-42", method: "tools/call", params: { name: "browser_fill" } }))
+      .toEqual({ operation: "browser_fill", jsonRpcId: "call-42" });
+    expect(browserLatencyRequestInfo({ jsonrpc: "2.0", id: "x".repeat(257), method: "tools/call", params: { name: "browser_fill" } }))
+      .toEqual({ operation: "browser_fill" });
+    expect(browserLatencyRequestInfo({ jsonrpc: "2.0", id: "é".repeat(129), method: "tools/call", params: { name: "browser_fill" } }))
+      .toEqual({ operation: "browser_fill" });
+    expect(browserLatencyRequestInfo({ jsonrpc: "2.0", id: "call-42", method: "tools/call", params: { name: "list_devices" } }))
+      .toEqual({ operation: "mcp_http" });
     const events: Record<string, unknown>[] = [];
     const bridge = createBrowserLatencyRecorder(e => events.push(e), "bridge");
     for (const operation of browserOperationSchema.options) bridge({}, operation).finish("success");
@@ -81,13 +89,15 @@ describe("bounded browser latency", () => {
     const events: Record<string, unknown>[] = []; let clock = 10;
     const record = createBrowserLatencyRecorder(e => events.push(e), "relay", 2, () => clock);
     const first = record({ requestId: id, bridgeRequestId: "secret-identity" }, "browser_fill");
+    first.addIds({ mcpCallIdHash: "a".repeat(64) });
     clock = 15;
     first.finish("success", { requestBytes: 100, responseBytes: Infinity, actionMs: -1, value: "secret-fill", token: "secret-token", contentBase64: "secret-image" });
     first.finish("error");
     record({ requestId: id }, "browser_sequence").finish("cancelled");
     record({ requestId: id }, "browser_sequence").finish("success");
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({ requestId: id, durationMs: 5, requestBytes: 100, operation: "browser_fill" });
+    expect(events[0]).toMatchObject({ requestId: id, mcpCallIdHash: "a".repeat(64), durationMs: 5, requestBytes: 100, operation: "browser_fill" });
+    expect(events[0]).not.toHaveProperty("value");
     expect(events[1]).toMatchObject({ durationMs: 0, outcome: "cancelled" });
     expect(JSON.stringify(events)).not.toMatch(/secret|Infinity|Base64/);
     expect(JSON.stringify(events[0]).length).toBeLessThan(2048);
@@ -126,6 +136,40 @@ describe("bounded browser latency", () => {
       expect(event).toMatchObject({ layer:"edge",requestId:routedId,outcome:"success",stage:"terminal" });
       expect(event.durationMs as number).toBeGreaterThanOrEqual(0);
       expect(JSON.stringify(spy.mock.calls)).not.toContain("secret");
+    } finally { spy.mockRestore(); }
+  });
+  it("correlates a bounded MCP call ID to the Edge root and downstream relay ID without logging raw values", async () => {
+    const spy=jest.spyOn(console,"log").mockImplementation(() => undefined);
+    const sessionId="private-session-id-7";
+    const jsonRpcId="work-mcp-request-83";
+    const rawBody=JSON.stringify({ jsonrpc:"2.0", id:jsonRpcId, method:"tools/call",
+      params:{ name:"browser_fill", arguments:{ ref:"private-ref", value:"private-draft" } } });
+    let edgeRootId: string | undefined;
+    const relayEvents: Record<string, unknown>[]=[];
+    try {
+      await measureEdgeMcpRequest(new Request("https://edge.example/mcp", { method:"POST",
+        headers:{ "mcp-session-id":sessionId }, body:rawBody }), async routed => {
+        edgeRootId=routed.headers.get(BROWSER_LATENCY_ID_HEADER) ?? undefined;
+        const relay=createBrowserLatencyRecorder(event=>relayEvents.push(event),"relay");
+        relay({ requestId:edgeRootId, relayRequestId:id },"browser_fill").finish("success");
+        return new Response("ok");
+      });
+      const edgeEvent=JSON.parse(spy.mock.calls[0]?.[0] as string) as Record<string,unknown>;
+      const expectedHashBuffer=await crypto.subtle.digest("SHA-256",
+        new TextEncoder().encode(JSON.stringify(["mcp-browser-call:v1",sessionId,typeof jsonRpcId,jsonRpcId])));
+      const expectedHash=Array.from(new Uint8Array(expectedHashBuffer), byte=>byte.toString(16).padStart(2,"0")).join("");
+      expect(edgeEvent).toMatchObject({ layer:"edge",requestId:edgeRootId,mcpCallIdHash:expectedHash });
+      expect(latencyId(edgeRootId)).toBe(edgeRootId);
+      expect(relayEvents[0]).toMatchObject({ requestId:edgeRootId,relayRequestId:id });
+      expect(JSON.stringify(spy.mock.calls)).not.toMatch(/private-session-id-7|work-mcp-request-83|private-ref|private-draft/);
+    } finally { spy.mockRestore(); }
+  });
+  it("omits the MCP call hash when no bounded session ID is available", async () => {
+    const spy=jest.spyOn(console,"log").mockImplementation(() => undefined);
+    try {
+      await measureEdgeMcpRequest(new Request("https://edge.example/mcp", { method:"POST", body:browserBody }), async () => new Response("ok"));
+      const event=JSON.parse(spy.mock.calls[0]?.[0] as string) as Record<string,unknown>;
+      expect(event).not.toHaveProperty("mcpCallIdHash");
     } finally { spy.mockRestore(); }
   });
   it("records a terminal when Edge dispatch fails", async () => {
