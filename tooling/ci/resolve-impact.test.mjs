@@ -13,6 +13,7 @@ function pick(result) {
     windowsRuntime: result.windowsRuntime,
     linuxRuntime: result.linuxRuntime,
     operationsTooling: result.operationsTooling,
+    updateControl: result.updateControl,
     rootBroad: result.rootBroad,
     docsOnly: result.docsOnly,
   };
@@ -33,6 +34,7 @@ test("docs-only changes do not fan out into runtime validation", () => {
     windowsRuntime: false,
     linuxRuntime: false,
     operationsTooling: false,
+    updateControl: false,
     rootBroad: false,
     docsOnly: true,
   });
@@ -109,4 +111,33 @@ test("unknown relevant source paths fail closed to broad coverage", () => {
   assert.equal(result.windowsRuntime, true);
   assert.equal(result.linuxRuntime, true);
   assert.equal(result.operationsTooling, true);
+});
+
+test("Update Control changes run the independent API, contract and auth lanes only", () => {
+  const worker = classifyChangedPaths(["services/update-control-worker/src/worker.ts"]);
+  assert.equal(worker.updateControl, true);
+  assert.equal(worker.edgeGateway, false);
+  assert.equal(worker.windowsRuntime, false);
+  assert.equal(worker.rootBroad, false);
+
+  const sharedAuth = classifyChangedPaths(["packages/mcp-owner-auth/src/owner-oauth.ts"]);
+  assert.equal(sharedAuth.updateControl, true);
+  assert.equal(sharedAuth.edgeGateway, true);
+  assert.equal(sharedAuth.rootBroad, false);
+
+  const ledgerApi = classifyChangedPaths(["services/oracle-release-orchestrator/src/read-api.ts"]);
+  assert.equal(ledgerApi.updateControl, true);
+  assert.equal(ledgerApi.rootBroad, false);
+});
+
+test("Edge Gateway-only changes stay on the edge-specific lane", () => {
+  const edge = classifyChangedPaths(["services/mcp-edge-gateway/src/worker.ts"]);
+  assert.equal(edge.edgeGateway, true);
+  assert.equal(edge.updateControl, false);
+  assert.equal(edge.rootBroad, false);
+  assert.equal(edge.shared, false);
+  assert.equal(edge.edgeProtocol, false);
+  assert.equal(edge.mcpGateway, false);
+  assert.equal(edge.workspaceAgent, false);
+  assert.equal(edge.browserWorker, false);
 });

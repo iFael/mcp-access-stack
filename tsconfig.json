@@ -12,23 +12,34 @@
       ],
       "@mcp-access-stack/edge-protocol": [
         "./packages/edge-protocol/src/index.ts"
+      ],
+      "@mcp-access-stack/update-control-contract": [
+        "./packages/update-control-contract/src/index.ts"
+      ],
+      "@mcp-access-stack/mcp-owner-auth": [
+        "./packages/mcp-owner-auth/src/index.ts"
       ]
     }
   },
   "include": [
     "packages/mcp-core/src/**/*.ts",
     "packages/edge-protocol/src/**/*.ts",
+    "packages/update-control-contract/src/**/*.ts",
+    "packages/mcp-owner-auth/src/**/*.ts",
     "packages/mcp-core/test/**/*.ts",
     "services/browser-worker/**/*.ts",
     "services/workspace-agent/src/**/*.ts",
     "services/workspace-agent/test/**/*.ts",
+    "services/oracle-release-orchestrator/src/**/*.ts",
+    "services/oracle-release-orchestrator/test/**/*.ts",
     "services/mcp-gateway/src/**/*.ts",
     "services/mcp-gateway/test/**/*.ts",
     "tooling/smoke/**/*.ts",
     "jest.config.ts",
     "jest.preset.ts",
     "packages/*/jest.config.ts",
-    "services/*/jest.config.ts"
+    "services/*/jest.config.ts",
+    "services/update-control-worker/src/**/*.ts"
   ],
   "exclude": [
     "services/browser-worker/dist/**"

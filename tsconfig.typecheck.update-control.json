@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2024",
+      "WebWorker"
+    ]
+  },
+  "include": [
+    "packages/update-control-contract/src/**/*.ts",
+    "packages/mcp-owner-auth/src/**/*.ts",
+    "services/update-control-worker/src/**/*.ts"
+  ]
+}

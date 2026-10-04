@@ -1,0 +1,14 @@
+{
+  "name": "@mcp-access-stack/oracle-release-orchestrator",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "description": "Durable Oracle-side MCP V3 release orchestration core.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
+    "test:unit": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand --selectProjects release-orchestrator-unit",
+    "test:integration": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand --selectProjects release-orchestrator-integration",
+    "start:read-api": "node dist/server.js"
+  }
+}

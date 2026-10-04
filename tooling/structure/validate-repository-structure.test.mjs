@@ -69,7 +69,7 @@ test("isolates TypeScript test workspaces and serializes Browser Worker", async 
 
   assert.equal(
     rootPackage.scripts["test:typescript"],
-    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent && npm run test:mcp-edge-gateway",
+    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent && npm run test:mcp-edge-gateway && npm run test:oracle-release-orchestrator && npm run test:update-control-worker",
   );
   assert.match(browserPackage.scripts.test, /(?:^|\s)--runInBand(?:\s|$)/u);
   assert.doesNotMatch(
@@ -116,6 +116,25 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
   assert.ok(
     workflow.replaceAll("\r\n", "\n").includes(expected),
     "global typecheck must skip edge-gateway-only changes so Check Edge Gateway owns that scope",
+  );
+});
+
+test("routes Update Control changes through dedicated typechecks", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const checkStart = workflow.indexOf("      - name: Check independent Update Control Worker");
+  const operationsStart = workflow.indexOf("      - name: Validate operations", checkStart);
+  const updateControlCheck = workflow.slice(checkStart, operationsStart);
+  assert.ok(checkStart >= 0 && operationsStart > checkStart, "dedicated Update Control check must exist");
+  assert.ok(
+    updateControlCheck.includes("needs.impact.outputs.updateControl == 'true'"),
+    "Update Control changes must run their dedicated validation",
+  );
+  assert.ok(
+    updateControlCheck.includes("npm run check:update-control && npm run test:update-control-worker"),
+    "Update Control lane must typecheck and test its Worker",
   );
 });
 

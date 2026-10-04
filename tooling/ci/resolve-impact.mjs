@@ -12,6 +12,7 @@ const IMPACT_KEYS = [
   "windowsRuntime",
   "linuxRuntime",
   "operationsTooling",
+  "updateControl",
   "rootBroad",
 ];
 
@@ -96,6 +97,23 @@ function classifyPath(repositoryPath, impact) {
     impact.edgeProtocol = true;
     return;
   }
+  if (projectPath.startsWith("packages/mcp-owner-auth/")) {
+    impact.updateControl = true;
+    impact.edgeGateway = true;
+    return;
+  }
+  if (projectPath.startsWith("packages/update-control-contract/")) {
+    impact.updateControl = true;
+    return;
+  }
+  if (projectPath.startsWith("services/oracle-release-orchestrator/")) {
+    impact.updateControl = true;
+    return;
+  }
+  if (projectPath.startsWith("services/update-control-worker/")) {
+    impact.updateControl = true;
+    return;
+  }
   if (projectPath.startsWith("services/workspace-agent/")) {
     impact.workspaceAgent = true;
     return;
@@ -146,6 +164,7 @@ function expandDependencies(impact) {
     impact.linuxRuntime = true;
   }
   if (impact.edgeProtocol) {
+    impact.updateControl = true;
     impact.mcpGateway = true;
     impact.edgeGateway = true;
     impact.windowsRuntime = true;

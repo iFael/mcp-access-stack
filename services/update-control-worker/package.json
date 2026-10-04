@@ -1,0 +1,21 @@
+{
+  "name": "@mcp-access-stack/update-control-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent read-only MCP Update Control Worker.",
+  "scripts": {
+    "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
+    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && npm run build --workspace @mcp-access-stack/update-control-contract && tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --dry-run --outdir services/update-control-worker/.wrangler/dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260817.1",
+    "typescript": "6.0.3",
+    "wrangler": "4.135.0"
+  },
+  "dependencies": {
+    "@mcp-access-stack/edge-protocol": "0.1.0",
+    "@mcp-access-stack/update-control-contract": "0.1.0",
+    "@mcp-access-stack/mcp-owner-auth": "0.1.0"
+  }
+}
