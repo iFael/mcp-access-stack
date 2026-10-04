@@ -36,6 +36,13 @@ const REQUIRED_DIRECTORIES = [
   "services/oracle-release-orchestrator/src/workflows",
   "services/oracle-release-orchestrator/test/unit",
   "services/oracle-release-orchestrator/test/integration",
+  "services/update-control-worker",
+  "services/update-control-worker/src",
+  "services/update-control-worker/test/unit",
+  "packages/update-control-contract",
+  "packages/update-control-contract/src",
+  "packages/mcp-owner-auth",
+  "packages/mcp-owner-auth/src",
   "packages/mcp-core",
   "operations/browser",
   "operations/validation",
@@ -76,6 +83,14 @@ const REQUIRED_FILES = [
   "services/mcp-gateway/jest.config.ts",
   "services/workspace-agent/jest.config.ts",
   "services/oracle-release-orchestrator/jest.config.ts",
+  "services/update-control-worker/jest.config.ts",
+  "services/update-control-worker/package.json",
+  "services/update-control-worker/tsconfig.json",
+  "services/update-control-worker/wrangler.jsonc",
+  "packages/update-control-contract/package.json",
+  "packages/update-control-contract/src/index.ts",
+  "packages/mcp-owner-auth/package.json",
+  "packages/mcp-owner-auth/src/index.ts",
 ];
 
 const FORBIDDEN_ROOT_DIRECTORIES = [
@@ -233,6 +248,13 @@ export function validateRepositoryStructure(root = process.cwd()) {
       !["unit/", "integration/"].some((prefix) => relative.startsWith(prefix))
     ) {
       issues.push(`Oracle Release Orchestrator test must live under unit/ or integration/: ${relative}`);
+    }
+  }
+  const updateControlTestRoot = path.join(root, "services/update-control-worker/test");
+  for (const file of listTextFiles(updateControlTestRoot)) {
+    const relative = path.relative(updateControlTestRoot, file).replaceAll("\\", "/");
+    if (relative.endsWith(".test.ts") && !relative.startsWith("unit/")) {
+      issues.push(`Update Control test must live under unit/: ${relative}`);
     }
   }
   for (const file of FORBIDDEN_SERVICE_TOOLING_FILES) {

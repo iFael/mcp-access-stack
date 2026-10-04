@@ -69,7 +69,7 @@ test("isolates TypeScript test workspaces and serializes Browser Worker", async 
 
   assert.equal(
     rootPackage.scripts["test:typescript"],
-    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent && npm run test:mcp-edge-gateway && npm run test:oracle-release-orchestrator",
+    "npm run test:browser-worker && npm run test:mcp-core && npm run test:mcp-gateway && npm run test:workspace-agent && npm run test:mcp-edge-gateway && npm run test:oracle-release-orchestrator && npm run test:update-control-worker",
   );
   assert.match(browserPackage.scripts.test, /(?:^|\s)--runInBand(?:\s|$)/u);
   assert.doesNotMatch(

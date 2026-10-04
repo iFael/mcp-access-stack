@@ -5,12 +5,14 @@ import { mcpEdgeGatewayProject } from "./services/mcp-edge-gateway/jest.config.t
 import { mcpGatewayProjects } from "./services/mcp-gateway/jest.config.ts";
 import { workspaceAgentProjects } from "./services/workspace-agent/jest.config.ts";
 import { releaseOrchestratorProjects } from "./services/oracle-release-orchestrator/jest.config.ts";
+import { updateControlWorkerProjects } from "./services/update-control-worker/jest.config.ts";
 
 const config: Config = {
   projects: [
     mcpCoreConfig,
     ...workspaceAgentProjects,
     ...releaseOrchestratorProjects,
+    ...updateControlWorkerProjects,
     ...mcpGatewayProjects,
     ...browserWorkerProjects,
     mcpEdgeGatewayProject,

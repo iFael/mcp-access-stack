@@ -114,6 +114,26 @@ export interface EvidenceRecord extends EvidenceInput {
   readonly recordedAt: string;
 }
 
+export interface ReleaseRunCursor {
+  readonly createdAt: string;
+  readonly runId: string;
+}
+
+export interface ReleaseRunPage {
+  readonly runs: readonly ReleaseRunSnapshot[];
+  readonly nextCursor: ReleaseRunCursor | null;
+}
+
+export interface EvidenceCursor {
+  readonly recordedAt: string;
+  readonly evidenceId: string;
+}
+
+export interface EvidencePage {
+  readonly records: readonly EvidenceRecord[];
+  readonly nextCursor: EvidenceCursor | null;
+}
+
 export interface ReleaseStepSnapshot {
   readonly stepId: string;
   readonly stage: ReleaseStage;

@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
-    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc --dry-run --outdir services/mcp-edge-gateway/.wrangler/dry-run",
-    "deploy": "npm run build --workspace @mcp-access-stack/edge-protocol && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc",
-    "dev": "npm run build --workspace @mcp-access-stack/edge-protocol && wrangler dev --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc"
+    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc --dry-run --outdir services/mcp-edge-gateway/.wrangler/dry-run",
+    "deploy": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && wrangler deploy --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc",
+    "dev": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && wrangler dev --cwd ../.. --config services/mcp-edge-gateway/wrangler.jsonc"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260817.1",
@@ -15,6 +15,7 @@
     "wrangler": "4.135.0"
   },
   "dependencies": {
-    "@mcp-access-stack/edge-protocol": "0.1.0"
+    "@mcp-access-stack/edge-protocol": "0.1.0",
+    "@mcp-access-stack/mcp-owner-auth": "0.1.0"
   }
 }

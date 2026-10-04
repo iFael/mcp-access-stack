@@ -30,6 +30,8 @@ test("uses one canonical source-resolution contract for internal packages", asyn
     "@vs-code-gpt/shared": ["./packages/mcp-core/src/index.ts"],
     "@vs-code-gpt/local-agent": ["./services/workspace-agent/src/index.ts"],
     "@mcp-access-stack/edge-protocol": ["./packages/edge-protocol/src/index.ts"],
+    "@mcp-access-stack/update-control-contract": ["./packages/update-control-contract/src/index.ts"],
+    "@mcp-access-stack/mcp-owner-auth": ["./packages/mcp-owner-auth/src/index.ts"],
   });
 
   const preset = await readFile(path.join(repoRoot, "jest.preset.ts"), "utf8");
@@ -43,6 +45,7 @@ test("uses one canonical source-resolution contract for internal packages", asyn
     "services/mcp-gateway/jest.config.ts",
     "services/workspace-agent/jest.config.ts",
     "services/oracle-release-orchestrator/jest.config.ts",
+    "services/update-control-worker/jest.config.ts",
   ]) {
     const config = await readFile(path.join(repoRoot, relativePath), "utf8");
     assert.doesNotMatch(config, /sharedSourceUrl/u, `${relativePath} must rely on the shared preset mapping`);
@@ -105,6 +108,9 @@ test("uses one worktree-safe Jest runner instead of hardcoded node_modules paths
     "services/mcp-gateway/package.json",
     "services/workspace-agent/package.json",
     "services/oracle-release-orchestrator/package.json",
+    "packages/update-control-contract/package.json",
+    "packages/mcp-owner-auth/package.json",
+    "services/update-control-worker/package.json",
   ];
 
   for (const relativePath of packageFiles) {

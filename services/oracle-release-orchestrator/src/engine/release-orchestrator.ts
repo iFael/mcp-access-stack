@@ -3,13 +3,17 @@ import { fail } from "../errors.js";
 import { SqliteReleaseLedger } from "../storage/sqlite-release-ledger.js";
 import type {
   BeginStepResult,
+  EvidenceCursor,
   EvidenceInput,
+  EvidencePage,
   EvidenceRecord,
   HealthGateSnapshot,
   ReconciliationOutcome,
   ReleaseAttemptStatus,
   ReleaseAuditEntry,
+  ReleaseRunCursor,
   ReleaseRunEvent,
+  ReleaseRunPage,
   ReleaseRunRequest,
   ReleaseRunSnapshot,
   ReleaseRunStatus,
@@ -826,6 +830,38 @@ export class ReleaseOrchestrator {
     });
   }
 
+  public listRuns(limit = 20, cursor?: ReleaseRunCursor): ReleaseRunPage {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      fail("INVALID_ARGUMENT", "Run page limit must be between 1 and 100.");
+    }
+    if (cursor) {
+      validateRunId(cursor.runId);
+      if (!Number.isFinite(Date.parse(cursor.createdAt))) {
+        fail("INVALID_ARGUMENT", "Run cursor timestamp is invalid.");
+      }
+    }
+    const rows = cursor
+      ? this.ledger.all<{ run_id: string; created_at: string }>(
+          `SELECT run_id, created_at FROM release_runs
+           WHERE created_at < ? OR (created_at = ? AND run_id < ?)
+           ORDER BY created_at DESC, run_id DESC LIMIT ?`,
+          [cursor.createdAt, cursor.createdAt, cursor.runId, limit + 1],
+        )
+      : this.ledger.all<{ run_id: string; created_at: string }>(
+          "SELECT run_id, created_at FROM release_runs ORDER BY created_at DESC, run_id DESC LIMIT ?",
+          [limit + 1],
+        );
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows.at(-1);
+    return {
+      runs: pageRows.map((row) => this.getRun(row.run_id)),
+      nextCursor: hasMore && last
+        ? { createdAt: last.created_at, runId: last.run_id }
+        : null,
+    };
+  }
+
   public getRun(runId: string): ReleaseRunSnapshot {
     validateRunId(runId);
     const run = this.requireRun(runId);
@@ -929,6 +965,47 @@ export class ReleaseOrchestrator {
         details: JSON.parse(entry.details_json) as Readonly<Record<string, unknown>>,
         occurredAt: entry.occurred_at,
       }));
+  }
+
+  public pageEvidence(runId: string, limit = 50, cursor?: EvidenceCursor): EvidencePage {
+    validateRunId(runId);
+    this.requireRun(runId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      fail("INVALID_ARGUMENT", "Evidence page limit must be between 1 and 200.");
+    }
+    if (cursor && !Number.isFinite(Date.parse(cursor.recordedAt))) {
+      fail("INVALID_ARGUMENT", "Evidence cursor timestamp is invalid.");
+    }
+    const rows = cursor
+      ? this.ledger.all<EvidenceRow>(
+          `SELECT * FROM evidence_records
+           WHERE run_id = ? AND
+             (recorded_at > ? OR (recorded_at = ? AND evidence_id > ?))
+           ORDER BY recorded_at, evidence_id LIMIT ?`,
+          [runId, cursor.recordedAt, cursor.recordedAt, cursor.evidenceId, limit + 1],
+        )
+      : this.ledger.all<EvidenceRow>(
+          "SELECT * FROM evidence_records WHERE run_id = ? ORDER BY recorded_at, evidence_id LIMIT ?",
+          [runId, limit + 1],
+        );
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows.at(-1);
+    return {
+      records: pageRows.map((row) => ({
+        evidenceId: row.evidence_id,
+        runId: row.run_id,
+        stepId: row.step_id,
+        kind: row.kind,
+        source: row.source,
+        sha256: row.sha256,
+        observedAt: row.observed_at,
+        recordedAt: row.recorded_at,
+      })),
+      nextCursor: hasMore && last
+        ? { recordedAt: last.recorded_at, evidenceId: last.evidence_id }
+        : null,
+    };
   }
 
   public listEvidence(runId: string): readonly EvidenceRecord[] {
