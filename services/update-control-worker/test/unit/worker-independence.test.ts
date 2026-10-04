@@ -22,7 +22,7 @@ describe("Update Control Worker independent deployment", () => {
     } as unknown as UpdateControlWorkerEnv;
 
     const response = await updateControlWorker.fetch(
-      new Request("https://mcp-v3-update-control.workers.dev/mcp", { method: "POST" }),
+      new Request("https://mcp-update-control.example.test/mcp", { method: "POST" }),
       env,
     );
 
@@ -36,15 +36,17 @@ describe("Update Control Worker independent deployment", () => {
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       name: string;
       workers_dev: boolean;
+      preview_urls: boolean;
       durable_objects: { bindings: Array<{ name: string; class_name: string; script_name?: string }> };
       services?: unknown;
       migrations: Array<{ tag: string; new_sqlite_classes?: string[] }>;
-      vars: Record<string, string>;
+      vars?: Record<string, string>;
     };
 
     expect(config.name).toBe("mcp-v3-update-control");
     expect(config.name).not.toBe("mcp-access-stack");
-    expect(config.workers_dev).toBe(true);
+    expect(config.workers_dev).toBe(false);
+    expect(config.preview_urls).toBe(false);
     expect(config.services).toBeUndefined();
     expect(config.durable_objects.bindings).toEqual([
       { name: "UPDATE_CONTROL_AUTH_STATE", class_name: "UpdateControlAuthState" },
@@ -52,9 +54,7 @@ describe("Update Control Worker independent deployment", () => {
     expect(config.migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["UpdateControlAuthState"] },
     ]);
-    expect(config.vars.MCP_UPDATE_CONTROL_PUBLIC_URL).toBe(
-      "https://mcp-v3-update-control.rafaeldamasio77.workers.dev/",
-    );
-    expect(config.vars.MCP_PUBLIC_BASE_URL).toBeUndefined();
+    expect(config.vars).toBeUndefined();
+    expect(await readFile(configPath, "utf8")).not.toContain(".workers.dev");
   });
 });
