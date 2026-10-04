@@ -1,0 +1,93 @@
+name: Update Control OAuth controlled reprovision
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation_id:
+        description: "UUID for this exact reprovision intent. Reuse the same UUID to reconcile this operation."
+        required: true
+        type: string
+      confirm_reprovision:
+        description: "This invalidates every registered OAuth client and all existing grants."
+        required: true
+        type: choice
+        default: "NO"
+        options:
+          - "NO"
+          - "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-control-production
+  cancel-in-progress: false
+
+jobs:
+  reprovision:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: update-control-production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check operation status through Cloudflare Access
+        id: preflight
+        env:
+          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
+          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
+          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID: ${{ vars.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID }}
+          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET: ${{ secrets.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET }}
+          UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
+        run: node tooling/update-control-oauth-reprovision.mjs preflight
+      - name: Install replacement owner token through locked Wrangler
+        if: steps.preflight.outputs.completed != 'true'
+        shell: bash
+        env:
+          UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${UPDATE_CONTROL_CF_API_TOKEN:-}" ]]; then
+            echo '::error::Required Environment secret UPDATE_CONTROL_CF_API_TOKEN is missing.'
+            exit 1
+          fi
+          if [[ ! "${CLOUDFLARE_ACCOUNT_ID:-}" =~ ^[[:xdigit:]]{32}$ ]]; then
+            echo '::error::Required Environment variable CLOUDFLARE_ACCOUNT_ID is missing or invalid.'
+            exit 1
+          fi
+          if [[ "${#UPDATE_CONTROL_OWNER_TOKEN_NEXT}" -lt 32 || "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" == *$'\n'* || "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" == *$'\r'* ]]; then
+            echo '::error::Replacement owner token is missing, too short, or contains a line break.'
+            exit 1
+          fi
+          export CLOUDFLARE_API_TOKEN="$UPDATE_CONTROL_CF_API_TOKEN"
+          unset UPDATE_CONTROL_CF_API_TOKEN
+          printf '%s' "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MCP_OWNER_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+          unset UPDATE_CONTROL_OWNER_TOKEN_NEXT
+      - name: Reconcile the same operation ID through Cloudflare Access
+        if: steps.preflight.outputs.completed != 'true'
+        env:
+          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
+          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
+          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID: ${{ vars.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID }}
+          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET: ${{ secrets.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET }}
+          UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
+        run: node tooling/update-control-oauth-reprovision.mjs apply

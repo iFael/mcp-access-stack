@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController } from "../../src/auth-state.js";
+import { createTestAccessAssertion, TEST_ACCESS_AUDIENCE, TEST_ACCESS_ISSUER, testAccessJwksFetch } from "./access-assertion-fixture.js";
 
 const OWNER_SECRET = "phase2-test-owner-secret-which-is-long";
 const BASE_URL = "https://update-control.example/";
@@ -19,18 +20,49 @@ class MemoryStorage implements OwnerOAuthStorage {
   async delete(key: string): Promise<boolean> {
     return this.values.delete(key);
   }
+
+  async listPrefix(prefix: string, limit: number): Promise<Map<string, unknown>> {
+    return new Map([...this.values.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .slice(0, limit));
+  }
+
+  async deleteMany(keys: string[]): Promise<number> {
+    let deleted = 0;
+    for (const key of keys) if (this.values.delete(key)) deleted += 1;
+    return deleted;
+  }
 }
 
 function makeController(storage = new MemoryStorage()) {
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: BASE_URL,
+    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://update-control-ops.example/_operations/oauth/reprovision",
+    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: TEST_ACCESS_ISSUER,
+    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: TEST_ACCESS_AUDIENCE,
     MCP_OWNER_TOKEN: OWNER_SECRET,
     ORCHESTRATOR_READ_API_URL: "https://oracle-tunnel.example/",
     UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "x".repeat(48),
     ORACLE_ACCESS_CLIENT_ID: "access-client-id",
     ORACLE_ACCESS_CLIENT_SECRET: "s".repeat(48),
   };
-  return { controller: new UpdateControlAuthController({ storage }, env), storage };
+  return { controller: new UpdateControlAuthController({ storage }, env, testAccessJwksFetch), storage };
+}
+
+async function completeInitialReprovision(controller: UpdateControlAuthController, operationId: string): Promise<void> {
+  const response = await controller.fetch(new Request(
+    "https://update-control-ops.example/_operations/oauth/reprovision",
+    {
+      method: "POST",
+      headers: {
+        "cf-access-jwt-assertion": await createTestAccessAssertion(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ operationId }),
+    },
+  ));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ operationId, status: "completed" });
 }
 
 async function ownerAccessToken(controller: UpdateControlAuthController): Promise<string> {
@@ -97,8 +129,37 @@ function base64Url(value: Uint8Array): string {
 }
 
 describe("Update Control owner authorization boundary", () => {
+  it("rejects a forged Access assertion without writing OAuth state", async () => {
+    const { controller, storage } = makeController();
+    const response = await controller.fetch(new Request(
+      "https://update-control-ops.example/_operations/oauth/reprovision",
+      {
+        method: "POST",
+        headers: {
+          "cf-access-jwt-assertion": "attacker-controlled-header",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ operationId: "05c60a6f-5f30-47fb-a2fc-43bf4e1c0dc4" }),
+      },
+    ));
+    expect(response.status).toBe(401);
+    expect(storage.values.size).toBe(0);
+  });
+
+  it("fails closed before the controlled initial OAuth reprovision", async () => {
+    const { controller } = makeController();
+    const response = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "tools/list" }),
+    }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "oauth_reprovision_required" });
+  });
+
   it("protects MCP and API reads, while exposing only OAuth protocol metadata", async () => {
     const { controller } = makeController();
+    await completeInitialReprovision(controller, "701edb98-15eb-4a8e-b998-2bd6f6a5eb62");
     const metadata = await controller.fetch(new Request(new URL("/.well-known/oauth-authorization-server", BASE_URL)));
     expect(metadata.status).toBe(200);
     expect(await metadata.json()).toMatchObject({ scopes_supported: ["update:read"] });
@@ -117,6 +178,7 @@ describe("Update Control owner authorization boundary", () => {
 
   it("completes bounded owner OAuth and exposes exactly three read-only MCP tools", async () => {
     const { controller, storage } = makeController();
+    await completeInitialReprovision(controller, "4c764152-20b8-4e0b-a27a-492efbbeb6ee");
     const token = await ownerAccessToken(controller);
     const response = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
       method: "POST",
