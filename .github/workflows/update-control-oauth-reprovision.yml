@@ -32,6 +32,7 @@ jobs:
       name: update-control-production
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,14 +47,12 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Check operation status through Cloudflare Access
+      - name: Check operation status with operation-bound GitHub OIDC
         id: preflight
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
-          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID: ${{ vars.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID }}
-          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET: ${{ secrets.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs preflight
       - name: Install replacement owner token through locked Wrangler
@@ -81,13 +80,11 @@ jobs:
           unset UPDATE_CONTROL_CF_API_TOKEN
           printf '%s' "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MCP_OWNER_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
           unset UPDATE_CONTROL_OWNER_TOKEN_NEXT
-      - name: Reconcile the same operation ID through Cloudflare Access
+      - name: Reconcile the same operation ID with GitHub OIDC
         if: steps.preflight.outputs.completed != 'true'
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
-          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID: ${{ vars.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID }}
-          UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET: ${{ secrets.UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs apply

@@ -48,8 +48,8 @@ function readSettings(env) {
   return {
     operationId,
     endpoint,
-    accessClientId: requireValue(env, "UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID"),
-    accessClientSecret: requireValue(env, "UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET"),
+    oidcRequestUrl: requireValue(env, "ACTIONS_ID_TOKEN_REQUEST_URL"),
+    oidcRequestToken: requireValue(env, "ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
   };
 }
 
@@ -104,6 +104,63 @@ async function readBoundedJson(response) {
   }
 }
 
+async function requestGitHubActionsAssertion(settings, fetchImpl) {
+  let requestUrl;
+  try {
+    requestUrl = new URL(settings.oidcRequestUrl);
+    if (
+      requestUrl.protocol !== "https:" ||
+      requestUrl.hostname !== "pipelines.actions.githubusercontent.com" ||
+      requestUrl.port !== "" ||
+      requestUrl.username ||
+      requestUrl.password ||
+      requestUrl.hash
+    ) {
+      throw new Error("invalid");
+    }
+    requestUrl.searchParams.set(
+      "audience",
+      `urn:mcp-v3-update-control:oauth-reprovision:${settings.operationId}`,
+    );
+  } catch {
+    throw new Error("GitHub Actions OIDC request endpoint is invalid.");
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(requestUrl, {
+      method: "GET",
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: {
+        authorization: `Bearer ${settings.oidcRequestToken}`,
+        accept: "application/json",
+      },
+    });
+  } catch {
+    throw new Error("GitHub Actions OIDC token request failed.");
+  }
+  if (!response.ok) throw new Error("GitHub Actions OIDC token request failed.");
+  const payload = await readBoundedJson(response);
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload) ||
+    typeof payload.value !== "string" ||
+    payload.value.length === 0 ||
+    payload.value.length > 8 * 1024
+  ) {
+    throw new Error("GitHub Actions OIDC token response is invalid.");
+  }
+  return payload.value;
+}
+
+async function createAuthenticatedSettings(env, fetchImpl) {
+  const settings = readSettings(env);
+  const assertion = await requestGitHubActionsAssertion(settings, fetchImpl);
+  return { ...settings, assertion };
+}
+
 async function requestJson(fetchImpl, url, method, settings, body) {
   let response;
   try {
@@ -112,8 +169,7 @@ async function requestJson(fetchImpl, url, method, settings, body) {
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
-        "CF-Access-Client-Id": settings.accessClientId,
-        "CF-Access-Client-Secret": settings.accessClientSecret,
+        authorization: `Bearer ${settings.assertion}`,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -165,7 +221,7 @@ export async function preflightOAuthReprovision({
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
-  const settings = readSettings(env);
+  const settings = await createAuthenticatedSettings(env, fetchImpl);
   const status = await readStatus(fetchImpl, settings);
   if (status !== "completed") requireNextOwnerToken(env);
   await appendGitHubOutput(env, status);
@@ -178,7 +234,7 @@ export async function executeOAuthReprovision({
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   maxAttempts = MAX_APPLY_ATTEMPTS,
 } = {}) {
-  const settings = readSettings(env);
+  const settings = await createAuthenticatedSettings(env, fetchImpl);
   requireNextOwnerToken(env);
 
   const initialStatus = await readStatus(fetchImpl, settings);

@@ -11,8 +11,9 @@ import {
 
 const OPERATION_ID = "ed1c5642-04aa-4e4d-8558-8aefc4f673c7";
 const OWNER_TOKEN = "replacement-owner-secret-long-random-test-value";
-const ACCESS_ID = "access-client-id-test";
-const ACCESS_SECRET = "access-client-secret-test";
+const OIDC_REQUEST_URL = "https://pipelines.actions.githubusercontent.com/synthetic-run/idtoken?api-version=2.0";
+const OIDC_REQUEST_TOKEN = "synthetic-runner-request-token";
+const OIDC_ASSERTION = "synthetic-github-oidc-assertion";
 const OAUTH_URL = "https://update-control-ops.example/_operations/oauth/reprovision";
 
 function makeEnv(overrides = {}) {
@@ -20,8 +21,8 @@ function makeEnv(overrides = {}) {
     UPDATE_CONTROL_OAUTH_CONFIRM: OAUTH_REPROVISION_CONFIRMATION,
     UPDATE_CONTROL_OAUTH_OPERATION_ID: OPERATION_ID,
     UPDATE_CONTROL_OAUTH_REPROVISION_URL: OAUTH_URL,
-    UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID: ACCESS_ID,
-    UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET: ACCESS_SECRET,
+    ACTIONS_ID_TOKEN_REQUEST_URL: OIDC_REQUEST_URL,
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: OIDC_REQUEST_TOKEN,
     UPDATE_CONTROL_OWNER_TOKEN_NEXT: OWNER_TOKEN,
     ...overrides,
   };
@@ -43,6 +44,17 @@ function findStep(workflow, jobName, stepName) {
   const step = workflow.jobs[jobName].steps.find(({ name }) => name === stepName);
   expect(step).toBeDefined();
   return step;
+}
+
+function makeOidcFetch(operationFetch, oidcRequests = []) {
+  return async (url, init) => {
+    const requestUrl = new URL(String(url));
+    if (requestUrl.hostname === "pipelines.actions.githubusercontent.com") {
+      oidcRequests.push({ url: requestUrl, init });
+      return jsonResponse({ value: OIDC_ASSERTION });
+    }
+    return operationFetch(requestUrl, init);
+  };
 }
 
 describe("Update Control OAuth reprovision operator workflow", () => {
@@ -107,7 +119,8 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     expect(workflow.jobs.reprovision.if).toContain("refs/heads/main");
     expect(workflow.jobs.reprovision.if).toContain("REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS");
     expect(workflow.jobs.reprovision.environment.name).toBe("update-control-production");
-    expect(workflow.jobs.reprovision.permissions).toEqual({ contents: "read" });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.reprovision.permissions).toEqual({ contents: "read", "id-token": "write" });
 
     const replaceSecret = findStep(workflow, "reprovision", "Install replacement owner token through locked Wrangler");
     expect(replaceSecret.run).toContain(`printf '%s' "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" |`);
@@ -115,10 +128,12 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     expect(replaceSecret.run).toContain("npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MCP_OWNER_TOKEN");
     expect(replaceSecret.run).not.toContain(`echo "$UPDATE_CONTROL_OWNER_TOKEN_NEXT"`);
 
-    expect(findStep(workflow, "reprovision", "Check operation status through Cloudflare Access").run)
-      .toContain("tooling/update-control-oauth-reprovision.mjs preflight");
-    expect(findStep(workflow, "reprovision", "Reconcile the same operation ID through Cloudflare Access").run)
-      .toContain("tooling/update-control-oauth-reprovision.mjs apply");
+    const preflight = findStep(workflow, "reprovision", "Check operation status with operation-bound GitHub OIDC");
+    const reconcile = findStep(workflow, "reprovision", "Reconcile the same operation ID with GitHub OIDC");
+    expect(preflight.run).toContain("tooling/update-control-oauth-reprovision.mjs preflight");
+    expect(reconcile.run).toContain("tooling/update-control-oauth-reprovision.mjs apply");
+    expect(JSON.stringify([preflight.env, reconcile.env])).not.toMatch(/CLOUDFLARE.*ACCESS|UPDATE_CONTROL_OAUTH_ACCESS/iu);
+    expect(JSON.stringify(workflow.jobs.reprovision)).not.toMatch(/CF-Access|cloudflareaccess/iu);
 
     const triggerNames = Object.keys(workflow.on);
     expect(triggerNames).not.toContain("push");
@@ -127,46 +142,57 @@ describe("Update Control OAuth reprovision operator workflow", () => {
 });
 
 describe("OAuth reprovision operator client", () => {
-  it("checks completed status without requiring or changing a replacement token", async () => {
+  it("requests a UUID-bound GitHub OIDC token and checks completed status without a replacement token", async () => {
     const dir = await mkdtemp(join(tmpdir(), "update-control-oauth-"));
     try {
       const outputPath = join(dir, "github-output");
       const env = makeEnv({ GITHUB_OUTPUT: outputPath, UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" });
       const requests = [];
+      const oidcRequests = [];
       const result = await preflightOAuthReprovision({
         env,
-        fetchImpl: async (url, init) => {
+        fetchImpl: makeOidcFetch(async (url, init) => {
           requests.push({ url: String(url), init });
           return jsonResponse({ operationId: OPERATION_ID, status: "completed", events: [] });
-        },
+        }, oidcRequests),
       });
       expect(result).toEqual({ operationId: OPERATION_ID, status: "completed" });
+      expect(oidcRequests).toHaveLength(1);
+      expect(oidcRequests[0].init.method).toBe("GET");
+      expect(oidcRequests[0].init.headers.authorization).toBe(`Bearer ${OIDC_REQUEST_TOKEN}`);
+      expect(oidcRequests[0].url.searchParams.get("audience"))
+        .toBe(`urn:mcp-v3-update-control:oauth-reprovision:${OPERATION_ID}`);
       expect(requests).toHaveLength(1);
       expect(requests[0].init.method).toBe("GET");
       expect(requests[0].url).toContain(`operationId=${OPERATION_ID}`);
-      expect(requests[0].init.headers["CF-Access-Client-Id"]).toBe(ACCESS_ID);
-      expect(requests[0].init.headers["CF-Access-Client-Secret"]).toBe(ACCESS_SECRET);
+      expect(requests[0].init.headers.authorization).toBe(`Bearer ${OIDC_ASSERTION}`);
+      expect(requests[0].init.headers["CF-Access-Client-Id"]).toBeUndefined();
+      expect(requests[0].init.headers["CF-Access-Client-Secret"]).toBeUndefined();
       expect(await readFile(outputPath, "utf8")).toContain("completed=true");
       expect(await readFile(outputPath, "utf8")).not.toContain(OWNER_TOKEN);
+      expect(JSON.stringify(oidcRequests)).not.toContain(OWNER_TOKEN);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
   it("refuses an active operation conflict before the secret-change step", async () => {
-    let calls = 0;
+    const requests = [];
+    const oidcRequests = [];
     await expect(preflightOAuthReprovision({
       env: makeEnv(),
-      fetchImpl: async () => {
-        calls += 1;
+      fetchImpl: makeOidcFetch(async (url, init) => {
+        requests.push({ url: String(url), init });
         return jsonResponse({ error: "another_operation_active" }, 409);
-      },
+      }, oidcRequests),
     })).rejects.toThrow("different OAuth reprovision is active");
-    expect(calls).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(oidcRequests).toHaveLength(1);
   });
 
   it("resumes only the same operation ID and polls bounded in-progress batches to completion", async () => {
     const requests = [];
+    const oidcRequests = [];
     const responses = [
       jsonResponse({ operationId: OPERATION_ID, status: "in_progress" }),
       jsonResponse({ operationId: OPERATION_ID, status: "in_progress", attempt: 2 }, 202),
@@ -174,36 +200,40 @@ describe("OAuth reprovision operator client", () => {
     ];
     const result = await executeOAuthReprovision({
       env: makeEnv(),
-      fetchImpl: async (url, init) => {
+      fetchImpl: makeOidcFetch(async (url, init) => {
         requests.push({ url: String(url), init });
         return responses.shift();
-      },
+      }, oidcRequests),
       sleep: async () => undefined,
     });
     expect(result).toEqual({ operationId: OPERATION_ID, status: "completed" });
     expect(requests.map(({ init }) => init.method)).toEqual(["GET", "POST", "POST"]);
     expect(requests[1].init.body).toBe(JSON.stringify({ operationId: OPERATION_ID }));
     expect(requests[2].init.body).toBe(JSON.stringify({ operationId: OPERATION_ID }));
+    expect(requests.every(({ init }) => init.headers.authorization === `Bearer ${OIDC_ASSERTION}`)).toBe(true);
+    expect(oidcRequests).toHaveLength(1);
     expect(JSON.stringify(requests)).not.toContain(OWNER_TOKEN);
   });
 
   it("stops on outcome_unknown without retrying or logging the owner token", async () => {
     const requests = [];
+    const oidcRequests = [];
     await expect(executeOAuthReprovision({
       env: makeEnv(),
-      fetchImpl: async (url, init) => {
+      fetchImpl: makeOidcFetch(async (url, init) => {
         requests.push({ url: String(url), init });
         if (init.method === "GET") {
           return jsonResponse({ operationId: OPERATION_ID, status: "in_progress" });
         }
         return jsonResponse({ operationId: OPERATION_ID, status: "outcome_unknown" }, 503);
-      },
+      }, oidcRequests),
     })).rejects.toThrow("outcome_unknown");
     expect(requests.map(({ init }) => init.method)).toEqual(["GET", "POST"]);
+    expect(oidcRequests).toHaveLength(1);
     expect(JSON.stringify(requests)).not.toContain(OWNER_TOKEN);
   });
 
-  it("rejects non-HTTPS, wrong-path, and unconfirmed requests before network access", async () => {
+  it("rejects non-HTTPS, wrong-path, unconfirmed, and untrusted OIDC request URLs before network access", async () => {
     let calls = 0;
     const fetchImpl = async () => {
       calls += 1;
@@ -221,6 +251,14 @@ describe("OAuth reprovision operator client", () => {
       env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "NO" }),
       fetchImpl,
     })).rejects.toThrow("Explicit OAuth reprovision confirmation");
+    await expect(preflightOAuthReprovision({
+      env: makeEnv({ ACTIONS_ID_TOKEN_REQUEST_URL: "https://attacker.example/token" }),
+      fetchImpl,
+    })).rejects.toThrow("OIDC request endpoint is invalid");
+    await expect(preflightOAuthReprovision({
+      env: makeEnv({ ACTIONS_ID_TOKEN_REQUEST_URL: "https://pipelines.actions.githubusercontent.com:8443/synthetic-run/idtoken" }),
+      fetchImpl,
+    })).rejects.toThrow("OIDC request endpoint is invalid");
     expect(calls).toBe(0);
   });
 
@@ -228,7 +266,7 @@ describe("OAuth reprovision operator client", () => {
     const oversized = new Response("x".repeat(16 * 1024 + 1), { status: 200 });
     await expect(preflightOAuthReprovision({
       env: makeEnv(),
-      fetchImpl: async () => oversized,
+      fetchImpl: makeOidcFetch(async () => oversized),
     })).rejects.toThrow("size limit");
   });
 });

@@ -8,7 +8,7 @@ import { createUpdateControlApiHandler } from "./api.js";
 import { createUpdateControlMcpHandler } from "./mcp.js";
 import { OracleReleaseReadClient } from "./oracle-read-client.js";
 import { createUpdateControlReadOnlyTools } from "./tools.js";
-import { CloudflareAccessAssertionVerifier } from "./cloudflare-access-assertion.js";
+import { GitHubActionsOidcAssertionVerifier } from "./github-actions-oidc.js";
 
 const UPDATE_CONTROL_OWNER_ID = "usr_85dd70bf-2a50-4b8e-97d6-3c20c7226757";
 const MAX_URL_LENGTH = 8 * 1024;
@@ -60,8 +60,6 @@ interface OAuthReprovisionAuditEvent {
 export interface UpdateControlEnvironment {
   readonly MCP_UPDATE_CONTROL_PUBLIC_URL?: string;
   readonly MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL?: string;
-  readonly MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER?: string;
-  readonly MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE?: string;
   readonly MCP_OWNER_TOKEN?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
@@ -84,9 +82,7 @@ export class UpdateControlAuthController {
   private ownerOAuth: EdgeOwnerOAuth | undefined;
   private configurationValid = false;
   private readonly reprovisionUrl: URL | undefined;
-  private readonly accessIssuer: string | undefined;
-  private readonly accessAudience: string | undefined;
-  private readonly accessAssertionVerifier: CloudflareAccessAssertionVerifier;
+  private readonly oidcAssertionVerifier: GitHubActionsOidcAssertionVerifier;
   private ownerIdentityPromise: Promise<void> | undefined;
   private readClient: OracleReleaseReadClient | undefined;
   private requestQueue: Promise<void> = Promise.resolve();
@@ -96,24 +92,16 @@ export class UpdateControlAuthController {
     private readonly env: UpdateControlEnvironment,
     fetchImpl: typeof fetch = fetch,
   ) {
-    this.accessAssertionVerifier = new CloudflareAccessAssertionVerifier(fetchImpl);
+    this.oidcAssertionVerifier = new GitHubActionsOidcAssertionVerifier(fetchImpl);
     try {
       this.reprovisionUrl = parseOAuthReprovisionUrl(
         env.MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL,
         env.MCP_UPDATE_CONTROL_PUBLIC_URL,
       );
-      const access = parseCloudflareAccessConfig(
-        env.MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER,
-        env.MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE,
-      );
-      this.accessIssuer = access.issuer;
-      this.accessAudience = access.audience;
       this.configurationValid = true;
     } catch {
       this.configurationValid = false;
       this.reprovisionUrl = undefined;
-      this.accessIssuer = undefined;
-      this.accessAudience = undefined;
     }
     try {
       this.ownerOAuth = createOwnerOAuth(state.storage, env, createIdentityStore(state.storage));
@@ -181,51 +169,53 @@ export class UpdateControlAuthController {
         url.username || url.password || url.hash) {
       return jsonResponse({ error: "not_found" }, 404);
     }
-    const accessAssertion = request.headers.get("cf-access-jwt-assertion");
-    if (!accessAssertion || !this.accessIssuer || !this.accessAudience ||
-        !(await this.accessAssertionVerifier.verify(
-          accessAssertion,
-          this.accessIssuer,
-          this.accessAudience,
-        ))) {
-      return jsonResponse({ error: "operation_auth_required" }, 401);
-    }
     if (!this.configurationValid) {
       return jsonResponse({ error: "update_control_not_configured" }, 503);
     }
+
+    let operationId: string;
     if (request.method === "GET") {
       if ([...url.searchParams.keys()].some((key) => key !== "operationId") ||
           url.searchParams.getAll("operationId").length !== 1) {
         return jsonResponse({ error: "invalid_request" }, 400);
       }
-      const operationId = url.searchParams.get("operationId") ?? "";
-      if (!OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(operationId)) {
+      operationId = url.searchParams.get("operationId") ?? "";
+    } else if (request.method === "POST" && !url.search && !url.hash) {
+      let body: string;
+      try {
+        body = await readBoundedRequestText(request, MAX_REPROVISION_BODY_BYTES);
+      } catch {
+        return jsonResponse({ error: "invalid_request" }, 400);
+      }
+      let input: unknown;
+      try {
+        input = JSON.parse(body) as unknown;
+      } catch {
+        return jsonResponse({ error: "invalid_request" }, 400);
+      }
+      if (!isRecord(input) || Object.keys(input).length !== 1 ||
+          typeof input.operationId !== "string") {
         return jsonResponse({ error: "invalid_operation_id" }, 400);
       }
-      return this.readOAuthReprovisionStatus(operationId);
-    }
-    if (request.method !== "POST" || url.search || url.hash) {
+      operationId = input.operationId;
+    } else {
       return jsonResponse({ error: "method_not_allowed" }, 405);
     }
 
-    let body: string;
-    try {
-      body = await readBoundedRequestText(request, MAX_REPROVISION_BODY_BYTES);
-    } catch {
-      return jsonResponse({ error: "invalid_request" }, 400);
-    }
-    let input: unknown;
-    try {
-      input = JSON.parse(body) as unknown;
-    } catch {
-      return jsonResponse({ error: "invalid_request" }, 400);
-    }
-    if (!isRecord(input) || Object.keys(input).length !== 1 ||
-        typeof input.operationId !== "string" ||
-        !OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(input.operationId)) {
+    if (!OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(operationId)) {
       return jsonResponse({ error: "invalid_operation_id" }, 400);
     }
-    return this.runOAuthReprovision(input.operationId);
+    const authorization = request.headers.get("authorization");
+    const assertion = authorization?.startsWith("Bearer ")
+      ? authorization.slice("Bearer ".length).trim()
+      : "";
+    if (!assertion ||
+        !(await this.oidcAssertionVerifier.verify(assertion, operationId))) {
+      return jsonResponse({ error: "operation_auth_required" }, 401);
+    }
+    return request.method === "GET"
+      ? this.readOAuthReprovisionStatus(operationId)
+      : this.runOAuthReprovision(operationId);
   }
 
   private async readOAuthReprovisionStatus(operationId: string): Promise<Response> {
@@ -549,20 +539,6 @@ function isOAuthReprovisionAuditEvent(value: unknown): value is OAuthReprovision
     ["started", "resumed", "oauth_state_cleared", "owner_authority_reprovisioned", "completed", "outcome_unknown"].includes(value.eventType) &&
     typeof value.occurredAt === "string" &&
     Number.isFinite(Date.parse(value.occurredAt));
-}
-
-function parseCloudflareAccessConfig(
-  issuerValue: string | undefined,
-  audienceValue: string | undefined,
-): { issuer: string; audience: string } {
-  const issuerUrl = new URL(requireValue(issuerValue, "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER"));
-  const audience = requireValue(audienceValue, "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE");
-  if (issuerUrl.protocol !== "https:" || issuerUrl.pathname !== "/" ||
-      issuerUrl.search || issuerUrl.hash || issuerUrl.username || issuerUrl.password ||
-      audience.length > 512) {
-    throw new Error("Cloudflare Access assertion issuer/audience configuration is invalid.");
-  }
-  return { issuer: issuerUrl.origin, audience };
 }
 
 function parseOAuthReprovisionUrl(value: string | undefined, publicBaseUrl: string | undefined): URL {
