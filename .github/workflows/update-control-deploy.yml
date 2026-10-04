@@ -1,0 +1,111 @@
+name: Update Control deploy
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/update-control-deploy.yml
+      - services/update-control-worker/**
+      - packages/edge-protocol/**
+      - packages/mcp-owner-auth/**
+      - packages/update-control-contract/**
+      - services/oracle-release-orchestrator/**
+      - deploy/linux/mcp-v3-oracle-read-api.service
+      - deploy/linux/mcp-v3-update-control-cloudflared.service
+      - deploy/linux/Test-McpUpdateControlServices.mjs
+      - docs/update-control-deployment.md
+      - package.json
+      - package-lock.json
+  push:
+    branches:
+      - main
+    # Deliberately omit this workflow and Oracle service preparation paths.
+    # Merging workflow/config preparation alone must never deploy the Worker.
+    paths:
+      - services/update-control-worker/**
+      - packages/edge-protocol/**
+      - packages/mcp-owner-auth/**
+      - packages/update-control-contract/**
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-control-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check Update Control Worker (uses locked workspace Wrangler, dry-run only)
+        run: npm run check:update-control
+      - name: Test Update Control Worker
+        run: npm run test:update-control-worker
+      - name: Build and test Oracle read API
+        run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
+      - name: Validate Update Control runtime templates
+        run: node deploy/linux/Test-McpUpdateControlServices.mjs
+      - name: Verify systemd unit syntax
+        run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-cloudflared.service
+
+  deploy:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: update-control-production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Fail closed and deploy only Update Control
+        shell: bash
+        env:
+          UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${UPDATE_CONTROL_CF_API_TOKEN:-}" ]]; then
+            echo '::error::Required Environment secret UPDATE_CONTROL_CF_API_TOKEN is missing.'
+            exit 1
+          fi
+          if [[ ! "${CLOUDFLARE_ACCOUNT_ID:-}" =~ ^[[:xdigit:]]{32}$ ]]; then
+            echo '::error::Required Environment variable CLOUDFLARE_ACCOUNT_ID is missing or invalid.'
+            exit 1
+          fi
+          export CLOUDFLARE_API_TOKEN="$UPDATE_CONTROL_CF_API_TOKEN"
+          unset UPDATE_CONTROL_CF_API_TOKEN
+          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc
