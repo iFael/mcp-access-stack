@@ -4,6 +4,11 @@ import {
   type UpdateControlDurableStorage,
   type UpdateControlEnvironment,
 } from "./auth-state.js";
+import {
+  ORACLE_CHANNEL_CONNECT_PATH,
+  ORACLE_CHANNEL_SCOPE,
+  type OracleChannelNamespace,
+} from "./oracle-channel.js";
 
 interface DurableObjectStorageLike extends Omit<OwnerOAuthStorage, "delete"> {
   delete(key: string): Promise<boolean>;
@@ -22,6 +27,8 @@ export interface DurableObjectNamespaceLike {
 
 export interface UpdateControlWorkerEnv extends UpdateControlEnvironment {
   readonly UPDATE_CONTROL_AUTH_STATE: DurableObjectNamespaceLike;
+  readonly UPDATE_CONTROL_ORACLE_CHANNEL: OracleChannelNamespace;
+  readonly UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN?: string;
 }
 
 export class UpdateControlAuthState {
@@ -45,10 +52,32 @@ export class UpdateControlAuthState {
 
 const updateControlWorker = {
   async fetch(request: Request, env: UpdateControlWorkerEnv): Promise<Response> {
+    let pathname: string;
+    try {
+      pathname = new URL(request.url).pathname;
+    } catch {
+      return new Response(JSON.stringify({ error: "invalid_request" }), {
+        status: 400,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
+    if (pathname === ORACLE_CHANNEL_CONNECT_PATH) {
+      const channel = env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if (!channel) {
+        return new Response(JSON.stringify({ error: "oracle_channel_not_configured" }), {
+          status: 503,
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      const id = channel.idFromName(ORACLE_CHANNEL_SCOPE);
+      return channel.get(id).fetch(request);
+    }
+
     const id = env.UPDATE_CONTROL_AUTH_STATE.idFromName("update-control-auth-v1");
-    const state = env.UPDATE_CONTROL_AUTH_STATE.get(id);
-    return state.fetch(request);
+    return env.UPDATE_CONTROL_AUTH_STATE.get(id).fetch(request);
   },
 };
 
+export { UpdateControlOracleChannel } from "./oracle-channel.js";
 export default updateControlWorker;

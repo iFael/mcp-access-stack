@@ -1,13 +1,8 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import type { UpdateControlRunSnapshot, UpdateListRunsResult, UpdateWaitEventsResult } from "@mcp-access-stack/update-control-contract";
-import { OracleReleaseReadClient } from "../../src/oracle-read-client.js";
+import type { UpdateControlRunSnapshot, UpdateListRunsResult } from "@mcp-access-stack/update-control-contract";
+import { ORACLE_CHANNEL_RPC_PATH, ORACLE_CHANNEL_SCOPE } from "../../src/oracle-channel.js";
+import { UpdateControlOracleChannelReadClient } from "../../src/oracle-channel-client.js";
 
-const config = {
-  baseUrl: "https://oracle-read-api.example.internal/",
-  bearerToken: "orchestrator-service-token-".padEnd(48, "x"),
-  accessClientId: "access-client-id.example",
-  accessClientSecret: "access-client-secret-".padEnd(48, "y"),
-};
 const run: UpdateControlRunSnapshot = {
   runId: "6aa35d14-07fb-414c-9f91-f9b08c125303",
   blueprintId: "mcp-v3-public-release",
@@ -22,6 +17,7 @@ const run: UpdateControlRunSnapshot = {
   steps: [],
   gates: [],
 };
+const listResult: UpdateListRunsResult = { runs: [run], nextCursor: null, hasMore: false };
 
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -30,67 +26,147 @@ function response(value: unknown, status = 200): Response {
   });
 }
 
-describe("Update Control Oracle read client", () => {
-  it("uses only the configured HTTPS origin and service authentication headers", async () => {
-    const fetcher = jest.fn(async () => response({ runs: [run], nextCursor: null, hasMore: false }));
-    const client = new OracleReleaseReadClient(config, fetcher as typeof fetch);
-    const result: UpdateListRunsResult = await client.listRuns({ limit: 1 });
+function createNamespace(fetcher: (request: Request) => Promise<Response>) {
+  const idFromName = jest.fn((name: string) => name);
+  const fetch = jest.fn(fetcher);
+  const namespace = {
+    idFromName,
+    get: jest.fn((id: unknown) => ({ fetch, id })),
+  };
+  return { namespace, idFromName, fetch };
+}
 
-    expect(result.runs[0]?.status).toBe("paused_outcome_unknown");
-    const [url, init] = fetcher.mock.calls[0] ?? [];
-    expect(url).toBe("https://oracle-read-api.example.internal/internal/v1/runs?limit=1");
-    expect((init as RequestInit).headers).toEqual({
-      authorization: `Bearer ${config.bearerToken}`,
-      "cf-access-client-id": config.accessClientId,
-      "cf-access-client-secret": config.accessClientSecret,
-      accept: "application/json",
+describe("Update Control Oracle WSS RPC read client", () => {
+  it("uses one fixed DO scope and sends only typed read arguments over the internal binding", async () => {
+    const h = createNamespace(async () => response({ result: listResult }));
+    const client = new UpdateControlOracleChannelReadClient(h.namespace);
+    const result = await client.listRuns({ limit: 1, cursor: "next_page" });
+
+    expect(result).toEqual(listResult);
+    expect(h.idFromName).toHaveBeenCalledWith(ORACLE_CHANNEL_SCOPE);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    const request = h.fetch.mock.calls[0]?.[0];
+    expect(request?.method).toBe("POST");
+    expect(request?.url).toBe("https://update-control-channel.internal" + ORACLE_CHANNEL_RPC_PATH);
+    expect(request?.headers.get("authorization")).toBeNull();
+    expect(request?.headers.get("cf-access-client-secret")).toBeNull();
+    expect(await request?.json()).toEqual({
+      method: "list_runs",
+      arguments: { limit: 1, cursor: "next_page" },
     });
   });
 
-  it("long-polls the same run/seq cursor and preserves timeout outcome", async () => {
-    const expected: UpdateWaitEventsResult = {
-      outcome: "timeout",
+  it("maps not-found and disconnected/timeout transport errors without conflating wait timeout", async () => {
+    const notFound = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ error: "RUN_NOT_FOUND" }, 404)).namespace,
+    );
+    await expect(notFound.getRun({
       runId: run.runId,
-      afterSeq: 2,
-      events: [],
-      currentSeq: 2,
-    };
-    const fetcher = jest.fn(async () => response(expected));
-    const client = new OracleReleaseReadClient(config, fetcher as typeof fetch);
-    const result = await client.waitEvents({
+      evidenceLimit: 5,
+    })).rejects.toMatchObject({ code: "RUN_NOT_FOUND" });
+
+    const wrong404 = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ error: "not_found" }, 404)).namespace,
+    );
+    await expect(wrong404.getRun({
+      runId: run.runId,
+      evidenceLimit: 5,
+    })).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
+
+    const unavailable = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ error: "transport_timeout" }, 504)).namespace,
+    );
+    await expect(unavailable.waitEvents({
       runId: run.runId,
       afterSeq: 2,
       timeoutSeconds: 15,
       limit: 100,
+    })).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
+
+    const normalTimeout = {
+      outcome: "timeout",
+      runId: run.runId,
+      afterSeq: 2,
+      currentSeq: 2,
+      events: [],
+    };
+    const timeoutClient = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ result: normalTimeout })).namespace,
+    );
+    await expect(timeoutClient.waitEvents({
+      runId: run.runId,
+      afterSeq: 2,
+      timeoutSeconds: 15,
+      limit: 100,
+    })).resolves.toEqual(normalTimeout);
+  });
+
+  it("rejects malformed, oversized, unordered, and out-of-cursor results fail-closed", async () => {
+    const malformed = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ result: { runs: [{ ...run, status: "promote_now" }], nextCursor: null, hasMore: false } })).namespace,
+    );
+    await expect(malformed.listRuns({ limit: 1 })).rejects.toMatchObject({
+      code: "UPDATE_ORCHESTRATOR_UNAVAILABLE",
     });
 
-    expect(result).toEqual(expected);
-    const [url] = fetcher.mock.calls[0] ?? [];
-    expect(url).toBe(
-      `https://oracle-read-api.example.internal/internal/v1/runs/${run.runId}/events?afterSeq=2&limit=100&waitMs=15000`,
+    const wrongCursor = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({
+        result: {
+          outcome: "events",
+          runId: run.runId,
+          afterSeq: 1,
+          currentSeq: 2,
+          events: [{
+            eventId: "9c7b7c3c-c955-4d3b-bba9-6ea7ca320000",
+            runId: run.runId,
+            seq: 2,
+            eventType: "run.started",
+            payload: {},
+            occurredAt: "2026-10-01T00:01:00.000Z",
+            redacted: true,
+          }],
+        },
+      })).namespace,
     );
+    await expect(wrongCursor.waitEvents({
+      runId: run.runId,
+      afterSeq: 2,
+      timeoutSeconds: 1,
+      limit: 10,
+    })).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
+
+    const malformedHasMore = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => response({ result: {
+        outcome: "timeout",
+        runId: run.runId,
+        afterSeq: 2,
+        currentSeq: 2,
+        events: [],
+        hasMore: "yes",
+      } })).namespace,
+    );
+    await expect(malformedHasMore.waitEvents({
+      runId: run.runId,
+      afterSeq: 2,
+      timeoutSeconds: 1,
+      limit: 10,
+    })).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
+
+    const oversized = new UpdateControlOracleChannelReadClient(
+      createNamespace(async () => new Response("x".repeat(512 * 1024 + 1), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })).namespace,
+    );
+    await expect(oversized.listRuns({ limit: 1 })).rejects.toMatchObject({
+      code: "UPDATE_ORCHESTRATOR_UNAVAILABLE",
+    });
   });
 
-  it("rejects non-HTTPS, credentialed, path-bearing, or incomplete upstream configuration", () => {
-    expect(() => new OracleReleaseReadClient({ ...config, baseUrl: "http://oracle.example" })).toThrow();
-    expect(() => new OracleReleaseReadClient({ ...config, baseUrl: "https://user:pass@oracle.example" })).toThrow();
-    expect(() => new OracleReleaseReadClient({ ...config, baseUrl: "https://oracle.example/private/" })).toThrow();
-    expect(() => new OracleReleaseReadClient({ ...config, accessClientSecret: "" })).toThrow();
-  });
-
-  it("fails closed on upstream auth errors, oversized bodies, and malformed snapshot data", async () => {
-    const unauthorized = new OracleReleaseReadClient(config, async () => response({ error: "unauthorized" }, 401));
-    await expect(unauthorized.listRuns({})).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
-
-    const oversized = new OracleReleaseReadClient(
-      { ...config, maxResponseBytes: 32 },
-      async () => response({ runs: [run], nextCursor: null, hasMore: false }),
-    );
-    await expect(oversized.listRuns({})).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
-
-    const malformed = new OracleReleaseReadClient(config, async () =>
-      response({ runs: [{ ...run, status: "promote_now" }], nextCursor: null, hasMore: false }),
-    );
-    await expect(malformed.listRuns({})).rejects.toMatchObject({ code: "UPDATE_ORCHESTRATOR_UNAVAILABLE" });
+  it("does not retry, call a public URL, or add an authentication header", async () => {
+    const h = createNamespace(async () => response({ result: listResult }));
+    const client = new UpdateControlOracleChannelReadClient(h.namespace);
+    await client.listRuns({});
+    expect(h.fetch).toHaveBeenCalledTimes(1);
   });
 });
