@@ -1,0 +1,32 @@
+[Unit]
+Description=MCP V3 Update Control Cloudflare Tunnel connector
+Wants=network-online.target mcp-v3-oracle-read-api.service
+After=network-online.target mcp-v3-oracle-read-api.service
+StartLimitIntervalSec=3600
+StartLimitBurst=6
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/
+LoadCredential=cloudflared-tunnel-token:/etc/mcp-access-stack/update-control/credentials/cloudflared-tunnel-token
+ExecStart=/usr/bin/env cloudflared tunnel run --token-file=%d/cloudflared-tunnel-token
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

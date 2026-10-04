@@ -1,0 +1,40 @@
+[Unit]
+Description=MCP V3 Oracle Release Orchestrator read API (loopback only)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=mcp-access-stack-update-control
+StateDirectoryMode=0700
+WorkingDirectory=/
+Environment=ORCHESTRATOR_READ_API_HOST=127.0.0.1
+Environment=ORCHESTRATOR_READ_API_PORT=9381
+Environment=ORCHESTRATOR_LEDGER_PATH=/var/lib/mcp-access-stack-update-control/orchestrator.sqlite
+Environment=ORCHESTRATOR_RELEASE_ROOT=/var/lib/mcp-access-stack-update-control/artifacts
+Environment=UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE=%d/update-control-orchestrator-token
+LoadCredential=update-control-orchestrator-token:/etc/mcp-access-stack/update-control/credentials/orchestrator-token
+ExecStart=/usr/bin/env node /opt/mcp-access-stack/update-control/current/services/oracle-release-orchestrator/dist/server.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/mcp-access-stack-update-control
+
+[Install]
+WantedBy=multi-user.target

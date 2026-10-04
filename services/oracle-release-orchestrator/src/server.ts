@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
@@ -63,10 +63,37 @@ function validateConfig(config: OracleReadApiServiceConfig): void {
   }
 }
 
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
+function requireEnv(name: string, environment: NodeJS.ProcessEnv = process.env): string {
+  const value = environment[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+export function resolveOrchestratorReadApiToken(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const credentialFile = environment.UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE?.trim();
+  const environmentToken = environment.UPDATE_CONTROL_ORCHESTRATOR_TOKEN?.trim();
+  if (credentialFile && environmentToken) {
+    throw new Error("Configure exactly one Oracle read API token source.");
+  }
+  if (!credentialFile) return requireEnv("UPDATE_CONTROL_ORCHESTRATOR_TOKEN", environment);
+  if (!isAbsolute(credentialFile)) {
+    throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE must be an absolute path.");
+  }
+
+  const credential = lstatSync(credentialFile);
+  if (!credential.isFile()) {
+    throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE must reference a regular file.");
+  }
+  if (process.platform !== "win32" && (credential.mode & 0o077) !== 0) {
+    throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE permissions are too broad.");
+  }
+
+  const raw = readFileSync(credentialFile, "utf8");
+  const token = raw.endsWith("\r\n") ? raw.slice(0, -2) : raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  if (!token) throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE is empty.");
+  return token;
 }
 
 function readPort(value: string): number {
@@ -78,15 +105,17 @@ function readPort(value: string): number {
   return port;
 }
 
-export function startFromEnvironment(): { close(): Promise<void> } {
-  const ledgerPath = resolve(requireEnv("ORCHESTRATOR_LEDGER_PATH"));
-  const releaseRoot = resolve(requireEnv("ORCHESTRATOR_RELEASE_ROOT"));
-  const host = process.env.ORCHESTRATOR_READ_API_HOST?.trim() || "127.0.0.1";
-  const port = readPort(process.env.ORCHESTRATOR_READ_API_PORT?.trim() || "9381");
+export function startFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): { close(): Promise<void> } {
+  const ledgerPath = resolve(requireEnv("ORCHESTRATOR_LEDGER_PATH", environment));
+  const releaseRoot = resolve(requireEnv("ORCHESTRATOR_RELEASE_ROOT", environment));
+  const host = environment.ORCHESTRATOR_READ_API_HOST?.trim() || "127.0.0.1";
+  const port = readPort(environment.ORCHESTRATOR_READ_API_PORT?.trim() || "9381");
   return startOracleReleaseReadApiService({
     ledgerPath,
     releaseRoot,
-    bearerToken: requireEnv("UPDATE_CONTROL_ORCHESTRATOR_TOKEN"),
+    bearerToken: resolveOrchestratorReadApiToken(environment),
     host,
     port,
   });
