@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - .github/workflows/update-control-deploy.yml
+      - .github/workflows/update-control-oauth-reprovision.yml
+      - tooling/update-control-oauth-reprovision.mjs
       - services/update-control-worker/**
       - packages/edge-protocol/**
       - packages/mcp-owner-auth/**
@@ -17,18 +19,16 @@ on:
       - docs/update-control-deployment.md
       - package.json
       - package-lock.json
-  push:
-    branches:
-      - main
-    # Deliberately omit this workflow and Oracle service preparation paths.
-    # Merging workflow/config preparation alone must never deploy the Worker.
-    paths:
-      - services/update-control-worker/**
-      - packages/edge-protocol/**
-      - packages/mcp-owner-auth/**
-      - packages/update-control-contract/**
-      - package.json
-      - package-lock.json
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: "Explicitly confirm deployment of the independent Update Control Worker."
+        required: true
+        type: choice
+        default: "NO"
+        options:
+          - "NO"
+          - "DEPLOY_UPDATE_CONTROL"
 
 permissions:
   contents: read
@@ -60,7 +60,7 @@ jobs:
         run: npm ci
       - name: Check Update Control Worker (uses locked workspace Wrangler, dry-run only)
         run: npm run check:update-control
-      - name: Test Update Control Worker
+      - name: Test Update Control Worker and OAuth operator workflow
         run: npm run test:update-control-worker
       - name: Build and test Oracle read API
         run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
@@ -70,7 +70,7 @@ jobs:
         run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-cloudflared.service
 
   deploy:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_deploy == 'DEPLOY_UPDATE_CONTROL' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -91,11 +91,14 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Fail closed and deploy only Update Control
+      - name: Deploy only Update Control
         shell: bash
         env:
           UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE }}
         run: |
           set -euo pipefail
           if [[ -z "${UPDATE_CONTROL_CF_API_TOKEN:-}" ]]; then
@@ -106,6 +109,18 @@ jobs:
             echo '::error::Required Environment variable CLOUDFLARE_ACCOUNT_ID is missing or invalid.'
             exit 1
           fi
+          if [[ ! "${UPDATE_CONTROL_OAUTH_REPROVISION_URL:-}" =~ ^https://[^/?#]+/_operations/oauth/reprovision$ ]]; then
+            echo '::error::Required Environment variable UPDATE_CONTROL_OAUTH_REPROVISION_URL is missing or invalid.'
+            exit 1
+          fi
+          if [[ ! "${UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER:-}" =~ ^https://[^/?#]+/?$ ]]; then
+            echo '::error::Required Cloudflare Access issuer variable is missing or invalid.'
+            exit 1
+          fi
+          if [[ -z "${UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE:-}" || "${#UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE}" -gt 512 ]]; then
+            echo '::error::Required Cloudflare Access audience variable is missing or invalid.'
+            exit 1
+          fi
           export CLOUDFLARE_API_TOKEN="$UPDATE_CONTROL_CF_API_TOKEN"
           unset UPDATE_CONTROL_CF_API_TOKEN
-          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL:$UPDATE_CONTROL_OAUTH_REPROVISION_URL" --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER:$UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER" --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE:$UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE"
