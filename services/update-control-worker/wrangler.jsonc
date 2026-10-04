@@ -3,10 +3,8 @@
   "name": "mcp-v3-update-control",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-17",
-  "workers_dev": true,
-  "vars": {
-    "MCP_UPDATE_CONTROL_PUBLIC_URL": "https://mcp-v3-update-control.rafaeldamasio77.workers.dev/"
-  },
+  "workers_dev": false,
+  "preview_urls": false,
   "observability": {
     "logs": {
       "enabled": true,
