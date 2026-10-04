@@ -6,8 +6,9 @@ import {
 } from "@mcp-access-stack/mcp-owner-auth";
 import { createUpdateControlApiHandler } from "./api.js";
 import { createUpdateControlMcpHandler } from "./mcp.js";
-import { OracleReleaseReadClient } from "./oracle-read-client.js";
-import { createUpdateControlReadOnlyTools } from "./tools.js";
+import { UpdateControlOracleChannelReadClient } from "./oracle-channel-client.js";
+import type { OracleChannelNamespace } from "./oracle-channel.js";
+import { createUpdateControlReadOnlyTools, type UpdateControlReadClient } from "./tools.js";
 import { GitHubActionsOidcAssertionVerifier } from "./github-actions-oidc.js";
 
 const UPDATE_CONTROL_OWNER_ID = "usr_85dd70bf-2a50-4b8e-97d6-3c20c7226757";
@@ -63,10 +64,7 @@ export interface UpdateControlEnvironment {
   readonly MCP_OWNER_TOKEN?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
-  readonly ORCHESTRATOR_READ_API_URL?: string;
-  readonly UPDATE_CONTROL_ORCHESTRATOR_TOKEN?: string;
-  readonly ORACLE_ACCESS_CLIENT_ID?: string;
-  readonly ORACLE_ACCESS_CLIENT_SECRET?: string;
+  readonly UPDATE_CONTROL_ORACLE_CHANNEL?: OracleChannelNamespace;
 }
 
 export interface UpdateControlDurableStorage extends OwnerOAuthStorage {
@@ -84,7 +82,7 @@ export class UpdateControlAuthController {
   private readonly reprovisionUrl: URL | undefined;
   private readonly oidcAssertionVerifier: GitHubActionsOidcAssertionVerifier;
   private ownerIdentityPromise: Promise<void> | undefined;
-  private readClient: OracleReleaseReadClient | undefined;
+  private readClient: UpdateControlOracleChannelReadClient | undefined;
   private requestQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -147,13 +145,13 @@ export class UpdateControlAuthController {
       if (url.pathname === "/mcp") {
         return createUpdateControlMcpHandler({
           authenticate: (candidate) => this.ownerOAuth!.authenticate(candidate),
-          tools: createUpdateControlReadOnlyTools(this.getReadClient()),
+          tools: createUpdateControlReadOnlyTools(this.createReadClientProxy()),
         })(oauthRequest);
       }
       if (url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/")) {
         return createUpdateControlApiHandler({
           authenticate: (candidate) => this.ownerOAuth!.authenticate(candidate),
-          client: this.getReadClient(),
+          client: this.createReadClientProxy(),
         })(request);
       }
       return jsonResponse({ error: "not_found" }, 404);
@@ -474,20 +472,19 @@ export class UpdateControlAuthController {
     return this.ownerIdentityPromise;
   }
 
-  private getReadClient(): OracleReleaseReadClient {
+  private createReadClientProxy(): UpdateControlReadClient {
+    return {
+      listRuns: (input) => this.getReadClient().listRuns(input),
+      getRun: (input) => this.getReadClient().getRun(input),
+      waitEvents: (input) => this.getReadClient().waitEvents(input),
+    };
+  }
+
+  private getReadClient(): UpdateControlOracleChannelReadClient {
     if (this.readClient) return this.readClient;
-    this.readClient = new OracleReleaseReadClient({
-      baseUrl: requireValue(this.env.ORCHESTRATOR_READ_API_URL, "ORCHESTRATOR_READ_API_URL"),
-      bearerToken: requireValue(
-        this.env.UPDATE_CONTROL_ORCHESTRATOR_TOKEN,
-        "UPDATE_CONTROL_ORCHESTRATOR_TOKEN",
-      ),
-      accessClientId: requireValue(this.env.ORACLE_ACCESS_CLIENT_ID, "ORACLE_ACCESS_CLIENT_ID"),
-      accessClientSecret: requireValue(
-        this.env.ORACLE_ACCESS_CLIENT_SECRET,
-        "ORACLE_ACCESS_CLIENT_SECRET",
-      ),
-    });
+    const channel = this.env.UPDATE_CONTROL_ORACLE_CHANNEL;
+    if (!channel) throw new Error("Update Control Oracle channel is not configured.");
+    this.readClient = new UpdateControlOracleChannelReadClient(channel);
     return this.readClient;
   }
 }
