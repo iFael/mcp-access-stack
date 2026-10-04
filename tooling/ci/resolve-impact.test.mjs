@@ -129,3 +129,15 @@ test("Update Control changes run the independent API, contract and auth lanes on
   assert.equal(ledgerApi.updateControl, true);
   assert.equal(ledgerApi.rootBroad, false);
 });
+
+test("Edge Gateway-only changes stay on the edge-specific lane", () => {
+  const edge = classifyChangedPaths(["services/mcp-edge-gateway/src/worker.ts"]);
+  assert.equal(edge.edgeGateway, true);
+  assert.equal(edge.updateControl, false);
+  assert.equal(edge.rootBroad, false);
+  assert.equal(edge.shared, false);
+  assert.equal(edge.edgeProtocol, false);
+  assert.equal(edge.mcpGateway, false);
+  assert.equal(edge.workspaceAgent, false);
+  assert.equal(edge.browserWorker, false);
+});

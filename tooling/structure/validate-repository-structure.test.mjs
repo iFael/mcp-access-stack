@@ -119,6 +119,25 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
   );
 });
 
+test("routes Update Control changes through dedicated typechecks", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const checkStart = workflow.indexOf("      - name: Check independent Update Control Worker");
+  const operationsStart = workflow.indexOf("      - name: Validate operations", checkStart);
+  const updateControlCheck = workflow.slice(checkStart, operationsStart);
+  assert.ok(checkStart >= 0 && operationsStart > checkStart, "dedicated Update Control check must exist");
+  assert.ok(
+    updateControlCheck.includes("needs.impact.outputs.updateControl == 'true'"),
+    "Update Control changes must run their dedicated validation",
+  );
+  assert.ok(
+    updateControlCheck.includes("npm run check:update-control && npm run test:update-control-worker"),
+    "Update Control lane must typecheck and test its Worker",
+  );
+});
+
 test("keeps main integration sharded instead of one monolithic timeout", async () => {
   const workflow = await readFile(
     new URL("../../.github/workflows/ci.yml", import.meta.url),

@@ -151,7 +151,6 @@ jobs:
            needs.impact.outputs.workspaceAgent == 'true' ||
            needs.impact.outputs.mcpGateway == 'true' ||
            needs.impact.outputs.browserWorker == 'true' ||
-           needs.impact.outputs.updateControl == 'true' ||
            needs.impact.outputs.rootBroad == 'true')
         run: npm run typecheck
 
