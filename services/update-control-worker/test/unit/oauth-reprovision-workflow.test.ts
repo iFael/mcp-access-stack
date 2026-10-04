@@ -46,7 +46,7 @@ function findStep(workflow, jobName, stepName) {
 }
 
 describe("Update Control OAuth reprovision operator workflow", () => {
-  it("keeps normal Worker deploy manual, protected, main-only, and disconnected from Edge/public release", async () => {
+  it("keeps normal Worker deploy manual, protected, fail-closed, and isolated from OAuth operations and Edge", async () => {
     const workflow = await parseWorkflow("update-control-deploy.yml");
     expect(workflow.on.pull_request.branches).toEqual(["main"]);
     expect(workflow.on.workflow_dispatch.inputs.confirm_deploy.default).toBe("NO");
@@ -55,16 +55,49 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     expect(workflow.jobs.deploy.if).toContain("workflow_dispatch");
     expect(workflow.jobs.deploy.if).toContain("refs/heads/main");
     expect(workflow.jobs.deploy.environment.name).toBe("update-control-production");
+
+    const preflight = findStep(workflow, "deploy", "Validate all normal-deploy runtime settings without printing values");
     const deploy = findStep(workflow, "deploy", "Deploy only Update Control");
+    const installSecrets = findStep(workflow, "deploy", "Install Oracle read API runtime secrets through locked Wrangler stdin");
+    const steps = workflow.jobs.deploy.steps;
+    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(deploy));
+    expect(steps.indexOf(deploy)).toBeLessThan(steps.indexOf(installSecrets));
+    expect(preflight.run).toBe("node tooling/update-control-deploy-preflight.mjs");
+
+    const preflightSources = {
+      UPDATE_CONTROL_CF_API_TOKEN: "secrets.UPDATE_CONTROL_CF_API_TOKEN",
+      CLOUDFLARE_ACCOUNT_ID: "vars.CLOUDFLARE_ACCOUNT_ID",
+      ORACLE_ACCESS_CLIENT_ID: "vars.ORACLE_ACCESS_CLIENT_ID",
+      ORACLE_ACCESS_CLIENT_SECRET: "secrets.ORACLE_ACCESS_CLIENT_SECRET",
+      UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN",
+      MCP_UPDATE_CONTROL_PUBLIC_URL: "vars.MCP_UPDATE_CONTROL_PUBLIC_URL",
+      ORCHESTRATOR_READ_API_URL: "vars.ORCHESTRATOR_READ_API_URL",
+      UPDATE_CONTROL_OAUTH_REPROVISION_URL: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL",
+      UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER",
+      UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE",
+    };
+    for (const [name, source] of Object.entries(preflightSources)) {
+      expect(preflight.env[name]).toBe("${{ " + source + " }}");
+    }
+
+    expect(deploy.env.CLOUDFLARE_API_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}");
     expect(deploy.run).toContain("npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy");
-    expect(deploy.run).toContain("UPDATE_CONTROL_CF_API_TOKEN");
-    expect(deploy.run).toContain("CLOUDFLARE_ACCOUNT_ID");
-    expect(deploy.run).toContain("UPDATE_CONTROL_OAUTH_REPROVISION_URL");
-    expect(deploy.run).toContain("MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER");
-    expect(deploy.run).toContain("MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE");
-    expect(deploy.env.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER).toContain("vars.");
-    expect(deploy.env.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE).toContain("vars.");
-    expect(deploy.run).not.toMatch(/public-release|edge-breakglass|mcp-edge-gateway/iu);
+    expect(deploy.run.indexOf("wrangler deploy")).toBeGreaterThanOrEqual(0);
+    expect(deploy.run).toContain("MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL");
+    expect(deploy.run).toContain("ORACLE_ACCESS_CLIENT_ID:$ORACLE_ACCESS_CLIENT_ID");
+    expect(deploy.run).toContain("ORCHESTRATOR_READ_API_URL:$ORCHESTRATOR_READ_API_URL");
+    expect(deploy.run).toContain("MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL:$UPDATE_CONTROL_OAUTH_REPROVISION_URL");
+    expect(deploy.run).not.toMatch(/UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID|UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET|UPDATE_CONTROL_OWNER_TOKEN_NEXT|MCP_OWNER_TOKEN|public-release|edge-breakglass|mcp-edge-gateway/iu);
+
+    expect(installSecrets.env.CLOUDFLARE_API_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}");
+    expect(installSecrets.env.CLOUDFLARE_ACCOUNT_ID).toBe("${{ vars.CLOUDFLARE_ACCOUNT_ID }}");
+    expect(installSecrets.env.ORACLE_ACCESS_CLIENT_SECRET).toBe("${{ secrets.ORACLE_ACCESS_CLIENT_SECRET }}");
+    expect(installSecrets.env.UPDATE_CONTROL_ORCHESTRATOR_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN }}");
+    expect(installSecrets.run).toContain('printf \'%s\' "$ORACLE_ACCESS_CLIENT_SECRET" |');
+    expect(installSecrets.run).toContain('printf \'%s\' "$UPDATE_CONTROL_ORCHESTRATOR_TOKEN" |');
+    expect(installSecrets.run).not.toMatch(/echo\s+.*(ORACLE_ACCESS_CLIENT_SECRET|UPDATE_CONTROL_ORCHESTRATOR_TOKEN)/u);
+    expect(workflow.jobs.validate.environment).toBeUndefined();
+    expect(JSON.stringify(workflow.jobs.validate)).not.toMatch(/secrets\.|vars\./u);
   });
 
   it("keeps OAuth reprovision dispatch-only, protected, explicitly confirmed, and bounded to fixed operations", async () => {
