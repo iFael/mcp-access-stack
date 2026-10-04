@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController } from "../../src/auth-state.js";
-import { createTestAccessAssertion, TEST_ACCESS_AUDIENCE, TEST_ACCESS_ISSUER, testAccessJwksFetch } from "./access-assertion-fixture.js";
+import { createTestGitHubActionsAssertion, testGitHubActionsJwksFetch } from "./github-actions-oidc-fixture.js";
 
 const OWNER_SECRET = "phase2-test-owner-secret-which-is-long";
 const BASE_URL = "https://update-control.example/";
@@ -38,15 +38,13 @@ function makeController(storage = new MemoryStorage()) {
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: BASE_URL,
     MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://update-control-ops.example/_operations/oauth/reprovision",
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: TEST_ACCESS_ISSUER,
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: TEST_ACCESS_AUDIENCE,
     MCP_OWNER_TOKEN: OWNER_SECRET,
     ORCHESTRATOR_READ_API_URL: "https://oracle-tunnel.example/",
     UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "x".repeat(48),
     ORACLE_ACCESS_CLIENT_ID: "access-client-id",
     ORACLE_ACCESS_CLIENT_SECRET: "s".repeat(48),
   };
-  return { controller: new UpdateControlAuthController({ storage }, env, testAccessJwksFetch), storage };
+  return { controller: new UpdateControlAuthController({ storage }, env, testGitHubActionsJwksFetch), storage };
 }
 
 async function completeInitialReprovision(controller: UpdateControlAuthController, operationId: string): Promise<void> {
@@ -55,7 +53,7 @@ async function completeInitialReprovision(controller: UpdateControlAuthControlle
     {
       method: "POST",
       headers: {
-        "cf-access-jwt-assertion": await createTestAccessAssertion(),
+        authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ operationId }),
@@ -129,14 +127,14 @@ function base64Url(value: Uint8Array): string {
 }
 
 describe("Update Control owner authorization boundary", () => {
-  it("rejects a forged Access assertion without writing OAuth state", async () => {
+  it("rejects an invalid GitHub OIDC bearer without writing OAuth state", async () => {
     const { controller, storage } = makeController();
     const response = await controller.fetch(new Request(
       "https://update-control-ops.example/_operations/oauth/reprovision",
       {
         method: "POST",
         headers: {
-          "cf-access-jwt-assertion": "attacker-controlled-header",
+          authorization: "Bearer attacker-controlled-header",
           "content-type": "application/json",
         },
         body: JSON.stringify({ operationId: "05c60a6f-5f30-47fb-a2fc-43bf4e1c0dc4" }),

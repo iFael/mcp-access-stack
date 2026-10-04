@@ -1,55 +1,78 @@
+export const GITHUB_ACTIONS_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const GITHUB_ACTIONS_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
+const EXPECTED_REPOSITORY = "iFael/mcp-access-stack";
+const EXPECTED_WORKFLOW_REF =
+  "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main";
+const EXPECTED_REF = "refs/heads/main";
+const EXPECTED_EVENT = "workflow_dispatch";
+const EXPECTED_ENVIRONMENT = "update-control-production";
+const EXPECTED_SUBJECT = "repo:iFael/mcp-access-stack:environment:update-control-production";
+const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_ASSERTION_BYTES = 8 * 1024;
 const MAX_JWKS_BYTES = 32 * 1024;
 const MAX_JWKS_KEYS = 16;
 const JWKS_CACHE_MS = 5 * 60 * 1000;
-const CLOCK_SKEW_SECONDS = 60;
+const CLOCK_SKEW_SECONDS = 30;
+const MAX_TOKEN_AGE_SECONDS = 10 * 60;
+const MAX_TOKEN_LIFETIME_SECONDS = 10 * 60;
 
-interface AccessJwk {
+interface GitHubJwk {
   readonly kty: string;
   readonly kid: string;
   readonly alg?: string;
   readonly use?: string;
+  readonly key_ops?: readonly string[];
   readonly n?: string;
   readonly e?: string;
 }
 
-interface AccessClaims {
+interface GitHubActionsClaims {
   readonly iss?: unknown;
   readonly aud?: unknown;
+  readonly sub?: unknown;
+  readonly repository?: unknown;
+  readonly workflow_ref?: unknown;
+  readonly ref?: unknown;
+  readonly event_name?: unknown;
+  readonly environment?: unknown;
   readonly exp?: unknown;
   readonly nbf?: unknown;
   readonly iat?: unknown;
+  readonly jti?: unknown;
 }
 
-interface CachedAccessKeys {
-  readonly issuer: string;
+interface CachedGitHubKeys {
   readonly expiresAt: number;
   readonly keys: ReadonlyMap<string, CryptoKey>;
 }
 
-export class CloudflareAccessAssertionVerifier {
-  private cache: CachedAccessKeys | undefined;
+export function githubActionsOAuthReprovisionAudience(operationId: string): string {
+  return `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`;
+}
+
+export class GitHubActionsOidcAssertionVerifier {
+  private cache: CachedGitHubKeys | undefined;
 
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
-  async verify(assertion: string, issuerValue: string, audience: string): Promise<boolean> {
+  async verify(assertion: string, operationId: string): Promise<boolean> {
     try {
-      if (assertion.length === 0 || assertion.length > MAX_ASSERTION_BYTES ||
-          audience.length === 0 || audience.length > 512) return false;
-      const issuerUrl = new URL(issuerValue);
-      if (issuerUrl.protocol !== "https:" || issuerUrl.pathname !== "/" ||
-          issuerUrl.search || issuerUrl.hash || issuerUrl.username || issuerUrl.password) return false;
-      const issuer = issuerUrl.origin;
+      if (typeof assertion !== "string" || assertion.length === 0 ||
+          assertion.length > MAX_ASSERTION_BYTES ||
+          !OPERATION_ID_PATTERN.test(operationId)) return false;
+
       const parts = assertion.split(".");
-      if (parts.length !== 3 || parts.some((part) => part.length === 0 || part.length > MAX_ASSERTION_BYTES)) return false;
+      if (parts.length !== 3 ||
+          parts.some((part) => part.length === 0 || part.length > MAX_ASSERTION_BYTES)) return false;
 
       const header = parseJsonPart(parts[0]!);
-      const claims = parseJsonPart(parts[1]!) as AccessClaims;
+      const claims = parseJsonPart(parts[1]!) as GitHubActionsClaims;
       if (!isRecord(header) || header.alg !== "RS256" ||
-          typeof header.kid !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid)) return false;
-      if (!validClaims(claims, issuer, audience)) return false;
+          typeof header.kid !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid) ||
+          header.jku !== undefined || header.x5u !== undefined || header.crit !== undefined) return false;
+      if (!validClaims(claims, operationId)) return false;
 
-      const key = await this.getKey(issuer, header.kid);
+      const key = await this.getKey(header.kid);
       if (!key) return false;
       const signature = decodeBase64Url(parts[2]!);
       const signingInput = new TextEncoder().encode(parts[0] + "." + parts[1]);
@@ -64,14 +87,13 @@ export class CloudflareAccessAssertionVerifier {
     }
   }
 
-  private async getKey(issuer: string, kid: string): Promise<CryptoKey | undefined> {
-    if (this.cache && this.cache.issuer === issuer && this.cache.expiresAt > Date.now()) {
+  private async getKey(kid: string): Promise<CryptoKey | undefined> {
+    if (this.cache && this.cache.expiresAt > Date.now()) {
       const cached = this.cache.keys.get(kid);
       if (cached) return cached;
     }
 
-    const jwksUrl = new URL("/cdn-cgi/access/certs", issuer);
-    const response = await this.fetchImpl(jwksUrl, {
+    const response = await this.fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
       method: "GET",
       redirect: "error",
       cache: "no-store",
@@ -85,7 +107,7 @@ export class CloudflareAccessAssertionVerifier {
 
     const imported = new Map<string, CryptoKey>();
     for (const value of payload.keys) {
-      if (!isAccessJwk(value)) continue;
+      if (!isGitHubJwk(value)) continue;
       try {
         const key = await crypto.subtle.importKey(
           "jwk",
@@ -96,39 +118,43 @@ export class CloudflareAccessAssertionVerifier {
         );
         imported.set(value.kid, key);
       } catch {
-        // Ignore malformed/unusable public keys; a matching valid key must still be present.
+        // A malformed unrelated key cannot authorize a request; a matching usable key must exist.
       }
     }
-    const maxAgeSeconds = parseMaxAge(response.headers.get("cache-control"));
+
     this.cache = {
-      issuer,
-      expiresAt: Date.now() + maxAgeSeconds * 1000,
+      expiresAt: Date.now() + parseMaxAge(response.headers.get("cache-control")),
       keys: imported,
     };
     return imported.get(kid);
   }
 }
 
-function validClaims(claims: AccessClaims, issuer: string, audience: string): boolean {
-  if (!isRecord(claims) || claims.iss !== issuer || typeof claims.exp !== "number" ||
-      !Number.isFinite(claims.exp) || claims.exp < Math.floor(Date.now() / 1000) - CLOCK_SKEW_SECONDS) {
-    return false;
-  }
-  const audiences = typeof claims.aud === "string"
-    ? [claims.aud]
-    : Array.isArray(claims.aud) && claims.aud.every((value) => typeof value === "string")
-      ? claims.aud
-      : [];
-  if (!audiences.includes(audience)) return false;
+function validClaims(claims: GitHubActionsClaims, operationId: string): boolean {
+  if (!isRecord(claims) ||
+      claims.iss !== GITHUB_ACTIONS_OIDC_ISSUER ||
+      claims.aud !== githubActionsOAuthReprovisionAudience(operationId) ||
+      claims.sub !== EXPECTED_SUBJECT ||
+      claims.repository !== EXPECTED_REPOSITORY ||
+      claims.workflow_ref !== EXPECTED_WORKFLOW_REF ||
+      claims.ref !== EXPECTED_REF ||
+      claims.event_name !== EXPECTED_EVENT ||
+      claims.environment !== EXPECTED_ENVIRONMENT ||
+      typeof claims.jti !== "string" ||
+      claims.jti.length === 0 ||
+      claims.jti.length > 256) return false;
+
   const now = Math.floor(Date.now() / 1000);
-  if (claims.nbf !== undefined &&
-      (typeof claims.nbf !== "number" || !Number.isFinite(claims.nbf) || claims.nbf > now + CLOCK_SKEW_SECONDS)) {
-    return false;
-  }
-  if (claims.iat !== undefined &&
-      (typeof claims.iat !== "number" || !Number.isFinite(claims.iat) || claims.iat > now + CLOCK_SKEW_SECONDS)) {
-    return false;
-  }
+  const { exp, nbf, iat } = claims;
+  if (!isNumericDate(exp) || !isNumericDate(nbf) || !isNumericDate(iat) ||
+      exp <= now ||
+      nbf > now + CLOCK_SKEW_SECONDS ||
+      iat > now + CLOCK_SKEW_SECONDS ||
+      iat < now - MAX_TOKEN_AGE_SECONDS ||
+      exp <= iat ||
+      exp - iat > MAX_TOKEN_LIFETIME_SECONDS ||
+      nbf > exp) return false;
+
   return true;
 }
 
@@ -136,7 +162,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   const declared = response.headers.get("content-length");
   if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_JWKS_BYTES)) {
     await response.body?.cancel();
-    throw new Error("Access JWKS response exceeded the limit.");
+    throw new Error("GitHub JWKS response exceeded the configured size limit.");
   }
   const reader = response.body?.getReader();
   if (!reader) return null;
@@ -149,7 +175,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       total += next.value.byteLength;
       if (total > MAX_JWKS_BYTES) {
         await reader.cancel();
-        throw new Error("Access JWKS response exceeded the limit.");
+        throw new Error("GitHub JWKS response exceeded the configured size limit.");
       }
       chunks.push(next.value);
     }
@@ -176,12 +202,15 @@ function decodeBase64Url(value: string): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function isAccessJwk(value: unknown): value is AccessJwk {
+function isGitHubJwk(value: unknown): value is GitHubJwk {
   return isRecord(value) &&
     value.kty === "RSA" &&
     typeof value.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(value.kid) &&
     (value.alg === undefined || value.alg === "RS256") &&
     (value.use === undefined || value.use === "sig") &&
+    (value.key_ops === undefined ||
+      (Array.isArray(value.key_ops) && value.key_ops.includes("verify") &&
+       value.key_ops.every((operation) => operation === "verify"))) &&
     typeof value.n === "string" && /^[A-Za-z0-9_-]+$/u.test(value.n) &&
     typeof value.e === "string" && /^[A-Za-z0-9_-]+$/u.test(value.e);
 }
@@ -189,8 +218,12 @@ function isAccessJwk(value: unknown): value is AccessJwk {
 function parseMaxAge(cacheControl: string | null): number {
   const match = cacheControl?.match(/(?:^|,)\s*max-age=(\d+)/iu);
   const seconds = match?.[1] ? Number(match[1]) : JWKS_CACHE_MS / 1000;
-  if (!Number.isFinite(seconds)) return JWKS_CACHE_MS / 1000;
-  return Math.min(Math.max(seconds, 30), 5 * 60);
+  if (!Number.isFinite(seconds)) return JWKS_CACHE_MS;
+  return Math.min(Math.max(seconds, 30), JWKS_CACHE_MS / 1000) * 1000;
+}
+
+function isNumericDate(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

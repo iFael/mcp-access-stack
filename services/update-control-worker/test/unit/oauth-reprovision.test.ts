@@ -5,7 +5,7 @@ import {
   type OwnerIdentity,
 } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController, type UpdateControlDurableState } from "../../src/auth-state.js";
-import { createTestAccessAssertion, TEST_ACCESS_AUDIENCE, TEST_ACCESS_ISSUER, testAccessJwksFetch } from "./access-assertion-fixture.js";
+import { createTestGitHubActionsAssertion, testGitHubActionsJwksFetch } from "./github-actions-oidc-fixture.js";
 
 const PUBLIC_URL = "https://update-control.example/";
 const REPROVISION_URL = "https://update-control-ops.example/_operations/oauth/reprovision";
@@ -52,22 +52,20 @@ function makeController(storage: MemoryStorage, ownerToken: string) {
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
     MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL: REPROVISION_URL,
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: TEST_ACCESS_ISSUER,
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: TEST_ACCESS_AUDIENCE,
     MCP_OWNER_TOKEN: ownerToken,
     ORCHESTRATOR_READ_API_URL: "https://oracle-tunnel.example/",
     UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "o".repeat(48),
     ORACLE_ACCESS_CLIENT_ID: "access-client-id",
     ORACLE_ACCESS_CLIENT_SECRET: "a".repeat(48),
   };
-  return new UpdateControlAuthController(state, env, testAccessJwksFetch);
+  return new UpdateControlAuthController(state, env, testGitHubActionsJwksFetch);
 }
 
 async function reprovisionRequest(operationId: string): Promise<Request> {
   return new Request(REPROVISION_URL, {
     method: "POST",
     headers: {
-      "cf-access-jwt-assertion": await createTestAccessAssertion(),
+      authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({ operationId }),
@@ -175,7 +173,7 @@ describe("controlled Update Control OAuth reprovision", () => {
 
     const status = await unconfigured.fetch(new Request(
       REPROVISION_URL + "?operationId=" + operationId,
-      { headers: { "cf-access-jwt-assertion": await createTestAccessAssertion() } },
+      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` } },
     ));
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
@@ -362,14 +360,14 @@ describe("controlled Update Control OAuth reprovision", () => {
 
     const status = await nextController.fetch(new Request(
       REPROVISION_URL + "?operationId=" + operationId,
-      { headers: { "cf-access-jwt-assertion": await createTestAccessAssertion() } },
+      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` } },
     ));
     expect(await status.json()).toMatchObject({ operationId, status: "outcome_unknown" });
 
     const competingOperationId = "d94bad79-6370-4fe6-b793-a872e3720c16";
     const competingStatus = await nextController.fetch(new Request(
       REPROVISION_URL + "?operationId=" + competingOperationId,
-      { headers: { "cf-access-jwt-assertion": await createTestAccessAssertion() } },
+      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(competingOperationId)}` } },
     ));
     const competingBody = await competingStatus.json();
     expect(competingStatus.status).toBe(409);
@@ -440,7 +438,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     const controller = makeController(storage, FIRST_OWNER_TOKEN);
     const operationId = "ef3f96d6-61e3-4d4e-a96c-7c4f4cda39a1";
     const status = await controller.fetch(new Request(REPROVISION_URL + "?operationId=" + operationId, {
-      headers: { "cf-access-jwt-assertion": await createTestAccessAssertion() },
+      headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` },
     }));
     expect(await status.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
 
@@ -449,13 +447,46 @@ describe("controlled Update Control OAuth reprovision", () => {
       {
         method: "POST",
         headers: {
-          "cf-access-jwt-assertion": await createTestAccessAssertion(),
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ operationId }),
       },
     ));
     expect(wrongHost.status).toBe(404);
+    expect(storage.values.size).toBe(0);
+
+    await runReprovision(controller, operationId);
+    const beforeGenericRoute = JSON.stringify([...storage.values.entries()]);
+    const genericAdmin = await controller.fetch(new Request(
+      "https://update-control-ops.example/_operations/admin/reset",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ operationId }),
+      },
+    ));
+    expect(genericAdmin.status).toBe(404);
+    expect(JSON.stringify([...storage.values.entries()])).toBe(beforeGenericRoute);
+  });
+
+  it("rejects a valid OIDC token when the request names a different operation UUID", async () => {
+    const storage = new MemoryStorage();
+    const controller = makeController(storage, FIRST_OWNER_TOKEN);
+    const audienceOperationId = "3bfb5fd8-45c6-4293-862b-879c4b1d0915";
+    const requestOperationId = "b47e245e-ec36-4932-aa97-15ddef3bb5fa";
+    const response = await controller.fetch(new Request(REPROVISION_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${await createTestGitHubActionsAssertion(audienceOperationId)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ operationId: requestOperationId }),
+    }));
+    expect(response.status).toBe(401);
     expect(storage.values.size).toBe(0);
   });
 });
