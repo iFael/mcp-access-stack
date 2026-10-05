@@ -34,22 +34,17 @@ class MemoryStorage implements OwnerOAuthStorage {
   }
 }
 
-function makeController(storage = new MemoryStorage()) {
+function makeController(storage = new MemoryStorage(), publicUrl = BASE_URL) {
   const env = {
-    MCP_UPDATE_CONTROL_PUBLIC_URL: BASE_URL,
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://update-control-ops.example/_operations/oauth/reprovision",
+    MCP_UPDATE_CONTROL_PUBLIC_URL: publicUrl,
     MCP_OWNER_TOKEN: OWNER_SECRET,
-    ORCHESTRATOR_READ_API_URL: "https://oracle-tunnel.example/",
-    UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "x".repeat(48),
-    ORACLE_ACCESS_CLIENT_ID: "access-client-id",
-    ORACLE_ACCESS_CLIENT_SECRET: "s".repeat(48),
   };
   return { controller: new UpdateControlAuthController({ storage }, env, testGitHubActionsJwksFetch), storage };
 }
 
 async function completeInitialReprovision(controller: UpdateControlAuthController, operationId: string): Promise<void> {
   const response = await controller.fetch(new Request(
-    "https://update-control-ops.example/_operations/oauth/reprovision",
+    new URL("/_operations/oauth/reprovision", BASE_URL),
     {
       method: "POST",
       headers: {
@@ -130,7 +125,7 @@ describe("Update Control owner authorization boundary", () => {
   it("rejects an invalid GitHub OIDC bearer without writing OAuth state", async () => {
     const { controller, storage } = makeController();
     const response = await controller.fetch(new Request(
-      "https://update-control-ops.example/_operations/oauth/reprovision",
+      new URL("/_operations/oauth/reprovision", BASE_URL),
       {
         method: "POST",
         headers: {
@@ -142,6 +137,26 @@ describe("Update Control owner authorization boundary", () => {
     ));
     expect(response.status).toBe(401);
     expect(storage.values.size).toBe(0);
+  });
+
+  it.each([
+    "http://update-control.example/",
+    "https://update-control.example/nested",
+    "https://update-control.example/?unexpected=1",
+    "https://update-control.example/#unexpected",
+    "https://update-control.example/../",
+    "https://user@update-control.example/",
+    "https://update-control.example:8443/",
+    "not a URL",
+  ])("fails closed for an invalid public origin: %s", async (publicUrl) => {
+    const { controller } = makeController(new MemoryStorage(), publicUrl);
+    const response = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "tools/list" }),
+    }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "update_control_not_configured" });
   });
 
   it("fails closed before the controlled initial OAuth reprovision", async () => {

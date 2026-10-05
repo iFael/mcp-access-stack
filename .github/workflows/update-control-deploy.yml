@@ -15,7 +15,6 @@ on:
       - services/oracle-release-orchestrator/**
       - deploy/linux/mcp-v3-oracle-read-api.service
       - deploy/linux/mcp-v3-update-control-oracle-channel.service
-      - deploy/linux/mcp-v3-update-control-cloudflared.service
       - deploy/linux/Test-McpUpdateControlServices.mjs
       - docs/update-control-deployment.md
       - tooling/update-control-deploy-preflight.mjs
@@ -69,7 +68,7 @@ jobs:
       - name: Validate Update Control runtime templates
         run: node deploy/linux/Test-McpUpdateControlServices.mjs
       - name: Verify systemd unit syntax
-        run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-oracle-channel.service deploy/linux/mcp-v3-update-control-cloudflared.service
+        run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-oracle-channel.service
 
   deploy:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_deploy == 'DEPLOY_UPDATE_CONTROL' }}
@@ -97,15 +96,9 @@ jobs:
         shell: bash
         env:
           UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
+          UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: ${{ secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          ORACLE_ACCESS_CLIENT_ID: ${{ vars.ORACLE_ACCESS_CLIENT_ID }}
-          ORACLE_ACCESS_CLIENT_SECRET: ${{ secrets.ORACLE_ACCESS_CLIENT_SECRET }}
-          UPDATE_CONTROL_ORCHESTRATOR_TOKEN: ${{ secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
-          ORCHESTRATOR_READ_API_URL: ${{ vars.ORCHESTRATOR_READ_API_URL }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE }}
         run: node tooling/update-control-deploy-preflight.mjs
       - name: Deploy only Update Control
         shell: bash
@@ -113,22 +106,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
-          ORACLE_ACCESS_CLIENT_ID: ${{ vars.ORACLE_ACCESS_CLIENT_ID }}
-          ORCHESTRATOR_READ_API_URL: ${{ vars.ORCHESTRATOR_READ_API_URL }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE }}
         run: |
           set -euo pipefail
-          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL:$UPDATE_CONTROL_OAUTH_REPROVISION_URL" --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER:$UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER" --var "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE:$UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE" --var "MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL" --var "ORACLE_ACCESS_CLIENT_ID:$ORACLE_ACCESS_CLIENT_ID" --var "ORCHESTRATOR_READ_API_URL:$ORCHESTRATOR_READ_API_URL"
-      - name: Install Oracle read API runtime secrets through locked Wrangler stdin
+          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --var "MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL"
+      - name: Install Oracle WSS channel secret through locked Wrangler stdin
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          ORACLE_ACCESS_CLIENT_SECRET: ${{ secrets.ORACLE_ACCESS_CLIENT_SECRET }}
-          UPDATE_CONTROL_ORCHESTRATOR_TOKEN: ${{ secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN }}
+          UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: ${{ secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN }}
         run: |
           set -euo pipefail
-          printf '%s' "$ORACLE_ACCESS_CLIENT_SECRET" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put ORACLE_ACCESS_CLIENT_SECRET --cwd ../.. --config services/update-control-worker/wrangler.jsonc
-          printf '%s' "$UPDATE_CONTROL_ORCHESTRATOR_TOKEN" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_ORCHESTRATOR_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+          printf '%s' "$UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc

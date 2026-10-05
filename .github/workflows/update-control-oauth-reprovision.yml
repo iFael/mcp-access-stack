@@ -52,7 +52,7 @@ jobs:
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
+          MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs preflight
       - name: Install replacement owner token through locked Wrangler
@@ -85,6 +85,6 @@ jobs:
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_URL: ${{ vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL }}
+          MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs apply

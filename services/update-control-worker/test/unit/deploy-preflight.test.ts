@@ -7,19 +7,21 @@ import {
 
 const VALID_ENV = {
   UPDATE_CONTROL_CF_API_TOKEN: "cloudflare-deploy-token-test-value",
-  ORACLE_ACCESS_CLIENT_SECRET: "o".repeat(40),
-  UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "b".repeat(48),
+  UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "c".repeat(48),
   CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
-  ORACLE_ACCESS_CLIENT_ID: "oracle-access-client-id",
-  MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-update-control.example.test/",
-  ORCHESTRATOR_READ_API_URL: "https://oracle-read.example.test/",
-  UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://update-control-ops.example.test/_operations/oauth/reprovision",
-  UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: "https://team.cloudflareaccess.com",
-  UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: "update-control-oauth-operations",
+  MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-v3-update-control.example.workers.dev/",
 };
 
 describe("Update Control deploy configuration preflight", () => {
-  it("accepts the complete typed runtime contract without returning values", () => {
+  it("requires only the deploy token, channel token, account, and public workers.dev origin", () => {
+    expect(UPDATE_CONTROL_DEPLOY_SECRET_INPUTS).toEqual([
+      "UPDATE_CONTROL_CF_API_TOKEN",
+      "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
+    ]);
+    expect(UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS).toEqual([
+      "CLOUDFLARE_ACCOUNT_ID",
+      "MCP_UPDATE_CONTROL_PUBLIC_URL",
+    ]);
     expect(validateUpdateControlDeployEnvironment(VALID_ENV)).toEqual([]);
   });
 
@@ -34,55 +36,44 @@ describe("Update Control deploy configuration preflight", () => {
     }
   });
 
-  it("rejects workers.dev/preview origins, invalid URLs, and OAuth operations sharing the public origin", () => {
-    expect(validateUpdateControlDeployEnvironment({
-      ...VALID_ENV,
-      MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-update-control.example.workers.dev/",
-    }).some((error) => error.includes("MCP_UPDATE_CONTROL_PUBLIC_URL is invalid"))).toBe(true);
-
-    expect(validateUpdateControlDeployEnvironment({
-      ...VALID_ENV,
-      ORCHESTRATOR_READ_API_URL: "http://oracle-read.example.test/",
-    }).some((error) => error.includes("ORCHESTRATOR_READ_API_URL is invalid"))).toBe(true);
-
-    expect(validateUpdateControlDeployEnvironment({
-      ...VALID_ENV,
-      UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://mcp-update-control.example.test/_operations/oauth/reprovision",
-    }).some((error) => error.includes("UPDATE_CONTROL_OAUTH_REPROVISION_URL must use a distinct origin"))).toBe(true);
-
-    expect(validateUpdateControlDeployEnvironment({
-      ...VALID_ENV,
-      UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://ops.example.test/admin/reset",
-    }).some((error) => error.includes("UPDATE_CONTROL_OAUTH_REPROVISION_URL is invalid"))).toBe(true);
-
-    expect(validateUpdateControlDeployEnvironment({
-      ...VALID_ENV,
-      UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://ops.example.workers.dev/_operations/oauth/reprovision",
-    }).some((error) => error.includes("UPDATE_CONTROL_OAUTH_REPROVISION_URL is invalid"))).toBe(true);
+  it("accepts production workers.dev and rejects non-HTTPS, custom, or malformed origins", () => {
+    for (const value of [
+      "http://mcp-v3-update-control.example.workers.dev/",
+      "https://mcp-v3-update-control.example.test/",
+      "https://mcp-v3-update-control.example.workers.dev/mcp",
+      "https://mcp-v3-update-control.example.workers.dev/?unexpected=1",
+      "https://mcp-v3-update-control.example.workers.dev/#unexpected",
+      "https://mcp-v3-update-control.example.workers.dev/../",
+      "https://user@mcp-v3-update-control.example.workers.dev/",
+      "https://mcp-v3-update-control.example.workers.dev:8443/",
+      "not a URL",
+    ]) {
+      const errors = validateUpdateControlDeployEnvironment({
+        ...VALID_ENV,
+        MCP_UPDATE_CONTROL_PUBLIC_URL: value,
+      });
+      expect(errors.some((error) => error.includes("MCP_UPDATE_CONTROL_PUBLIC_URL is invalid"))).toBe(true);
+    }
   });
 
-  it("rejects malformed credentials without including any supplied secret values in diagnostics", () => {
+  it("rejects malformed secrets without including supplied values in diagnostics", () => {
     const sentinel = "NEVER-ECHO-THIS-SECRET-8j6Yp1";
     const errors = validateUpdateControlDeployEnvironment({
       ...VALID_ENV,
       UPDATE_CONTROL_CF_API_TOKEN: sentinel,
-      ORACLE_ACCESS_CLIENT_SECRET: "short",
-      UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "also-short",
+      UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "short",
       CLOUDFLARE_ACCOUNT_ID: "not-an-account-id",
-      UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: "x".repeat(513),
     });
     const diagnostics = errors.join("\n");
-    expect(diagnostics).toContain("ORACLE_ACCESS_CLIENT_SECRET");
-    expect(diagnostics).toContain("UPDATE_CONTROL_ORCHESTRATOR_TOKEN");
+    expect(diagnostics).toContain("UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN");
+    expect(diagnostics).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(diagnostics).not.toContain(sentinel);
     expect(diagnostics).not.toContain("short");
   });
 
-  it("keeps owner and OAuth-operation credentials outside the normal deployment contract", () => {
+  it("keeps OAuth owner and replacement credentials outside the normal deploy contract", () => {
     const normalNames = [...UPDATE_CONTROL_DEPLOY_SECRET_INPUTS, ...UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS];
     expect(normalNames).not.toContain("MCP_OWNER_TOKEN");
     expect(normalNames).not.toContain("UPDATE_CONTROL_OWNER_TOKEN_NEXT");
-    expect(normalNames).not.toContain("UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID");
-    expect(normalNames).not.toContain("UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET");
   });
 });

@@ -8,7 +8,7 @@ import { UpdateControlAuthController, type UpdateControlDurableState } from "../
 import { createTestGitHubActionsAssertion, testGitHubActionsJwksFetch } from "./github-actions-oidc-fixture.js";
 
 const PUBLIC_URL = "https://update-control.example/";
-const REPROVISION_URL = "https://update-control-ops.example/_operations/oauth/reprovision";
+const REPROVISION_URL = new URL("/_operations/oauth/reprovision", PUBLIC_URL).href;
 const FIRST_OWNER_TOKEN = "first-owner-token-with-more-than-thirty-two-characters";
 const SECOND_OWNER_TOKEN = "second-owner-token-with-more-than-thirty-two-characters";
 const THIRD_OWNER_TOKEN = "third-owner-token-with-more-than-thirty-two-characters";
@@ -51,12 +51,7 @@ function makeController(storage: MemoryStorage, ownerToken: string) {
   const state: UpdateControlDurableState = { storage };
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
-    MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL: REPROVISION_URL,
     MCP_OWNER_TOKEN: ownerToken,
-    ORCHESTRATOR_READ_API_URL: "https://oracle-tunnel.example/",
-    UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "o".repeat(48),
-    ORACLE_ACCESS_CLIENT_ID: "access-client-id",
-    ORACLE_ACCESS_CLIENT_SECRET: "a".repeat(48),
   };
   return new UpdateControlAuthController(state, env, testGitHubActionsJwksFetch);
 }
@@ -433,7 +428,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(allStoredValues).not.toContain(SECOND_OWNER_TOKEN);
   });
 
-  it("rejects the operation on the public MCP hostname and reports not_executed", async () => {
+  it("restricts OAuth reprovision to the same-origin fixed path and rejects generic admin paths", async () => {
     const storage = new MemoryStorage();
     const controller = makeController(storage, FIRST_OWNER_TOKEN);
     const operationId = "ef3f96d6-61e3-4d4e-a96c-7c4f4cda39a1";
@@ -443,7 +438,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(await status.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
 
     const wrongHost = await controller.fetch(new Request(
-      "https://update-control.example/_operations/oauth/reprovision",
+      "https://wrong-update-control.example/_operations/oauth/reprovision",
       {
         method: "POST",
         headers: {
@@ -456,10 +451,56 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(wrongHost.status).toBe(404);
     expect(storage.values.size).toBe(0);
 
+    const wrongHttpOrigin = await controller.fetch(new Request(
+      "http://update-control.example/_operations/oauth/reprovision",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ operationId }),
+      },
+    ));
+    expect(wrongHttpOrigin.status).toBe(404);
+    expect(storage.values.size).toBe(0);
+
+    const wrongPath = await controller.fetch(new Request(
+      "https://update-control.example/_operations/oauth/reprovision/extra",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ operationId }),
+      },
+    ));
+    expect(wrongPath.status).toBe(404);
+    expect(storage.values.size).toBe(0);
+
+    const unexpectedGetQuery = await controller.fetch(new Request(
+      REPROVISION_URL + "?operationId=" + operationId + "&unexpected=1",
+      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` } },
+    ));
+    expect(unexpectedGetQuery.status).toBe(400);
+    expect(storage.values.size).toBe(0);
+
+    const unexpectedPostQuery = await controller.fetch(new Request(REPROVISION_URL + "?unexpected=1", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ operationId }),
+    }));
+    expect(unexpectedPostQuery.status).toBe(405);
+    expect(storage.values.size).toBe(0);
+
     await runReprovision(controller, operationId);
     const beforeGenericRoute = JSON.stringify([...storage.values.entries()]);
     const genericAdmin = await controller.fetch(new Request(
-      "https://update-control-ops.example/_operations/admin/reset",
+      "https://update-control.example/_operations/admin/reset",
       {
         method: "POST",
         headers: {

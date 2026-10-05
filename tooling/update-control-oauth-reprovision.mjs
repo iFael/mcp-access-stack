@@ -28,22 +28,25 @@ function readSettings(env) {
     throw new Error("OAuth reprovision operation ID must be a UUID.");
   }
 
-  let endpoint;
+  const publicUrlValue = requireValue(env, "MCP_UPDATE_CONTROL_PUBLIC_URL");
+  if (/[\u0000-\u001f\u007f]/u.test(publicUrlValue) || publicUrlValue.includes("?") || publicUrlValue.includes("#")) {
+    throw new Error("The public URL is invalid.");
+  }
+  let publicUrl;
   try {
-    endpoint = new URL(requireValue(env, "UPDATE_CONTROL_OAUTH_REPROVISION_URL"));
+    publicUrl = new URL(publicUrlValue);
   } catch {
-    throw new Error("OAuth reprovision URL is invalid.");
+    throw new Error("The public URL is invalid.");
   }
-  if (
-    endpoint.protocol !== "https:" ||
-    endpoint.pathname !== OAUTH_REPROVISION_PATH ||
-    endpoint.username ||
-    endpoint.password ||
-    endpoint.search ||
-    endpoint.hash
-  ) {
-    throw new Error("OAuth reprovision URL must use HTTPS and the fixed operations path.");
+  if (publicUrl.protocol !== "https:") {
+    throw new Error("The public URL must use HTTPS.");
   }
+  const isRootOrigin = publicUrlValue === publicUrl.origin || publicUrlValue === `${publicUrl.origin}/`;
+  if (publicUrl.username || publicUrl.password || publicUrl.port || publicUrl.pathname !== "/" ||
+      publicUrl.search || publicUrl.hash || !isRootOrigin) {
+    throw new Error("The public URL must be an HTTPS origin without credentials, nonstandard port, path, query, or fragment.");
+  }
+  const endpoint = new URL(OAUTH_REPROVISION_PATH, publicUrl.origin);
 
   return {
     operationId,

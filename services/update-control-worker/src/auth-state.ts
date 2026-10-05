@@ -60,7 +60,6 @@ interface OAuthReprovisionAuditEvent {
 
 export interface UpdateControlEnvironment {
   readonly MCP_UPDATE_CONTROL_PUBLIC_URL?: string;
-  readonly MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL?: string;
   readonly MCP_OWNER_TOKEN?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
@@ -92,10 +91,7 @@ export class UpdateControlAuthController {
   ) {
     this.oidcAssertionVerifier = new GitHubActionsOidcAssertionVerifier(fetchImpl);
     try {
-      this.reprovisionUrl = parseOAuthReprovisionUrl(
-        env.MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL,
-        env.MCP_UPDATE_CONTROL_PUBLIC_URL,
-      );
+      this.reprovisionUrl = deriveOAuthReprovisionUrl(env.MCP_UPDATE_CONTROL_PUBLIC_URL);
       this.configurationValid = true;
     } catch {
       this.configurationValid = false;
@@ -125,6 +121,9 @@ export class UpdateControlAuthController {
     }
     if (url.pathname === OAUTH_REPROVISION_PATH) {
       return this.handleOAuthReprovision(request, url);
+    }
+    if (url.pathname === "/_operations" || url.pathname.startsWith("/_operations/")) {
+      return jsonResponse({ error: "not_found" }, 404);
     }
     if (!this.configurationValid || !this.ownerOAuth) {
       return jsonResponse({ error: "update_control_not_configured" }, 503);
@@ -178,7 +177,8 @@ export class UpdateControlAuthController {
         return jsonResponse({ error: "invalid_request" }, 400);
       }
       operationId = url.searchParams.get("operationId") ?? "";
-    } else if (request.method === "POST" && !url.search && !url.hash) {
+    } else if (request.method === "POST" && !url.search && !url.hash &&
+        !request.url.includes("?") && !request.url.includes("#")) {
       let body: string;
       try {
         body = await readBoundedRequestText(request, MAX_REPROVISION_BODY_BYTES);
@@ -538,14 +538,27 @@ function isOAuthReprovisionAuditEvent(value: unknown): value is OAuthReprovision
     Number.isFinite(Date.parse(value.occurredAt));
 }
 
-function parseOAuthReprovisionUrl(value: string | undefined, publicBaseUrl: string | undefined): URL {
-  const url = new URL(requireValue(value, "MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL"));
-  const publicUrl = new URL(requireValue(publicBaseUrl, "MCP_UPDATE_CONTROL_PUBLIC_URL"));
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
-      url.pathname !== OAUTH_REPROVISION_PATH || url.origin === publicUrl.origin) {
-    throw new Error("OAuth reprovision URL must be a dedicated HTTPS origin and the fixed operation path.");
+function parseUpdateControlPublicUrl(value: string | undefined): URL {
+  const raw = requireValue(value, "MCP_UPDATE_CONTROL_PUBLIC_URL");
+  if (/[\u0000-\u001f\u007f]/u.test(raw) || raw.includes("?") || raw.includes("#")) {
+    throw new Error("MCP_UPDATE_CONTROL_PUBLIC_URL must be an HTTPS origin without query or fragment.");
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("MCP_UPDATE_CONTROL_PUBLIC_URL must be an HTTPS origin.");
+  }
+  const isRootOrigin = raw === url.origin || raw === `${url.origin}/`;
+  if (url.protocol !== "https:" || url.username || url.password || url.port ||
+      url.pathname !== "/" || url.search || url.hash || !isRootOrigin) {
+    throw new Error("MCP_UPDATE_CONTROL_PUBLIC_URL must be an HTTPS origin without credentials, nonstandard port, path, query, or fragment.");
   }
   return url;
+}
+
+function deriveOAuthReprovisionUrl(publicBaseUrl: string | undefined): URL {
+  return new URL(OAUTH_REPROVISION_PATH, parseUpdateControlPublicUrl(publicBaseUrl).origin);
 }
 
 async function ownerSecretMatchesPersistedState(
@@ -669,11 +682,7 @@ function createOwnerOAuth(
     env.MCP_UPDATE_CONTROL_PUBLIC_URL,
     "MCP_UPDATE_CONTROL_PUBLIC_URL",
   );
-  const publicBaseUrl = new URL(baseUrlValue);
-  if (publicBaseUrl.protocol !== "https:" || publicBaseUrl.username || publicBaseUrl.password ||
-      publicBaseUrl.pathname !== "/" || publicBaseUrl.search || publicBaseUrl.hash) {
-    throw new Error("MCP_UPDATE_CONTROL_PUBLIC_URL must be an HTTPS origin.");
-  }
+  const publicBaseUrl = parseUpdateControlPublicUrl(baseUrlValue);
   return new EdgeOwnerOAuth(storage, {
     ownerSecret,
     publicBaseUrl,
