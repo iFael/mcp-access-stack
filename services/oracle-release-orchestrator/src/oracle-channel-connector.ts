@@ -1,5 +1,5 @@
-import { lstatSync, readFileSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import WebSocket, { type ClientOptions, type RawData } from "ws";
 import {
@@ -114,9 +114,18 @@ function readCredentialFromEnvironment(
   }
   try {
     const stat = lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() ||
-        (process.platform !== "win32" && (stat.mode & 0o077) !== 0)) {
+    if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error("credential file permissions are invalid");
+    }
+    if (process.platform !== "win32") {
+      const permissions = stat.mode & 0o777;
+      const strictFilePermissions = (permissions & 0o077) === 0;
+      const systemdLoadCredentialPermissions =
+        permissions === 0o440 &&
+        isSystemdCredentialFile(filePath, environment);
+      if (!strictFilePermissions && !systemdLoadCredentialPermissions) {
+        throw new Error("credential file permissions are invalid");
+      }
     }
     const raw = readFileSync(filePath, "utf8");
     const token = raw.endsWith("\r\n") ? raw.slice(0, -2) : raw.endsWith("\n") ? raw.slice(0, -1) : raw;
@@ -127,6 +136,19 @@ function readCredentialFromEnvironment(
     return token;
   } catch {
     throw new Error(`${variable} is unavailable or invalid.`);
+  }
+}
+
+function isSystemdCredentialFile(
+  credentialFile: string,
+  environment: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const credentialDirectory = environment.CREDENTIALS_DIRECTORY?.trim();
+  if (!credentialDirectory || !isAbsolute(credentialDirectory)) return false;
+  try {
+    return dirname(realpathSync(credentialFile)) === realpathSync(credentialDirectory);
+  } catch {
+    return false;
   }
 }
 
