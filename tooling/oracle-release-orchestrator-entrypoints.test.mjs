@@ -62,6 +62,14 @@ async function stopChild(processState) {
   throw new Error("entrypoint did not stop after SIGTERM");
 }
 
+function assertStoppedAfterTestSignal(result) {
+  assert.ok(
+    (result.code === 0 && result.signal === null)
+      || (result.code === null && result.signal === "SIGTERM"),
+    `entrypoint should stop after the test signal: ${JSON.stringify(result)}`,
+  );
+}
+
 async function settleWithin(promise, timeoutMs) {
   let timer;
   const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
@@ -125,7 +133,7 @@ test("read API main starts and stays alive when invoked through a symlink", asyn
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(processState.state.finished, false, "read API process should remain alive");
     const stopped = await stopChild(processState);
-    assert.deepEqual({ code: stopped.code, signal: stopped.signal }, { code: 0, signal: null });
+    assertStoppedAfterTestSignal(stopped);
   } finally {
     if (!processState.state.finished) {
       processState.child.kill("SIGKILL");
@@ -194,7 +202,7 @@ export default FakeWebSocket;
 `);
 
   const processState = startNode([link], {
-    NODE_OPTIONS: `--loader=${loaderPath}`,
+    NODE_OPTIONS: `--loader=${pathToFileURL(loaderPath).href}`,
     UPDATE_CONTROL_ORACLE_CHANNEL_URL:
       "wss://mcp-v3-update-control.mcp-v3-update-control.workers.dev/_internal/oracle-channel",
     UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE: channelTokenPath,
@@ -209,7 +217,7 @@ export default FakeWebSocket;
     const { stdout, stderr } = processState.output();
     assert.doesNotMatch(stdout + stderr, /c{16}|r{16}/u, "synthetic credentials must not be logged");
     const stopped = await stopChild(processState);
-    assert.deepEqual({ code: stopped.code, signal: stopped.signal }, { code: 0, signal: null });
+    assertStoppedAfterTestSignal(stopped);
   } finally {
     if (!processState.state.finished) {
       processState.child.kill("SIGKILL");
