@@ -14,13 +14,13 @@ const OWNER_TOKEN = "replacement-owner-secret-long-random-test-value";
 const OIDC_REQUEST_URL = "https://pipelines.actions.githubusercontent.com/synthetic-run/idtoken?api-version=2.0";
 const OIDC_REQUEST_TOKEN = "synthetic-runner-request-token";
 const OIDC_ASSERTION = "synthetic-github-oidc-assertion";
-const OAUTH_URL = "https://update-control-ops.example/_operations/oauth/reprovision";
+const PUBLIC_URL = "https://mcp-v3-update-control.example.workers.dev/";
 
 function makeEnv(overrides = {}) {
   return {
     UPDATE_CONTROL_OAUTH_CONFIRM: OAUTH_REPROVISION_CONFIRMATION,
     UPDATE_CONTROL_OAUTH_OPERATION_ID: OPERATION_ID,
-    UPDATE_CONTROL_OAUTH_REPROVISION_URL: OAUTH_URL,
+    MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
     ACTIONS_ID_TOKEN_REQUEST_URL: OIDC_REQUEST_URL,
     ACTIONS_ID_TOKEN_REQUEST_TOKEN: OIDC_REQUEST_TOKEN,
     UPDATE_CONTROL_OWNER_TOKEN_NEXT: OWNER_TOKEN,
@@ -70,7 +70,7 @@ describe("Update Control OAuth reprovision operator workflow", () => {
 
     const preflight = findStep(workflow, "deploy", "Validate all normal-deploy runtime settings without printing values");
     const deploy = findStep(workflow, "deploy", "Deploy only Update Control");
-    const installSecrets = findStep(workflow, "deploy", "Install Oracle read API runtime secrets through locked Wrangler stdin");
+    const installSecrets = findStep(workflow, "deploy", "Install Oracle WSS channel secret through locked Wrangler stdin");
     const steps = workflow.jobs.deploy.steps;
     expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(deploy));
     expect(steps.indexOf(deploy)).toBeLessThan(steps.indexOf(installSecrets));
@@ -78,15 +78,9 @@ describe("Update Control OAuth reprovision operator workflow", () => {
 
     const preflightSources = {
       UPDATE_CONTROL_CF_API_TOKEN: "secrets.UPDATE_CONTROL_CF_API_TOKEN",
+      UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
       CLOUDFLARE_ACCOUNT_ID: "vars.CLOUDFLARE_ACCOUNT_ID",
-      ORACLE_ACCESS_CLIENT_ID: "vars.ORACLE_ACCESS_CLIENT_ID",
-      ORACLE_ACCESS_CLIENT_SECRET: "secrets.ORACLE_ACCESS_CLIENT_SECRET",
-      UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN",
       MCP_UPDATE_CONTROL_PUBLIC_URL: "vars.MCP_UPDATE_CONTROL_PUBLIC_URL",
-      ORCHESTRATOR_READ_API_URL: "vars.ORCHESTRATOR_READ_API_URL",
-      UPDATE_CONTROL_OAUTH_REPROVISION_URL: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_URL",
-      UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_ISSUER",
-      UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE: "vars.UPDATE_CONTROL_OAUTH_REPROVISION_ACCESS_AUDIENCE",
     };
     for (const [name, source] of Object.entries(preflightSources)) {
       expect(preflight.env[name]).toBe("${{ " + source + " }}");
@@ -96,18 +90,16 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     expect(deploy.run).toContain("npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy");
     expect(deploy.run.indexOf("wrangler deploy")).toBeGreaterThanOrEqual(0);
     expect(deploy.run).toContain("MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL");
-    expect(deploy.run).toContain("ORACLE_ACCESS_CLIENT_ID:$ORACLE_ACCESS_CLIENT_ID");
-    expect(deploy.run).toContain("ORCHESTRATOR_READ_API_URL:$ORCHESTRATOR_READ_API_URL");
-    expect(deploy.run).toContain("MCP_UPDATE_CONTROL_OAUTH_REPROVISION_URL:$UPDATE_CONTROL_OAUTH_REPROVISION_URL");
+    expect(deploy.run).not.toMatch(/ORACLE_ACCESS_CLIENT|ORCHESTRATOR_READ_API_URL|UPDATE_CONTROL_OAUTH_REPROVISION|cloudflared|tunnel/iu);
+    expect(deploy.env.MCP_UPDATE_CONTROL_PUBLIC_URL).toBe("${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}");
     expect(deploy.run).not.toMatch(/UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_ID|UPDATE_CONTROL_OAUTH_ACCESS_CLIENT_SECRET|UPDATE_CONTROL_OWNER_TOKEN_NEXT|MCP_OWNER_TOKEN|public-release|edge-breakglass|mcp-edge-gateway/iu);
 
     expect(installSecrets.env.CLOUDFLARE_API_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}");
     expect(installSecrets.env.CLOUDFLARE_ACCOUNT_ID).toBe("${{ vars.CLOUDFLARE_ACCOUNT_ID }}");
-    expect(installSecrets.env.ORACLE_ACCESS_CLIENT_SECRET).toBe("${{ secrets.ORACLE_ACCESS_CLIENT_SECRET }}");
-    expect(installSecrets.env.UPDATE_CONTROL_ORCHESTRATOR_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_ORCHESTRATOR_TOKEN }}");
-    expect(installSecrets.run).toContain('printf \'%s\' "$ORACLE_ACCESS_CLIENT_SECRET" |');
-    expect(installSecrets.run).toContain('printf \'%s\' "$UPDATE_CONTROL_ORCHESTRATOR_TOKEN" |');
-    expect(installSecrets.run).not.toMatch(/echo\s+.*(ORACLE_ACCESS_CLIENT_SECRET|UPDATE_CONTROL_ORCHESTRATOR_TOKEN)/u);
+    expect(installSecrets.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN).toBe("${{ secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN }}");
+    expect(installSecrets.run).toContain("wrangler secret put UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN");
+    expect(installSecrets.run).toContain('printf \'%s\' "$UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN" |');
+    expect(installSecrets.run).not.toMatch(/echo\s+.*UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN/u);
     expect(workflow.jobs.validate.environment).toBeUndefined();
     expect(JSON.stringify(workflow.jobs.validate)).not.toMatch(/secrets\.|vars\./u);
   });
@@ -165,6 +157,8 @@ describe("OAuth reprovision operator client", () => {
       expect(requests).toHaveLength(1);
       expect(requests[0].init.method).toBe("GET");
       expect(requests[0].url).toContain(`operationId=${OPERATION_ID}`);
+      expect(new URL(requests[0].url).origin).toBe(new URL(PUBLIC_URL).origin);
+      expect(new URL(requests[0].url).pathname).toBe("/_operations/oauth/reprovision");
       expect(requests[0].init.headers.authorization).toBe(`Bearer ${OIDC_ASSERTION}`);
       expect(requests[0].init.headers["CF-Access-Client-Id"]).toBeUndefined();
       expect(requests[0].init.headers["CF-Access-Client-Secret"]).toBeUndefined();
@@ -233,20 +227,30 @@ describe("OAuth reprovision operator client", () => {
     expect(JSON.stringify(requests)).not.toContain(OWNER_TOKEN);
   });
 
-  it("rejects non-HTTPS, wrong-path, unconfirmed, and untrusted OIDC request URLs before network access", async () => {
+  it("rejects invalid public origins, unconfirmed operations, and untrusted OIDC request URLs before network access", async () => {
     let calls = 0;
     const fetchImpl = async () => {
       calls += 1;
       return jsonResponse({ operationId: OPERATION_ID, status: "not_executed" });
     };
     await expect(preflightOAuthReprovision({
-      env: makeEnv({ UPDATE_CONTROL_OAUTH_REPROVISION_URL: "http://ops.example/_operations/oauth/reprovision" }),
+      env: makeEnv({ MCP_UPDATE_CONTROL_PUBLIC_URL: "http://mcp-v3-update-control.example.workers.dev/" }),
       fetchImpl,
     })).rejects.toThrow("HTTPS");
-    await expect(preflightOAuthReprovision({
-      env: makeEnv({ UPDATE_CONTROL_OAUTH_REPROVISION_URL: "https://ops.example/admin/reset" }),
-      fetchImpl,
-    })).rejects.toThrow("fixed operations path");
+    for (const value of [
+      "https://mcp-v3-update-control.example.workers.dev/nested",
+      "https://mcp-v3-update-control.example.workers.dev/?unexpected=1",
+      "https://mcp-v3-update-control.example.workers.dev/#unexpected",
+      "https://mcp-v3-update-control.example.workers.dev/../",
+      "https://user@mcp-v3-update-control.example.workers.dev/",
+      "https://mcp-v3-update-control.example.workers.dev:8443/",
+      "not a URL",
+    ]) {
+      await expect(preflightOAuthReprovision({
+        env: makeEnv({ MCP_UPDATE_CONTROL_PUBLIC_URL: value }),
+        fetchImpl,
+      })).rejects.toThrow("public URL");
+    }
     await expect(preflightOAuthReprovision({
       env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "NO" }),
       fetchImpl,

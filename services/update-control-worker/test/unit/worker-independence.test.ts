@@ -98,7 +98,7 @@ describe("Update Control Worker independent deployment", () => {
     expect(config.name).toBe("mcp-v3-update-control");
     expect(config.name).not.toBe("mcp-access-stack");
     expect(config.compatibility_date).toBe("2026-08-17");
-    expect(config.workers_dev).toBe(false);
+    expect(config.workers_dev).toBe(true);
     expect(config.preview_urls).toBe(false);
     expect(config.services).toBeUndefined();
     expect(config.durable_objects.bindings).toEqual([
