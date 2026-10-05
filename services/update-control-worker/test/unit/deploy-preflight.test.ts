@@ -9,11 +9,11 @@ const VALID_ENV = {
   UPDATE_CONTROL_CF_API_TOKEN: "cloudflare-deploy-token-test-value",
   UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "c".repeat(48),
   CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
-  MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-v3-update-control.example.workers.dev/",
+  MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-v3-update-control.mcp-v3-update-control.workers.dev/",
 };
 
 describe("Update Control deploy configuration preflight", () => {
-  it("requires only the deploy token, channel token, account, and public workers.dev origin", () => {
+  it("requires only the deploy token, channel token, account, and complete canonical Worker workers.dev origin", () => {
     expect(UPDATE_CONTROL_DEPLOY_SECRET_INPUTS).toEqual([
       "UPDATE_CONTROL_CF_API_TOKEN",
       "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
@@ -23,6 +23,16 @@ describe("Update Control deploy configuration preflight", () => {
       "MCP_UPDATE_CONTROL_PUBLIC_URL",
     ]);
     expect(validateUpdateControlDeployEnvironment(VALID_ENV)).toEqual([]);
+  });
+
+  it("rejects the account subdomain when the Worker name label is missing", () => {
+    const errors = validateUpdateControlDeployEnvironment({
+      ...VALID_ENV,
+      MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-v3-update-control.workers.dev",
+    });
+    expect(errors).toEqual([
+      "Required GitHub Environment variable MCP_UPDATE_CONTROL_PUBLIC_URL is invalid.",
+    ]);
   });
 
   it("fails each missing required secret and variable by name and correct GitHub classification", () => {
@@ -40,6 +50,7 @@ describe("Update Control deploy configuration preflight", () => {
     for (const value of [
       "http://mcp-v3-update-control.example.workers.dev/",
       "https://mcp-v3-update-control.example.test/",
+      "https://other-worker.mcp-v3-update-control.workers.dev/",
       "https://mcp-v3-update-control.example.workers.dev/mcp",
       "https://mcp-v3-update-control.example.workers.dev/?unexpected=1",
       "https://mcp-v3-update-control.example.workers.dev/#unexpected",

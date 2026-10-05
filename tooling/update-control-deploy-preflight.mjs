@@ -19,11 +19,18 @@ function containsControlCharacters(value) {
   return /[\u0000-\u001f\u007f]/u.test(value);
 }
 
+const UPDATE_CONTROL_WORKER_NAME = "mcp-v3-update-control";
+
 function isWorkersDevOrigin(value) {
   try {
     if (/[\u0000-\u001f\u007f]/u.test(value) || value.includes("?") || value.includes("#")) return false;
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase();
+    const workerHostPrefix = UPDATE_CONTROL_WORKER_NAME + ".";
+    const workersDevSuffix = ".workers.dev";
+    const accountSubdomain = hostname.startsWith(workerHostPrefix) && hostname.endsWith(workersDevSuffix)
+      ? hostname.slice(workerHostPrefix.length, -workersDevSuffix.length)
+      : "";
     const isRootOrigin = value === url.origin || value === `${url.origin}/`;
     return url.protocol === "https:" &&
       isRootOrigin &&
@@ -33,8 +40,7 @@ function isWorkersDevOrigin(value) {
       url.pathname === "/" &&
       !url.search &&
       !url.hash &&
-      hostname !== "workers.dev" &&
-      hostname.endsWith(".workers.dev");
+      accountSubdomain.length > 0;
   } catch {
     return false;
   }
