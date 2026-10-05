@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   OracleChannelConnector,
   parseOracleChannelConnectorConfig,
@@ -27,7 +27,17 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+function isDirectExecution(): boolean {
+  const entryPath = process.argv[1];
+  if (!entryPath) return false;
+  try {
+    return realpathSync(entryPath) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   void main().catch(() => {
     process.stderr.write("update-control-oracle-channel-connector: stopped after an internal failure\n");
     process.exitCode = 1;

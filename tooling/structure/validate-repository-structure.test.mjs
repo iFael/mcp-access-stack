@@ -105,8 +105,7 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
   const expected = `      - name: Typecheck affected graph
         if: >-
           github.event_name == 'pull_request' &&
-          (needs.impact.result != 'success' ||
-           needs.impact.outputs.shared == 'true' ||
+          (needs.impact.outputs.shared == 'true' ||
            needs.impact.outputs.edgeProtocol == 'true' ||
            needs.impact.outputs.workspaceAgent == 'true' ||
            needs.impact.outputs.mcpGateway == 'true' ||
@@ -116,6 +115,43 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
   assert.ok(
     workflow.replaceAll("\r\n", "\n").includes(expected),
     "global typecheck must skip edge-gateway-only changes so Check Edge Gateway owns that scope",
+  );
+});
+
+test("fails closed without fan-out when the impact control plane is unavailable", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const normalized = workflow.replaceAll("\r\n", "\n");
+  const impactBlock = normalized.slice(
+    normalized.indexOf("  impact:\n"),
+    normalized.indexOf("\n  pr-validation:\n"),
+  );
+  const checkBlock = normalized.slice(
+    normalized.indexOf("  check:\n"),
+    normalized.indexOf("\n  main-integration:\n"),
+  );
+
+  assert.doesNotMatch(normalized, /needs\.impact\.result != 'success'/u);
+  assert.match(impactBlock, /runs-on: ubuntu-slim/u);
+  assert.match(checkBlock, /runs-on: ubuntu-slim/u);
+  assert.match(checkBlock, /test "\$IMPACT_RESULT" = "success"/u);
+  assert.match(
+    normalized,
+    /github\.event_name == 'pull_request' &&\n\s+needs\.impact\.result == 'success' &&\n\s+needs\.impact\.outputs\.browserWorker == 'true'/u,
+  );
+  assert.match(
+    normalized,
+    /github\.event_name == 'pull_request' &&\n\s+needs\.impact\.result == 'success' &&\n\s+needs\.impact\.outputs\.workspaceAgent == 'true'/u,
+  );
+  assert.match(
+    normalized,
+    /github\.event_name == 'push' && needs\.impact\.result == 'success'/u,
+  );
+  assert.match(
+    normalized,
+    /always\(\) &&\n\s+needs\.impact\.result == 'success' &&\n\s+needs\.impact\.outputs\.docsOnly != 'true'/u,
   );
 });
 

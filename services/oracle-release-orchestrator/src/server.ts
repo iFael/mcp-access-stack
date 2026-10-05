@@ -1,6 +1,6 @@
-import { lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 import { createOracleReleaseReadApi } from "./read-api.js";
 import { createOracleReadApiServer } from "./node-read-server.js";
@@ -133,7 +133,17 @@ async function main(): Promise<void> {
   process.once("SIGTERM", shutdown);
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+function isDirectExecution(): boolean {
+  const entryPath = process.argv[1];
+  if (!entryPath) return false;
+  try {
+    return realpathSync(entryPath) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   void main().catch(() => {
     process.stderr.write("oracle-release-orchestrator: startup failed\n");
     process.exitCode = 1;
