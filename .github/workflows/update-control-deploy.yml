@@ -18,6 +18,8 @@ on:
       - deploy/linux/Test-McpUpdateControlServices.mjs
       - docs/update-control-deployment.md
       - tooling/update-control-deploy-preflight.mjs
+      - tooling/update-control-oracle-runtime.mjs
+      - tooling/update-control-oracle-runtime.test.mjs
       - package.json
       - package-lock.json
   workflow_dispatch:
@@ -63,8 +65,8 @@ jobs:
         run: npm run check:update-control
       - name: Test Update Control Worker and OAuth operator workflow
         run: npm run test:update-control-worker
-      - name: Build and test Oracle read API
-        run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
+      - name: Build and test Oracle read API and runtime stager
+        run: npm run test:update-control-oracle-runtime && npm run test:oracle-release-orchestrator
       - name: Validate Update Control runtime templates
         run: node deploy/linux/Test-McpUpdateControlServices.mjs
       - name: Verify systemd unit syntax

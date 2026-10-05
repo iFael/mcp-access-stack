@@ -74,7 +74,9 @@
     "production:update": "pwsh -NoLogo -NoProfile -File deploy/windows/Update-McpAccessStack.ps1",
     "test:update-control-worker": "npm run test --workspace @mcp-access-stack/update-control-worker",
     "check:update-control": "npm run check --workspace @mcp-access-stack/update-control-worker",
-    "test:update-control-contract": "node tooling/testing/run-jest.mjs --config services/update-control-worker/jest.config.ts --runInBand --runTestsByPath services/update-control-worker/test/unit/contract.test.ts"
+    "test:update-control-contract": "node tooling/testing/run-jest.mjs --config services/update-control-worker/jest.config.ts --runInBand --runTestsByPath services/update-control-worker/test/unit/contract.test.ts",
+    "build:update-control-oracle-runtime": "node tooling/update-control-oracle-runtime.mjs build",
+    "test:update-control-oracle-runtime": "npm run build --workspace @mcp-access-stack/update-control-contract && npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && node --test tooling/update-control-oracle-runtime.test.mjs"
   },
   "engines": {
     "node": ">=26"
