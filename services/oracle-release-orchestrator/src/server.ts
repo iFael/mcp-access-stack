@@ -1,5 +1,5 @@
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 import { createOracleReleaseReadApi } from "./read-api.js";
@@ -86,14 +86,34 @@ export function resolveOrchestratorReadApiToken(
   if (!credential.isFile()) {
     throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE must reference a regular file.");
   }
-  if (process.platform !== "win32" && (credential.mode & 0o077) !== 0) {
-    throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE permissions are too broad.");
+  if (process.platform !== "win32") {
+    const permissions = credential.mode & 0o777;
+    const strictFilePermissions = (permissions & 0o077) === 0;
+    const systemdLoadCredentialPermissions =
+      permissions === 0o440 &&
+      isSystemdCredentialFile(credentialFile, environment);
+    if (!strictFilePermissions && !systemdLoadCredentialPermissions) {
+      throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE permissions are too broad.");
+    }
   }
 
   const raw = readFileSync(credentialFile, "utf8");
   const token = raw.endsWith("\r\n") ? raw.slice(0, -2) : raw.endsWith("\n") ? raw.slice(0, -1) : raw;
   if (!token) throw new Error("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE is empty.");
   return token;
+}
+
+function isSystemdCredentialFile(
+  credentialFile: string,
+  environment: NodeJS.ProcessEnv,
+): boolean {
+  const credentialDirectory = environment.CREDENTIALS_DIRECTORY?.trim();
+  if (!credentialDirectory || !isAbsolute(credentialDirectory)) return false;
+  try {
+    return dirname(realpathSync(credentialFile)) === realpathSync(credentialDirectory);
+  } catch {
+    return false;
+  }
 }
 
 function readPort(value: string): number {

@@ -23,6 +23,30 @@ describe("Oracle read API credential-file loading", () => {
     })).toBe("t".repeat(48));
   });
 
+  it("accepts systemd LoadCredential mode 0440 only inside CREDENTIALS_DIRECTORY", () => {
+    if (process.platform === "win32") return;
+
+    root = mkdtempSync(path.join(tmpdir(), "mcp-orchestrator-systemd-credential-"));
+    const credentials = path.join(root, "credentials");
+    mkdirSync(credentials, { mode: 0o700 });
+
+    const systemdToken = path.join(credentials, "orchestrator-token");
+    writeFileSync(systemdToken, `${"s".repeat(48)}\n`, { mode: 0o600 });
+    chmodSync(systemdToken, 0o440);
+    expect(resolveOrchestratorReadApiToken({
+      UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE: systemdToken,
+      CREDENTIALS_DIRECTORY: credentials,
+    })).toBe("s".repeat(48));
+
+    const outsideToken = path.join(root, "outside-token");
+    writeFileSync(outsideToken, "o".repeat(48), { mode: 0o600 });
+    chmodSync(outsideToken, 0o440);
+    expect(() => resolveOrchestratorReadApiToken({
+      UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE: outsideToken,
+      CREDENTIALS_DIRECTORY: credentials,
+    })).toThrow(/permissions/u);
+  });
+
   it("retains direct environment compatibility for non-systemd development", () => {
     expect(resolveOrchestratorReadApiToken({
       UPDATE_CONTROL_ORCHESTRATOR_TOKEN: "e".repeat(48),
