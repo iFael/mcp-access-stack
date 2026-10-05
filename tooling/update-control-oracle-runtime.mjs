@@ -22,7 +22,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { gunzipSync, gzipSync } from "node:zlib";
 
 export const UPDATE_CONTROL_ORACLE_CHANNEL_URL =
   "wss://mcp-v3-update-control.mcp-v3-update-control.workers.dev/_internal/oracle-channel";
@@ -146,18 +145,31 @@ export async function buildOracleRuntimeArtifact({ repositoryRoot, sourceCommit,
     };
     const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8");
     await writeNormalizedFile(path.join(stage, "manifest.json"), manifestBytes);
-    const packed = gzipSync(createUstar(manifestEntries, manifestBytes), { level: 9, mtime: 0 });
-    packed.fill(0, 4, 8);
-    packed[9] = 255;
-    if (packed.length > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_ARTIFACT_BYTES) {
+    const fileListPath = path.join(stage, ".oracle-runtime-files");
+    const archivePaths = [...manifestEntries.keys(), "manifest.json"].sort();
+    await writeFile(
+      fileListPath,
+      Buffer.from(archivePaths.join("\0") + "\0", "utf8"),
+      { flag: "wx", mode: 0o600 },
+    );
+    let packed;
+    try {
+      packed = runGnuTar([
+        "--create", "--gzip", "--file=-", "--format=ustar", "--sort=name",
+        "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--mode=0644",
+        "--no-recursion", "--null", "--files-from=" + path.basename(fileListPath),
+      ], { cwd: stage, maxBuffer: UPDATE_CONTROL_ORACLE_RUNTIME_MAX_ARTIFACT_BYTES });
+    } finally {
+      await unlink(fileListPath).catch(() => undefined);
+    }
+    if (packed.length < 1 || packed.length > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_ARTIFACT_BYTES) {
       throw new Error("Oracle runtime artifact exceeds its size bound.");
     }
-
-    const verifiedEntries = parseUstar(gunzipSync(packed, {
-      maxOutputLength: UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES,
-    }));
-    validateArtifactManifest(verifiedEntries, sourceCommit);
-    await smokeArtifactEntries(verifiedEntries, process.execPath);
+    const archiveSha256 = sha256(packed);
+    const checkedArchive = await inspectOracleRuntimeArchive(packed, sourceCommit);
+    if (JSON.stringify(checkedArchive.manifest) !== JSON.stringify(manifest)) {
+      throw new Error("GNU tar artifact does not match the staged runtime manifest.");
+    }
 
     await mkdir(path.dirname(output), { recursive: true });
     const pendingOutput = output + ".pending-" + randomBytes(8).toString("hex");
@@ -168,14 +180,14 @@ export async function buildOracleRuntimeArtifact({ repositoryRoot, sourceCommit,
         throw error;
       });
       if (existing) {
-        if (sha256(existing) !== sha256(packed)) {
+        if (sha256(existing) !== archiveSha256) {
           throw new Error("Refusing to replace an existing artifact with different bytes.");
         }
         await unlink(pendingOutput);
         return {
           status: "existing",
           artifactPath: output,
-          artifactSha256: sha256(existing),
+          artifactSha256: archiveSha256,
           sourceCommit,
           fileCount: manifestFiles.length,
         };
@@ -187,7 +199,7 @@ export async function buildOracleRuntimeArtifact({ repositoryRoot, sourceCommit,
     return {
       status: "created",
       artifactPath: output,
-      artifactSha256: sha256(packed),
+      artifactSha256: archiveSha256,
       sourceCommit,
       fileCount: manifestFiles.length,
     };
@@ -215,20 +227,8 @@ export async function readOracleRuntimeArtifact({
   if (artifactSha256 !== expectedArtifactSha256) {
     throw new Error("Oracle runtime artifact digest does not match the supplied digest.");
   }
-
-  let entries;
-  try {
-    const tarBytes = gunzipSync(archive, {
-      maxOutputLength: UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES,
-    });
-    entries = parseUstar(tarBytes);
-  } catch {
-    throw new Error("Oracle runtime artifact archive is invalid.");
-  }
-  const manifest = validateArtifactManifest(entries, expectedSourceCommit);
-  const files = new Map(entries);
-  files.delete("manifest.json");
-  return { artifactSha256, manifest, files };
+  const inspected = await inspectOracleRuntimeArchive(archive, expectedSourceCommit);
+  return { artifactSha256, manifest: inspected.manifest, files: inspected.files, archive };
 }
 
 export async function smokeOracleRuntimeDirectory(runtimeRoot, nodeExecutable = process.execPath) {
@@ -281,7 +281,6 @@ export async function prepareOracleRuntime({
     expectedArtifactSha256,
   });
   assertRuntimeDependencyManifest(artifact.manifest);
-  await smokeArtifactEntries(artifact.files, nodeExecutable);
 
   const credentialDirectoryInfo = await lstat(paths.credentialsRoot).catch((error) => {
     if (error?.code === "ENOENT") return undefined;
@@ -338,7 +337,8 @@ export async function prepareOracleRuntime({
       ".staging-" + expectedSourceCommit + "-" + randomBytes(8).toString("hex"),
     );
     try {
-      await extractArtifactEntries(artifact, stagePath, expectedOwner);
+      await extractTarArtifact(artifact.archive, stagePath);
+      await normalizeRuntimeDirectory(stagePath, expectedOwner);
       await verifyRuntimeDirectory(stagePath, artifact.manifest, expectedOwner);
       await smokeOracleRuntimeDirectory(stagePath, nodeExecutable);
       await rename(stagePath, releasePath);
@@ -628,35 +628,12 @@ async function assertNoSymlinkAncestors(targetPath) {
   }
 }
 
-async function extractArtifactEntries(artifact, stagePath, expectedOwner) {
+async function extractTarArtifact(archive, stagePath) {
   await mkdir(stagePath, { recursive: false, mode: 0o700 });
-  for (const [relative, bytes] of artifact.files) {
-    assertSafeRelativePath(relative);
-    const destination = path.join(stagePath, ...relative.split("/"));
-    await assertNoSymlinkAncestors(destination);
-    await mkdir(path.dirname(destination), { recursive: true, mode: 0o755 });
-    const handle = await open(destination, "wx", 0o600);
-    try {
-      await handle.writeFile(bytes);
-      await handle.sync();
-      await handle.chmod(0o644);
-      await handle.chown(expectedOwner.uid, expectedOwner.gid);
-    } finally {
-      await handle.close();
-    }
-  }
-  const manifestPath = path.join(stagePath, "manifest.json");
-  const manifestBytes = Buffer.from(JSON.stringify(artifact.manifest, null, 2) + "\n", "utf8");
-  const manifestHandle = await open(manifestPath, "wx", 0o600);
-  try {
-    await manifestHandle.writeFile(manifestBytes);
-    await manifestHandle.sync();
-    await manifestHandle.chmod(0o644);
-    await manifestHandle.chown(expectedOwner.uid, expectedOwner.gid);
-  } finally {
-    await manifestHandle.close();
-  }
-  await normalizeRuntimeDirectory(stagePath, expectedOwner);
+  runGnuTar([
+    "--extract", "--gzip", "--file=-", "--directory", stagePath,
+    "--no-same-owner", "--no-same-permissions",
+  ], { input: archive, maxBuffer: 1024 * 1024 });
 }
 
 async function normalizeRuntimeDirectory(rootPath, expectedOwner) {
@@ -691,7 +668,7 @@ async function verifyRuntimeDirectory(rootPath, expectedManifest, expectedOwner)
       (rootInfo.mode & 0o777) !== 0o755) {
     throw new Error("Runtime release root owner or mode is invalid.");
   }
-  const observed = new Map();
+  const expectedFiles = new Map(expectedManifest.files.map((entry) => [entry.path, entry]));
   const stack = [rootPath];
   while (stack.length > 0) {
     const current = stack.pop();
@@ -711,37 +688,22 @@ async function verifyRuntimeDirectory(rootPath, expectedManifest, expectedOwner)
           throw new Error("Runtime release file owner or mode is invalid.");
         }
         const relative = path.relative(rootPath, target).split(path.sep).join("/");
-        observed.set(relative, await readFile(target));
+        if (relative === "manifest.json") continue;
+        const expected = expectedFiles.get(relative);
+        if (!expected || info.size !== expected.sizeBytes ||
+            sha256(await readFile(target)) !== expected.sha256) {
+          throw new Error("Runtime release contents do not match the verified manifest.");
+        }
+        expectedFiles.delete(relative);
       } else {
         throw new Error("Runtime release contains a non-regular file.");
       }
     }
   }
-  const manifestPath = path.join(rootPath, "manifest.json");
-  const parsedManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (expectedFiles.size !== 0) throw new Error("Runtime release is missing manifest-listed files.");
+  const parsedManifest = JSON.parse(await readFile(path.join(rootPath, "manifest.json"), "utf8"));
   if (JSON.stringify(parsedManifest) !== JSON.stringify(expectedManifest)) {
     throw new Error("Runtime release manifest does not match the verified artifact.");
-  }
-  const verified = validateArtifactManifest(new Map([
-    ...observed.entries(),
-  ]), expectedManifest.sourceCommit);
-  if (JSON.stringify(verified) !== JSON.stringify(expectedManifest)) {
-    throw new Error("Runtime release contents do not match the verified manifest.");
-  }
-}
-
-async function smokeArtifactEntries(files, nodeExecutable) {
-  const stage = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-update-control-runtime-smoke-"));
-  try {
-    for (const [relative, bytes] of files) {
-      if (relative === "manifest.json") continue;
-      const destination = path.join(stage, ...relative.split("/"));
-      await mkdir(path.dirname(destination), { recursive: true });
-      await writeFile(destination, bytes, { mode: 0o600 });
-    }
-    await smokeOracleRuntimeDirectory(stage, nodeExecutable);
-  } finally {
-    await rm(stage, { recursive: true, force: true });
   }
 }
 
@@ -856,10 +818,53 @@ function assertRequiredArtifactFiles(entries) {
   }
 }
 
-function validateArtifactManifest(entries, expectedSourceCommit) {
+async function inspectOracleRuntimeArchive(archive, expectedSourceCommit) {
+  assertGnuTar();
+  const listing = runGnuTar([
+    "--list", "--verbose", "--gzip", "--file=-", "--numeric-owner",
+    "--full-time", "--quoting-style=c",
+  ], { input: archive, maxBuffer: 4 * 1024 * 1024 });
+  const listedFiles = parseTarListing(listing);
+  const manifestBytes = runGnuTar([
+    "--extract", "--to-stdout", "--gzip", "--file=-", "manifest.json",
+  ], { input: archive, maxBuffer: 1024 * 1024 });
+  const manifest = validateArtifactManifest(manifestBytes, listedFiles, expectedSourceCommit);
+  return {
+    manifest,
+    files: new Set([...listedFiles.keys()].filter((filePath) => filePath !== "manifest.json")),
+  };
+}
+
+function parseTarListing(output) {
+  const lines = output.toString("utf8").trimEnd().split(/\r?\n/u);
+  if (lines.length === 0 || lines.length > MAX_RUNTIME_FILES) {
+    throw new Error("GNU tar listing exceeds the Oracle runtime file-count bound.");
+  }
+  const files = new Map();
+  let totalBytes = 0;
+  for (const line of lines) {
+    const match = /^(-[rwxstST-]{9})\s+\d+\/\d+\s+(\d+)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+"([A-Za-z0-9._/@+-]+)"$/u.exec(line);
+    if (!match) throw new Error("Oracle runtime archive contains a non-regular or unrecognized entry.");
+    const filePath = match[3];
+    assertSafeRelativePath(filePath);
+    if (files.has(filePath)) throw new Error("Oracle runtime archive contains a duplicate path.");
+    const size = Number(match[2]);
+    if (!Number.isSafeInteger(size) || size > 16 * 1024 * 1024) {
+      throw new Error("Oracle runtime archive file exceeds its size bound.");
+    }
+    totalBytes += size;
+    if (totalBytes > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES) {
+      throw new Error("Oracle runtime archive contents exceed their size bound.");
+    }
+    files.set(filePath, size);
+  }
+  return files;
+}
+
+function validateArtifactManifest(manifestBytes, archiveFiles, expectedSourceCommit) {
   assertGitSha(expectedSourceCommit);
-  const manifestBytes = entries.get("manifest.json");
-  if (!manifestBytes || manifestBytes.length > 1024 * 1024) {
+  if (!Buffer.isBuffer(manifestBytes) || manifestBytes.length > 1024 * 1024 ||
+      archiveFiles.get("manifest.json") !== manifestBytes.length) {
     throw new Error("Oracle runtime artifact manifest is missing or too large.");
   }
   let manifest;
@@ -885,178 +890,66 @@ function validateArtifactManifest(entries, expectedSourceCommit) {
   for (const entry of manifest.files) {
     if (!entry || typeof entry.path !== "string" ||
         !Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0 ||
-        !HEX_SHA256.test(entry.sha256)) {
+        entry.sizeBytes > 16 * 1024 * 1024 || !HEX_SHA256.test(entry.sha256)) {
       throw new Error("Oracle runtime artifact manifest contains an invalid file record.");
     }
     assertSafeRelativePath(entry.path);
     if (entry.path === "manifest.json" || manifestPaths.has(entry.path)) {
       throw new Error("Oracle runtime artifact manifest contains a duplicate path.");
     }
-    manifestPaths.add(entry.path);
-    const content = entries.get(entry.path);
-    if (!content || content.length !== entry.sizeBytes || sha256(content) !== entry.sha256) {
-      throw new Error("Oracle runtime artifact file does not match its manifest.");
-    }
-    totalBytes += content.length;
-  }
-  if (totalBytes > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES) {
-    throw new Error("Oracle runtime artifact contents exceed the configured bound.");
-  }
-  if (entries.size !== manifestPaths.size + 1 || !entries.has("manifest.json")) {
-    throw new Error("Oracle runtime artifact contains unlisted files.");
-  }
-
-  const allowedPath = (filePath) => {
-    const wsRelative = filePath.startsWith(WS_PACKAGE + "/")
-      ? filePath.slice(WS_PACKAGE.length + 1)
+    const wsRelative = entry.path.startsWith(WS_PACKAGE + "/")
+      ? entry.path.slice(WS_PACKAGE.length + 1)
       : "";
-    return filePath === ORCHESTRATOR_PACKAGE + "/package.json" ||
-      (filePath.startsWith(ORCHESTRATOR_PACKAGE + "/dist/") && filePath.endsWith(".js")) ||
-      filePath === ARTIFACT_CONTRACT_MODULE + "/package.json" ||
-      (filePath.startsWith(ARTIFACT_CONTRACT_MODULE + "/dist/") && filePath.endsWith(".js")) ||
+    const allowed = entry.path === ORCHESTRATOR_PACKAGE + "/package.json" ||
+      (entry.path.startsWith(ORCHESTRATOR_PACKAGE + "/dist/") && entry.path.endsWith(".js")) ||
+      entry.path === ARTIFACT_CONTRACT_MODULE + "/package.json" ||
+      (entry.path.startsWith(ARTIFACT_CONTRACT_MODULE + "/dist/") && entry.path.endsWith(".js")) ||
       (wsRelative !== "" && (
-        wsRelative === "package.json" ||
-        /\.(?:js|mjs)$/u.test(wsRelative) ||
-        wsRelative === "LICENSE" ||
-        wsRelative === "README.md"
+        wsRelative === "package.json" || /\.(?:js|mjs)$/u.test(wsRelative) ||
+        wsRelative === "LICENSE" || wsRelative === "README.md"
       )) ||
-      filePath === "tooling/update-control-oracle-runtime.mjs" ||
-      UNIT_NAMES.some((unit) => filePath === "deploy/linux/" + unit);
-  };
-  if ([...manifestPaths].some((filePath) => !allowedPath(filePath))) {
-    throw new Error("Oracle runtime artifact contains a file outside the allowlist.");
+      entry.path === "tooling/update-control-oracle-runtime.mjs" ||
+      UNIT_NAMES.some((unit) => entry.path === "deploy/linux/" + unit);
+    if (!allowed || archiveFiles.get(entry.path) !== entry.sizeBytes) {
+      throw new Error("Oracle runtime archive contains a path or size outside the manifest allowlist.");
+    }
+    manifestPaths.add(entry.path);
+    totalBytes += entry.sizeBytes;
   }
-  assertRequiredArtifactFiles(new Map([...manifestPaths].map((filePath) => [filePath, Buffer.alloc(0)])));
+  if (totalBytes > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES ||
+      archiveFiles.size !== manifestPaths.size + 1) {
+    throw new Error("Oracle runtime archive contains unlisted files or exceeds its size bound.");
+  }
+  assertRequiredArtifactFiles(new Set([...manifestPaths, "manifest.json"]));
   return manifest;
 }
 
-function parseUstar(input) {
-  if (!Buffer.isBuffer(input) || input.length % 512 !== 0 ||
-      input.length > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES) {
-    throw new Error("Oracle runtime tar size is invalid.");
+function assertGnuTar() {
+  const result = spawnSync("tar", ["--version"], {
+    encoding: "utf8",
+    timeout: 5_000,
+    env: childNodeEnvironment(),
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0 || !result.stdout.startsWith("tar (GNU tar)")) {
+    throw new Error("The Oracle runtime stager requires GNU tar.");
   }
-  const files = new Map();
-  let offset = 0;
-  let totalBytes = 0;
-  let zeroBlocks = 0;
-  while (offset + 512 <= input.length) {
-    const header = input.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0)) {
-      zeroBlocks++;
-      offset += 512;
-      if (zeroBlocks >= 2) break;
-      continue;
-    }
-    if (zeroBlocks > 0) throw new Error("Oracle runtime tar has data after its end marker.");
-    if (header.toString("ascii", 257, 263) !== "ustar\u0000" ||
-        header.toString("ascii", 263, 265) !== "00") {
-      throw new Error("Oracle runtime tar must use the deterministic USTAR format.");
-    }
-    const observedChecksum = parseTarOctal(header, 148, 8);
-    let calculatedChecksum = 0;
-    for (let index = 0; index < header.length; index++) {
-      calculatedChecksum += index >= 148 && index < 156 ? 32 : header[index];
-    }
-    if (observedChecksum !== calculatedChecksum) throw new Error("Oracle runtime tar header checksum is invalid.");
-    const typeFlag = header[156];
-    if (typeFlag !== 0 && typeFlag !== 48) {
-      throw new Error("Oracle runtime tar contains a non-regular entry.");
-    }
-    const leaf = readTarString(header, 0, 100);
-    const prefix = readTarString(header, 345, 155);
-    const filePath = prefix ? prefix + "/" + leaf : leaf;
-    assertSafeRelativePath(filePath);
-    if (files.has(filePath)) throw new Error("Oracle runtime tar contains a duplicate path.");
-    const size = parseTarOctal(header, 124, 12);
-    if (size > 16 * 1024 * 1024) throw new Error("Oracle runtime tar file exceeds its size bound.");
-    const start = offset + 512;
-    const end = start + size;
-    if (end > input.length) throw new Error("Oracle runtime tar file is truncated.");
-    const content = Buffer.from(input.subarray(start, end));
-    files.set(filePath, content);
-    totalBytes += size;
-    if (totalBytes > UPDATE_CONTROL_ORACLE_RUNTIME_MAX_CONTENT_BYTES) {
-      throw new Error("Oracle runtime tar contents exceed their size bound.");
-    }
-    offset = start + Math.ceil(size / 512) * 512;
+}
+
+function runGnuTar(args, { cwd, input, maxBuffer }) {
+  const result = spawnSync("tar", args, {
+    cwd,
+    input,
+    encoding: null,
+    timeout: 30_000,
+    maxBuffer,
+    env: childNodeEnvironment(),
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error("GNU tar rejected an Oracle runtime archive operation.");
   }
-  if (zeroBlocks < 2 || [...input.subarray(offset)].some((byte) => byte !== 0)) {
-    throw new Error("Oracle runtime tar end marker is missing or invalid.");
-  }
-  return files;
-}
-
-function createUstar(files, manifestBytes) {
-  const entries = [...files.entries()].map(([name, content]) => [name, content]);
-  entries.push(["manifest.json", manifestBytes]);
-  entries.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
-  const blocks = [];
-  for (const [name, content] of entries) {
-    assertSafeRelativePath(name);
-    const header = Buffer.alloc(512, 0);
-    const split = splitTarPath(name);
-    writeTarString(header, 0, 100, split.leaf);
-    writeTarOctal(header, 100, 8, 0o644);
-    writeTarOctal(header, 108, 8, 0);
-    writeTarOctal(header, 116, 8, 0);
-    writeTarOctal(header, 124, 12, content.length);
-    writeTarOctal(header, 136, 12, 0);
-    header.fill(32, 148, 156);
-    header[156] = 48;
-    header.write("ustar\u0000", 257, "ascii");
-    header.write("00", 263, "ascii");
-    if (split.prefix) writeTarString(header, 345, 155, split.prefix);
-    let checksum = 0;
-    for (const byte of header) checksum += byte;
-    const checksumField = checksum.toString(8).padStart(6, "0") + "\u0000 ";
-    header.write(checksumField, 148, 8, "ascii");
-    blocks.push(header, content);
-    const padding = (512 - (content.length % 512)) % 512;
-    if (padding > 0) blocks.push(Buffer.alloc(padding, 0));
-  }
-  blocks.push(Buffer.alloc(1024, 0));
-  return Buffer.concat(blocks);
-}
-
-function splitTarPath(filePath) {
-  if (Buffer.byteLength(filePath, "utf8") <= 100) return { leaf: filePath, prefix: "" };
-  const slashIndices = [];
-  for (let index = 0; index < filePath.length; index++) if (filePath[index] === "/") slashIndices.push(index);
-  for (const index of slashIndices.reverse()) {
-    const prefix = filePath.slice(0, index);
-    const leaf = filePath.slice(index + 1);
-    if (Buffer.byteLength(prefix, "utf8") <= 155 && Buffer.byteLength(leaf, "utf8") <= 100) {
-      return { leaf, prefix };
-    }
-  }
-  throw new Error("Oracle runtime artifact contains a path too long for deterministic USTAR.");
-}
-
-function writeTarString(buffer, offset, length, value) {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > length) throw new Error("Oracle runtime tar string exceeds its field.");
-  bytes.copy(buffer, offset);
-}
-
-function writeTarOctal(buffer, offset, length, value) {
-  const octal = Math.trunc(value).toString(8);
-  if (octal.length > length - 1) throw new Error("Oracle runtime tar numeric field overflow.");
-  buffer.write(octal.padStart(length - 1, "0") + "\u0000", offset, length, "ascii");
-}
-
-function readTarString(buffer, offset, length) {
-  const value = buffer.subarray(offset, offset + length);
-  const end = value.indexOf(0);
-  return value.subarray(0, end === -1 ? value.length : end).toString("utf8");
-}
-
-function parseTarOctal(buffer, offset, length) {
-  const value = buffer.toString("ascii", offset, offset + length).replace(/\0.*$/u, "").trim();
-  if (value === "") return 0;
-  if (!/^[0-7]+$/u.test(value)) throw new Error("Oracle runtime tar numeric field is invalid.");
-  const parsed = Number.parseInt(value, 8);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("Oracle runtime tar numeric field is out of range.");
-  return parsed;
+  return result.stdout ?? Buffer.alloc(0);
 }
 
 function assertSafeRelativePath(filePath) {

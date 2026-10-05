@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -94,7 +94,7 @@ test("runtime artifact is deterministic, SHA-bound, dependency-complete and both
     expectedSourceCommit: testSha,
     expectedArtifactSha256: artifact.artifactSha256,
   });
-  const entries = [...verified.files.keys()];
+  const entries = [...verified.files];
   for (const required of [
     "services/oracle-release-orchestrator/dist/server.js",
     "services/oracle-release-orchestrator/dist/oracle-channel-connector-server.js",
@@ -107,12 +107,89 @@ test("runtime artifact is deterministic, SHA-bound, dependency-complete and both
   ]) assert.ok(entries.includes(required), `artifact is missing ${required}`);
 
   const extracted = path.join(rootTemp, "runtime-smoke");
-  for (const [relative, bytes] of verified.files) {
-    const target = path.join(extracted, ...relative.split("/"));
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, bytes);
-  }
+  await mkdir(extracted);
+  execFileSync("tar", [
+    "--extract", "--gzip", "--file", artifactPath, "--directory", extracted,
+    "--no-same-owner", "--no-same-permissions",
+  ]);
   await smokeOracleRuntimeDirectory(extracted, process.execPath);
+});
+
+async function createTarFixture(label, setup, members, extraArgs = []) {
+  const base = await mkdtemp(path.join(rootTemp, label + "-"));
+  const tree = path.join(base, "tree");
+  await mkdir(tree);
+  await setup(tree);
+  const archivePath = path.join(base, "fixture.tar.gz");
+  execFileSync("tar", [
+    "--create", "--gzip", "--file", archivePath, "--format=ustar",
+    "--directory", tree, ...extraArgs, ...members,
+  ]);
+  const bytes = await readFile(archivePath);
+  const digest = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
+  return { artifactPath: archivePath, digest };
+}
+
+test("GNU tar metadata rejects symlinks, hardlinks, traversal and duplicate paths before extraction", async (t) => {
+  const symlinkArchive = await createTarFixture("symlink-entry", async (tree) => {
+    await symlink("missing-target", path.join(tree, "link.js"));
+  }, ["link.js"]);
+  const hardlinkArchive = await createTarFixture("hardlink-entry", async (tree) => {
+    await writeFile(path.join(tree, "first.js"), "first");
+    await link(path.join(tree, "first.js"), path.join(tree, "second.js"));
+  }, ["first.js", "second.js"]);
+  const traversalArchive = await createTarFixture("traversal-entry", async (tree) => {
+    await writeFile(path.join(tree, "payload.js"), "payload");
+  }, ["payload.js"], ["--transform=s,^payload.js$,../escape.js,"]);
+  const directoryArchive = await createTarFixture("directory-entry", async (tree) => {
+    await mkdir(path.join(tree, "nested"));
+  }, ["nested"]);
+  const duplicateBase = await mkdtemp(path.join(rootTemp, "duplicate-entry-"));
+  const duplicateTree = path.join(duplicateBase, "tree");
+  await mkdir(duplicateTree);
+  await writeFile(path.join(duplicateTree, "payload.js"), "payload");
+  const duplicateTar = path.join(duplicateBase, "duplicate.tar");
+  execFileSync("tar", [
+    "--create", "--file", duplicateTar, "--format=ustar",
+    "--directory", duplicateTree, "payload.js",
+  ]);
+  execFileSync("tar", [
+    "--append", "--file", duplicateTar, "--directory", duplicateTree, "payload.js",
+  ]);
+  execFileSync("gzip", ["--force", duplicateTar]);
+  const duplicateArchive = {
+    artifactPath: duplicateTar + ".gz",
+    digest: (await import("node:crypto")).createHash("sha256")
+      .update(await readFile(duplicateTar + ".gz")).digest("hex"),
+  };
+  for (const [archive, expected] of [
+    [symlinkArchive, /non-regular/u],
+    [hardlinkArchive, /non-regular/u],
+    [directoryArchive, /non-regular/u],
+    [traversalArchive, /traversal|unsafe/u],
+    [duplicateArchive, /duplicate path/u],
+  ]) {
+    await t.test(expected.source, async () => {
+      await assert.rejects(() => readOracleRuntimeArtifact({
+        artifactPath: archive.artifactPath,
+        expectedSourceCommit: sourceCommit,
+        expectedArtifactSha256: archive.digest,
+      }), expected);
+    });
+  }
+});
+
+test("GNU tar listing rejects oversized members before extraction", async () => {
+  const oversized = await createTarFixture("oversized-entry", async (tree) => {
+    const payload = path.join(tree, "payload.js");
+    await writeFile(payload, "x");
+    await truncate(payload, 16 * 1024 * 1024 + 1);
+  }, ["payload.js"]);
+  await assert.rejects(() => readOracleRuntimeArtifact({
+    artifactPath: oversized.artifactPath,
+    expectedSourceCommit: sourceCommit,
+    expectedArtifactSha256: oversized.digest,
+  }), /size bound/u);
 });
 
 test("prepare installs only the approved units, preserves WSS bytes, creates local bearer, and leaves units stopped", { skip: linuxOnly }, async () => {
@@ -317,6 +394,53 @@ test("an invalid bundle cannot change the previous current symlink", { skip: lin
       : { exitCode: 0, stdout: "" },
   }), /archive|manifest|package|missing/iu);
   assert.equal(await readlink(currentPath), previousTarget);
+});
+
+test("manifest SHA mismatch is rejected before a release or current switch", { skip: linuxOnly }, async () => {
+  const sandbox = await createInstallSandbox("manifest-sha");
+  const verified = await readOracleRuntimeArtifact({
+    artifactPath,
+    expectedSourceCommit: artifact.sourceCommit,
+    expectedArtifactSha256: artifact.artifactSha256,
+  });
+  const tamperRoot = await mkdtemp(path.join(rootTemp, "manifest-sha-tree-"));
+  execFileSync("tar", [
+    "--extract", "--gzip", "--file", artifactPath, "--directory", tamperRoot,
+    "--no-same-owner", "--no-same-permissions",
+  ]);
+  const changedPath = path.join(
+    tamperRoot,
+    ...verified.manifest.files[0].path.split("/"),
+  );
+  const changedBytes = await readFile(changedPath);
+  changedBytes[0] ^= 0xff;
+  await writeFile(changedPath, changedBytes);
+  const alteredArtifact = path.join(rootTemp, "manifest-sha-mismatch.tar.gz");
+  execFileSync("tar", [
+    "--create", "--gzip", "--file", alteredArtifact, "--format=ustar",
+    "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+    "--mode=0644", "--no-recursion", "--directory", tamperRoot,
+    ...verified.manifest.files.map((entry) => entry.path), "manifest.json",
+  ]);
+  const alteredBytes = await readFile(alteredArtifact);
+  const alteredDigest = (await import("node:crypto")).createHash("sha256")
+    .update(alteredBytes).digest("hex");
+
+  await assert.rejects(() => prepareOracleRuntime({
+    artifactPath: alteredArtifact,
+    expectedSourceCommit: artifact.sourceCommit,
+    expectedArtifactSha256: alteredDigest,
+    paths: sandbox.paths,
+    expectedOwner: owner,
+    runSystemctl: async (args) => args[0] === "show"
+      ? { exitCode: 0, stdout: "inactive\n" }
+      : { exitCode: 0, stdout: "" },
+  }), /contents do not match the verified manifest/u);
+  await assert.rejects(() => lstat(path.join(sandbox.paths.installationRoot, "current")), /ENOENT/u);
+  await assert.rejects(() => lstat(path.join(
+    sandbox.paths.installationRoot, "releases", artifact.sourceCommit,
+  )), /ENOENT/u);
+  await assert.rejects(() => lstat(path.join(sandbox.paths.credentialsRoot, "orchestrator-token")), /ENOENT/u);
 });
 
 test("stager source contains no generic activation operation and artifact contains exactly two units", async () => {
