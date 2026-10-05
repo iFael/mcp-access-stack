@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
@@ -223,6 +223,41 @@ describe("Oracle reverse-WSS read connector", () => {
       UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE: undefined,
     })).toThrow();
     expect(ORACLE_READ_API_BASE_URL).toBe("http://127.0.0.1:9381");
+  });
+
+  it("accepts systemd LoadCredential mode 0440 only inside CREDENTIALS_DIRECTORY", () => {
+    if (process.platform === "win32") return;
+
+    const directory = mkdtempSync(path.join(tmpdir(), "mcp-v3-oracle-channel-systemd-"));
+    temporaryDirectories.push(directory);
+    const credentialDirectory = path.join(directory, "credentials");
+    mkdirSync(credentialDirectory, { mode: 0o700 });
+
+    const channelPath = path.join(credentialDirectory, "channel-token");
+    const readPath = path.join(credentialDirectory, "read-token");
+    writeFileSync(channelPath, CHANNEL_TOKEN, { mode: 0o600 });
+    writeFileSync(readPath, READ_TOKEN, { mode: 0o600 });
+    chmodSync(channelPath, 0o440);
+    chmodSync(readPath, 0o440);
+
+    const loaded = parseOracleChannelConnectorConfig({
+      UPDATE_CONTROL_ORACLE_CHANNEL_URL: CHANNEL_URL,
+      UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE: channelPath,
+      UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE: readPath,
+      CREDENTIALS_DIRECTORY: credentialDirectory,
+    });
+    expect(loaded.channelToken).toBe(CHANNEL_TOKEN);
+    expect(loaded.orchestratorToken).toBe(READ_TOKEN);
+
+    const outsidePath = path.join(directory, "outside-token");
+    writeFileSync(outsidePath, CHANNEL_TOKEN, { mode: 0o600 });
+    chmodSync(outsidePath, 0o440);
+    expect(() => parseOracleChannelConnectorConfig({
+      UPDATE_CONTROL_ORACLE_CHANNEL_URL: CHANNEL_URL,
+      UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE: outsidePath,
+      UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE: readPath,
+      CREDENTIALS_DIRECTORY: credentialDirectory,
+    })).toThrow(/unavailable or invalid/u);
   });
 
   it("uses the exact authenticated Worker handshake and translates list/get/wait without changing results", async () => {
