@@ -1,24 +1,36 @@
 import {
+  ORACLE_CHANNEL_BASE_RPC_TIMEOUT_MS,
+  ORACLE_CHANNEL_CONNECT_PATH,
+  ORACLE_CHANNEL_MAX_ARGUMENT_BYTES,
+  ORACLE_CHANNEL_MAX_FRAME_BYTES,
+  ORACLE_CHANNEL_MAX_IN_FLIGHT,
+  ORACLE_CHANNEL_MAX_RPC_TIMEOUT_MS,
+  ORACLE_CHANNEL_ORIGIN,
+  ORACLE_CHANNEL_RPC_PATH,
+  ORACLE_CHANNEL_SCOPE,
+  ORACLE_CHANNEL_WAIT_RPC_GRACE_MS,
   UpdateControlInputError,
   parseUpdateGetRunArguments,
   parseUpdateListRunsArguments,
   parseUpdateWaitEventsArguments,
-  type UpdateGetRunArguments,
-  type UpdateListRunsArguments,
-  type UpdateWaitEventsArguments,
+  type OracleChannelReadCommand,
+  type OracleChannelResponseFrame,
 } from "@mcp-access-stack/update-control-contract";
 
-export const ORACLE_CHANNEL_CONNECT_PATH = "/_internal/oracle-channel";
-export const ORACLE_CHANNEL_RPC_PATH = "/_internal/rpc";
-export const ORACLE_CHANNEL_ORIGIN = "https://mcp-v3-update-control-oracle.invalid";
-export const ORACLE_CHANNEL_SCOPE = "oracle-release-orchestrator-v1";
-export const ORACLE_CHANNEL_MAX_FRAME_BYTES = 512 * 1024;
-export const ORACLE_CHANNEL_MAX_IN_FLIGHT = 32;
-export const ORACLE_CHANNEL_BASE_RPC_TIMEOUT_MS = 5_000;
-export const ORACLE_CHANNEL_WAIT_RPC_GRACE_MS = 5_000;
-export const ORACLE_CHANNEL_MAX_RPC_TIMEOUT_MS = 20_000;
+export {
+  ORACLE_CHANNEL_BASE_RPC_TIMEOUT_MS,
+  ORACLE_CHANNEL_CONNECT_PATH,
+  ORACLE_CHANNEL_MAX_ARGUMENT_BYTES,
+  ORACLE_CHANNEL_MAX_FRAME_BYTES,
+  ORACLE_CHANNEL_MAX_IN_FLIGHT,
+  ORACLE_CHANNEL_MAX_RPC_TIMEOUT_MS,
+  ORACLE_CHANNEL_ORIGIN,
+  ORACLE_CHANNEL_RPC_PATH,
+  ORACLE_CHANNEL_SCOPE,
+  ORACLE_CHANNEL_WAIT_RPC_GRACE_MS,
+} from "@mcp-access-stack/update-control-contract";
 
-const MAX_INTERNAL_BODY_BYTES = 4 * 1024;
+const MAX_INTERNAL_BODY_BYTES = ORACLE_CHANNEL_MAX_ARGUMENT_BYTES;
 const MAX_URL_LENGTH = 8 * 1024;
 const MAX_HEADER_COUNT = 64;
 const MAX_HEADER_BYTES = 16 * 1024;
@@ -46,25 +58,8 @@ export interface OracleChannelDependencies {
   readonly upgradeResponseFactory?: (client: WebSocket) => Response;
 }
 
-type ReadCommand =
-  | { readonly method: "list_runs"; readonly arguments: UpdateListRunsArguments }
-  | { readonly method: "get_run"; readonly arguments: UpdateGetRunArguments }
-  | { readonly method: "wait_events"; readonly arguments: UpdateWaitEventsArguments };
-type OracleRpcResponse =
-  | {
-      readonly version: 1;
-      readonly type: "response";
-      readonly requestId: string;
-      readonly outcome: "success";
-      readonly result: unknown;
-    }
-  | {
-      readonly version: 1;
-      readonly type: "response";
-      readonly requestId: string;
-      readonly outcome: "error";
-      readonly errorCode: "RUN_NOT_FOUND" | "UPDATE_ORCHESTRATOR_UNAVAILABLE";
-    };
+type ReadCommand = OracleChannelReadCommand;
+type OracleRpcResponse = OracleChannelResponseFrame;
 
 interface PendingRpc {
   readonly requestId: string;

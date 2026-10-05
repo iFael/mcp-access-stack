@@ -8,6 +8,7 @@ const deployJob = workflow.split("  deploy:\n", 2)[1] ?? "";
 assert.ok(workflowTriggers.includes("pull_request:"), "PR validation must remain available");
 assert.ok(workflowTriggers.includes(".github/workflows/update-control-deploy.yml"), "PR validation must cover workflow edits");
 assert.ok(workflowTriggers.includes("deploy/linux/mcp-v3-oracle-read-api.service"), "PR validation must cover Oracle unit edits");
+assert.ok(workflowTriggers.includes("deploy/linux/mcp-v3-update-control-oracle-channel.service"), "PR validation must cover the outbound connector unit");
 assert.ok(workflowTriggers.includes("workflow_dispatch:"), "production deploy must require manual dispatch");
 assert.ok(workflowTriggers.includes("DEPLOY_UPDATE_CONTROL"), "manual deploy must require explicit confirmation");
 assert.ok(!workflowTriggers.includes("  push:"), "merge/push must not deploy Update Control automatically");
@@ -25,6 +26,7 @@ assert.ok(!/public-release|edge-breakglass\.yml|release\.yml/u.test(workflow));
 
 const apiUnit = readFileSync("deploy/linux/mcp-v3-oracle-read-api.service", "utf8");
 const tunnelUnit = readFileSync("deploy/linux/mcp-v3-update-control-cloudflared.service", "utf8");
+const channelUnit = readFileSync("deploy/linux/mcp-v3-update-control-oracle-channel.service", "utf8");
 assert.ok(apiUnit.includes("ORCHESTRATOR_READ_API_HOST=127.0.0.1"));
 assert.ok(apiUnit.includes("ORCHESTRATOR_READ_API_PORT=9381"));
 assert.ok(apiUnit.includes("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE=%d/update-control-orchestrator-token"));
@@ -37,10 +39,23 @@ assert.ok(tunnelUnit.includes("--token-file=%d/cloudflared-tunnel-token"));
 assert.ok(tunnelUnit.includes("DynamicUser=yes"));
 assert.ok(!/ExecStart=.*--token(?:=|\s)/u.test(apiUnit + tunnelUnit), "raw tunnel tokens must never appear in arguments");
 assert.ok(!/0\.0\.0\.0|\[::\]/u.test(apiUnit), "Oracle API must not bind all interfaces");
+assert.ok(channelUnit.includes("After=network-online.target mcp-v3-oracle-read-api.service"));
+assert.ok(channelUnit.includes("EnvironmentFile=/etc/mcp-access-stack/update-control/oracle-channel.env"));
+assert.ok(channelUnit.includes("UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE=%d/update-control-oracle-channel-token"));
+assert.ok(channelUnit.includes("UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE=%d/update-control-orchestrator-token"));
+assert.ok(channelUnit.includes("LoadCredential=update-control-oracle-channel-token:"));
+assert.ok(channelUnit.includes("LoadCredential=update-control-orchestrator-token:"));
+assert.ok(channelUnit.includes("Restart=on-failure"));
+assert.ok(channelUnit.includes("StartLimitBurst=5"));
+assert.ok(channelUnit.includes("DynamicUser=yes"));
+assert.ok(!channelUnit.includes("StateDirectory=") && !channelUnit.includes("ReadWritePaths=") && !channelUnit.includes("orchestrator.sqlite") && !channelUnit.includes("cloudflared"), "connector must not persist business state or depend on Tunnel");
+assert.ok(!channelUnit.includes("0.0.0.0") && !channelUnit.includes("[::]") && !channelUnit.includes("ListenStream="), "connector must not expose an inbound listener");
+assert.ok(!/ExecStart=.*--(?:token|secret)(?:=|\s)/u.test(channelUnit), "secrets must not appear in process arguments");
 
 for (const path of [
   ".github/workflows/update-control-deploy.yml",
   "deploy/linux/mcp-v3-oracle-read-api.service",
+  "deploy/linux/mcp-v3-update-control-oracle-channel.service",
   "deploy/linux/mcp-v3-update-control-cloudflared.service",
   "docs/update-control-deployment.md",
   "deploy/linux/Test-McpUpdateControlServices.mjs",

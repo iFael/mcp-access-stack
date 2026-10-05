@@ -9,6 +9,11 @@
     "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
     "test:unit": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand --selectProjects release-orchestrator-unit",
     "test:integration": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand --selectProjects release-orchestrator-integration",
-    "start:read-api": "node dist/server.js"
+    "start:read-api": "node dist/server.js",
+    "start:update-control-connector": "node dist/oracle-channel-connector-server.js"
+  },
+  "dependencies": {
+    "@mcp-access-stack/update-control-contract": "0.1.0",
+    "ws": "^8.21.0"
   }
 }

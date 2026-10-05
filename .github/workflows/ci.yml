@@ -104,6 +104,10 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
         run: npm run check:syntax
 
+      - name: Build Update Control contract dependency
+        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
+        run: npm run build --workspace @mcp-access-stack/update-control-contract
+
       - name: Build and test Oracle Release Orchestrator
         if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
         run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
