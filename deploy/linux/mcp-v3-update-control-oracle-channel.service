@@ -1,0 +1,37 @@
+[Unit]
+Description=MCP V3 Update Control Oracle outbound WSS read connector
+Wants=network-online.target
+After=network-online.target mcp-v3-oracle-read-api.service
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/
+EnvironmentFile=/etc/mcp-access-stack/update-control/oracle-channel.env
+Environment=UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE=%d/update-control-oracle-channel-token
+Environment=UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE=%d/update-control-orchestrator-token
+LoadCredential=update-control-oracle-channel-token:/etc/mcp-access-stack/update-control/credentials/oracle-channel-token
+LoadCredential=update-control-orchestrator-token:/etc/mcp-access-stack/update-control/credentials/orchestrator-token
+ExecStart=/usr/bin/env node /opt/mcp-access-stack/update-control/current/services/oracle-release-orchestrator/dist/oracle-channel-connector-server.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=20s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

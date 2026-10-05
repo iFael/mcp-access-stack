@@ -14,6 +14,7 @@ on:
       - packages/update-control-contract/**
       - services/oracle-release-orchestrator/**
       - deploy/linux/mcp-v3-oracle-read-api.service
+      - deploy/linux/mcp-v3-update-control-oracle-channel.service
       - deploy/linux/mcp-v3-update-control-cloudflared.service
       - deploy/linux/Test-McpUpdateControlServices.mjs
       - docs/update-control-deployment.md
@@ -68,7 +69,7 @@ jobs:
       - name: Validate Update Control runtime templates
         run: node deploy/linux/Test-McpUpdateControlServices.mjs
       - name: Verify systemd unit syntax
-        run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-cloudflared.service
+        run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-oracle-channel.service deploy/linux/mcp-v3-update-control-cloudflared.service
 
   deploy:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_deploy == 'DEPLOY_UPDATE_CONTROL' }}
