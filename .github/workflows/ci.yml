@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   impact:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
       shared: ${{ steps.impact.outputs.shared }}
@@ -68,7 +68,9 @@ jobs:
 
   pr-validation:
     needs: impact
-    if: ${{ always() }}
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' || needs.impact.result == 'success')
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -96,61 +98,60 @@ jobs:
         run: node tooling/structure/validate-repository-structure.test.mjs
 
       - name: Install dependencies
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
         run: npm ci
 
 
       - name: Validate cheap syntax contracts
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
         run: npm run check:syntax
 
       - name: Build Update Control contract dependency
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
         run: npm run build --workspace @mcp-access-stack/update-control-contract
 
       - name: Build and test Oracle Release Orchestrator
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.rootBroad == 'true' || needs.impact.outputs.updateControl == 'true')
         run: npm run build --workspace @mcp-access-stack/oracle-release-orchestrator && npm run test:oracle-release-orchestrator
 
       - name: Validate public MCP contracts
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
         run: npm run ci:contracts
 
       - name: Build shared test dependency
         if: >-
           github.event_name == 'pull_request' &&
-          ((needs.impact.result != 'success' || needs.impact.outputs.shared == 'true') ||
-           (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true') ||
-           (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true') ||
-           (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true'))
+          ((needs.impact.outputs.shared == 'true') ||
+           (needs.impact.outputs.workspaceAgent == 'true') ||
+           (needs.impact.outputs.mcpGateway == 'true') ||
+           (needs.impact.outputs.browserWorker == 'true'))
         run: npm run build --workspace @vs-code-gpt/shared
 
       - name: Build Edge protocol test dependency
         if: >-
           github.event_name == 'pull_request' &&
-          ((needs.impact.result != 'success' || needs.impact.outputs.edgeProtocol == 'true') || (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true'))
+          ((needs.impact.outputs.edgeProtocol == 'true') || (needs.impact.outputs.mcpGateway == 'true'))
         run: npm run build --workspace @mcp-access-stack/edge-protocol
 
       - name: Build Workspace Agent test dependency
         if: >-
           github.event_name == 'pull_request' &&
-          ((needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true') || (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true'))
+          ((needs.impact.outputs.workspaceAgent == 'true') || (needs.impact.outputs.mcpGateway == 'true'))
         run: npm run build --workspace @vs-code-gpt/local-agent
 
       - name: Test MCP core
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.shared == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.shared == 'true')
         run: npm run test:mcp-core
 
       - name: Test MCP Gateway
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.mcpGateway == 'true')
         run: npm run test:mcp-gateway
 
 
       - name: Typecheck affected graph
         if: >-
           github.event_name == 'pull_request' &&
-          (needs.impact.result != 'success' ||
-           needs.impact.outputs.shared == 'true' ||
+          (needs.impact.outputs.shared == 'true' ||
            needs.impact.outputs.edgeProtocol == 'true' ||
            needs.impact.outputs.workspaceAgent == 'true' ||
            needs.impact.outputs.mcpGateway == 'true' ||
@@ -159,24 +160,24 @@ jobs:
         run: npm run typecheck
 
       - name: Build MCP Gateway
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.mcpGateway == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.mcpGateway == 'true')
         run: npm run build --workspace @vs-code-gpt/remote-mcp-gateway
 
 
       - name: Check Edge Gateway
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.edgeGateway == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.edgeGateway == 'true')
         run: npm run check:edge
 
       - name: Validate Edge manifest parity
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.edgeGateway == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.edgeGateway == 'true')
         run: npm run test:mcp-edge-manifest
 
       - name: Check independent Update Control Worker
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.updateControl == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.updateControl == 'true')
         run: npm run check:update-control && npm run test:update-control-worker
 
       - name: Validate operations and policy scripts
-        if: github.event_name == 'pull_request' && (needs.impact.result != 'success' || needs.impact.outputs.operationsTooling == 'true')
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.operationsTooling == 'true')
         run: npm run check:operations
 
   pr-browser-worker:
@@ -184,7 +185,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.browserWorker == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -224,7 +226,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.workspaceAgent == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -262,7 +265,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.workspaceAgent == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -300,7 +304,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.workspaceAgent == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -342,7 +347,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.workspaceAgent == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.workspaceAgent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -362,7 +368,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.windowsRuntime == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -394,7 +401,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.linuxRuntime == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.linuxRuntime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -413,7 +421,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.windowsRuntime == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -448,7 +457,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.windowsRuntime == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.windowsRuntime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -470,7 +480,7 @@ jobs:
       - pr-runtime-assurance
       - pr-linux-runtime
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Require successful validation lanes
@@ -489,24 +499,25 @@ jobs:
           LINUX_RUNTIME_RESULT: ${{ needs.pr-linux-runtime.result }}
         run: |
           set -euo pipefail
+          test "$IMPACT_RESULT" = "success"
           test "$VALIDATION_RESULT" = "success"
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if [[ "$IMPACT_RESULT" != "success" || "$BROWSER_WORKER_IMPACT" == "true" ]]; then
+            if [[ "$BROWSER_WORKER_IMPACT" == "true" ]]; then
               test "$BROWSER_WORKER_RESULT" = "success"
             else
               test "$BROWSER_WORKER_RESULT" = "skipped"
             fi
-            if [[ "$IMPACT_RESULT" != "success" || "$WORKSPACE_AGENT_IMPACT" == "true" ]]; then
+            if [[ "$WORKSPACE_AGENT_IMPACT" == "true" ]]; then
               test "$WORKSPACE_AGENT_RESULT" = "success"
             else
               test "$WORKSPACE_AGENT_RESULT" = "skipped"
             fi
-            if [[ "$IMPACT_RESULT" != "success" || "$WINDOWS_RUNTIME_IMPACT" == "true" ]]; then
+            if [[ "$WINDOWS_RUNTIME_IMPACT" == "true" ]]; then
               test "$RUNTIME_ASSURANCE_RESULT" = "success"
             else
               test "$RUNTIME_ASSURANCE_RESULT" = "skipped"
             fi
-            if [[ "$IMPACT_RESULT" != "success" || "$LINUX_RUNTIME_IMPACT" == "true" ]]; then
+            if [[ "$LINUX_RUNTIME_IMPACT" == "true" ]]; then
               test "$LINUX_RUNTIME_RESULT" = "success"
             else
               test "$LINUX_RUNTIME_RESULT" = "skipped"
@@ -515,7 +526,7 @@ jobs:
   main-integration:
     name: main-${{ matrix.target }}
     needs: impact
-    if: ${{ always() && github.event_name == 'push' }}
+    if: ${{ always() && github.event_name == 'push' && needs.impact.result == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -561,7 +572,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.linuxRuntime == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.linuxRuntime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -581,7 +593,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' &&
-      (needs.impact.result != 'success' || needs.impact.outputs.browserWorker == 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.browserWorker == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -616,7 +629,8 @@ jobs:
     needs: impact
     if: >-
       always() &&
-      (needs.impact.result != 'success' || needs.impact.outputs.docsOnly != 'true')
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.docsOnly != 'true'
     strategy:
       fail-fast: false
       matrix:

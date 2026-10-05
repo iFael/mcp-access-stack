@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { classifyChangedPaths } from "./resolve-impact.mjs";
 
@@ -88,6 +90,33 @@ test("Linux runtime changes stay targeted to the Linux assurance lane", () => {
   assert.equal(result.windowsRuntime, false);
   assert.equal(result.operationsTooling, true);
   assert.equal(result.rootBroad, false);
+});
+
+test("resolver execution failures stay fail-closed to broad coverage", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("./resolve-impact.mjs", import.meta.url))],
+    { encoding: "utf8" },
+  );
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.resolverFailed, true);
+  assert.equal(result.rootBroad, true);
+  for (const key of [
+    "shared",
+    "edgeProtocol",
+    "workspaceAgent",
+    "mcpGateway",
+    "edgeGateway",
+    "browserWorker",
+    "windowsRuntime",
+    "linuxRuntime",
+    "operationsTooling",
+    "updateControl",
+  ]) {
+    assert.equal(result[key], true, `${key} should remain true on resolver failure`);
+  }
+  assert.equal(result.docsOnly, false);
 });
 
 test("root dependency graph changes fail closed to broad coverage", () => {
