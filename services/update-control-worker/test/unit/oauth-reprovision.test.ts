@@ -1,10 +1,11 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import {
   EdgeOwnerOAuth,
   type OwnerOAuthStorage,
   type OwnerIdentity,
 } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController, type UpdateControlDurableState } from "../../src/auth-state.js";
+import { UpdateControlAuthState, type UpdateControlWorkerEnv } from "../../src/worker.js";
 import { createTestGitHubActionsAssertion, testGitHubActionsJwksFetch } from "./github-actions-oidc-fixture.js";
 
 const PUBLIC_URL = "https://update-control.example/";
@@ -47,6 +48,30 @@ class MemoryStorage implements OwnerOAuthStorage {
   }
 }
 
+function makeDurableAuthState(storage: MemoryStorage): UpdateControlAuthState {
+  const state = {
+    storage: {
+      get: <T>(key: string) => storage.get<T>(key),
+      put: <T>(key: string, value: T) => storage.put(key, value),
+      delete: async (keys: string | string[]) => {
+        if (typeof keys === "string") return storage.delete(keys);
+        let deleted = 0;
+        for (const key of keys) if (await storage.delete(key)) deleted += 1;
+        return deleted;
+      },
+      list: async ({ prefix, limit }: { prefix: string; limit: number }) =>
+        storage.listPrefix(prefix, limit),
+    },
+  };
+  const env = {
+    MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
+  } as unknown as UpdateControlWorkerEnv;
+  return new UpdateControlAuthState(state as never, env);
+}
+
+const INTERNAL_OIDC_HEADER = "x-update-control-internal-oidc-verified";
+const INTERNAL_OIDC_MARKER = "v1";
+
 function makeController(
   storage: MemoryStorage,
   ownerToken: string,
@@ -65,6 +90,7 @@ async function reprovisionRequest(operationId: string): Promise<Request> {
     method: "POST",
     headers: {
       authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+      [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
       "content-type": "application/json",
     },
     body: JSON.stringify({ operationId }),
@@ -159,6 +185,54 @@ function base64Url(value: Uint8Array): string {
 }
 
 describe("controlled Update Control OAuth reprovision", () => {
+  it("skips OIDC verification in the DO only when the trusted internal marker is present", async () => {
+    const storage = new MemoryStorage();
+    const operationId = "b795a30e-90d3-4a51-95ed-3c06bbc1e2ad";
+    const token = await createTestGitHubActionsAssertion(operationId);
+    const fetchSpy = jest.spyOn(globalThis, "fetch").mockImplementation(testGitHubActionsJwksFetch);
+    try {
+      const durableObject = makeDurableAuthState(storage);
+      const response = await durableObject.fetch(new Request(
+        REPROVISION_URL + "?operationId=" + operationId,
+        {
+          headers: {
+            authorization: "Bearer " + token,
+            [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
+          },
+        },
+      ));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(storage.values.size).toBe(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("fails closed in the DO without the trusted internal marker and performs no JWKS fetch", async () => {
+    const storage = new MemoryStorage();
+    const operationId = "b795a30e-90d3-4a51-95ed-3c06bbc1e2ad";
+    const token = await createTestGitHubActionsAssertion(operationId);
+    const fetchSpy = jest.spyOn(globalThis, "fetch").mockImplementation(testGitHubActionsJwksFetch);
+    try {
+      const durableObject = makeDurableAuthState(storage);
+      const response = await durableObject.fetch(new Request(
+        REPROVISION_URL + "?operationId=" + operationId,
+        { headers: { authorization: "Bearer " + token } },
+      ));
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "operation_auth_required" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(storage.values.size).toBe(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+
   it("allows protected status preflight before MCP_OWNER_TOKEN exists, then provisions the first owner", async () => {
     const storage = new MemoryStorage();
     const operationId = "a3a1f91e-4a82-40fd-9f82-6f7fe4d8d0e4";
@@ -172,7 +246,12 @@ describe("controlled Update Control OAuth reprovision", () => {
 
     const status = await unconfigured.fetch(new Request(
       REPROVISION_URL + "?operationId=" + operationId,
-      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` } },
+      {
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+          [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
+        },
+      },
     ));
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
@@ -185,7 +264,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     await issueTokens(provisioned, SECOND_OWNER_TOKEN);
   });
 
-  it("exposes bounded verification stage only for read-only diagnostic GETs", async () => {
+  it("does not expose OIDC diagnostics to direct Durable Object requests", async () => {
     const storage = new MemoryStorage();
     const operationId = "c29e6014-5da0-4191-a509-f0e18ab2ff80";
     const controller = makeController(storage, "");
@@ -207,10 +286,7 @@ describe("controlled Update Control OAuth reprovision", () => {
       },
     }));
     expect(diagnostic.status).toBe(401);
-    expect(await diagnostic.json()).toEqual({
-      error: "operation_auth_required",
-      diagnosticStage: "claims",
-    });
+    expect(await diagnostic.json()).toEqual({ error: "operation_auth_required" });
 
     const post = await controller.fetch(new Request(REPROVISION_URL, {
       method: "POST",
@@ -225,7 +301,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(await post.json()).toEqual({ error: "operation_auth_required" });
   });
 
-  it("returns a bounded TypeError reason only on the opt-in GET and never on POST", async () => {
+  it("keeps direct Durable Object GET and POST failures free of OIDC diagnostics", async () => {
     const storage = new MemoryStorage();
     const operationId = "6f7fcf36-00f5-4d98-bf66-55c1d9dfd465";
     const assertion = await createTestGitHubActionsAssertion(operationId);
@@ -253,13 +329,7 @@ describe("controlled Update Control OAuth reprovision", () => {
       },
     }));
     const diagnosticBody = await diagnostic.json();
-    expect(diagnosticBody).toEqual({
-      error: "operation_auth_required",
-      diagnosticStage: "jwks_fetch",
-      diagnosticFailureCategory: "fetch_rejected",
-      diagnosticRejectionClass: "type_error",
-      diagnosticTypeErrorReason: "network_connection_lost",
-    });
+    expect(diagnosticBody).toEqual({ error: "operation_auth_required" });
     const serializedDiagnostic = JSON.stringify(diagnosticBody);
     expect(serializedDiagnostic).not.toContain(rawMessage);
     expect(serializedDiagnostic).not.toContain(rawStack);
@@ -451,14 +521,24 @@ describe("controlled Update Control OAuth reprovision", () => {
 
     const status = await nextController.fetch(new Request(
       REPROVISION_URL + "?operationId=" + operationId,
-      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` } },
+      {
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+          [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
+        },
+      },
     ));
     expect(await status.json()).toMatchObject({ operationId, status: "outcome_unknown" });
 
     const competingOperationId = "d94bad79-6370-4fe6-b793-a872e3720c16";
     const competingStatus = await nextController.fetch(new Request(
       REPROVISION_URL + "?operationId=" + competingOperationId,
-      { headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(competingOperationId)}` } },
+      {
+        headers: {
+          authorization: `Bearer ${await createTestGitHubActionsAssertion(competingOperationId)}`,
+          [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
+        },
+      },
     ));
     const competingBody = await competingStatus.json();
     expect(competingStatus.status).toBe(409);
@@ -529,7 +609,10 @@ describe("controlled Update Control OAuth reprovision", () => {
     const controller = makeController(storage, FIRST_OWNER_TOKEN);
     const operationId = "ef3f96d6-61e3-4d4e-a96c-7c4f4cda39a1";
     const status = await controller.fetch(new Request(REPROVISION_URL + "?operationId=" + operationId, {
-      headers: { authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}` },
+      headers: {
+        authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
+        [INTERNAL_OIDC_HEADER]: INTERNAL_OIDC_MARKER,
+      },
     }));
     expect(await status.json()).toMatchObject({ operationId, status: "not_executed", events: [] });
 

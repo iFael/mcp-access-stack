@@ -50,6 +50,7 @@ async function completeInitialReprovision(controller: UpdateControlAuthControlle
       headers: {
         authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
         "content-type": "application/json",
+        "x-update-control-internal-oidc-verified": "v1",
       },
       body: JSON.stringify({ operationId }),
     },
