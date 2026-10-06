@@ -33,7 +33,6 @@ jobs:
       name: update-control-production
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,10 +47,11 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Diagnose operation status with operation-bound GitHub OIDC
+      - name: Diagnose operation status with operation-bound HMAC-SHA-256
         env:
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
         run: node tooling/update-control-oauth-reprovision.mjs diagnose
 
   reprovision:
@@ -62,7 +62,6 @@ jobs:
       name: update-control-production
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -77,12 +76,13 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Check operation status with operation-bound GitHub OIDC
+      - name: Check operation status with operation-bound HMAC-SHA-256
         id: preflight
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs preflight
       - name: Install replacement owner token through locked Wrangler
@@ -110,11 +110,12 @@ jobs:
           unset UPDATE_CONTROL_CF_API_TOKEN
           printf '%s' "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MCP_OWNER_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
           unset UPDATE_CONTROL_OWNER_TOKEN_NEXT
-      - name: Reconcile the same operation ID with GitHub OIDC
+      - name: Reconcile the same operation ID with HMAC-SHA-256
         if: steps.preflight.outputs.completed != 'true'
         env:
           UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
           UPDATE_CONTROL_OWNER_TOKEN_NEXT: ${{ secrets.UPDATE_CONTROL_OWNER_TOKEN_NEXT }}
         run: node tooling/update-control-oauth-reprovision.mjs apply

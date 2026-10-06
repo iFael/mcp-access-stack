@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 export const UPDATE_CONTROL_DEPLOY_SECRET_INPUTS = Object.freeze([
   "UPDATE_CONTROL_CF_API_TOKEN",
   "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
+  "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY",
 ]);
 
 export const UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS = Object.freeze([
@@ -67,6 +68,7 @@ export function validateUpdateControlDeployEnvironment(env) {
   const secretValidators = {
     UPDATE_CONTROL_CF_API_TOKEN: cleanText(1, 4096),
     UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: cleanText(32, 2048),
+    UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: (value) => /^[0-9a-f]{64}$/u.test(value),
   };
   for (const name of UPDATE_CONTROL_DEPLOY_SECRET_INPUTS) {
     const error = settingError("secret", name, env[name], secretValidators[name]);

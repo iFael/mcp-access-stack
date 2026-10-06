@@ -99,6 +99,7 @@ jobs:
         env:
           UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: ${{ secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
         run: node tooling/update-control-deploy-preflight.mjs
@@ -111,6 +112,15 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+      - name: Install OAuth reprovision HMAC key through locked Wrangler stdin
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY --cwd ../.. --config services/update-control-worker/wrangler.jsonc
       - name: Deploy only Update Control
         shell: bash
         env:

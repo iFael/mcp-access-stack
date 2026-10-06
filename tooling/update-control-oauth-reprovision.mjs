@@ -3,39 +3,13 @@ import { pathToFileURL } from "node:url";
 
 export const OAUTH_REPROVISION_CONFIRMATION = "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS";
 const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
-const GITHUB_ACTIONS_OIDC_HOST_SUFFIX = ".actions.githubusercontent.com";
-const GITHUB_ACTIONS_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
+const SIGNATURE_DOMAIN = "mcp-v3-update-control:oauth-reprovision";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const VALID_STATUSES = new Set(["not_executed", "in_progress", "completed", "outcome_unknown"]);
-const VALID_DIAGNOSTIC_STAGES = new Set([
-  "verified", "input", "structure", "header", "claims", "jwks_fetch", "jwks_http",
-  "jwks_shape", "jwks_kid", "jwks_import", "signature", "exception",
-]);
-const VALID_DIAGNOSTIC_FAILURE_CATEGORIES = new Set([
-  "request_setup", "fetch_sync_throw", "timeout", "fetch_rejected",
-]);
-const VALID_DIAGNOSTIC_REJECTION_CLASSES = new Set([
-  "error", "type_error", "abort_error", "timeout_error", "dom_exception_other",
-  "other_error", "non_error", "other",
-]);
-const VALID_DIAGNOSTIC_TYPE_ERROR_REASONS = new Set([
-  "network_connection_lost", "unknown_type_error",
-]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
-const MAX_JWKS_RESPONSE_BYTES = 32 * 1024;
-const MAX_JWKS_KEYS = 16;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
-const EXPECTED_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const EXPECTED_OIDC_SUBJECT = "repo:iFael@185357494/mcp-access-stack@1379020190:environment:update-control-production";
-const EXPECTED_OIDC_REPOSITORY = "iFael/mcp-access-stack";
-const EXPECTED_OIDC_REPOSITORY_OWNER_ID = "185357494";
-const EXPECTED_OIDC_REPOSITORY_ID = "1379020190";
-const EXPECTED_OIDC_WORKFLOW_REF = "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main";
-const EXPECTED_OIDC_REF = "refs/heads/main";
-const EXPECTED_OIDC_EVENT = "workflow_dispatch";
-const EXPECTED_OIDC_ENVIRONMENT = "update-control-production";
 
 function requireValue(env, name) {
   const value = env[name];
@@ -73,13 +47,16 @@ function readSettings(env, { requireConfirmation = true } = {}) {
       publicUrl.search || publicUrl.hash || !isRootOrigin) {
     throw new Error("The public URL must be an HTTPS origin without credentials, nonstandard port, path, query, or fragment.");
   }
-  const endpoint = new URL(OAUTH_REPROVISION_PATH, publicUrl.origin);
+
+  const hmacKey = requireValue(env, "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
+  if (!/^[0-9a-f]{64}$/u.test(hmacKey)) {
+    throw new Error("The dedicated OAuth reprovision HMAC key must be 64 lowercase hexadecimal characters.");
+  }
 
   return {
     operationId,
-    endpoint,
-    oidcRequestUrl: requireValue(env, "ACTIONS_ID_TOKEN_REQUEST_URL"),
-    oidcRequestToken: requireValue(env, "ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
+    endpoint: new URL(OAUTH_REPROVISION_PATH, publicUrl.origin),
+    hmacKey,
   };
 }
 
@@ -94,6 +71,49 @@ function requestUrl(endpoint, operationId) {
   const url = new URL(endpoint);
   url.searchParams.set("operationId", operationId);
   return url;
+}
+
+function hexBytes(value) {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function asArrayBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function toHex(bytes) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function createAuthorization(method, operationId, hmacKey) {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const canonical = [
+    SIGNATURE_DOMAIN,
+    "v1",
+    method,
+    OAUTH_REPROVISION_PATH,
+    operationId,
+    timestamp,
+  ].join("\n");
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    asArrayBuffer(hexBytes(hmacKey)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await globalThis.crypto.subtle.sign(
+    "HMAC",
+    key,
+    asArrayBuffer(new TextEncoder().encode(canonical)),
+  );
+  return `HMAC-SHA256 v1=${timestamp}.${toHex(new Uint8Array(signature))}`;
 }
 
 async function readBoundedJson(
@@ -138,67 +158,8 @@ async function readBoundedJson(
   }
 }
 
-async function requestGitHubActionsAssertion(settings, fetchImpl) {
-  let requestUrl;
-  try {
-    requestUrl = new URL(settings.oidcRequestUrl);
-    const isGitHubActionsOidcHost =
-      requestUrl.hostname.length > GITHUB_ACTIONS_OIDC_HOST_SUFFIX.length &&
-      requestUrl.hostname.endsWith(GITHUB_ACTIONS_OIDC_HOST_SUFFIX);
-    if (
-      requestUrl.protocol !== "https:" ||
-      !isGitHubActionsOidcHost ||
-      requestUrl.port !== "" ||
-      requestUrl.username ||
-      requestUrl.password ||
-      requestUrl.hash
-    ) {
-      throw new Error("invalid");
-    }
-    requestUrl.searchParams.set(
-      "audience",
-      `urn:mcp-v3-update-control:oauth-reprovision:${settings.operationId}`,
-    );
-  } catch {
-    throw new Error("GitHub Actions OIDC request endpoint is invalid.");
-  }
-
-  let response;
-  try {
-    response = await fetchImpl(requestUrl, {
-      method: "GET",
-      redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        authorization: `Bearer ${settings.oidcRequestToken}`,
-        accept: "application/json",
-      },
-    });
-  } catch {
-    throw new Error("GitHub Actions OIDC token request failed.");
-  }
-  if (!response.ok) throw new Error("GitHub Actions OIDC token request failed.");
-  const payload = await readBoundedJson(response);
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    Array.isArray(payload) ||
-    typeof payload.value !== "string" ||
-    payload.value.length === 0 ||
-    payload.value.length > 8 * 1024
-  ) {
-    throw new Error("GitHub Actions OIDC token response is invalid.");
-  }
-  return payload.value;
-}
-
-async function createAuthenticatedSettings(env, fetchImpl, options) {
-  const settings = readSettings(env, options);
-  const assertion = await requestGitHubActionsAssertion(settings, fetchImpl);
-  return { ...settings, assertion };
-}
-
-async function requestJson(fetchImpl, url, method, settings, body, diagnostic = false) {
+async function requestJson(fetchImpl, url, method, settings, body) {
+  const authorization = await createAuthorization(method, settings.operationId, settings.hmacKey);
   let response;
   try {
     response = await fetchImpl(url, {
@@ -206,9 +167,8 @@ async function requestJson(fetchImpl, url, method, settings, body, diagnostic = 
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
-        authorization: `Bearer ${settings.assertion}`,
+        authorization,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
-        ...(diagnostic ? { "x-update-control-oidc-diagnose": "v1" } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -218,188 +178,21 @@ async function requestJson(fetchImpl, url, method, settings, body, diagnostic = 
   return { response, payload: await readBoundedJson(response) };
 }
 
-function decodeJwtJsonPart(value) {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/u.test(value)) return undefined;
-  try {
-    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
-    const bytes = Uint8Array.from(
-      atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4)),
-      (character) => character.charCodeAt(0),
-    );
-    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isDiagnosticGitHubJwk(value) {
-  return value && typeof value === "object" && !Array.isArray(value) &&
-    value.kty === "RSA" &&
-    typeof value.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(value.kid) &&
-    (value.alg === undefined || value.alg === "RS256") &&
-    (value.use === undefined || value.use === "sig") &&
-    (value.key_ops === undefined ||
-      (Array.isArray(value.key_ops) && value.key_ops.includes("verify") &&
-       value.key_ops.every((operation) => operation === "verify"))) &&
-    typeof value.n === "string" && /^[A-Za-z0-9_-]+$/u.test(value.n) &&
-    typeof value.e === "string" && /^[A-Za-z0-9_-]+$/u.test(value.e);
-}
-
-function diagnosticArrayBuffer(bytes) {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-}
-
-async function summarizeAssertion(assertion, operationId, fetchImpl) {
-  const parts = assertion.split(".");
-  const header = parts.length === 3 ? decodeJwtJsonPart(parts[0]) : undefined;
-  const claims = parts.length === 3 ? decodeJwtJsonPart(parts[1]) : undefined;
-  const now = Math.floor(Date.now() / 1000);
-  const iat = Number.isSafeInteger(claims?.iat) ? claims.iat : null;
-  const nbf = Number.isSafeInteger(claims?.nbf) ? claims.nbf : null;
-  const exp = Number.isSafeInteger(claims?.exp) ? claims.exp : null;
-  const headerGuardsMatch = Boolean(header && header.alg === "RS256" &&
-    typeof header.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid) &&
-    header.jku === undefined && header.x5u === undefined && header.crit === undefined);
-  let jwksFetchOk = false;
-  let jwksShapeValid = false;
-  let kidInJwks = false;
-  let keyImportValid = false;
-  let signatureValid = false;
-  if (headerGuardsMatch && parts.length === 3) {
-    try {
-      const response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
-        method: "GET",
-        redirect: "error",
-        cache: "no-store",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        headers: { accept: "application/json" },
-      });
-      jwksFetchOk = response.ok;
-      if (response.ok) {
-        const payload = await readBoundedJson(
-          response,
-          MAX_JWKS_RESPONSE_BYTES,
-          "GitHub JWKS response exceeded the configured size limit.",
-        );
-        jwksShapeValid = Boolean(payload && typeof payload === "object" && !Array.isArray(payload) &&
-          Array.isArray(payload.keys) && payload.keys.length > 0 && payload.keys.length <= MAX_JWKS_KEYS);
-        if (jwksShapeValid) {
-          const candidate = payload.keys.find((value) => isDiagnosticGitHubJwk(value) && value.kid === header.kid);
-          kidInJwks = Boolean(candidate);
-          if (candidate) {
-            const key = await crypto.subtle.importKey(
-              "jwk",
-              { kty: "RSA", n: candidate.n, e: candidate.e, alg: "RS256", ext: true },
-              { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-              false,
-              ["verify"],
-            );
-            keyImportValid = true;
-            const signature = Uint8Array.from(
-              atob(parts[2].replaceAll("-", "+").replaceAll("_", "/") +
-                "=".repeat((4 - (parts[2].length % 4)) % 4)),
-              (character) => character.charCodeAt(0),
-            );
-            const signingInput = new TextEncoder().encode(parts[0] + "." + parts[1]);
-            signatureValid = await crypto.subtle.verify(
-              { name: "RSASSA-PKCS1-v1_5" },
-              key,
-              diagnosticArrayBuffer(signature),
-              diagnosticArrayBuffer(signingInput),
-            );
-          }
-        }
-      }
-    } catch {
-      // Diagnosis stays boolean-only and fail-closed; no token/key material is emitted.
-    }
-  }
-  return {
-    formatValid: Boolean(header && claims),
-    algMatches: header?.alg === "RS256",
-    kidPresent: typeof header?.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid),
-    headerGuardsMatch,
-    jwksFetchOk,
-    jwksShapeValid,
-    kidInJwks,
-    keyImportValid,
-    signatureValid,
-    issuerMatches: claims?.iss === EXPECTED_OIDC_ISSUER,
-    audienceMatches: claims?.aud === `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`,
-    subjectMatches: claims?.sub === EXPECTED_OIDC_SUBJECT,
-    repositoryMatches: claims?.repository === EXPECTED_OIDC_REPOSITORY,
-    repositoryOwnerIdMatches: claims?.repository_owner_id === EXPECTED_OIDC_REPOSITORY_OWNER_ID,
-    repositoryIdMatches: claims?.repository_id === EXPECTED_OIDC_REPOSITORY_ID,
-    workflowRefMatches: claims?.workflow_ref === EXPECTED_OIDC_WORKFLOW_REF,
-    refMatches: claims?.ref === EXPECTED_OIDC_REF,
-    eventNameMatches: claims?.event_name === EXPECTED_OIDC_EVENT,
-    environmentMatches: claims?.environment === EXPECTED_OIDC_ENVIRONMENT,
-    jtiPresent: typeof claims?.jti === "string" && claims.jti.length > 0 && claims.jti.length <= 256,
-    issuedAtPresent: iat !== null,
-    notBeforePresent: nbf !== null,
-    expiresAtPresent: exp !== null,
-    issuedAtFresh: iat !== null && iat <= now + 30 && iat >= now - 600,
-    notBeforeValid: nbf !== null && nbf <= now + 30,
-    notExpired: exp !== null && exp > now,
-    lifetimeValid: iat !== null && exp !== null && exp > iat && exp - iat <= 600,
-    temporalOrderValid: nbf !== null && exp !== null && nbf <= exp,
-  };
-}
-
 function safeEndpointError(payload) {
   const error = payload && typeof payload === "object" && !Array.isArray(payload) ? payload.error : undefined;
   return typeof error === "string" && /^[a-z0-9_]{1,64}$/u.test(error) ? error : null;
 }
 
-function safeEndpointDiagnosticStage(payload) {
-  const stage = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload.diagnosticStage
-    : undefined;
-  return typeof stage === "string" && VALID_DIAGNOSTIC_STAGES.has(stage) ? stage : null;
-}
-
-function safeEndpointDiagnosticFailureCategory(payload) {
-  const category = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload.diagnosticFailureCategory
-    : undefined;
-  return typeof category === "string" && VALID_DIAGNOSTIC_FAILURE_CATEGORIES.has(category)
-    ? category
-    : null;
-}
-
-function safeEndpointDiagnosticRejectionClass(payload) {
-  const rejectionClass = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload.diagnosticRejectionClass
-    : undefined;
-  return typeof rejectionClass === "string" && VALID_DIAGNOSTIC_REJECTION_CLASSES.has(rejectionClass)
-    ? rejectionClass
-    : null;
-}
-
-function safeEndpointDiagnosticTypeErrorReason(payload) {
-  const reason = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload.diagnosticTypeErrorReason
-    : undefined;
-  return typeof reason === "string" && VALID_DIAGNOSTIC_TYPE_ERROR_REASONS.has(reason)
-    ? reason
-    : null;
+function safeStatus(payload, operationId) {
+  return payload && typeof payload === "object" && !Array.isArray(payload) &&
+    payload.operationId === operationId && typeof payload.status === "string" &&
+    VALID_STATUSES.has(payload.status) ? payload.status : null;
 }
 
 function validateStatusPayload(payload, operationId) {
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    Array.isArray(payload) ||
-    payload.operationId !== operationId ||
-    typeof payload.status !== "string" ||
-    !VALID_STATUSES.has(payload.status)
-  ) {
-    throw new Error("OAuth reprovision endpoint returned an invalid operation status.");
-  }
-  return payload.status;
+  const status = safeStatus(payload, operationId);
+  if (!status) throw new Error("OAuth reprovision endpoint returned an invalid operation status.");
+  return status;
 }
 
 async function readStatus(fetchImpl, settings) {
@@ -429,41 +222,18 @@ export async function diagnoseOAuthReprovisionStatus({
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
-  const settings = await createAuthenticatedSettings(env, fetchImpl, { requireConfirmation: false });
-  const assertion = await summarizeAssertion(settings.assertion, settings.operationId, fetchImpl);
+  const settings = readSettings(env, { requireConfirmation: false });
   const { response, payload } = await requestJson(
     fetchImpl,
     requestUrl(settings.endpoint, settings.operationId),
     "GET",
     settings,
-    undefined,
-    true,
   );
-  const status = payload && typeof payload === "object" && !Array.isArray(payload) &&
-    payload.operationId === settings.operationId && typeof payload.status === "string" &&
-    VALID_STATUSES.has(payload.status) ? payload.status : null;
-  const workerStage = safeEndpointDiagnosticStage(payload);
-  const workerFailureCategory = workerStage === "jwks_fetch"
-    ? safeEndpointDiagnosticFailureCategory(payload)
-    : null;
-  const workerRejectionClass = workerStage === "jwks_fetch" &&
-      workerFailureCategory === "fetch_rejected"
-    ? safeEndpointDiagnosticRejectionClass(payload)
-    : null;
   return {
     operationId: settings.operationId,
     httpStatus: response.status,
-    status,
+    status: safeStatus(payload, settings.operationId),
     error: safeEndpointError(payload),
-    workerStage,
-    workerFailureCategory,
-    workerRejectionClass,
-    workerTypeErrorReason: workerStage === "jwks_fetch" &&
-        workerFailureCategory === "fetch_rejected" &&
-        workerRejectionClass === "type_error"
-      ? safeEndpointDiagnosticTypeErrorReason(payload)
-      : null,
-    assertion,
   };
 }
 
@@ -471,7 +241,7 @@ export async function preflightOAuthReprovision({
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
-  const settings = await createAuthenticatedSettings(env, fetchImpl);
+  const settings = readSettings(env);
   const status = await readStatus(fetchImpl, settings);
   if (status !== "completed") requireNextOwnerToken(env);
   await appendGitHubOutput(env, status);
@@ -484,7 +254,7 @@ export async function executeOAuthReprovision({
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   maxAttempts = MAX_APPLY_ATTEMPTS,
 } = {}) {
-  const settings = await createAuthenticatedSettings(env, fetchImpl);
+  const settings = readSettings(env);
   requireNextOwnerToken(env);
 
   const initialStatus = await readStatus(fetchImpl, settings);
