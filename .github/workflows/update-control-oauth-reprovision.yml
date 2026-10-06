@@ -110,6 +110,11 @@ jobs:
           unset UPDATE_CONTROL_CF_API_TOKEN
           printf '%s' "$UPDATE_CONTROL_OWNER_TOKEN_NEXT" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MCP_OWNER_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
           unset UPDATE_CONTROL_OWNER_TOKEN_NEXT
+      - name: Wait for replacement owner token runtime readiness
+        if: steps.preflight.outputs.completed != 'true'
+        env:
+          MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+        run: node tooling/update-control-oauth-reprovision.mjs wait-ready
       - name: Reconcile the same operation ID with HMAC-SHA-256
         if: steps.preflight.outputs.completed != 'true'
         env:
