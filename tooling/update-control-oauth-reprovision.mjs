@@ -11,8 +11,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
 const EXPECTED_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const EXPECTED_OIDC_SUBJECT = "repo:iFael/mcp-access-stack:environment:update-control-production";
+const EXPECTED_OIDC_SUBJECT = "repo:iFael@185357494/mcp-access-stack@1379020190:environment:update-control-production";
 const EXPECTED_OIDC_REPOSITORY = "iFael/mcp-access-stack";
+const EXPECTED_OIDC_REPOSITORY_OWNER_ID = "185357494";
+const EXPECTED_OIDC_REPOSITORY_ID = "1379020190";
 const EXPECTED_OIDC_WORKFLOW_REF = "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main";
 const EXPECTED_OIDC_REF = "refs/heads/main";
 const EXPECTED_OIDC_EVENT = "workflow_dispatch";
@@ -225,6 +227,8 @@ function summarizeAssertion(assertion, operationId) {
     audienceMatches: claims?.aud === `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`,
     subjectMatches: claims?.sub === EXPECTED_OIDC_SUBJECT,
     repositoryMatches: claims?.repository === EXPECTED_OIDC_REPOSITORY,
+    repositoryOwnerIdMatches: claims?.repository_owner_id === EXPECTED_OIDC_REPOSITORY_OWNER_ID,
+    repositoryIdMatches: claims?.repository_id === EXPECTED_OIDC_REPOSITORY_ID,
     workflowRefMatches: claims?.workflow_ref === EXPECTED_OIDC_WORKFLOW_REF,
     refMatches: claims?.ref === EXPECTED_OIDC_REF,
     eventNameMatches: claims?.event_name === EXPECTED_OIDC_EVENT,
