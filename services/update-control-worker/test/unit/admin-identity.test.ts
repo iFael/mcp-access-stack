@@ -4,8 +4,8 @@ import { UpdateControlAuthController, type UpdateControlDurableState } from "../
 
 const BASE_URL = "https://update-control.example/";
 const ADMIN_MARKER = "x-update-control-internal-admin-operation-authenticated";
-const MICROSOFT_MARKER = "x-update-control-internal-microsoft-authenticated";
 const INTERNAL_VALUE = "v1";
+const TOTP_KEY = "e".repeat(64);
 
 class MemoryStorage implements OwnerOAuthStorage {
   readonly values = new Map<string, unknown>();
@@ -28,9 +28,8 @@ function makeController(storage = new MemoryStorage()) {
     storage,
     controller: new UpdateControlAuthController(state, {
       MCP_UPDATE_CONTROL_PUBLIC_URL: BASE_URL,
-      MICROSOFT_CLIENT_ID: "11111111-2222-4333-8444-555555555555",
-      MICROSOFT_TENANT: "organizations",
       UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: "rafael@example.com",
+      UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: TOTP_KEY,
     }),
   };
 }
@@ -78,55 +77,75 @@ async function beginMcpAuthorization(controller: UpdateControlAuthController, cl
     state: "chatgpt-state",
   }).toString();
   const response = await controller.fetch(new Request(url));
-  expect(response.status).toBe(302);
-  const state = new URL(response.headers.get("location")!).searchParams.get("state");
-  expect(state).toBeTruthy();
-  return { state: state!, verifier };
+  expect(response.status).toBe(200);
+  return { state: hiddenState(await response.text()), verifier };
 }
 
-async function completeMicrosoft(
+async function form(
   controller: UpdateControlAuthController,
-  state: string,
-  subject: string,
-  name: string,
-): Promise<Response> {
-  return controller.fetch(new Request(new URL("/_internal/microsoft/complete", BASE_URL), {
+  path: string,
+  fields: Record<string, string>,
+  cookie?: string,
+) {
+  return controller.fetch(new Request(new URL(path, BASE_URL), {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      [MICROSOFT_MARKER]: INTERNAL_VALUE,
+      "content-type": "application/x-www-form-urlencoded",
+      ...(cookie ? { cookie } : {}),
     },
-    body: JSON.stringify({
-      state,
-      subject,
-      displayName: name,
-      email: name.toLowerCase().replaceAll(" ", ".") + "@example.com",
-    }),
+    body: new URLSearchParams(fields),
   }));
 }
 
-async function createFirstAdmin(
+async function enroll(
   controller: UpdateControlAuthController,
-  subject = "microsoft-admin-subject",
-) {
-  await bootstrap(controller);
-  const clientId = await registerClient(controller);
-  const started = await beginMcpAuthorization(controller, clientId);
-  const completed = await completeMicrosoft(controller, started.state, subject, "Rafael");
-  expect(completed.status).toBe(302);
+  url: string,
+  email: string,
+  name: string,
+): Promise<{ recoveryCodes: string[]; secret: string }> {
+  const page = await controller.fetch(new Request(url));
+  expect(page.status).toBe(200);
+  const html = await page.text();
+  const state = hiddenState(html);
+  const provisioning = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
+  expect(provisioning).toContain("otpauth://totp/");
+  const secret = new URL(provisioning!).searchParams.get("secret")!;
+  const response = await form(controller, "/enroll", {
+    state,
+    email,
+    display_name: name,
+    code: await totp(secret, Date.now()),
+  });
+  expect(response.status).toBe(200);
+  const completed = await response.text();
+  return {
+    secret,
+    recoveryCodes: [...completed.matchAll(/data-recovery-code="([A-Z0-9-]+)"/gu)]
+      .map((match) => match[1]!),
+  };
 }
 
-async function adminLogin(controller: UpdateControlAuthController, subject: string) {
+async function createFirstAdmin(controller: UpdateControlAuthController) {
+  await bootstrap(controller);
+  return enroll(controller, new URL("/enroll", BASE_URL).href, "rafael@example.com", "Rafael");
+}
+
+async function adminLogin(
+  controller: UpdateControlAuthController,
+  code: string,
+): Promise<Response> {
   const begin = await controller.fetch(new Request(new URL("/admin/login", BASE_URL)));
-  expect(begin.status).toBe(302);
-  const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
-  const complete = await completeMicrosoft(controller, state, subject, "Rafael");
-  return complete;
+  expect(begin.status).toBe(200);
+  const state = hiddenState(await begin.text());
+  return form(controller, "/admin/login", {
+    state,
+    email: "rafael@example.com",
+    code,
+  });
 }
 
 function cookieFrom(response: Response): string {
-  const setCookie = response.headers.get("set-cookie") ?? "";
-  const pair = setCookie.split(";", 1)[0] ?? "";
+  const pair = (response.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
   expect(pair).toMatch(/^update_control_admin_session=/u);
   return pair;
 }
@@ -142,29 +161,13 @@ async function adminPage(controller: UpdateControlAuthController, cookie: string
   return { html, csrf: csrf! };
 }
 
-async function formPost(
-  controller: UpdateControlAuthController,
-  path: string,
-  cookie: string,
-  fields: Record<string, string>,
-) {
-  return controller.fetch(new Request(new URL(path, BASE_URL), {
-    method: "POST",
-    headers: {
-      cookie,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(fields),
-  }));
-}
-
-describe("Update Control multi-user admin surface", () => {
-  it("authenticates admin with Microsoft, invites a second user one-shot, and manages roles without HMAC", async () => {
+describe("Update Control multi-user local admin surface", () => {
+  it("authenticates admin locally, invites a second user one-shot, and manages roles without HMAC login", async () => {
     const { controller, storage } = makeController();
-    const adminSubject = "microsoft-admin-subject";
-    await createFirstAdmin(controller, adminSubject);
+    const adminEnrollment = await createFirstAdmin(controller);
+    expect(adminEnrollment.recoveryCodes).toHaveLength(8);
 
-    const login = await adminLogin(controller, adminSubject);
+    const login = await adminLogin(controller, adminEnrollment.recoveryCodes[0]!);
     expect(login.status).toBe(302);
     expect(login.headers.get("location")).toBe(new URL("/admin", BASE_URL).href);
     const cookie = cookieFrom(login);
@@ -173,49 +176,51 @@ describe("Update Control multi-user admin surface", () => {
     expect(firstPage.html).toContain("Rafael");
     expect(firstPage.html).toContain("admin");
 
-    const badCsrf = await formPost(controller, "/admin/invites", cookie, {
+    const badCsrf = await form(controller, "/admin/invites", {
       csrf: "x".repeat(43),
       role: "viewer",
-    });
+    }, cookie);
     expect(badCsrf.status).toBe(403);
-    expect(await badCsrf.json()).toEqual({ error: "csrf_rejected" });
 
-    const invite = await formPost(controller, "/admin/invites", cookie, {
+    const invite = await form(controller, "/admin/invites", {
       csrf: firstPage.csrf,
       role: "viewer",
-    });
+    }, cookie);
     expect(invite.status).toBe(200);
     const inviteHtml = await invite.text();
     const joinUrl = /href="(https:[^"]+\/join\?invite=[^"]+)"/u.exec(inviteHtml)?.[1];
     expect(joinUrl).toBeTruthy();
 
-    const join = await controller.fetch(new Request(joinUrl!));
-    expect(join.status).toBe(302);
-    const joinState = new URL(join.headers.get("location")!).searchParams.get("state")!;
-    const enrolled = await completeMicrosoft(controller, joinState, "microsoft-viewer-subject", "Felipe");
-    expect(enrolled.status).toBe(200);
-    expect(await enrolled.text()).toContain("viewer");
+    const viewerEnrollment = await enroll(controller, joinUrl!, "felipe@example.com", "Felipe");
+    expect(viewerEnrollment.recoveryCodes).toHaveLength(8);
 
     const replay = await controller.fetch(new Request(joinUrl!));
     expect(replay.status).toBe(400);
     expect(await replay.json()).toEqual({ error: "invalid_invite" });
 
-    const viewerLogin = await adminLogin(controller, "microsoft-viewer-subject");
+    const viewerLoginBegin = await controller.fetch(new Request(new URL("/admin/login", BASE_URL)));
+    const viewerState = hiddenState(await viewerLoginBegin.text());
+    const viewerLogin = await form(controller, "/admin/login", {
+      state: viewerState,
+      email: "felipe@example.com",
+      code: viewerEnrollment.recoveryCodes[0]!,
+    });
     expect(viewerLogin.status).toBe(403);
     expect(await viewerLogin.json()).toEqual({ error: "admin_required" });
 
     const viewer = [...storage.values.values()].find((value) =>
       typeof value === "object" && value !== null &&
-      "providerSubject" in value && value.providerSubject === "microsoft-viewer-subject"
+      "email" in value && value.email === "felipe@example.com" &&
+      "provider" in value && value.provider === "local-totp"
     ) as { id: string } | undefined;
     expect(viewer?.id).toMatch(/^usr_/u);
 
     const refreshedPage = await adminPage(controller, cookie);
-    const roleChanged = await formPost(
+    const roleChanged = await form(
       controller,
       "/admin/users/" + viewer!.id + "/role",
-      cookie,
       { csrf: refreshedPage.csrf, role: "operator" },
+      cookie,
     );
     expect(roleChanged.status).toBe(303);
     expect((storage.values.get("update-control:identity:user:" + viewer!.id) as { role: string }).role)
@@ -224,30 +229,30 @@ describe("Update Control multi-user admin surface", () => {
 
   it("cannot demote or revoke the final admin", async () => {
     const { controller, storage } = makeController();
-    const adminSubject = "microsoft-only-admin";
-    await createFirstAdmin(controller, adminSubject);
-    const login = await adminLogin(controller, adminSubject);
+    const adminEnrollment = await createFirstAdmin(controller);
+    const login = await adminLogin(controller, adminEnrollment.recoveryCodes[0]!);
     const cookie = cookieFrom(login);
     const page = await adminPage(controller, cookie);
     const admin = [...storage.values.values()].find((value) =>
       typeof value === "object" && value !== null &&
-      "providerSubject" in value && value.providerSubject === adminSubject
+      "email" in value && value.email === "rafael@example.com" &&
+      "provider" in value && value.provider === "local-totp"
     ) as { id: string } | undefined;
 
-    const demote = await formPost(
+    const demote = await form(
       controller,
       "/admin/users/" + admin!.id + "/role",
-      cookie,
       { csrf: page.csrf, role: "viewer" },
+      cookie,
     );
     expect(demote.status).toBe(409);
     expect(await demote.json()).toEqual({ error: "last_admin_required" });
 
-    const revoke = await formPost(
+    const revoke = await form(
       controller,
       "/admin/users/" + admin!.id + "/revoke",
-      cookie,
       { csrf: page.csrf },
+      cookie,
     );
     expect(revoke.status).toBe(409);
     expect(await revoke.json()).toEqual({ error: "last_admin_required" });
@@ -255,26 +260,28 @@ describe("Update Control multi-user admin surface", () => {
 
   it("revoking an enrolled user immediately invalidates that user's existing MCP access token", async () => {
     const { controller, storage } = makeController();
-    const adminSubject = "microsoft-admin-for-revoke";
-    const viewerSubject = "microsoft-viewer-for-revoke";
-    await createFirstAdmin(controller, adminSubject);
-    const login = await adminLogin(controller, adminSubject);
+    const adminEnrollment = await createFirstAdmin(controller);
+    const login = await adminLogin(controller, adminEnrollment.recoveryCodes[0]!);
     const cookie = cookieFrom(login);
     let page = await adminPage(controller, cookie);
 
-    const invite = await formPost(controller, "/admin/invites", cookie, {
+    const invite = await form(controller, "/admin/invites", {
       csrf: page.csrf,
       role: "viewer",
-    });
+    }, cookie);
     const joinUrl = /href="(https:[^"]+\/join\?invite=[^"]+)"/u.exec(await invite.text())?.[1]!;
-    const join = await controller.fetch(new Request(joinUrl));
-    const joinState = new URL(join.headers.get("location")!).searchParams.get("state")!;
-    expect((await completeMicrosoft(controller, joinState, viewerSubject, "Felipe")).status).toBe(200);
+    const viewerEnrollment = await enroll(controller, joinUrl, "felipe@example.com", "Felipe");
 
     const clientId = await registerClient(controller);
     const started = await beginMcpAuthorization(controller, clientId);
-    const authorized = await completeMicrosoft(controller, started.state, viewerSubject, "Felipe");
+    const authorized = await form(controller, "/authorize", {
+      state: started.state,
+      email: "felipe@example.com",
+      code: viewerEnrollment.recoveryCodes[0]!,
+    });
+    expect(authorized.status).toBe(302);
     const code = new URL(authorized.headers.get("location")!).searchParams.get("code")!;
+
     const tokenResponse = await controller.fetch(new Request(new URL("/token", BASE_URL), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -300,14 +307,15 @@ describe("Update Control multi-user admin surface", () => {
 
     const viewer = [...storage.values.values()].find((value) =>
       typeof value === "object" && value !== null &&
-      "providerSubject" in value && value.providerSubject === viewerSubject
+      "email" in value && value.email === "felipe@example.com" &&
+      "provider" in value && value.provider === "local-totp"
     ) as { id: string } | undefined;
     page = await adminPage(controller, cookie);
-    const revoked = await formPost(
+    const revoked = await form(
       controller,
       "/admin/users/" + viewer!.id + "/revoke",
-      cookie,
       { csrf: page.csrf },
+      cookie,
     );
     expect(revoked.status).toBe(303);
 
@@ -323,9 +331,64 @@ describe("Update Control multi-user admin surface", () => {
   });
 });
 
+function hiddenState(html: string): string {
+  const state = /name="state" value="([^"]+)"/u.exec(html)?.[1];
+  expect(state).toBeTruthy();
+  return state!;
+}
+
+async function totp(secret: string, nowMs: number): Promise<string> {
+  const keyBytes = decodeBase32(secret);
+  const counter = Math.floor(nowMs / 30_000);
+  const message = new Uint8Array(8);
+  let value = BigInt(counter);
+  for (let index = 7; index >= 0; index -= 1) {
+    message[index] = Number(value & 0xffn);
+    value >>= 8n;
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    toArrayBuffer(keyBytes),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, message));
+  const offset = (mac[mac.length - 1] ?? 0) & 0x0f;
+  const binary = (((mac[offset] ?? 0) & 0x7f) << 24) |
+    ((mac[offset + 1] ?? 0) << 16) |
+    ((mac[offset + 2] ?? 0) << 8) |
+    (mac[offset + 3] ?? 0);
+  return String(binary % 1_000_000).padStart(6, "0");
+}
+
+function decodeBase32(value: string): Uint8Array {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let accumulator = 0;
+  const bytes: number[] = [];
+  for (const char of value) {
+    const digit = alphabet.indexOf(char);
+    if (digit < 0) throw new Error("invalid base32");
+    accumulator = (accumulator << 5) | digit;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((accumulator >>> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
 async function sha256Base64Url(value: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   let binary = "";
   for (const byte of digest) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 }

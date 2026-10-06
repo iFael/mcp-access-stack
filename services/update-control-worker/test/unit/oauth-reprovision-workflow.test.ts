@@ -70,17 +70,18 @@ describe("Update Control operational workflows", () => {
     expect(definition.jobs.reprovision.environment.name).toBe("update-control-production");
   });
 
-  it("normal deploy provisions Microsoft Identity and the administrative HMAC without legacy owner secrets", () => {
+  it("normal deploy provisions local TOTP encryption and the administrative HMAC without external identity credentials", () => {
     const definition = workflow("../../../../.github/workflows/update-control-deploy.yml");
     const deploy = definition.jobs.deploy;
     const serialized = JSON.stringify(deploy);
     expect(serialized).toContain("UPDATE_CONTROL_ADMIN_HMAC_KEY");
-    expect(serialized).toContain("MICROSOFT_CLIENT_SECRET");
-    expect(serialized).toContain("MICROSOFT_CLIENT_ID");
-    expect(serialized).toContain("MICROSOFT_TENANT");
+    expect(serialized).toContain("UPDATE_CONTROL_TOTP_ENCRYPTION_KEY");
     expect(serialized).toContain("UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL");
     expect(serialized).toContain("wrangler secret put UPDATE_CONTROL_ADMIN_HMAC_KEY");
-    expect(serialized).toContain("wrangler secret put MICROSOFT_CLIENT_SECRET");
+    expect(serialized).toContain("wrangler secret put UPDATE_CONTROL_TOTP_ENCRYPTION_KEY");
+    expect(serialized).not.toContain("MICROSOFT_CLIENT_SECRET");
+    expect(serialized).not.toContain("MICROSOFT_CLIENT_ID");
+    expect(serialized).not.toContain("MICROSOFT_TENANT");
     expect(serialized).not.toContain("MCP_OWNER_TOKEN");
     expect(serialized).not.toContain("UPDATE_CONTROL_OWNER_TOKEN_NEXT");
     expect(serialized).not.toContain("UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");

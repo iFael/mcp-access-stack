@@ -5,26 +5,38 @@ import {
   readBearerToken,
   type OwnerOAuthStorage,
 } from "@mcp-access-stack/mcp-owner-auth";
+import {
+  isTotpEncryptionKey,
+  RECOVERY_CODE_COUNT,
+  TOTP_DIGITS,
+  TOTP_PERIOD_SECONDS,
+  UPDATE_CONTROL_TOTP_ISSUER,
+} from "./local-totp.js";
 
 const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
-const MICROSOFT_PENDING_TTL_MS = 10 * 60 * 1000;
+const LOGIN_PENDING_TTL_MS = 10 * 60 * 1000;
+const ENROLLMENT_PENDING_TTL_MS = 10 * 60 * 1000;
 const BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
 const INVITE_TTL_MS = 30 * 60 * 1000;
 const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const TOTP_MAX_FAILURES = 5;
+const TOTP_LOCK_MS = 5 * 60 * 1000;
 const MAX_CLIENTS = 256;
 const MAX_SCOPES = 64;
 
 const USER_IDS_KEY = "update-control:identity:user-ids:v1";
 const USER_PREFIX = "update-control:identity:user:";
-const MICROSOFT_SUBJECT_PREFIX = "update-control:identity:microsoft-subject:";
+const EMAIL_PREFIX = "update-control:identity:email:";
+const CREDENTIAL_PREFIX = "update-control:identity:totp:";
 const BOOTSTRAP_ACTIVE_KEY = "update-control:identity:bootstrap:active";
 const BOOTSTRAP_OPERATION_PREFIX = "update-control:identity:bootstrap:operation:";
 const INVITE_PREFIX = "update-control:identity:invite:";
+const ENROLLMENT_PREFIX = "update-control:identity:enrollment:";
 export const UPDATE_CONTROL_OAUTH_STORAGE_PREFIX = "update-control:oauth:";
 const ADMIN_SESSION_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "admin-session:";
 const CLIENT_COUNT_KEY = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "client-count";
 const CLIENT_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "client:";
-const PENDING_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "microsoft-pending:";
+const LOGIN_PENDING_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "login-pending:";
 const CODE_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "code:";
 const REFRESH_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "refresh:";
 const REVOKED_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "revoked:";
@@ -36,11 +48,10 @@ export type UpdateControlUser = {
   version: 1;
   id: string;
   displayName: string;
-  email?: string;
+  email: string;
   role: UpdateControlRole;
   status: "active" | "revoked";
-  provider: "microsoft";
-  providerSubject: string;
+  provider: "local-totp";
   createdAt: string;
   updatedAt: string;
 };
@@ -55,11 +66,10 @@ type OAuthClient = {
   response_types: string[];
 };
 
-type PendingMicrosoftAuthorization = {
+type PendingLogin = {
   version: 1;
   state: string;
-  kind: "mcp" | "admin" | "join";
-  microsoftCodeVerifier: string;
+  kind: "mcp" | "admin";
   expiresAtMs: number;
   clientId?: string;
   redirectUri?: string;
@@ -67,6 +77,15 @@ type PendingMicrosoftAuthorization = {
   scopes?: string[];
   resource?: string;
   clientState?: string;
+};
+
+type PendingEnrollment = {
+  version: 1;
+  state: string;
+  kind: "bootstrap" | "join";
+  role: UpdateControlRole;
+  encryptedSecret: EncryptedSecret;
+  expiresAtMs: number;
   inviteHash?: string;
 };
 
@@ -121,6 +140,24 @@ type AdminSessionRecord = {
   expiresAt: string;
 };
 
+type EncryptedSecret = {
+  version: 1;
+  iv: string;
+  ciphertext: string;
+};
+
+type TotpCredential = {
+  version: 1;
+  userId: string;
+  encryptedSecret: EncryptedSecret;
+  lastAcceptedCounter?: number;
+  recoveryCodeHashes: string[];
+  failedAttempts: number;
+  lockedUntilMs?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type AccessClaims = {
   iss: string;
   aud: string;
@@ -136,9 +173,8 @@ type AccessClaims = {
 
 export interface UpdateControlIdentityOAuthConfig {
   publicBaseUrl: URL;
-  microsoftClientId: string;
-  microsoftTenant: string;
   bootstrapAdminEmail: string;
+  totpEncryptionKey: string;
   scopes: string[];
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
@@ -150,34 +186,26 @@ export interface UpdateControlIdentityStorage extends OwnerOAuthStorage {
   deleteMany(keys: string[]): Promise<number>;
 }
 
-export type MicrosoftIdentityCompletion = {
-  state: string;
-  subject: string;
-  displayName: string;
-  email?: string;
-};
-
 export class UpdateControlIdentityOAuth {
   private readonly mcpUrl: URL;
   private readonly resourceMetadataUrl: URL;
   private readonly challenge: string;
+  private readonly encryptionKeyBytes: Uint8Array;
 
   constructor(
     private readonly storage: UpdateControlIdentityStorage,
     private readonly config: UpdateControlIdentityOAuthConfig,
   ) {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(config.microsoftClientId)) {
-      throw new Error("MICROSOFT_CLIENT_ID must be a GUID.");
-    }
-    if (!isMicrosoftTenant(config.microsoftTenant)) {
-      throw new Error("MICROSOFT_TENANT must be common, organizations, consumers, or a tenant GUID.");
-    }
     if (!isBootstrapAdminEmail(config.bootstrapAdminEmail)) {
       throw new Error("UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL is invalid.");
+    }
+    if (!isTotpEncryptionKey(config.totpEncryptionKey)) {
+      throw new Error("UPDATE_CONTROL_TOTP_ENCRYPTION_KEY must be 64 lowercase hex characters.");
     }
     if (config.scopes.length === 0 || config.scopes.length > MAX_SCOPES) {
       throw new Error("Update Control OAuth scopes are invalid.");
     }
+    this.encryptionKeyBytes = decodeHex(config.totpEncryptionKey);
     this.mcpUrl = new URL("/mcp", config.publicBaseUrl);
     this.resourceMetadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", config.publicBaseUrl);
     this.challenge = createBearerChallenge(this.resourceMetadataUrl, config.scopes[0] ?? "update:read");
@@ -212,7 +240,7 @@ export class UpdateControlIdentityOAuth {
     }
     if (url.pathname === "/register" && request.method === "POST") return this.register(request);
     if (url.pathname === "/authorize" && (request.method === "GET" || request.method === "POST")) {
-      return this.authorize(request);
+      return request.method === "GET" ? this.beginAuthorization(request) : this.completeLogin(request, "mcp");
     }
     if (url.pathname === "/token" && request.method === "POST") return this.token(request);
     if (url.pathname === "/revoke" && request.method === "POST") return this.revoke(request);
@@ -265,8 +293,7 @@ export class UpdateControlIdentityOAuth {
       }
       return jsonResponse({ operationId, status: existing.status });
     }
-    const userIds = await this.userIds();
-    if (userIds.length > 0) {
+    if ((await this.userIds()).length > 0) {
       return jsonResponse({ operationId, status: "not_executed", error: "bootstrap_not_required" }, 409);
     }
     const active = await this.storage.get<BootstrapOperation>(BOOTSTRAP_ACTIVE_KEY);
@@ -288,9 +315,7 @@ export class UpdateControlIdentityOAuth {
 
   async readBootstrap(operationId: string): Promise<Response> {
     const operation = await this.storage.get<BootstrapOperation>(BOOTSTRAP_OPERATION_PREFIX + operationId);
-    if (!isBootstrapOperation(operation)) {
-      return jsonResponse({ operationId, status: "not_executed" });
-    }
+    if (!isBootstrapOperation(operation)) return jsonResponse({ operationId, status: "not_executed" });
     if (operation.status === "ready" && Date.parse(operation.expiresAt) <= Date.now()) {
       const expired = { ...operation, status: "expired" as const };
       await this.storage.put(BOOTSTRAP_OPERATION_PREFIX + operationId, expired);
@@ -301,8 +326,109 @@ export class UpdateControlIdentityOAuth {
     return jsonResponse({ operationId, status: operation.status });
   }
 
+  async beginBootstrapEnrollment(): Promise<Response> {
+    if ((await this.userIds()).length !== 0) return jsonResponse({ error: "bootstrap_not_required" }, 409);
+    const bootstrap = await this.storage.get<BootstrapOperation>(BOOTSTRAP_ACTIVE_KEY);
+    if (!isBootstrapOperation(bootstrap) || bootstrap.status !== "ready" ||
+        Date.parse(bootstrap.expiresAt) <= Date.now()) {
+      return jsonResponse({ error: "bootstrap_not_ready" }, 403);
+    }
+    return this.beginEnrollment({ kind: "bootstrap", role: "admin" });
+  }
+
+  async completeEnrollment(request: Request): Promise<Response> {
+    const fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
+    const state = fields.get("state") ?? "";
+    const email = normalizeEmail(fields.get("email") ?? "");
+    const displayName = (fields.get("display_name") ?? "").trim();
+    const code = normalizeVerificationCode(fields.get("code") ?? "");
+    if (!isOpaqueToken(state) || !isBootstrapAdminEmail(email) ||
+        !validBoundedText(displayName, 1, 200) || !code) {
+      return jsonResponse({ error: "invalid_enrollment" }, 400);
+    }
+    const key = ENROLLMENT_PREFIX + state;
+    const pending = await this.storage.get<PendingEnrollment>(key);
+    if (!isPendingEnrollment(pending) || pending.expiresAtMs <= Date.now()) {
+      await this.storage.delete(key);
+      return jsonResponse({ error: "enrollment_expired" }, 400);
+    }
+    if (await this.findUserByEmail(email)) return jsonResponse({ error: "identity_already_enrolled" }, 409);
+
+    if (pending.kind === "bootstrap") {
+      const bootstrap = await this.storage.get<BootstrapOperation>(BOOTSTRAP_ACTIVE_KEY);
+      if (!isBootstrapOperation(bootstrap) || bootstrap.status !== "ready" ||
+          Date.parse(bootstrap.expiresAt) <= Date.now() ||
+          (await this.userIds()).length !== 0) {
+        return jsonResponse({ error: "bootstrap_not_ready" }, 403);
+      }
+      if (email !== normalizeEmail(this.config.bootstrapAdminEmail)) {
+        return jsonResponse({ error: "bootstrap_identity_mismatch" }, 403);
+      }
+    } else {
+      if (!pending.inviteHash) return jsonResponse({ error: "invalid_invite" }, 400);
+      const invitation = await this.storage.get<InvitationRecord>(INVITE_PREFIX + pending.inviteHash);
+      if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now() ||
+          invitation.role !== pending.role) {
+        return jsonResponse({ error: "invalid_invite" }, 400);
+      }
+    }
+
+    let secret: Uint8Array;
+    try {
+      secret = await this.decryptSecret(pending.encryptedSecret, "enrollment:" + state);
+    } catch {
+      return jsonResponse({ error: "enrollment_unavailable" }, 503);
+    }
+    const acceptedCounter = await verifyTotp(secret, code, undefined);
+    if (acceptedCounter === null) return jsonResponse({ error: "invalid_credentials" }, 401);
+
+    const user = await this.createLocalUser(email, displayName, pending.role);
+    const recoveryCodes = generateRecoveryCodes();
+    const credential: TotpCredential = {
+      version: 1,
+      userId: user.id,
+      encryptedSecret: await this.encryptSecret(secret, "user:" + user.id),
+      lastAcceptedCounter: acceptedCounter,
+      recoveryCodeHashes: await Promise.all(recoveryCodes.map((value) => sha256Base64Url(normalizeRecoveryCode(value)))),
+      failedAttempts: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.storage.put(CREDENTIAL_PREFIX + user.id, credential);
+    await this.storage.delete(key);
+
+    if (pending.kind === "join" && pending.inviteHash) {
+      await this.storage.delete(INVITE_PREFIX + pending.inviteHash);
+    }
+    if (pending.kind === "bootstrap") {
+      const bootstrap = await this.storage.get<BootstrapOperation>(BOOTSTRAP_ACTIVE_KEY);
+      if (isBootstrapOperation(bootstrap)) {
+        const completedAt = new Date().toISOString();
+        await this.storage.put(BOOTSTRAP_OPERATION_PREFIX + bootstrap.operationId, {
+          ...bootstrap,
+          status: "completed",
+          completedAt,
+        } satisfies BootstrapOperation);
+        await this.storage.delete(BOOTSTRAP_ACTIVE_KEY);
+      }
+    }
+
+    return htmlResponse(enrollmentCompletedPage(user, recoveryCodes));
+  }
+
   async beginAdminLogin(): Promise<Response> {
-    return this.beginMicrosoftFlow({ kind: "admin" });
+    const state = randomToken();
+    await this.storage.put(LOGIN_PENDING_PREFIX + state, {
+      version: 1,
+      state,
+      kind: "admin",
+      expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
+    } satisfies PendingLogin);
+    return htmlResponse(loginPage(state, "/admin/login", "Administrator sign in"));
+  }
+
+  async completeAdminLogin(request: Request): Promise<Response> {
+    return this.completeLogin(request, "admin");
   }
 
   async beginInviteJoin(inviteToken: string): Promise<Response> {
@@ -312,7 +438,7 @@ export class UpdateControlIdentityOAuth {
     if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now()) {
       return jsonResponse({ error: "invalid_invite" }, 400);
     }
-    return this.beginMicrosoftFlow({ kind: "join", inviteHash });
+    return this.beginEnrollment({ kind: "join", role: invitation.role, inviteHash });
   }
 
   async renderAdmin(request: Request): Promise<Response> {
@@ -323,15 +449,13 @@ export class UpdateControlIdentityOAuth {
         headers: { location: new URL("/admin/login", this.config.publicBaseUrl).href, "cache-control": "no-store" },
       });
     }
-    const users = await this.listUsers();
-    return htmlResponse(adminPage(users, context.session.csrfToken));
+    return htmlResponse(adminPage(await this.listUsers(), context.session.csrfToken));
   }
 
   async createInvite(request: Request): Promise<Response> {
     const context = await this.requireAdminPost(request);
     if (context instanceof Response) return context;
-    const fields = context.fields;
-    const role = fields.get("role");
+    const role = context.fields.get("role");
     if (!isRole(role)) return jsonResponse({ error: "invalid_role" }, 400);
     const token = randomToken();
     const now = new Date().toISOString();
@@ -358,8 +482,11 @@ export class UpdateControlIdentityOAuth {
     if (target.role === "admin" && role !== "admin" && await this.activeAdminCount() <= 1) {
       return jsonResponse({ error: "last_admin_required" }, 409);
     }
-    const updated = { ...target, role, updatedAt: new Date().toISOString() } satisfies UpdateControlUser;
-    await this.storage.put(USER_PREFIX + target.id, updated);
+    await this.storage.put(USER_PREFIX + target.id, {
+      ...target,
+      role,
+      updatedAt: new Date().toISOString(),
+    } satisfies UpdateControlUser);
     return new Response(null, { status: 303, headers: { location: "/admin", "cache-control": "no-store" } });
   }
 
@@ -396,125 +523,13 @@ export class UpdateControlIdentityOAuth {
     });
   }
 
-  async getPendingMicrosoft(state: string): Promise<Response> {
-    if (!isOpaqueToken(state)) return jsonResponse({ error: "invalid_state" }, 400);
-    const pending = await this.storage.get<PendingMicrosoftAuthorization>(PENDING_PREFIX + state);
-    if (!isPendingAuthorization(pending) || pending.expiresAtMs <= Date.now()) {
-      return jsonResponse({ error: "authorization_expired" }, 400);
-    }
-    return jsonResponse({ state, codeVerifier: pending.microsoftCodeVerifier });
-  }
-
-  async completeMicrosoftIdentity(input: MicrosoftIdentityCompletion): Promise<Response> {
-    if (
-      !isOpaqueToken(input.state) ||
-      !validBoundedText(input.subject, 1, 512) ||
-      !validBoundedText(input.displayName, 1, 200) ||
-      (input.email !== undefined && !validBoundedText(input.email, 3, 320))
-    ) {
-      return jsonResponse({ error: "invalid_identity" }, 400);
-    }
-    const pendingKey = PENDING_PREFIX + input.state;
-    const pending = await this.storage.get<PendingMicrosoftAuthorization>(pendingKey);
-    if (!isPendingAuthorization(pending) || pending.expiresAtMs <= Date.now()) {
-      return jsonResponse({ error: "authorization_expired" }, 400);
-    }
-
-    let user = await this.findMicrosoftUser(input.subject);
-    if (!user) {
-      if (pending.kind === "join") {
-        if (!pending.inviteHash) {
-          await this.storage.delete(pendingKey);
-          return jsonResponse({ error: "invalid_invite" }, 400);
-        }
-        const invitation = await this.storage.get<InvitationRecord>(INVITE_PREFIX + pending.inviteHash);
-        if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now()) {
-          await this.storage.delete(pendingKey);
-          return jsonResponse({ error: "invalid_invite" }, 400);
-        }
-        user = await this.createMicrosoftUser(input, invitation.role);
-        await this.storage.delete(INVITE_PREFIX + pending.inviteHash);
-      } else {
-        const userIds = await this.userIds();
-        const bootstrap = await this.storage.get<BootstrapOperation>(BOOTSTRAP_ACTIVE_KEY);
-        if (
-          userIds.length !== 0 ||
-          !isBootstrapOperation(bootstrap) ||
-          bootstrap.status !== "ready" ||
-          Date.parse(bootstrap.expiresAt) <= Date.now()
-        ) {
-          await this.storage.delete(pendingKey);
-          return jsonResponse({ error: "identity_not_enrolled" }, 403);
-        }
-        if (!input.email || normalizeEmail(input.email) !== normalizeEmail(this.config.bootstrapAdminEmail)) {
-          await this.storage.delete(pendingKey);
-          return jsonResponse({ error: "bootstrap_identity_mismatch" }, 403);
-        }
-        user = await this.createMicrosoftUser(input, "admin");
-        const completedAt = new Date().toISOString();
-        const completed: BootstrapOperation = {
-          ...bootstrap,
-          status: "completed",
-          completedAt,
-        };
-        await this.storage.put(BOOTSTRAP_OPERATION_PREFIX + bootstrap.operationId, completed);
-        await this.storage.delete(BOOTSTRAP_ACTIVE_KEY);
-      }
-    } else if (pending.kind === "join") {
-      await this.storage.delete(pendingKey);
-      return jsonResponse({ error: "identity_already_enrolled" }, 409);
-    }
-
-    if (user.status !== "active") {
-      await this.storage.delete(pendingKey);
-      return jsonResponse({ error: "identity_disabled" }, 403);
-    }
-
-    if (pending.kind === "admin") {
-      await this.storage.delete(pendingKey);
-      if (user.role !== "admin") return jsonResponse({ error: "admin_required" }, 403);
-      return this.createAdminSession(user);
-    }
-
-    if (pending.kind === "join") {
-      await this.storage.delete(pendingKey);
-      return htmlResponse(`<!doctype html><html><body><main><h1>Access enabled</h1><p>${htmlEscape(user.displayName)} is enrolled as ${htmlEscape(user.role)}.</p><p>You can now connect MCP V3 Update Center in ChatGPT.</p></main></body></html>`);
-    }
-
-    if (!pending.clientId || !pending.redirectUri || !pending.codeChallenge ||
-        !pending.scopes || !pending.resource) {
-      await this.storage.delete(pendingKey);
-      return jsonResponse({ error: "authorization_unavailable" }, 503);
-    }
-    const code = "code-" + randomToken();
-    await this.storage.put(CODE_PREFIX + await sha256Base64Url(code), {
-      clientId: pending.clientId,
-      redirectUri: pending.redirectUri,
-      codeChallenge: pending.codeChallenge,
-      scopes: [...pending.scopes],
-      resource: pending.resource,
-      expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS,
-      userId: user.id,
-    } satisfies AuthorizationCodeRecord);
-    await this.storage.delete(pendingKey);
-
-    const target = new URL(pending.redirectUri);
-    target.searchParams.set("code", code);
-    if (pending.clientState) target.searchParams.set("state", pending.clientState);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: target.href,
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-      },
-    });
-  }
-
   async deleteOAuthState(limit = 4096): Promise<{ deleted: number; complete: boolean }> {
     let deleted = 0;
     while (deleted < limit) {
-      const batch = await this.storage.listPrefix(UPDATE_CONTROL_OAUTH_STORAGE_PREFIX, Math.min(256, limit - deleted));
+      const batch = await this.storage.listPrefix(
+        UPDATE_CONTROL_OAUTH_STORAGE_PREFIX,
+        Math.min(256, limit - deleted),
+      );
       const keys = [...batch.keys()];
       if (keys.length === 0) return { deleted, complete: true };
       deleted += await this.storage.deleteMany(keys);
@@ -532,27 +547,94 @@ export class UpdateControlIdentityOAuth {
     return users;
   }
 
-  private async beginMicrosoftFlow(
-    input: { kind: "admin" } | { kind: "join"; inviteHash: string },
+  private async beginEnrollment(
+    input: { kind: "bootstrap"; role: "admin" } | { kind: "join"; role: UpdateControlRole; inviteHash: string },
   ): Promise<Response> {
     const state = randomToken();
-    const microsoftCodeVerifier = randomToken();
-    const pending: PendingMicrosoftAuthorization = {
+    const secret = new Uint8Array(20);
+    crypto.getRandomValues(secret);
+    const pending: PendingEnrollment = {
       version: 1,
       state,
       kind: input.kind,
-      microsoftCodeVerifier,
-      expiresAtMs: Date.now() + MICROSOFT_PENDING_TTL_MS,
+      role: input.role,
+      encryptedSecret: await this.encryptSecret(secret, "enrollment:" + state),
+      expiresAtMs: Date.now() + ENROLLMENT_PENDING_TTL_MS,
       ...(input.kind === "join" ? { inviteHash: input.inviteHash } : {}),
     };
-    await this.storage.put(PENDING_PREFIX + state, pending);
-    const target = microsoftAuthorizeUrl(
-      this.config.microsoftTenant,
-      this.config.microsoftClientId,
-      new URL("/auth/microsoft/callback", this.config.publicBaseUrl).href,
+    await this.storage.put(ENROLLMENT_PREFIX + state, pending);
+    const provisioningUri = createProvisioningUri(encodeBase32(secret));
+    return htmlResponse(enrollmentPage(
       state,
-      await sha256Base64Url(microsoftCodeVerifier),
-    );
+      provisioningUri,
+      input.kind === "bootstrap" ? normalizeEmail(this.config.bootstrapAdminEmail) : "",
+      input.kind === "bootstrap",
+    ));
+  }
+
+  private async beginAuthorization(request: Request): Promise<Response> {
+    const fields = new URL(request.url).searchParams;
+    const validated = await this.validateAuthorizationRequest(fields);
+    if (validated instanceof Response) return validated;
+    const state = randomToken();
+    const pending: PendingLogin = {
+      version: 1,
+      state,
+      kind: "mcp",
+      clientId: validated.clientId,
+      redirectUri: validated.redirectUri,
+      codeChallenge: validated.codeChallenge,
+      scopes: validated.scopes,
+      resource: validated.resource,
+      ...(validated.clientState ? { clientState: validated.clientState } : {}),
+      expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
+    };
+    await this.storage.put(LOGIN_PENDING_PREFIX + state, pending);
+    return htmlResponse(loginPage(state, "/authorize", "Authorize MCP V3 Update Center"));
+  }
+
+  private async completeLogin(request: Request, expectedKind: "mcp" | "admin"): Promise<Response> {
+    const fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
+    const state = fields.get("state") ?? "";
+    const email = normalizeEmail(fields.get("email") ?? "");
+    const code = normalizeVerificationCode(fields.get("code") ?? "");
+    if (!isOpaqueToken(state) || !isBootstrapAdminEmail(email) || !code) {
+      return jsonResponse({ error: "invalid_credentials" }, 401);
+    }
+    const pendingKey = LOGIN_PENDING_PREFIX + state;
+    const pending = await this.storage.get<PendingLogin>(pendingKey);
+    if (!isPendingLogin(pending) || pending.kind !== expectedKind || pending.expiresAtMs <= Date.now()) {
+      await this.storage.delete(pendingKey);
+      return jsonResponse({ error: "authorization_expired" }, 400);
+    }
+    const user = await this.authenticateLocalUser(email, code);
+    if (!user || user.status !== "active") return jsonResponse({ error: "invalid_credentials" }, 401);
+
+    if (expectedKind === "admin") {
+      await this.storage.delete(pendingKey);
+      if (user.role !== "admin") return jsonResponse({ error: "admin_required" }, 403);
+      return this.createAdminSession(user);
+    }
+
+    if (!pending.clientId || !pending.redirectUri || !pending.codeChallenge ||
+        !pending.scopes || !pending.resource) {
+      await this.storage.delete(pendingKey);
+      return jsonResponse({ error: "authorization_unavailable" }, 503);
+    }
+    const codeToken = "code-" + randomToken();
+    await this.storage.put(CODE_PREFIX + await sha256Base64Url(codeToken), {
+      clientId: pending.clientId,
+      redirectUri: pending.redirectUri,
+      codeChallenge: pending.codeChallenge,
+      scopes: [...pending.scopes],
+      resource: pending.resource,
+      expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS,
+      userId: user.id,
+    } satisfies AuthorizationCodeRecord);
+    await this.storage.delete(pendingKey);
+    const target = new URL(pending.redirectUri);
+    target.searchParams.set("code", codeToken);
+    if (pending.clientState) target.searchParams.set("state", pending.clientState);
     return new Response(null, {
       status: 302,
       headers: {
@@ -561,6 +643,102 @@ export class UpdateControlIdentityOAuth {
         "referrer-policy": "no-referrer",
       },
     });
+  }
+
+  private async validateAuthorizationRequest(fields: URLSearchParams): Promise<
+    Response | {
+      clientId: string;
+      redirectUri: string;
+      codeChallenge: string;
+      scopes: string[];
+      resource: string;
+      clientState?: string;
+    }
+  > {
+    const clientId = fields.get("client_id") ?? "";
+    const client = await this.storage.get<OAuthClient>(CLIENT_PREFIX + clientId);
+    if (!isOAuthClient(client)) return oauthError("invalid_request", 400);
+    const redirectUri = fields.get("redirect_uri") ?? "";
+    const codeChallenge = fields.get("code_challenge") ?? "";
+    const resource = fields.get("resource") ?? "";
+    const scopes = parseScopes(fields.get("scope") ?? this.config.scopes.join(" "));
+    if (
+      fields.get("response_type") !== "code" ||
+      fields.get("code_challenge_method") !== "S256" ||
+      !/^[A-Za-z0-9_-]{43,128}$/u.test(codeChallenge) ||
+      !client.redirect_uris.includes(redirectUri) ||
+      resource !== this.mcpUrl.href ||
+      scopes.length === 0 ||
+      !scopes.every((scope) => this.config.scopes.includes(scope))
+    ) {
+      return oauthError("invalid_request", 400);
+    }
+    return {
+      clientId,
+      redirectUri,
+      codeChallenge,
+      scopes,
+      resource,
+      ...(fields.get("state") ? { clientState: fields.get("state")! } : {}),
+    };
+  }
+
+  private async authenticateLocalUser(email: string, code: string): Promise<UpdateControlUser | null> {
+    const user = await this.findUserByEmail(email);
+    if (!user || user.status !== "active") return null;
+    const key = CREDENTIAL_PREFIX + user.id;
+    const credential = await this.storage.get<TotpCredential>(key);
+    if (!isTotpCredential(credential) || credential.userId !== user.id) return null;
+    if (credential.lockedUntilMs && credential.lockedUntilMs > Date.now()) return null;
+
+    let success = false;
+    let acceptedCounter: number | undefined;
+    let recoveryIndex = -1;
+    if (/^\d{6}$/u.test(code)) {
+      try {
+        const secret = await this.decryptSecret(credential.encryptedSecret, "user:" + user.id);
+        const counter = await verifyTotp(secret, code, credential.lastAcceptedCounter);
+        if (counter !== null) {
+          success = true;
+          acceptedCounter = counter;
+        }
+      } catch {
+        return null;
+      }
+    } else if (isRecoveryCode(code)) {
+      const targetHash = await sha256Base64Url(normalizeRecoveryCode(code));
+      for (let index = 0; index < credential.recoveryCodeHashes.length; index += 1) {
+        if (await constantTimeTextEquals(targetHash, credential.recoveryCodeHashes[index] ?? "")) {
+          recoveryIndex = index;
+          success = true;
+          break;
+        }
+      }
+    }
+
+    if (!success) {
+      const failures = credential.failedAttempts + 1;
+      await this.storage.put(key, {
+        ...credential,
+        failedAttempts: failures >= TOTP_MAX_FAILURES ? 0 : failures,
+        ...(failures >= TOTP_MAX_FAILURES ? { lockedUntilMs: Date.now() + TOTP_LOCK_MS } : {}),
+        updatedAt: new Date().toISOString(),
+      } satisfies TotpCredential);
+      return null;
+    }
+
+    const hashes = [...credential.recoveryCodeHashes];
+    if (recoveryIndex >= 0) hashes.splice(recoveryIndex, 1);
+    const updatedCredential: TotpCredential = {
+      ...credential,
+      ...(acceptedCounter === undefined ? {} : { lastAcceptedCounter: acceptedCounter }),
+      recoveryCodeHashes: hashes,
+      failedAttempts: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    delete updatedCredential.lockedUntilMs;
+    await this.storage.put(key, updatedCredential);
+    return user;
   }
 
   private async createAdminSession(user: UpdateControlUser): Promise<Response> {
@@ -679,64 +857,6 @@ export class UpdateControlIdentityOAuth {
     return jsonResponse(client, 201);
   }
 
-  private async authorize(request: Request): Promise<Response> {
-    const fields = request.method === "GET"
-      ? new URL(request.url).searchParams
-      : new URLSearchParams(await request.text());
-    const clientId = fields.get("client_id") ?? "";
-    const client = await this.storage.get<OAuthClient>(CLIENT_PREFIX + clientId);
-    if (!isOAuthClient(client)) return oauthError("invalid_request", 400);
-
-    const redirectUri = fields.get("redirect_uri") ?? "";
-    const codeChallenge = fields.get("code_challenge") ?? "";
-    const resource = fields.get("resource") ?? "";
-    const scopes = parseScopes(fields.get("scope") ?? this.config.scopes.join(" "));
-    if (
-      fields.get("response_type") !== "code" ||
-      fields.get("code_challenge_method") !== "S256" ||
-      !/^[A-Za-z0-9_-]{43,128}$/u.test(codeChallenge) ||
-      !client.redirect_uris.includes(redirectUri) ||
-      resource !== this.mcpUrl.href ||
-      scopes.length === 0 ||
-      !scopes.every((scope) => this.config.scopes.includes(scope))
-    ) {
-      return oauthError("invalid_request", 400);
-    }
-
-    const state = randomToken();
-    const microsoftCodeVerifier = randomToken();
-    const pending: PendingMicrosoftAuthorization = {
-      version: 1,
-      state,
-      kind: "mcp",
-      clientId,
-      redirectUri,
-      codeChallenge,
-      scopes,
-      resource,
-      ...(fields.get("state") ? { clientState: fields.get("state")! } : {}),
-      microsoftCodeVerifier,
-      expiresAtMs: Date.now() + MICROSOFT_PENDING_TTL_MS,
-    };
-    await this.storage.put(PENDING_PREFIX + state, pending);
-
-    const target = microsoftAuthorizeUrl(
-      this.config.microsoftTenant,
-      this.config.microsoftClientId,
-      new URL("/auth/microsoft/callback", this.config.publicBaseUrl).href,
-      state,
-      await sha256Base64Url(microsoftCodeVerifier),
-    );
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: target.href,
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-      },
-    });
-  }
-
   private async token(request: Request): Promise<Response> {
     const fields = new URLSearchParams(await request.text());
     const grantType = fields.get("grant_type");
@@ -782,7 +902,6 @@ export class UpdateControlIdentityOAuth {
       await this.storage.delete(key);
       return jsonResponse(await this.issueTokens(clientId, requested, record.resource, user.id));
     }
-
     return oauthError("unsupported_grant_type", 400);
   }
 
@@ -903,33 +1022,33 @@ export class UpdateControlIdentityOAuth {
     return created;
   }
 
-  private async findMicrosoftUser(subject: string): Promise<UpdateControlUser | null> {
-    const userId = await this.storage.get<string>(MICROSOFT_SUBJECT_PREFIX + await sha256Base64Url(subject));
-    return userId ? this.getUser(userId) : null;
-  }
-
-  private async createMicrosoftUser(
-    identity: MicrosoftIdentityCompletion,
+  private async createLocalUser(
+    email: string,
+    displayName: string,
     role: UpdateControlRole,
   ): Promise<UpdateControlUser> {
     const now = new Date().toISOString();
     const user: UpdateControlUser = {
       version: 1,
       id: "usr_" + crypto.randomUUID(),
-      displayName: identity.displayName.trim(),
-      ...(identity.email ? { email: identity.email.trim() } : {}),
+      displayName,
+      email,
       role,
       status: "active",
-      provider: "microsoft",
-      providerSubject: identity.subject,
+      provider: "local-totp",
       createdAt: now,
       updatedAt: now,
     };
     const ids = await this.userIds();
     await this.storage.put(USER_PREFIX + user.id, user);
-    await this.storage.put(MICROSOFT_SUBJECT_PREFIX + await sha256Base64Url(identity.subject), user.id);
+    await this.storage.put(EMAIL_PREFIX + await sha256Base64Url(email), user.id);
     await this.storage.put(USER_IDS_KEY, [...ids, user.id]);
     return user;
+  }
+
+  private async findUserByEmail(email: string): Promise<UpdateControlUser | null> {
+    const userId = await this.storage.get<string>(EMAIL_PREFIX + await sha256Base64Url(normalizeEmail(email)));
+    return userId ? this.getUser(userId) : null;
   }
 
   private async userIds(): Promise<string[]> {
@@ -940,6 +1059,44 @@ export class UpdateControlIdentityOAuth {
   private async getUser(userId: string): Promise<UpdateControlUser | null> {
     const value = await this.storage.get<unknown>(USER_PREFIX + userId);
     return isUpdateControlUser(value) ? value : null;
+  }
+
+  private async encryptionKey(): Promise<CryptoKey> {
+    return crypto.subtle.importKey(
+      "raw",
+      toArrayBuffer(this.encryptionKeyBytes),
+      "AES-GCM",
+      false,
+      ["encrypt", "decrypt"],
+    );
+  }
+
+  private async encryptSecret(secret: Uint8Array, context: string): Promise<EncryptedSecret> {
+    const iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: toArrayBuffer(iv),
+        additionalData: toArrayBuffer(new TextEncoder().encode(context)),
+      },
+      await this.encryptionKey(),
+      toArrayBuffer(secret),
+    ));
+    return { version: 1, iv: base64UrlBytes(iv), ciphertext: base64UrlBytes(ciphertext) };
+  }
+
+  private async decryptSecret(encrypted: EncryptedSecret, context: string): Promise<Uint8Array> {
+    if (!isEncryptedSecret(encrypted)) throw new Error("invalid encrypted secret");
+    return new Uint8Array(await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: toArrayBuffer(decodeBase64UrlBytes(encrypted.iv)),
+        additionalData: toArrayBuffer(new TextEncoder().encode(context)),
+      },
+      await this.encryptionKey(),
+      toArrayBuffer(decodeBase64UrlBytes(encrypted.ciphertext)),
+    ));
   }
 
   private redirectAllowed(value: string): boolean {
@@ -957,48 +1114,347 @@ export class UpdateControlIdentityOAuth {
     }
     return url.protocol === "https:" &&
       url.hostname === this.config.publicBaseUrl.hostname &&
-      !url.username &&
-      !url.password;
+      !url.username && !url.password;
   }
 }
 
-function microsoftAuthorizeUrl(
-  tenant: string,
-  clientId: string,
-  redirectUri: string,
+function createProvisioningUri(secret: string): string {
+  const issuer = UPDATE_CONTROL_TOTP_ISSUER;
+  const url = new URL("otpauth://totp/" + encodeURIComponent(issuer));
+  url.searchParams.set("secret", secret);
+  url.searchParams.set("issuer", issuer);
+  return url.href;
+}
+
+function loginPage(state: string, action: string, title: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)}</title></head><body><main><h1>${htmlEscape(title)}</h1><form method="post" action="${htmlEscape(action)}"><input type="hidden" name="state" value="${htmlEscape(state)}"><label>Email <input name="email" type="email" autocomplete="username" required></label><label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Continue</button></form></main></body></html>`;
+}
+
+function enrollmentPage(
   state: string,
-  codeChallenge: string,
-): URL {
-  const url = new URL("https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/authorize");
-  url.search = new URLSearchParams({
-    client_id: clientId,
-    response_type: "code",
-    redirect_uri: redirectUri,
-    response_mode: "query",
-    scope: "openid profile email",
-    state,
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
-  }).toString();
-  return url;
+  provisioningUri: string,
+  email: string,
+  emailReadonly: boolean,
+): string {
+  const qr = qrSvg(provisioningUri);
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Enroll Authenticator</title></head><body><main><h1>Enroll Authenticator</h1><p>Scan this QR code with an authenticator app, then enter the current 6-digit code.</p><div data-provisioning-uri="${htmlEscape(provisioningUri)}">${qr}</div><details><summary>Manual setup key</summary><code>${htmlEscape(new URL(provisioningUri).searchParams.get("secret") ?? "")}</code></details><form method="post" action="/enroll"><input type="hidden" name="state" value="${htmlEscape(state)}"><label>Email <input name="email" type="email" value="${htmlEscape(email)}"${emailReadonly ? " readonly" : ""} required></label><label>Name <input name="display_name" maxlength="200" required></label><label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Enable access</button></form></main></body></html>`;
 }
 
-function isMicrosoftTenant(value: string): boolean {
-  return value === "common" ||
-    value === "organizations" ||
-    value === "consumers" ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+function enrollmentCompletedPage(user: UpdateControlUser, recoveryCodes: string[]): string {
+  const codes = recoveryCodes.map((code) =>
+    `<li><code data-recovery-code="${htmlEscape(code)}">${htmlEscape(code)}</code></li>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access enabled</title></head><body><main><h1>Access enabled</h1><p>${htmlEscape(user.displayName)} is enrolled as ${htmlEscape(user.role)}.</p><h2>Recovery codes</h2><p>Store these codes securely. Each code can be used once and will not be shown again.</p><ul>${codes}</ul></main></body></html>`;
 }
 
-function isBootstrapAdminEmail(value: string): boolean {
-  return value.length >= 3 &&
-    value.length <= 320 &&
-    !/[\u0000-\u0020\u007f]/u.test(value) &&
-    /^[^@]+@[^@]+$/u.test(value);
+function adminPage(users: UpdateControlUser[], csrfToken: string): string {
+  const rows = users.map((user) => {
+    const roleOptions = ["admin", "operator", "viewer"].map((role) =>
+      `<option value="${role}"${user.role === role ? " selected" : ""}>${role}</option>`).join("");
+    const controls = user.status === "active"
+      ? `<form method="post" action="/admin/users/${encodeURIComponent(user.id)}/role"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role">${roleOptions}</select><button type="submit">Change role</button></form><form method="post" action="/admin/users/${encodeURIComponent(user.id)}/revoke"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Revoke</button></form>`
+      : "";
+    return `<tr><td>${htmlEscape(user.displayName)}</td><td>${htmlEscape(user.email)}</td><td>${htmlEscape(user.role)}</td><td>${htmlEscape(user.status)}</td><td>${controls}</td></tr>`;
+  }).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 Update Center admin</title></head><body><main><h1>MCP V3 Update Center</h1><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table><h2>Invite user</h2><form method="post" action="/admin/invites"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role"><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select><button type="submit">Create invite</button></form><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Sign out</button></form></main></body></html>`;
 }
 
-function normalizeEmail(value: string): string {
-  return value.trim().toLowerCase();
+async function verifyTotp(
+  secret: Uint8Array,
+  code: string,
+  lastAcceptedCounter: number | undefined,
+): Promise<number | null> {
+  if (!/^\d{6}$/u.test(code)) return null;
+  const current = Math.floor(Date.now() / 1000 / TOTP_PERIOD_SECONDS);
+  for (const counter of [current, current - 1, current + 1]) {
+    if (counter < 0 || (lastAcceptedCounter !== undefined && counter <= lastAcceptedCounter)) continue;
+    if (await constantTimeTextEquals(await totpCode(secret, counter), code)) return counter;
+  }
+  return null;
+}
+
+async function totpCode(secret: Uint8Array, counter: number): Promise<string> {
+  const message = new Uint8Array(8);
+  let value = BigInt(counter);
+  for (let index = 7; index >= 0; index -= 1) {
+    message[index] = Number(value & 0xffn);
+    value >>= 8n;
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    toArrayBuffer(secret),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, toArrayBuffer(message)));
+  const offset = (mac[mac.length - 1] ?? 0) & 0x0f;
+  const binary = (((mac[offset] ?? 0) & 0x7f) << 24) |
+    ((mac[offset + 1] ?? 0) << 16) |
+    ((mac[offset + 2] ?? 0) << 8) |
+    (mac[offset + 3] ?? 0);
+  return String(binary % 1_000_000).padStart(TOTP_DIGITS, "0");
+}
+
+function generateRecoveryCodes(): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < RECOVERY_CODE_COUNT; index += 1) {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const text = encodeBase32(bytes).slice(0, 12);
+    result.push(text.slice(0, 4) + "-" + text.slice(4, 8) + "-" + text.slice(8, 12));
+  }
+  return result;
+}
+
+function normalizeVerificationCode(value: string): string {
+  const trimmed = value.trim().toUpperCase();
+  if (/^\d{6}$/u.test(trimmed)) return trimmed;
+  const normalizedRecovery = normalizeRecoveryCode(trimmed);
+  return isRecoveryCode(normalizedRecovery) ? normalizedRecovery : "";
+}
+
+function normalizeRecoveryCode(value: string): string {
+  return value.trim().toUpperCase().replaceAll(" ", "");
+}
+
+function isRecoveryCode(value: string): boolean {
+  return /^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/u.test(value);
+}
+
+function encodeBase32(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let accumulator = 0;
+  let output = "";
+  for (const byte of bytes) {
+    accumulator = (accumulator << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      output += alphabet[(accumulator >>> bits) & 31];
+    }
+  }
+  if (bits > 0) output += alphabet[(accumulator << (5 - bits)) & 31];
+  return output;
+}
+
+function qrSvg(text: string): string {
+  const matrix = qrMatrixVersion6L(text);
+  const quiet = 4;
+  const size = matrix.length + quiet * 2;
+  let path = "";
+  for (let row = 0; row < matrix.length; row += 1) {
+    for (let col = 0; col < matrix.length; col += 1) {
+      if (matrix[row]?.[col]) path += `M${col + quiet} ${row + quiet}h1v1h-1z`;
+    }
+  }
+  return `<svg role="img" aria-label="Authenticator QR code" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges"><title>Authenticator QR code</title><rect width="100%" height="100%" fill="white"/><path d="${path}" fill="black"/></svg>`;
+}
+
+function qrMatrixVersion6L(text: string): boolean[][] {
+  const data = new TextEncoder().encode(text);
+  if (data.length > 134) throw new Error("TOTP provisioning URI is too long for the local QR encoder.");
+  const dataCodewords = makeQrDataCodewords(data, 136);
+  const blocks = [dataCodewords.slice(0, 68), dataCodewords.slice(68, 136)];
+  const ecc = blocks.map((block) => reedSolomonRemainder(block, 18));
+  const codewords: number[] = [];
+  for (let index = 0; index < 68; index += 1) {
+    codewords.push(blocks[0]![index]!, blocks[1]![index]!);
+  }
+  for (let index = 0; index < 18; index += 1) {
+    codewords.push(ecc[0]![index]!, ecc[1]![index]!);
+  }
+
+  const size = 41;
+  const modules: Array<Array<boolean | null>> =
+    Array.from({ length: size }, () => Array<boolean | null>(size).fill(null));
+  setupFinder(modules, 0, 0);
+  setupFinder(modules, size - 7, 0);
+  setupFinder(modules, 0, size - 7);
+  setupAlignment(modules, [6, 34]);
+  setupTiming(modules);
+  setupFormatInfo(modules, 0);
+  mapQrData(modules, codewords, 0);
+  return modules.map((row) => row.map(Boolean));
+}
+
+function makeQrDataCodewords(data: Uint8Array, capacity: number): number[] {
+  const bits: number[] = [];
+  appendBits(bits, 0b0100, 4);
+  appendBits(bits, data.length, 8);
+  for (const byte of data) appendBits(bits, byte, 8);
+  const capacityBits = capacity * 8;
+  appendBits(bits, 0, Math.min(4, capacityBits - bits.length));
+  while (bits.length % 8 !== 0) bits.push(0);
+  const result: number[] = [];
+  for (let index = 0; index < bits.length; index += 8) {
+    let value = 0;
+    for (let bit = 0; bit < 8; bit += 1) value = (value << 1) | (bits[index + bit] ?? 0);
+    result.push(value);
+  }
+  let pad = 0;
+  while (result.length < capacity) {
+    result.push(pad % 2 === 0 ? 0xec : 0x11);
+    pad += 1;
+  }
+  return result;
+}
+
+function appendBits(target: number[], value: number, length: number): void {
+  for (let bit = length - 1; bit >= 0; bit -= 1) target.push((value >>> bit) & 1);
+}
+
+function reedSolomonRemainder(data: number[], degree: number): number[] {
+  const exp = new Uint8Array(512);
+  const log = new Uint8Array(256);
+  let value = 1;
+  for (let index = 0; index < 255; index += 1) {
+    exp[index] = value;
+    log[value] = index;
+    value <<= 1;
+    if (value & 0x100) value ^= 0x11d;
+  }
+  for (let index = 255; index < 512; index += 1) exp[index] = exp[index - 255]!;
+  const multiply = (a: number, b: number): number =>
+    a === 0 || b === 0 ? 0 : exp[log[a]! + log[b]!]!;
+
+  let generator = [1];
+  for (let index = 0; index < degree; index += 1) {
+    const next = new Array<number>(generator.length + 1).fill(0);
+    for (let j = 0; j < generator.length; j += 1) {
+      next[j] = (next[j] ?? 0) ^ generator[j]!;
+      next[j + 1] = (next[j + 1] ?? 0) ^ multiply(generator[j]!, exp[index]!);
+    }
+    generator = next;
+  }
+
+  const remainder = new Array<number>(degree).fill(0);
+  for (const byte of data) {
+    const factor = byte ^ remainder[0]!;
+    remainder.shift();
+    remainder.push(0);
+    for (let index = 0; index < degree; index += 1) {
+      remainder[index] = (remainder[index] ?? 0) ^ multiply(generator[index + 1]!, factor);
+    }
+  }
+  return remainder;
+}
+
+function setupFinder(modules: Array<Array<boolean | null>>, row: number, col: number): void {
+  const size = modules.length;
+  for (let r = -1; r <= 7; r += 1) {
+    for (let c = -1; c <= 7; c += 1) {
+      const y = row + r;
+      const x = col + c;
+      if (y < 0 || y >= size || x < 0 || x >= size) continue;
+      modules[y]![x] =
+        (r >= 0 && r <= 6 && (c === 0 || c === 6)) ||
+        (c >= 0 && c <= 6 && (r === 0 || r === 6)) ||
+        (r >= 2 && r <= 4 && c >= 2 && c <= 4);
+    }
+  }
+}
+
+function setupAlignment(modules: Array<Array<boolean | null>>, positions: number[]): void {
+  for (const row of positions) {
+    for (const col of positions) {
+      if (modules[row]?.[col] !== null) continue;
+      for (let r = -2; r <= 2; r += 1) {
+        for (let c = -2; c <= 2; c += 1) {
+          modules[row + r]![col + c] =
+            Math.abs(r) === 2 || Math.abs(c) === 2 || (r === 0 && c === 0);
+        }
+      }
+    }
+  }
+}
+
+function setupTiming(modules: Array<Array<boolean | null>>): void {
+  const size = modules.length;
+  for (let index = 8; index < size - 8; index += 1) {
+    if (modules[index]?.[6] === null) modules[index]![6] = index % 2 === 0;
+    if (modules[6]?.[index] === null) modules[6]![index] = index % 2 === 0;
+  }
+}
+
+function setupFormatInfo(modules: Array<Array<boolean | null>>, mask: number): void {
+  const size = modules.length;
+  const data = (1 << 3) | mask;
+  let value = data << 10;
+  const polynomial = 0x537;
+  while (bitLength(value) - bitLength(polynomial) >= 0) {
+    value ^= polynomial << (bitLength(value) - bitLength(polynomial));
+  }
+  const bits = ((data << 10) | value) ^ 0x5412;
+  for (let index = 0; index < 15; index += 1) {
+    const dark = ((bits >>> index) & 1) === 1;
+    if (index < 6) modules[index]![8] = dark;
+    else if (index < 8) modules[index + 1]![8] = dark;
+    else modules[size - 15 + index]![8] = dark;
+
+    if (index < 8) modules[8]![size - index - 1] = dark;
+    else if (index < 9) modules[8]![15 - index] = dark;
+    else modules[8]![15 - index - 1] = dark;
+  }
+  modules[size - 8]![8] = true;
+}
+
+function bitLength(value: number): number {
+  let length = 0;
+  while (value !== 0) {
+    length += 1;
+    value >>>= 1;
+  }
+  return length;
+}
+
+function mapQrData(
+  modules: Array<Array<boolean | null>>,
+  codewords: number[],
+  mask: number,
+): void {
+  const size = modules.length;
+  let row = size - 1;
+  let direction = -1;
+  let byteIndex = 0;
+  let bitIndex = 7;
+  for (let col = size - 1; col > 0; col -= 2) {
+    if (col === 6) col -= 1;
+    while (true) {
+      for (let offset = 0; offset < 2; offset += 1) {
+        const x = col - offset;
+        if (modules[row]?.[x] !== null) continue;
+        let dark = false;
+        if (byteIndex < codewords.length) dark = (((codewords[byteIndex] ?? 0) >>> bitIndex) & 1) === 1;
+        if (qrMask(mask, row, x)) dark = !dark;
+        modules[row]![x] = dark;
+        bitIndex -= 1;
+        if (bitIndex < 0) {
+          byteIndex += 1;
+          bitIndex = 7;
+        }
+      }
+      row += direction;
+      if (row < 0 || row >= size) {
+        row -= direction;
+        direction = -direction;
+        break;
+      }
+    }
+  }
+}
+
+function qrMask(mask: number, row: number, col: number): boolean {
+  switch (mask) {
+    case 0: return (row + col) % 2 === 0;
+    case 1: return row % 2 === 0;
+    case 2: return col % 3 === 0;
+    case 3: return (row + col) % 3 === 0;
+    case 4: return (Math.floor(row / 2) + Math.floor(col / 3)) % 2 === 0;
+    case 5: return (row * col) % 2 + (row * col) % 3 === 0;
+    case 6: return ((row * col) % 2 + (row * col) % 3) % 2 === 0;
+    default: return ((row * col) % 3 + (row + col) % 2) % 2 === 0;
+  }
 }
 
 function isOAuthClient(value: unknown): value is OAuthClient {
@@ -1014,15 +1470,9 @@ function isOAuthClient(value: unknown): value is OAuthClient {
     value.response_types.every((entry) => typeof entry === "string");
 }
 
-function isPendingAuthorization(value: unknown): value is PendingMicrosoftAuthorization {
-  if (!isRecord(value) ||
-      value.version !== 1 ||
-      typeof value.state !== "string" ||
-      (value.kind !== "mcp" && value.kind !== "admin" && value.kind !== "join") ||
-      typeof value.microsoftCodeVerifier !== "string" ||
-      !Number.isFinite(value.expiresAtMs)) {
-    return false;
-  }
+function isPendingLogin(value: unknown): value is PendingLogin {
+  if (!isRecord(value) || value.version !== 1 || typeof value.state !== "string" ||
+      (value.kind !== "mcp" && value.kind !== "admin") || !Number.isFinite(value.expiresAtMs)) return false;
   if (value.kind === "mcp") {
     return typeof value.clientId === "string" &&
       typeof value.redirectUri === "string" &&
@@ -1032,8 +1482,18 @@ function isPendingAuthorization(value: unknown): value is PendingMicrosoftAuthor
       typeof value.resource === "string" &&
       (value.clientState === undefined || typeof value.clientState === "string");
   }
-  if (value.kind === "join") return typeof value.inviteHash === "string";
   return true;
+}
+
+function isPendingEnrollment(value: unknown): value is PendingEnrollment {
+  return isRecord(value) &&
+    value.version === 1 &&
+    typeof value.state === "string" &&
+    (value.kind === "bootstrap" || value.kind === "join") &&
+    isRole(value.role) &&
+    isEncryptedSecret(value.encryptedSecret) &&
+    Number.isFinite(value.expiresAtMs) &&
+    (value.inviteHash === undefined || typeof value.inviteHash === "string");
 }
 
 function isAuthorizationCodeRecord(value: unknown): value is AuthorizationCodeRecord {
@@ -1087,13 +1547,36 @@ function isUpdateControlUser(value: unknown): value is UpdateControlUser {
     typeof value.id === "string" &&
     /^usr_[0-9a-f-]{36}$/iu.test(value.id) &&
     typeof value.displayName === "string" &&
-    (value.email === undefined || typeof value.email === "string") &&
+    typeof value.email === "string" &&
     (value.role === "admin" || value.role === "operator" || value.role === "viewer") &&
     (value.status === "active" || value.status === "revoked") &&
-    value.provider === "microsoft" &&
-    typeof value.providerSubject === "string" &&
+    value.provider === "local-totp" &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string";
+}
+
+function isTotpCredential(value: unknown): value is TotpCredential {
+  return isRecord(value) &&
+    value.version === 1 &&
+    typeof value.userId === "string" &&
+    isEncryptedSecret(value.encryptedSecret) &&
+    (value.lastAcceptedCounter === undefined || Number.isSafeInteger(value.lastAcceptedCounter)) &&
+    Array.isArray(value.recoveryCodeHashes) &&
+    value.recoveryCodeHashes.every((entry) => typeof entry === "string" && /^[A-Za-z0-9_-]{43}$/u.test(entry)) &&
+    Number.isSafeInteger(value.failedAttempts) &&
+    (value.failedAttempts as number) >= 0 &&
+    (value.lockedUntilMs === undefined || Number.isFinite(value.lockedUntilMs)) &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string";
+}
+
+function isEncryptedSecret(value: unknown): value is EncryptedSecret {
+  return isRecord(value) &&
+    value.version === 1 &&
+    typeof value.iv === "string" &&
+    /^[A-Za-z0-9_-]{16}$/u.test(value.iv) &&
+    typeof value.ciphertext === "string" &&
+    /^[A-Za-z0-9_-]+$/u.test(value.ciphertext);
 }
 
 function isAccessClaims(value: unknown): value is AccessClaims {
@@ -1138,16 +1621,15 @@ function isRole(value: unknown): value is UpdateControlRole {
   return value === "admin" || value === "operator" || value === "viewer";
 }
 
-function adminPage(users: UpdateControlUser[], csrfToken: string): string {
-  const rows = users.map((user) => {
-    const roleOptions = ["admin", "operator", "viewer"].map((role) =>
-      `<option value="${role}"${user.role === role ? " selected" : ""}>${role}</option>`).join("");
-    const controls = user.status === "active"
-      ? `<form method="post" action="/admin/users/${encodeURIComponent(user.id)}/role"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role">${roleOptions}</select><button type="submit">Change role</button></form><form method="post" action="/admin/users/${encodeURIComponent(user.id)}/revoke"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Revoke</button></form>`
-      : "";
-    return `<tr><td>${htmlEscape(user.displayName)}</td><td>${htmlEscape(user.email ?? "")}</td><td>${htmlEscape(user.role)}</td><td>${htmlEscape(user.status)}</td><td>${controls}</td></tr>`;
-  }).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 Update Center admin</title></head><body><main><h1>MCP V3 Update Center</h1><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table><h2>Invite user</h2><form method="post" action="/admin/invites"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role"><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select><button type="submit">Create invite</button></form><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Sign out</button></form></main></body></html>`;
+function isBootstrapAdminEmail(value: string): boolean {
+  return value.length >= 3 &&
+    value.length <= 320 &&
+    !/[\u0000-\u0020\u007f]/u.test(value) &&
+    /^[^@]+@[^@]+$/u.test(value);
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function readCookie(header: string | null, name: string): string | null {
@@ -1155,8 +1637,7 @@ function readCookie(header: string | null, name: string): string | null {
   for (const pair of header.split(";")) {
     const index = pair.indexOf("=");
     if (index < 0) continue;
-    const key = pair.slice(0, index).trim();
-    if (key !== name) continue;
+    if (pair.slice(0, index).trim() !== name) continue;
     return pair.slice(index + 1).trim();
   }
   return null;
@@ -1225,6 +1706,7 @@ function htmlResponse(body: string, status = 200): Response {
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     },
   });
 }
@@ -1282,6 +1764,14 @@ function decodeBase64UrlBytes(value: string): Uint8Array {
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   const binary = atob(padded);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function decodeHex(value: string): Uint8Array {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

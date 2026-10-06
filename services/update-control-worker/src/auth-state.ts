@@ -18,10 +18,8 @@ export const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
 export const ADMIN_BOOTSTRAP_PATH = "/_operations/admin/bootstrap";
 export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER = "x-update-control-internal-reprovision-authenticated";
 export const UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_HEADER = "x-update-control-internal-admin-operation-authenticated";
-export const UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER = "x-update-control-internal-microsoft-authenticated";
 export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER = "v1";
 export const UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_MARKER = "v1";
-export const UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER = "v1";
 const OAUTH_REPROVISION_ACTIVE_KEY = "update-control:oauth-reprovision:v1:active";
 const OAUTH_REPROVISION_OPERATION_PREFIX = "update-control:oauth-reprovision:v1:operation:";
 const OAUTH_REPROVISION_EVENT_PREFIX = "update-control:oauth-reprovision:v1:event:";
@@ -139,10 +137,8 @@ interface OAuthReprovisionAuditEvent {
 
 export interface UpdateControlEnvironment {
   readonly MCP_UPDATE_CONTROL_PUBLIC_URL?: string;
-  readonly MICROSOFT_CLIENT_ID?: string;
-  readonly MICROSOFT_TENANT?: string;
-  readonly MICROSOFT_CLIENT_SECRET?: string;
   readonly UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL?: string;
+  readonly UPDATE_CONTROL_TOTP_ENCRYPTION_KEY?: string;
   readonly UPDATE_CONTROL_ADMIN_HMAC_KEY?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
@@ -202,12 +198,6 @@ export class UpdateControlAuthController {
     if (url.pathname === ADMIN_BOOTSTRAP_PATH) {
       return this.handleAdminBootstrap(request);
     }
-    if (url.pathname === "/_internal/microsoft/pending") {
-      return this.handleMicrosoftPending(request);
-    }
-    if (url.pathname === "/_internal/microsoft/complete") {
-      return this.handleMicrosoftComplete(request);
-    }
     if (url.pathname === "/_operations" || url.pathname.startsWith("/_operations/") ||
         url.pathname === "/_internal" || url.pathname.startsWith("/_internal/")) {
       return jsonResponse({ error: "not_found" }, 404);
@@ -223,11 +213,18 @@ export class UpdateControlAuthController {
           activeReprovision.status !== "completed") {
         return jsonResponse({ error: "oauth_reprovision_required" }, 503);
       }
+      if (url.pathname === "/enroll") {
+        if (request.method === "GET") return this.identityOAuth.beginBootstrapEnrollment();
+        if (request.method === "POST") return this.identityOAuth.completeEnrollment(request);
+        return jsonResponse({ error: "method_not_allowed" }, 405);
+      }
       if (url.pathname === "/admin/login") {
-        if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
-        return this.identityOAuth.beginAdminLogin();
+        if (request.method === "GET") return this.identityOAuth.beginAdminLogin();
+        if (request.method === "POST") return this.identityOAuth.completeAdminLogin(request);
+        return jsonResponse({ error: "method_not_allowed" }, 405);
       }
       if (url.pathname === "/join") {
+        if (request.method === "POST") return this.identityOAuth.completeEnrollment(request);
         if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
         if ([...url.searchParams.keys()].some((key) => key !== "invite") ||
             url.searchParams.getAll("invite").length !== 1) {
@@ -297,54 +294,6 @@ export class UpdateControlAuthController {
     return request.method === "GET"
       ? this.identityOAuth.readBootstrap(parsed.operationId)
       : this.identityOAuth.beginBootstrap(parsed.operationId);
-  }
-
-  private async handleMicrosoftPending(request: Request): Promise<Response> {
-    if (request.headers.get(UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER) !==
-        UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER) {
-      return jsonResponse({ error: "operation_auth_required" }, 401);
-    }
-    if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
-    if (!this.configurationValid || !this.identityOAuth) {
-      return jsonResponse({ error: "update_control_not_configured" }, 503);
-    }
-    const url = new URL(request.url);
-    if ([...url.searchParams.keys()].some((key) => key !== "state") ||
-        url.searchParams.getAll("state").length !== 1) {
-      return jsonResponse({ error: "invalid_request" }, 400);
-    }
-    return this.identityOAuth.getPendingMicrosoft(url.searchParams.get("state") ?? "");
-  }
-
-  private async handleMicrosoftComplete(request: Request): Promise<Response> {
-    if (request.headers.get(UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER) !==
-        UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER) {
-      return jsonResponse({ error: "operation_auth_required" }, 401);
-    }
-    if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-    if (!this.configurationValid || !this.identityOAuth) {
-      return jsonResponse({ error: "update_control_not_configured" }, 503);
-    }
-    let input: unknown;
-    try {
-      input = JSON.parse(await readBoundedRequestText(request, MAX_OAUTH_BODY_BYTES)) as unknown;
-    } catch {
-      return jsonResponse({ error: "invalid_identity" }, 400);
-    }
-    if (!isRecord(input) ||
-        typeof input.state !== "string" ||
-        typeof input.subject !== "string" ||
-        typeof input.displayName !== "string" ||
-        (input.email !== undefined && typeof input.email !== "string") ||
-        Object.keys(input).some((key) => !["state", "subject", "displayName", "email"].includes(key))) {
-      return jsonResponse({ error: "invalid_identity" }, 400);
-    }
-    return this.identityOAuth.completeMicrosoftIdentity({
-      state: input.state,
-      subject: input.subject,
-      displayName: input.displayName,
-      ...(typeof input.email === "string" ? { email: input.email } : {}),
-    });
   }
 
   private async readOAuthReprovisionStatus(operationId: string): Promise<Response> {
@@ -661,11 +610,13 @@ function createIdentityOAuth(
   );
   return new UpdateControlIdentityOAuth(storage, {
     publicBaseUrl,
-    microsoftClientId: requireValue(env.MICROSOFT_CLIENT_ID, "MICROSOFT_CLIENT_ID"),
-    microsoftTenant: requireValue(env.MICROSOFT_TENANT, "MICROSOFT_TENANT"),
     bootstrapAdminEmail: requireValue(
       env.UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL,
       "UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL",
+    ),
+    totpEncryptionKey: requireValue(
+      env.UPDATE_CONTROL_TOTP_ENCRYPTION_KEY,
+      "UPDATE_CONTROL_TOTP_ENCRYPTION_KEY",
     ),
     scopes: ["update:read"],
     accessTokenTtlSeconds: readBoundedInteger(
