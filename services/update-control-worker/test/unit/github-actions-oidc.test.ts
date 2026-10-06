@@ -60,6 +60,16 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
     await expect(verifier.verify(parts.join("."), OPERATION_ID)).resolves.toBe(false);
   });
 
+  it("invokes injected fetch without an unrelated receiver", async () => {
+    const receiverSensitiveFetch = function(this: unknown, input: RequestInfo | URL): Promise<Response> {
+      if (this !== undefined) throw new TypeError("Illegal invocation");
+      return testGitHubActionsJwksFetch(input);
+    } as typeof fetch;
+    const verifier = new GitHubActionsOidcAssertionVerifier(receiverSensitiveFetch);
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    await expect(verifier.verify(token, OPERATION_ID)).resolves.toBe(true);
+  });
+
   it("fails closed when GitHub JWKS is unavailable or malformed", async () => {
     const unavailable = new GitHubActionsOidcAssertionVerifier(async () => new Response(null, { status: 503 }));
     await expect(unavailable.verify(await createTestGitHubActionsAssertion(OPERATION_ID), OPERATION_ID))

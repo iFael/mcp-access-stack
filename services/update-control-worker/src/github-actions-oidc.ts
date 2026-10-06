@@ -98,7 +98,8 @@ export class GitHubActionsOidcAssertionVerifier {
       if (cached) return cached;
     }
 
-    const response = await this.fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
+    const fetchImpl = this.fetchImpl;
+    const response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
       method: "GET",
       redirect: "error",
       cache: "no-store",
