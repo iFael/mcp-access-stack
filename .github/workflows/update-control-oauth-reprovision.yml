@@ -8,12 +8,13 @@ on:
         required: true
         type: string
       confirm_reprovision:
-        description: "This invalidates every registered OAuth client and all existing grants."
+        description: "Choose read-only status diagnosis or explicitly authorize destructive OAuth reprovisioning."
         required: true
         type: choice
         default: "NO"
         options:
           - "NO"
+          - "DIAGNOSE_STATUS"
           - "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS"
 
 permissions:
@@ -24,6 +25,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  diagnose:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'DIAGNOSE_STATUS' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: update-control-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Diagnose operation status with operation-bound GitHub OIDC
+        env:
+          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
+          MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+        run: node tooling/update-control-oauth-reprovision.mjs diagnose
+
   reprovision:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS' }}
     runs-on: ubuntu-latest
