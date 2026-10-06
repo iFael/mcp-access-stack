@@ -7,6 +7,7 @@ import {
   executeOAuthReprovision,
   OAUTH_REPROVISION_CONFIRMATION,
   preflightOAuthReprovision,
+  waitForOAuthReprovisionReadiness,
 } from "../../../../tooling/update-control-oauth-reprovision.mjs";
 
 const OPERATION_ID = "b795a30e-90d3-4a51-95ed-3c06bbc1e2ad";
@@ -97,6 +98,7 @@ describe("controlled Update Control OAuth reprovision", () => {
     const preflight = definition.jobs.reprovision.steps.find((step) => step.id === "preflight");
     const reconcile = definition.jobs.reprovision.steps.find((step) => step.run?.includes(" apply"));
     const installOwner = definition.jobs.reprovision.steps.find((step) => step.name.includes("replacement owner token"));
+    const waitReady = definition.jobs.reprovision.steps.find((step) => step.run?.includes(" wait-ready"));
 
     expect(diagnose.env.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY)
       .toBe("${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}");
@@ -110,6 +112,10 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(installOwner.run).toContain("wrangler secret put MCP_OWNER_TOKEN");
     expect(installOwner.run).toContain("printf '%s'");
     expect(installOwner.run).not.toContain("echo \"$UPDATE_CONTROL_OWNER_TOKEN_NEXT\"");
+    expect(waitReady.if).toContain("steps.preflight.outputs.completed != 'true'");
+    expect(waitReady.env).toEqual({ MCP_UPDATE_CONTROL_PUBLIC_URL: "${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}" });
+    expect(definition.jobs.reprovision.steps.indexOf(installOwner)).toBeLessThan(definition.jobs.reprovision.steps.indexOf(waitReady));
+    expect(definition.jobs.reprovision.steps.indexOf(waitReady)).toBeLessThan(definition.jobs.reprovision.steps.indexOf(reconcile));
   });
 
   it("preflights and installs the dedicated HMAC key only in the normal manual deployment workflow", () => {
@@ -190,6 +196,30 @@ describe("controlled Update Control OAuth reprovision", () => {
       requests[0].init.headers.authorization,
       OPERATION_ID,
     );
+  });
+
+  it("waits boundedly for the replacement owner token runtime to become ready without secrets", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const responses = [
+      jsonResponse({ error: "update_control_not_configured" }, 503),
+      jsonResponse({ error: "oauth_reprovision_required" }, 503),
+    ];
+    const result = await waitForOAuthReprovisionReadiness({
+      env: { MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL },
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init });
+        return responses.shift();
+      },
+      sleep: async () => {},
+      maxAttempts: 3,
+    });
+
+    expect(result).toEqual({ state: "oauth_reprovision_required" });
+    expect(requests).toHaveLength(2);
+    expect(requests.every(({ url }) => new URL(url).pathname === "/mcp")).toBe(true);
+    expect(requests.every(({ init }) => init.method === "GET")).toBe(true);
+    expect(JSON.stringify(requests)).not.toContain(HMAC_KEY);
+    expect(JSON.stringify(requests)).not.toContain(OWNER_TOKEN);
   });
 
   it("signs status and apply requests for the same operation ID and resumes only in_progress", async () => {

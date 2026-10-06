@@ -10,6 +10,8 @@ const MAX_RESPONSE_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
+const MAX_READY_ATTEMPTS = 30;
+const READY_RETRY_DELAY_MS = 1_000;
 
 function requireValue(env, name) {
   const value = env[name];
@@ -19,16 +21,7 @@ function requireValue(env, name) {
   return value;
 }
 
-function readSettings(env, { requireConfirmation = true } = {}) {
-  if (requireConfirmation && env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
-    throw new Error("Explicit OAuth reprovision confirmation is required.");
-  }
-
-  const operationId = requireValue(env, "UPDATE_CONTROL_OAUTH_OPERATION_ID");
-  if (!OPERATION_ID_PATTERN.test(operationId)) {
-    throw new Error("OAuth reprovision operation ID must be a UUID.");
-  }
-
+function readPublicUrl(env) {
   const publicUrlValue = requireValue(env, "MCP_UPDATE_CONTROL_PUBLIC_URL");
   if (/[\u0000-\u001f\u007f]/u.test(publicUrlValue) || publicUrlValue.includes("?") || publicUrlValue.includes("#")) {
     throw new Error("The public URL is invalid.");
@@ -47,6 +40,20 @@ function readSettings(env, { requireConfirmation = true } = {}) {
       publicUrl.search || publicUrl.hash || !isRootOrigin) {
     throw new Error("The public URL must be an HTTPS origin without credentials, nonstandard port, path, query, or fragment.");
   }
+  return publicUrl;
+}
+
+function readSettings(env, { requireConfirmation = true } = {}) {
+  if (requireConfirmation && env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
+    throw new Error("Explicit OAuth reprovision confirmation is required.");
+  }
+
+  const operationId = requireValue(env, "UPDATE_CONTROL_OAUTH_OPERATION_ID");
+  if (!OPERATION_ID_PATTERN.test(operationId)) {
+    throw new Error("OAuth reprovision operation ID must be a UUID.");
+  }
+
+  const publicUrl = readPublicUrl(env);
 
   const hmacKey = requireValue(env, "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
   if (!/^[0-9a-f]{64}$/u.test(hmacKey)) {
@@ -218,6 +225,52 @@ async function appendGitHubOutput(env, status) {
   await appendFile(path, `status=${status}\ncompleted=${status === "completed"}\n`, { encoding: "utf8" });
 }
 
+export async function waitForOAuthReprovisionReadiness({
+  env = process.env,
+  fetchImpl = fetch,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  maxAttempts = MAX_READY_ATTEMPTS,
+} = {}) {
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 120) {
+    throw new Error("OAuth reprovision readiness attempts are invalid.");
+  }
+  const publicUrl = readPublicUrl(env);
+  const endpoint = new URL("/mcp", publicUrl.origin);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: { accept: "application/json" },
+      });
+    } catch {
+      if (attempt + 1 >= maxAttempts) break;
+      await sleep(READY_RETRY_DELAY_MS);
+      continue;
+    }
+    if (response.status === 401) {
+      await response.body?.cancel();
+      return { state: "oauth_active" };
+    }
+    const payload = await readBoundedJson(
+      response,
+      4 * 1024,
+      "OAuth reprovision readiness response exceeded the configured size limit.",
+    );
+    const error = safeEndpointError(payload);
+    if (response.status === 503 && error === "oauth_reprovision_required") {
+      return { state: "oauth_reprovision_required" };
+    }
+    if (response.status !== 503 || error !== "update_control_not_configured") {
+      throw new Error("OAuth reprovision runtime readiness returned an unexpected response.");
+    }
+    if (attempt + 1 < maxAttempts) await sleep(READY_RETRY_DELAY_MS);
+  }
+  throw new Error("OAuth reprovision runtime did not become ready within the bounded wait.");
+}
+
 export async function diagnoseOAuthReprovisionStatus({
   env = process.env,
   fetchImpl = fetch,
@@ -294,6 +347,11 @@ async function main() {
       process.stdout.write(`OAuth reprovision diagnosis: ${JSON.stringify(result)}\n`);
       return;
     }
+    if (mode === "wait-ready") {
+      const result = await waitForOAuthReprovisionReadiness();
+      process.stdout.write(`OAuth reprovision runtime readiness: ${result.state}.\n`);
+      return;
+    }
     if (mode === "preflight") {
       const result = await preflightOAuthReprovision();
       process.stdout.write(`OAuth reprovision preflight status: ${result.status}.\n`);
@@ -304,7 +362,7 @@ async function main() {
       process.stdout.write(`OAuth reprovision terminal status: ${result.status}.\n`);
       return;
     }
-    throw new Error("Expected mode: diagnose, preflight or apply.");
+    throw new Error("Expected mode: diagnose, wait-ready, preflight or apply.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected failure.";
     process.stderr.write(`OAuth reprovision ${mode === "preflight" ? "preflight" : "operation"} stopped safely: ${message}\n`);
