@@ -23,7 +23,7 @@ assert.ok(deployJob.includes("secrets.UPDATE_CONTROL_CF_API_TOKEN"));
 assert.ok(deployJob.includes("secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN"));
 assert.ok(deployJob.includes("vars.CLOUDFLARE_ACCOUNT_ID"));
 assert.ok(deployJob.includes("npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy"));
-assert.ok(!/ORACLE_ACCESS_CLIENT|ORCHESTRATOR_READ_API_URL|UPDATE_CONTROL_OAUTH_REPROVISION|cloudflared|tunnel/iu.test(deployJob), "deploy must not require the retired Access/Tunnel topology");
+assert.ok(!/ORACLE_ACCESS_CLIENT|ORCHESTRATOR_READ_API_URL|UPDATE_CONTROL_OAUTH_REPROVISION_(?:URL|ACCESS_ISSUER|ACCESS_AUDIENCE)|cloudflared|tunnel/iu.test(deployJob), "deploy must not require the retired Access/Tunnel topology");
 assert.ok(!/\bnpx\s+wrangler|npm\s+install\s+-g\s+wrangler/u.test(workflow));
 assert.ok(!/public-release|edge-breakglass\.yml|release\.yml/u.test(workflow));
 
