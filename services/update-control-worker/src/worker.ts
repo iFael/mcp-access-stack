@@ -1,9 +1,15 @@
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import {
+  createOAuthReprovisionOidcFailureResponse,
+  OAUTH_REPROVISION_PATH,
+  parseOAuthReprovisionOperationId,
+  UPDATE_CONTROL_INTERNAL_OIDC_HEADER,
+  UPDATE_CONTROL_INTERNAL_OIDC_MARKER,
   UpdateControlAuthController,
   type UpdateControlDurableStorage,
   type UpdateControlEnvironment,
 } from "./auth-state.js";
+import { GitHubActionsOidcAssertionVerifier } from "./github-actions-oidc.js";
 import {
   ORACLE_CHANNEL_CONNECT_PATH,
   ORACLE_CHANNEL_SCOPE,
@@ -50,11 +56,18 @@ export class UpdateControlAuthState {
   }
 }
 
+function withoutClientInternalOidcMarker(request: Request): Request {
+  if (!request.headers.has(UPDATE_CONTROL_INTERNAL_OIDC_HEADER)) return request;
+  const headers = new Headers(request.headers);
+  headers.delete(UPDATE_CONTROL_INTERNAL_OIDC_HEADER);
+  return new Request(request, { headers });
+}
+
 const updateControlWorker = {
   async fetch(request: Request, env: UpdateControlWorkerEnv): Promise<Response> {
-    let pathname: string;
+    let url: URL;
     try {
-      pathname = new URL(request.url).pathname;
+      url = new URL(request.url);
     } catch {
       return new Response(JSON.stringify({ error: "invalid_request" }), {
         status: 400,
@@ -62,7 +75,37 @@ const updateControlWorker = {
       });
     }
 
-    if (pathname === ORACLE_CHANNEL_CONNECT_PATH) {
+    if (url.pathname === OAUTH_REPROVISION_PATH) {
+      const parsed = await parseOAuthReprovisionOperationId(
+        request.clone() as unknown as Request,
+        env.MCP_UPDATE_CONTROL_PUBLIC_URL,
+      );
+      if (!parsed.ok) return parsed.response;
+
+      const authorization = request.headers.get("authorization");
+      const assertion = authorization?.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+      if (!assertion) return createOAuthReprovisionOidcFailureResponse(request);
+
+      const verification = await new GitHubActionsOidcAssertionVerifier(fetch)
+        .verifyWithStage(assertion, parsed.operationId);
+      if (!verification.valid) {
+        return createOAuthReprovisionOidcFailureResponse(request, verification);
+      }
+
+      const headers = new Headers(request.headers);
+      headers.delete("authorization");
+      headers.delete("x-update-control-oidc-diagnose");
+      headers.delete(UPDATE_CONTROL_INTERNAL_OIDC_HEADER);
+      headers.set(UPDATE_CONTROL_INTERNAL_OIDC_HEADER, UPDATE_CONTROL_INTERNAL_OIDC_MARKER);
+      const internalRequest = new Request(request, { headers });
+      const id = env.UPDATE_CONTROL_AUTH_STATE.idFromName("update-control-auth-v1");
+      return env.UPDATE_CONTROL_AUTH_STATE.get(id).fetch(internalRequest);
+    }
+
+    const routedRequest = withoutClientInternalOidcMarker(request);
+    if (url.pathname === ORACLE_CHANNEL_CONNECT_PATH) {
       const channel = env.UPDATE_CONTROL_ORACLE_CHANNEL;
       if (!channel) {
         return new Response(JSON.stringify({ error: "oracle_channel_not_configured" }), {
@@ -71,11 +114,11 @@ const updateControlWorker = {
         });
       }
       const id = channel.idFromName(ORACLE_CHANNEL_SCOPE);
-      return channel.get(id).fetch(request);
+      return channel.get(id).fetch(routedRequest);
     }
 
     const id = env.UPDATE_CONTROL_AUTH_STATE.idFromName("update-control-auth-v1");
-    return env.UPDATE_CONTROL_AUTH_STATE.get(id).fetch(request);
+    return env.UPDATE_CONTROL_AUTH_STATE.get(id).fetch(routedRequest);
   },
 };
 

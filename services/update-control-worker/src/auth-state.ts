@@ -9,7 +9,7 @@ import { createUpdateControlMcpHandler } from "./mcp.js";
 import { UpdateControlOracleChannelReadClient } from "./oracle-channel-client.js";
 import type { OracleChannelNamespace } from "./oracle-channel.js";
 import { createUpdateControlReadOnlyTools, type UpdateControlReadClient } from "./tools.js";
-import { GitHubActionsOidcAssertionVerifier } from "./github-actions-oidc.js";
+import type { GitHubActionsOidcVerificationResult } from "./github-actions-oidc.js";
 
 const UPDATE_CONTROL_OWNER_ID = "usr_85dd70bf-2a50-4b8e-97d6-3c20c7226757";
 const MAX_URL_LENGTH = 8 * 1024;
@@ -17,7 +17,9 @@ const MAX_HEADER_COUNT = 64;
 const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_OAUTH_BODY_BYTES = 16 * 1024;
 const MAX_REPROVISION_BODY_BYTES = 1024;
-const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
+export const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
+export const UPDATE_CONTROL_INTERNAL_OIDC_HEADER = "x-update-control-internal-oidc-verified";
+export const UPDATE_CONTROL_INTERNAL_OIDC_MARKER = "v1";
 const OAUTH_REPROVISION_ACTIVE_KEY = "update-control:oauth-reprovision:v1:active";
 const OAUTH_REPROVISION_OPERATION_PREFIX = "update-control:oauth-reprovision:v1:operation:";
 const OAUTH_REPROVISION_EVENT_PREFIX = "update-control:oauth-reprovision:v1:event:";
@@ -31,6 +33,106 @@ type DiagnosticTypeErrorReason = "network_connection_lost" | "unknown_type_error
 
 function safeDiagnosticTypeErrorReason(value: unknown): DiagnosticTypeErrorReason | null {
   return value === "network_connection_lost" || value === "unknown_type_error" ? value : null;
+}
+
+export type OAuthReprovisionOperationIdResult =
+  | { readonly ok: true; readonly operationId: string }
+  | { readonly ok: false; readonly response: Response };
+
+export async function parseOAuthReprovisionOperationId(
+  request: Request,
+  publicBaseUrl: string | undefined,
+): Promise<OAuthReprovisionOperationIdResult> {
+  if (request.url.length > MAX_URL_LENGTH || !headersWithinBounds(request.headers)) {
+    return { ok: false, response: new Response(null, { status: 431, headers: { "cache-control": "no-store" } }) };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return { ok: false, response: jsonResponse({ error: "invalid_request" }, 400) };
+  }
+
+  let reprovisionUrl: URL;
+  try {
+    reprovisionUrl = deriveOAuthReprovisionUrl(publicBaseUrl);
+  } catch {
+    return { ok: false, response: jsonResponse({ error: "not_found" }, 404) };
+  }
+  if (url.origin !== reprovisionUrl.origin ||
+      url.pathname !== reprovisionUrl.pathname ||
+      url.username || url.password || url.hash) {
+    return { ok: false, response: jsonResponse({ error: "not_found" }, 404) };
+  }
+
+  let operationId: string;
+  if (request.method === "GET") {
+    if ([...url.searchParams.keys()].some((key) => key !== "operationId") ||
+        url.searchParams.getAll("operationId").length !== 1) {
+      return { ok: false, response: jsonResponse({ error: "invalid_request" }, 400) };
+    }
+    operationId = url.searchParams.get("operationId") ?? "";
+  } else if (request.method === "POST" && !url.search && !url.hash &&
+      !request.url.includes("?") && !request.url.includes("#")) {
+    let body: string;
+    try {
+      body = await readBoundedRequestText(request, MAX_REPROVISION_BODY_BYTES);
+    } catch {
+      return { ok: false, response: jsonResponse({ error: "invalid_request" }, 400) };
+    }
+    let input: unknown;
+    try {
+      input = JSON.parse(body) as unknown;
+    } catch {
+      return { ok: false, response: jsonResponse({ error: "invalid_request" }, 400) };
+    }
+    if (!isRecord(input) || Object.keys(input).length !== 1 ||
+        typeof input.operationId !== "string") {
+      return { ok: false, response: jsonResponse({ error: "invalid_operation_id" }, 400) };
+    }
+    operationId = input.operationId;
+  } else {
+    return { ok: false, response: jsonResponse({ error: "method_not_allowed" }, 405) };
+  }
+
+  if (!OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(operationId)) {
+    return { ok: false, response: jsonResponse({ error: "invalid_operation_id" }, 400) };
+  }
+  return { ok: true, operationId };
+}
+
+export function createOAuthReprovisionOidcFailureResponse(
+  request: Request,
+  verification?: GitHubActionsOidcVerificationResult,
+): Response {
+  const diagnosticRequested = request.method === "GET" &&
+    request.headers.get("x-update-control-oidc-diagnose") === "v1";
+  return jsonResponse({
+    error: "operation_auth_required",
+    ...(diagnosticRequested ? { diagnosticStage: verification?.stage ?? "input" } : {}),
+    ...(diagnosticRequested &&
+    verification?.stage === "jwks_fetch" &&
+    verification.jwksFetchFailureCategory
+      ? { diagnosticFailureCategory: verification.jwksFetchFailureCategory }
+      : {}),
+    ...(diagnosticRequested &&
+    verification?.stage === "jwks_fetch" &&
+    verification.jwksFetchFailureCategory === "fetch_rejected" &&
+    verification.jwksFetchRejectionClass
+      ? { diagnosticRejectionClass: verification.jwksFetchRejectionClass }
+      : {}),
+    ...(diagnosticRequested &&
+    verification?.stage === "jwks_fetch" &&
+    verification.jwksFetchFailureCategory === "fetch_rejected" &&
+    verification.jwksFetchRejectionClass === "type_error"
+      ? {
+        diagnosticTypeErrorReason:
+          safeDiagnosticTypeErrorReason(verification.jwksFetchTypeErrorReason) ??
+          "unknown_type_error",
+      }
+      : {}),
+  }, 401);
 }
 
 type OAuthReprovisionStatus = "in_progress" | "completed" | "outcome_unknown";
@@ -84,8 +186,6 @@ export interface UpdateControlDurableState {
 export class UpdateControlAuthController {
   private ownerOAuth: EdgeOwnerOAuth | undefined;
   private configurationValid = false;
-  private readonly reprovisionUrl: URL | undefined;
-  private readonly oidcAssertionVerifier: GitHubActionsOidcAssertionVerifier;
   private ownerIdentityPromise: Promise<void> | undefined;
   private readClient: UpdateControlOracleChannelReadClient | undefined;
   private requestQueue: Promise<void> = Promise.resolve();
@@ -93,15 +193,13 @@ export class UpdateControlAuthController {
   constructor(
     private readonly state: UpdateControlDurableState,
     private readonly env: UpdateControlEnvironment,
-    fetchImpl: typeof fetch = fetch,
+    _fetchImpl: typeof fetch = fetch,
   ) {
-    this.oidcAssertionVerifier = new GitHubActionsOidcAssertionVerifier(fetchImpl);
     try {
-      this.reprovisionUrl = deriveOAuthReprovisionUrl(env.MCP_UPDATE_CONTROL_PUBLIC_URL);
+      deriveOAuthReprovisionUrl(env.MCP_UPDATE_CONTROL_PUBLIC_URL);
       this.configurationValid = true;
     } catch {
       this.configurationValid = false;
-      this.reprovisionUrl = undefined;
     }
     try {
       this.ownerOAuth = createOwnerOAuth(state.storage, env, createIdentityStore(state.storage));
@@ -126,7 +224,7 @@ export class UpdateControlAuthController {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
     if (url.pathname === OAUTH_REPROVISION_PATH) {
-      return this.handleOAuthReprovision(request, url);
+      return this.handleOAuthReprovision(request);
     }
     if (url.pathname === "/_operations" || url.pathname.startsWith("/_operations/")) {
       return jsonResponse({ error: "not_found" }, 404);
@@ -165,93 +263,15 @@ export class UpdateControlAuthController {
     }
   }
 
-  private async handleOAuthReprovision(request: Request, url: URL): Promise<Response> {
-    if (!this.reprovisionUrl ||
-        url.origin !== this.reprovisionUrl.origin ||
-        url.pathname !== this.reprovisionUrl.pathname ||
-        url.username || url.password || url.hash) {
-      return jsonResponse({ error: "not_found" }, 404);
-    }
-    if (!this.configurationValid) {
-      return jsonResponse({ error: "update_control_not_configured" }, 503);
-    }
-
-    let operationId: string;
-    if (request.method === "GET") {
-      if ([...url.searchParams.keys()].some((key) => key !== "operationId") ||
-          url.searchParams.getAll("operationId").length !== 1) {
-        return jsonResponse({ error: "invalid_request" }, 400);
-      }
-      operationId = url.searchParams.get("operationId") ?? "";
-    } else if (request.method === "POST" && !url.search && !url.hash &&
-        !request.url.includes("?") && !request.url.includes("#")) {
-      let body: string;
-      try {
-        body = await readBoundedRequestText(request, MAX_REPROVISION_BODY_BYTES);
-      } catch {
-        return jsonResponse({ error: "invalid_request" }, 400);
-      }
-      let input: unknown;
-      try {
-        input = JSON.parse(body) as unknown;
-      } catch {
-        return jsonResponse({ error: "invalid_request" }, 400);
-      }
-      if (!isRecord(input) || Object.keys(input).length !== 1 ||
-          typeof input.operationId !== "string") {
-        return jsonResponse({ error: "invalid_operation_id" }, 400);
-      }
-      operationId = input.operationId;
-    } else {
-      return jsonResponse({ error: "method_not_allowed" }, 405);
-    }
-
-    if (!OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(operationId)) {
-      return jsonResponse({ error: "invalid_operation_id" }, 400);
-    }
-    const authorization = request.headers.get("authorization");
-    const assertion = authorization?.startsWith("Bearer ")
-      ? authorization.slice("Bearer ".length).trim()
-      : "";
-    const diagnosticRequested = request.method === "GET" &&
-      request.headers.get("x-update-control-oidc-diagnose") === "v1";
-    if (!assertion) {
-      return jsonResponse({
-        error: "operation_auth_required",
-        ...(diagnosticRequested ? { diagnosticStage: "input" } : {}),
-      }, 401);
-    }
-    const verification = await this.oidcAssertionVerifier.verifyWithStage(assertion, operationId);
-    if (!verification.valid) {
-      return jsonResponse({
-        error: "operation_auth_required",
-        ...(diagnosticRequested ? { diagnosticStage: verification.stage } : {}),
-        ...(diagnosticRequested &&
-        verification.stage === "jwks_fetch" &&
-        verification.jwksFetchFailureCategory
-          ? { diagnosticFailureCategory: verification.jwksFetchFailureCategory }
-          : {}),
-        ...(diagnosticRequested &&
-        verification.stage === "jwks_fetch" &&
-        verification.jwksFetchFailureCategory === "fetch_rejected" &&
-        verification.jwksFetchRejectionClass
-          ? { diagnosticRejectionClass: verification.jwksFetchRejectionClass }
-          : {}),
-        ...(diagnosticRequested &&
-        verification.stage === "jwks_fetch" &&
-        verification.jwksFetchFailureCategory === "fetch_rejected" &&
-        verification.jwksFetchRejectionClass === "type_error"
-          ? {
-            diagnosticTypeErrorReason:
-              safeDiagnosticTypeErrorReason(verification.jwksFetchTypeErrorReason) ??
-              "unknown_type_error",
-          }
-          : {}),
-      }, 401);
+  private async handleOAuthReprovision(request: Request): Promise<Response> {
+    const parsed = await parseOAuthReprovisionOperationId(request, this.env.MCP_UPDATE_CONTROL_PUBLIC_URL);
+    if (!parsed.ok) return parsed.response;
+    if (request.headers.get(UPDATE_CONTROL_INTERNAL_OIDC_HEADER) !== UPDATE_CONTROL_INTERNAL_OIDC_MARKER) {
+      return jsonResponse({ error: "operation_auth_required" }, 401);
     }
     return request.method === "GET"
-      ? this.readOAuthReprovisionStatus(operationId)
-      : this.runOAuthReprovision(operationId);
+      ? this.readOAuthReprovisionStatus(parsed.operationId)
+      : this.runOAuthReprovision(parsed.operationId);
   }
 
   private async readOAuthReprovisionStatus(operationId: string): Promise<Response> {
