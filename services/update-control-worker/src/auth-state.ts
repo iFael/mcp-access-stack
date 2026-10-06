@@ -220,6 +220,11 @@ export class UpdateControlAuthController {
       return jsonResponse({
         error: "operation_auth_required",
         ...(diagnosticRequested ? { diagnosticStage: verification.stage } : {}),
+        ...(diagnosticRequested &&
+        verification.stage === "jwks_fetch" &&
+        verification.jwksFetchFailureCategory
+          ? { diagnosticFailureCategory: verification.jwksFetchFailureCategory }
+          : {}),
       }, 401);
     }
     return request.method === "GET"
