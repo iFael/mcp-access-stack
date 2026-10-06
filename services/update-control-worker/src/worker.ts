@@ -1,15 +1,14 @@
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import {
-  createOAuthReprovisionOidcFailureResponse,
   OAUTH_REPROVISION_PATH,
   parseOAuthReprovisionOperationId,
-  UPDATE_CONTROL_INTERNAL_OIDC_HEADER,
-  UPDATE_CONTROL_INTERNAL_OIDC_MARKER,
+  UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER,
+  UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER,
   UpdateControlAuthController,
   type UpdateControlDurableStorage,
   type UpdateControlEnvironment,
 } from "./auth-state.js";
-import { GitHubActionsOidcAssertionVerifier } from "./github-actions-oidc.js";
+import { verifyOAuthReprovisionHmac } from "./oauth-reprovision-hmac.js";
 import {
   ORACLE_CHANNEL_CONNECT_PATH,
   ORACLE_CHANNEL_SCOPE,
@@ -56,10 +55,10 @@ export class UpdateControlAuthState {
   }
 }
 
-function withoutClientInternalOidcMarker(request: Request): Request {
-  if (!request.headers.has(UPDATE_CONTROL_INTERNAL_OIDC_HEADER)) return request;
+function withoutClientInternalReprovisionAuthMarker(request: Request): Request {
+  if (!request.headers.has(UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER)) return request;
   const headers = new Headers(request.headers);
-  headers.delete(UPDATE_CONTROL_INTERNAL_OIDC_HEADER);
+  headers.delete(UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER);
   return new Request(request, { headers });
 }
 
@@ -82,29 +81,32 @@ const updateControlWorker = {
       );
       if (!parsed.ok) return parsed.response;
 
-      const authorization = request.headers.get("authorization");
-      const assertion = authorization?.startsWith("Bearer ")
-        ? authorization.slice("Bearer ".length).trim()
-        : "";
-      if (!assertion) return createOAuthReprovisionOidcFailureResponse(request);
-
-      const verification = await new GitHubActionsOidcAssertionVerifier(fetch)
-        .verifyWithStage(assertion, parsed.operationId);
-      if (!verification.valid) {
-        return createOAuthReprovisionOidcFailureResponse(request, verification);
+      const authenticated = await verifyOAuthReprovisionHmac(
+        request,
+        parsed.operationId,
+        env.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY,
+      );
+      if (!authenticated) {
+        return new Response(JSON.stringify({ error: "operation_auth_required" }), {
+          status: 401,
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
       }
 
       const headers = new Headers(request.headers);
       headers.delete("authorization");
       headers.delete("x-update-control-oidc-diagnose");
-      headers.delete(UPDATE_CONTROL_INTERNAL_OIDC_HEADER);
-      headers.set(UPDATE_CONTROL_INTERNAL_OIDC_HEADER, UPDATE_CONTROL_INTERNAL_OIDC_MARKER);
+      headers.delete(UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER);
+      headers.set(
+        UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER,
+        UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER,
+      );
       const internalRequest = new Request(request, { headers });
       const id = env.UPDATE_CONTROL_AUTH_STATE.idFromName("update-control-auth-v1");
       return env.UPDATE_CONTROL_AUTH_STATE.get(id).fetch(internalRequest);
     }
 
-    const routedRequest = withoutClientInternalOidcMarker(request);
+    const routedRequest = withoutClientInternalReprovisionAuthMarker(request);
     if (url.pathname === ORACLE_CHANNEL_CONNECT_PATH) {
       const channel = env.UPDATE_CONTROL_ORACLE_CHANNEL;
       if (!channel) {

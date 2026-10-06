@@ -9,7 +9,6 @@ import { createUpdateControlMcpHandler } from "./mcp.js";
 import { UpdateControlOracleChannelReadClient } from "./oracle-channel-client.js";
 import type { OracleChannelNamespace } from "./oracle-channel.js";
 import { createUpdateControlReadOnlyTools, type UpdateControlReadClient } from "./tools.js";
-import type { GitHubActionsOidcVerificationResult } from "./github-actions-oidc.js";
 
 const UPDATE_CONTROL_OWNER_ID = "usr_85dd70bf-2a50-4b8e-97d6-3c20c7226757";
 const MAX_URL_LENGTH = 8 * 1024;
@@ -18,8 +17,8 @@ const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_OAUTH_BODY_BYTES = 16 * 1024;
 const MAX_REPROVISION_BODY_BYTES = 1024;
 export const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
-export const UPDATE_CONTROL_INTERNAL_OIDC_HEADER = "x-update-control-internal-oidc-verified";
-export const UPDATE_CONTROL_INTERNAL_OIDC_MARKER = "v1";
+export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER = "x-update-control-internal-reprovision-authenticated";
+export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER = "v1";
 const OAUTH_REPROVISION_ACTIVE_KEY = "update-control:oauth-reprovision:v1:active";
 const OAUTH_REPROVISION_OPERATION_PREFIX = "update-control:oauth-reprovision:v1:operation:";
 const OAUTH_REPROVISION_EVENT_PREFIX = "update-control:oauth-reprovision:v1:event:";
@@ -28,12 +27,6 @@ const OWNER_OAUTH_STORAGE_PREFIX = "owner:";
 const OWNER_OAUTH_DELETE_BATCH_SIZE = 256;
 const OWNER_OAUTH_DELETE_LIMIT_PER_REQUEST = 2048;
 const OAUTH_REPROVISION_OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-
-type DiagnosticTypeErrorReason = "network_connection_lost" | "unknown_type_error";
-
-function safeDiagnosticTypeErrorReason(value: unknown): DiagnosticTypeErrorReason | null {
-  return value === "network_connection_lost" || value === "unknown_type_error" ? value : null;
-}
 
 export type OAuthReprovisionOperationIdResult =
   | { readonly ok: true; readonly operationId: string }
@@ -102,38 +95,6 @@ export async function parseOAuthReprovisionOperationId(
   return { ok: true, operationId };
 }
 
-export function createOAuthReprovisionOidcFailureResponse(
-  request: Request,
-  verification?: GitHubActionsOidcVerificationResult,
-): Response {
-  const diagnosticRequested = request.method === "GET" &&
-    request.headers.get("x-update-control-oidc-diagnose") === "v1";
-  return jsonResponse({
-    error: "operation_auth_required",
-    ...(diagnosticRequested ? { diagnosticStage: verification?.stage ?? "input" } : {}),
-    ...(diagnosticRequested &&
-    verification?.stage === "jwks_fetch" &&
-    verification.jwksFetchFailureCategory
-      ? { diagnosticFailureCategory: verification.jwksFetchFailureCategory }
-      : {}),
-    ...(diagnosticRequested &&
-    verification?.stage === "jwks_fetch" &&
-    verification.jwksFetchFailureCategory === "fetch_rejected" &&
-    verification.jwksFetchRejectionClass
-      ? { diagnosticRejectionClass: verification.jwksFetchRejectionClass }
-      : {}),
-    ...(diagnosticRequested &&
-    verification?.stage === "jwks_fetch" &&
-    verification.jwksFetchFailureCategory === "fetch_rejected" &&
-    verification.jwksFetchRejectionClass === "type_error"
-      ? {
-        diagnosticTypeErrorReason:
-          safeDiagnosticTypeErrorReason(verification.jwksFetchTypeErrorReason) ??
-          "unknown_type_error",
-      }
-      : {}),
-  }, 401);
-}
 
 type OAuthReprovisionStatus = "in_progress" | "completed" | "outcome_unknown";
 type OAuthReprovisionEventType =
@@ -169,6 +130,7 @@ interface OAuthReprovisionAuditEvent {
 export interface UpdateControlEnvironment {
   readonly MCP_UPDATE_CONTROL_PUBLIC_URL?: string;
   readonly MCP_OWNER_TOKEN?: string;
+  readonly UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
   readonly UPDATE_CONTROL_ORACLE_CHANNEL?: OracleChannelNamespace;
@@ -193,7 +155,6 @@ export class UpdateControlAuthController {
   constructor(
     private readonly state: UpdateControlDurableState,
     private readonly env: UpdateControlEnvironment,
-    _fetchImpl: typeof fetch = fetch,
   ) {
     try {
       deriveOAuthReprovisionUrl(env.MCP_UPDATE_CONTROL_PUBLIC_URL);
@@ -266,7 +227,7 @@ export class UpdateControlAuthController {
   private async handleOAuthReprovision(request: Request): Promise<Response> {
     const parsed = await parseOAuthReprovisionOperationId(request, this.env.MCP_UPDATE_CONTROL_PUBLIC_URL);
     if (!parsed.ok) return parsed.response;
-    if (request.headers.get(UPDATE_CONTROL_INTERNAL_OIDC_HEADER) !== UPDATE_CONTROL_INTERNAL_OIDC_MARKER) {
+    if (request.headers.get(UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER) !== UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER) {
       return jsonResponse({ error: "operation_auth_required" }, 401);
     }
     return request.method === "GET"

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController } from "../../src/auth-state.js";
-import { createTestGitHubActionsAssertion, testGitHubActionsJwksFetch } from "./github-actions-oidc-fixture.js";
 
 const OWNER_SECRET = "phase2-test-owner-secret-which-is-long";
 const BASE_URL = "https://update-control.example/";
@@ -39,7 +38,7 @@ function makeController(storage = new MemoryStorage(), publicUrl = BASE_URL) {
     MCP_UPDATE_CONTROL_PUBLIC_URL: publicUrl,
     MCP_OWNER_TOKEN: OWNER_SECRET,
   };
-  return { controller: new UpdateControlAuthController({ storage }, env, testGitHubActionsJwksFetch), storage };
+  return { controller: new UpdateControlAuthController({ storage }, env), storage };
 }
 
 async function completeInitialReprovision(controller: UpdateControlAuthController, operationId: string): Promise<void> {
@@ -48,9 +47,8 @@ async function completeInitialReprovision(controller: UpdateControlAuthControlle
     {
       method: "POST",
       headers: {
-        authorization: `Bearer ${await createTestGitHubActionsAssertion(operationId)}`,
         "content-type": "application/json",
-        "x-update-control-internal-oidc-verified": "v1",
+        "x-update-control-internal-reprovision-authenticated": "v1",
       },
       body: JSON.stringify({ operationId }),
     },
@@ -123,7 +121,7 @@ function base64Url(value: Uint8Array): string {
 }
 
 describe("Update Control owner authorization boundary", () => {
-  it("rejects an invalid GitHub OIDC bearer without writing OAuth state", async () => {
+  it("rejects a request without the trusted internal authentication marker", async () => {
     const { controller, storage } = makeController();
     const response = await controller.fetch(new Request(
       new URL("/_operations/oauth/reprovision", BASE_URL),

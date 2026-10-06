@@ -8,15 +8,17 @@ import {
 const VALID_ENV = {
   UPDATE_CONTROL_CF_API_TOKEN: "cloudflare-deploy-token-test-value",
   UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "c".repeat(48),
+  UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join(""),
   CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
   MCP_UPDATE_CONTROL_PUBLIC_URL: "https://mcp-v3-update-control.mcp-v3-update-control.workers.dev/",
 };
 
 describe("Update Control deploy configuration preflight", () => {
-  it("requires only the deploy token, channel token, account, and complete canonical Worker workers.dev origin", () => {
+  it("requires the dedicated reprovision HMAC key with the other deploy inputs", () => {
     expect(UPDATE_CONTROL_DEPLOY_SECRET_INPUTS).toEqual([
       "UPDATE_CONTROL_CF_API_TOKEN",
       "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
+      "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY",
     ]);
     expect(UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS).toEqual([
       "CLOUDFLARE_ACCOUNT_ID",
@@ -73,10 +75,12 @@ describe("Update Control deploy configuration preflight", () => {
       ...VALID_ENV,
       UPDATE_CONTROL_CF_API_TOKEN: sentinel,
       UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: "short",
+      UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: sentinel,
       CLOUDFLARE_ACCOUNT_ID: "not-an-account-id",
     });
     const diagnostics = errors.join("\n");
     expect(diagnostics).toContain("UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN");
+    expect(diagnostics).toContain("UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
     expect(diagnostics).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(diagnostics).not.toContain(sentinel);
     expect(diagnostics).not.toContain("short");
@@ -86,5 +90,6 @@ describe("Update Control deploy configuration preflight", () => {
     const normalNames = [...UPDATE_CONTROL_DEPLOY_SECRET_INPUTS, ...UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS];
     expect(normalNames).not.toContain("MCP_OWNER_TOKEN");
     expect(normalNames).not.toContain("UPDATE_CONTROL_OWNER_TOKEN_NEXT");
+    expect(normalNames).toContain("UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
   });
 });
