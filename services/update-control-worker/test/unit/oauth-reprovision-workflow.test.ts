@@ -172,6 +172,7 @@ describe("OAuth reprovision operator client", () => {
           error: "operation_auth_required",
           diagnosticStage: "jwks_fetch",
           diagnosticFailureCategory: "fetch_rejected",
+          diagnosticRejectionClass: "type_error",
         }, 401);
       },
     });
@@ -183,6 +184,7 @@ describe("OAuth reprovision operator client", () => {
     expect(result.error).toBe("operation_auth_required");
     expect(result.workerStage).toBe("jwks_fetch");
     expect(result.workerFailureCategory).toBe("fetch_rejected");
+    expect(result.workerRejectionClass).toBe("type_error");
     expect(result.assertion).toEqual({
       formatValid: true,
       algMatches: true,
@@ -238,7 +240,34 @@ describe("OAuth reprovision operator client", () => {
     });
     expect(result.workerStage).toBe("jwks_fetch");
     expect(result.workerFailureCategory).toBeNull();
+    expect(result.workerRejectionClass).toBeNull();
     expect(JSON.stringify(result)).not.toContain("unrecognized-category");
+  });
+
+  it("drops an unrecognized Worker fetch rejection class while preserving the valid category", async () => {
+    const assertion = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const result = await diagnoseOAuthReprovisionStatus({
+      env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "", UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" }),
+      fetchImpl: async (url) => {
+        const requestUrl = new URL(String(url));
+        if (requestUrl.hostname === "token.actions.githubusercontent.com") {
+          return testGitHubActionsJwksFetch(requestUrl);
+        }
+        if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
+          return jsonResponse({ value: assertion });
+        }
+        return jsonResponse({
+          error: "operation_auth_required",
+          diagnosticStage: "jwks_fetch",
+          diagnosticFailureCategory: "fetch_rejected",
+          diagnosticRejectionClass: "unrecognized-class",
+        }, 401);
+      },
+    });
+    expect(result.workerStage).toBe("jwks_fetch");
+    expect(result.workerFailureCategory).toBe("fetch_rejected");
+    expect(result.workerRejectionClass).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("unrecognized-class");
   });
 
   it("requests a UUID-bound GitHub OIDC token and checks completed status without a replacement token", async () => {

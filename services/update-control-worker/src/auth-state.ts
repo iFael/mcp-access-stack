@@ -225,6 +225,12 @@ export class UpdateControlAuthController {
         verification.jwksFetchFailureCategory
           ? { diagnosticFailureCategory: verification.jwksFetchFailureCategory }
           : {}),
+        ...(diagnosticRequested &&
+        verification.stage === "jwks_fetch" &&
+        verification.jwksFetchFailureCategory === "fetch_rejected" &&
+        verification.jwksFetchRejectionClass
+          ? { diagnosticRejectionClass: verification.jwksFetchRejectionClass }
+          : {}),
       }, 401);
     }
     return request.method === "GET"
