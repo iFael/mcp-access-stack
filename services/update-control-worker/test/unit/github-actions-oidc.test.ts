@@ -70,14 +70,21 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
     await expect(verifier.verify(token, OPERATION_ID)).resolves.toBe(true);
   });
 
-  it("fails closed when GitHub JWKS is unavailable or malformed", async () => {
+  it("reports bounded internal failure stages without exposing token material", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
     const unavailable = new GitHubActionsOidcAssertionVerifier(async () => new Response(null, { status: 503 }));
-    await expect(unavailable.verify(await createTestGitHubActionsAssertion(OPERATION_ID), OPERATION_ID))
-      .resolves.toBe(false);
+    await expect(unavailable.verifyWithStage(token, OPERATION_ID))
+      .resolves.toEqual({ valid: false, stage: "jwks_http" });
 
     const malformed = new GitHubActionsOidcAssertionVerifier(async () =>
       new Response(JSON.stringify({ keys: [] }), { status: 200 }));
-    await expect(malformed.verify(await createTestGitHubActionsAssertion(OPERATION_ID), OPERATION_ID))
-      .resolves.toBe(false);
+    await expect(malformed.verifyWithStage(token, OPERATION_ID))
+      .resolves.toEqual({ valid: false, stage: "jwks_shape" });
+
+    const invalid = token.split(".");
+    invalid[2] = "A".repeat(invalid[2]!.length);
+    const signature = new GitHubActionsOidcAssertionVerifier(testGitHubActionsJwksFetch);
+    await expect(signature.verifyWithStage(invalid.join("."), OPERATION_ID))
+      .resolves.toEqual({ valid: false, stage: "signature" });
   });
 });

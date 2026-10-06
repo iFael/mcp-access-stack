@@ -168,14 +168,16 @@ describe("OAuth reprovision operator client", () => {
           return jsonResponse({ value: assertion });
         }
         requests.push({ url: requestUrl, init });
-        return jsonResponse({ error: "operation_auth_required" }, 401);
+        return jsonResponse({ error: "operation_auth_required", diagnosticStage: "signature" }, 401);
       },
     });
     expect(requests).toHaveLength(1);
     expect(requests[0].init.method).toBe("GET");
+    expect(requests[0].init.headers["x-update-control-oidc-diagnose"]).toBe("v1");
     expect(result.httpStatus).toBe(401);
     expect(result.status).toBeNull();
     expect(result.error).toBe("operation_auth_required");
+    expect(result.workerStage).toBe("signature");
     expect(result.assertion).toEqual({
       formatValid: true,
       algMatches: true,

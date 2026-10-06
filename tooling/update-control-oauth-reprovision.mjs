@@ -7,6 +7,10 @@ const GITHUB_ACTIONS_OIDC_HOST_SUFFIX = ".actions.githubusercontent.com";
 const GITHUB_ACTIONS_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const VALID_STATUSES = new Set(["not_executed", "in_progress", "completed", "outcome_unknown"]);
+const VALID_DIAGNOSTIC_STAGES = new Set([
+  "verified", "input", "structure", "header", "claims", "jwks_fetch", "jwks_http",
+  "jwks_shape", "jwks_kid", "jwks_import", "signature", "exception",
+]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const MAX_JWKS_RESPONSE_BYTES = 32 * 1024;
 const MAX_JWKS_KEYS = 16;
@@ -184,7 +188,7 @@ async function createAuthenticatedSettings(env, fetchImpl, options) {
   return { ...settings, assertion };
 }
 
-async function requestJson(fetchImpl, url, method, settings, body) {
+async function requestJson(fetchImpl, url, method, settings, body, diagnostic = false) {
   let response;
   try {
     response = await fetchImpl(url, {
@@ -194,6 +198,7 @@ async function requestJson(fetchImpl, url, method, settings, body) {
       headers: {
         authorization: `Bearer ${settings.assertion}`,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(diagnostic ? { "x-update-control-oidc-diagnose": "v1" } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -339,6 +344,13 @@ function safeEndpointError(payload) {
   return typeof error === "string" && /^[a-z0-9_]{1,64}$/u.test(error) ? error : null;
 }
 
+function safeEndpointDiagnosticStage(payload) {
+  const stage = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload.diagnosticStage
+    : undefined;
+  return typeof stage === "string" && VALID_DIAGNOSTIC_STAGES.has(stage) ? stage : null;
+}
+
 function validateStatusPayload(payload, operationId) {
   if (
     typeof payload !== "object" ||
@@ -387,6 +399,8 @@ export async function diagnoseOAuthReprovisionStatus({
     requestUrl(settings.endpoint, settings.operationId),
     "GET",
     settings,
+    undefined,
+    true,
   );
   const status = payload && typeof payload === "object" && !Array.isArray(payload) &&
     payload.operationId === settings.operationId && typeof payload.status === "string" &&
@@ -396,6 +410,7 @@ export async function diagnoseOAuthReprovisionStatus({
     httpStatus: response.status,
     status,
     error: safeEndpointError(payload),
+    workerStage: safeEndpointDiagnosticStage(payload),
     assertion,
   };
 }

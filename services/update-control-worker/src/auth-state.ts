@@ -207,9 +207,20 @@ export class UpdateControlAuthController {
     const assertion = authorization?.startsWith("Bearer ")
       ? authorization.slice("Bearer ".length).trim()
       : "";
-    if (!assertion ||
-        !(await this.oidcAssertionVerifier.verify(assertion, operationId))) {
-      return jsonResponse({ error: "operation_auth_required" }, 401);
+    const diagnosticRequested = request.method === "GET" &&
+      request.headers.get("x-update-control-oidc-diagnose") === "v1";
+    if (!assertion) {
+      return jsonResponse({
+        error: "operation_auth_required",
+        ...(diagnosticRequested ? { diagnosticStage: "input" } : {}),
+      }, 401);
+    }
+    const verification = await this.oidcAssertionVerifier.verifyWithStage(assertion, operationId);
+    if (!verification.valid) {
+      return jsonResponse({
+        error: "operation_auth_required",
+        ...(diagnosticRequested ? { diagnosticStage: verification.stage } : {}),
+      }, 401);
     }
     return request.method === "GET"
       ? this.readOAuthReprovisionStatus(operationId)
