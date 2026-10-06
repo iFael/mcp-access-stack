@@ -81,11 +81,16 @@ export type GitHubActionsOidcJwksFetchRejectionClass =
   | "non_error"
   | "other";
 
+export type GitHubActionsOidcJwksFetchTypeErrorReason =
+  | "network_connection_lost"
+  | "unknown_type_error";
+
 export interface GitHubActionsOidcVerificationResult {
   readonly valid: boolean;
   readonly stage: GitHubActionsOidcVerificationStage;
   readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
   readonly jwksFetchRejectionClass?: GitHubActionsOidcJwksFetchRejectionClass;
+  readonly jwksFetchTypeErrorReason?: GitHubActionsOidcJwksFetchTypeErrorReason;
 }
 
 export function githubActionsOAuthReprovisionAudience(operationId: string): string {
@@ -139,6 +144,9 @@ export class GitHubActionsOidcAssertionVerifier {
           ...(keyResult.stage === "jwks_fetch" && keyResult.jwksFetchRejectionClass
             ? { jwksFetchRejectionClass: keyResult.jwksFetchRejectionClass }
             : {}),
+          ...(keyResult.stage === "jwks_fetch" && keyResult.jwksFetchTypeErrorReason
+            ? { jwksFetchTypeErrorReason: keyResult.jwksFetchTypeErrorReason }
+            : {}),
         };
       }
       const signature = decodeBase64Url(parts[2]!);
@@ -162,6 +170,7 @@ export class GitHubActionsOidcAssertionVerifier {
     readonly stage: GitHubActionsOidcVerificationStage;
     readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
     readonly jwksFetchRejectionClass?: GitHubActionsOidcJwksFetchRejectionClass;
+    readonly jwksFetchTypeErrorReason?: GitHubActionsOidcJwksFetchTypeErrorReason;
   }> {
     if (this.cache && this.cache.expiresAt > Date.now()) {
       const cached = this.cache.keys.get(kid);
@@ -197,11 +206,20 @@ export class GitHubActionsOidcAssertionVerifier {
     } catch (rejected) {
       const failureCategory =
         timeoutSignal.aborted && rejected === timeoutSignal.reason ? "timeout" : "fetch_rejected";
+      const rejectionClass = classifyJwksFetchRejection(rejected);
       return {
         stage: "jwks_fetch",
         jwksFetchFailureCategory: failureCategory,
         ...(failureCategory === "fetch_rejected"
-          ? { jwksFetchRejectionClass: classifyJwksFetchRejection(rejected) }
+          ? {
+            jwksFetchRejectionClass: rejectionClass,
+            ...(rejectionClass === "type_error"
+              ? {
+                jwksFetchTypeErrorReason:
+                  classifyJwksFetchTypeErrorReason(rejected) ?? "unknown_type_error",
+              }
+              : {}),
+          }
           : {}),
       };
     }
@@ -261,6 +279,19 @@ function classifyJwksFetchRejection(
     return "non_error";
   } catch {
     return "other";
+  }
+}
+
+function classifyJwksFetchTypeErrorReason(
+  rejected: unknown,
+): GitHubActionsOidcJwksFetchTypeErrorReason | null {
+  try {
+    if (!(rejected instanceof TypeError)) return null;
+    return rejected.message === "Network connection lost"
+      ? "network_connection_lost"
+      : "unknown_type_error";
+  } catch {
+    return null;
   }
 }
 

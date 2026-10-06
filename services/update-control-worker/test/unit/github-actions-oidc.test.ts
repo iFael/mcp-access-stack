@@ -136,8 +136,37 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
       stage: "jwks_fetch",
       jwksFetchFailureCategory: "fetch_rejected",
       jwksFetchRejectionClass: "type_error",
+      jwksFetchTypeErrorReason: "unknown_type_error",
     });
     expect(JSON.stringify(result)).not.toContain("unsafe rejected fetch detail");
+  });
+
+  it.each([
+    ["documented network failure", "Network connection lost", "network_connection_lost"],
+    ["unrecognized TypeError message", "raw-message-sentinel", "unknown_type_error"],
+  ])("maps only the exact documented TypeError reason for %s", async (_label, rawMessage, expectedReason) => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const rawStack = "raw-stack-sentinel";
+    const rawCause = "raw-cause-sentinel";
+    const rejected = new TypeError(rawMessage);
+    rejected.stack = rawStack;
+    Object.defineProperty(rejected, "cause", { value: rawCause });
+    const fetchImpl = (async () => {
+      throw rejected;
+    }) as typeof fetch;
+    const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+      .verifyWithStage(token, OPERATION_ID);
+    expect(result).toEqual({
+      valid: false,
+      stage: "jwks_fetch",
+      jwksFetchFailureCategory: "fetch_rejected",
+      jwksFetchRejectionClass: "type_error",
+      jwksFetchTypeErrorReason: expectedReason,
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(rawMessage);
+    expect(serialized).not.toContain(rawStack);
+    expect(serialized).not.toContain(rawCause);
   });
 
   it.each([
@@ -159,6 +188,9 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
       stage: "jwks_fetch",
       jwksFetchFailureCategory: "fetch_rejected",
       jwksFetchRejectionClass: rejectionClass,
+      ...(rejectionClass === "type_error"
+        ? { jwksFetchTypeErrorReason: "unknown_type_error" }
+        : {}),
     });
     expect(JSON.stringify(result)).not.toContain("unsafe rejection detail");
     expect(JSON.stringify(result)).not.toContain("UnlistedDiagnosticName");
@@ -207,6 +239,7 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
         stage: "jwks_fetch",
         jwksFetchFailureCategory: "fetch_rejected",
         jwksFetchRejectionClass: "type_error",
+        jwksFetchTypeErrorReason: "unknown_type_error",
       });
       expect(JSON.stringify(result)).not.toContain("unrelated rejection detail");
     } finally {
