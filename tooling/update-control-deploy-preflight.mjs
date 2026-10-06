@@ -4,12 +4,16 @@ import { pathToFileURL } from "node:url";
 export const UPDATE_CONTROL_DEPLOY_SECRET_INPUTS = Object.freeze([
   "UPDATE_CONTROL_CF_API_TOKEN",
   "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
-  "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY",
+  "UPDATE_CONTROL_ADMIN_HMAC_KEY",
+  "MICROSOFT_CLIENT_SECRET",
 ]);
 
 export const UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS = Object.freeze([
   "CLOUDFLARE_ACCOUNT_ID",
   "MCP_UPDATE_CONTROL_PUBLIC_URL",
+  "MICROSOFT_CLIENT_ID",
+  "MICROSOFT_TENANT",
+  "UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL",
 ]);
 
 function isMissing(value) {
@@ -24,7 +28,7 @@ const UPDATE_CONTROL_WORKER_NAME = "mcp-v3-update-control";
 
 function isWorkersDevOrigin(value) {
   try {
-    if (/[\u0000-\u001f\u007f]/u.test(value) || value.includes("?") || value.includes("#")) return false;
+    if (containsControlCharacters(value) || value.includes("?") || value.includes("#")) return false;
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase();
     const workerHostPrefix = UPDATE_CONTROL_WORKER_NAME + ".";
@@ -47,19 +51,27 @@ function isWorkersDevOrigin(value) {
   }
 }
 
+function isGuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function isMicrosoftTenant(value) {
+  return value === "common" || value === "organizations" || value === "consumers" || isGuid(value);
+}
+
+function isBootstrapAdminEmail(value) {
+  return value.length >= 3 &&
+    value.length <= 320 &&
+    !/[\u0000-\u0020\u007f]/u.test(value) &&
+    /^[^@]+@[^@]+$/u.test(value);
+}
+
 function settingError(kind, name, value, valid) {
   if (isMissing(value)) return `Required GitHub Environment ${kind} ${name} is missing.`;
   if (!valid(value)) return `Required GitHub Environment ${kind} ${name} is invalid.`;
   return undefined;
 }
 
-/**
- * Validates the protected Environment inputs needed for the normal Update Control Worker deploy.
- * Error messages contain setting names and classifications only; values are never returned or logged.
- * MCP_OWNER_TOKEN belongs to the separate controlled OAuth workflow and is not a normal-deploy input.
- * @param {Record<string, string | undefined>} env
- * @returns {string[]}
- */
 export function validateUpdateControlDeployEnvironment(env) {
   const errors = [];
   const cleanText = (minimum, maximum) => (value) =>
@@ -68,7 +80,8 @@ export function validateUpdateControlDeployEnvironment(env) {
   const secretValidators = {
     UPDATE_CONTROL_CF_API_TOKEN: cleanText(1, 4096),
     UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: cleanText(32, 2048),
-    UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: (value) => /^[0-9a-f]{64}$/u.test(value),
+    UPDATE_CONTROL_ADMIN_HMAC_KEY: (value) => /^[0-9a-f]{64}$/u.test(value),
+    MICROSOFT_CLIENT_SECRET: cleanText(16, 4096),
   };
   for (const name of UPDATE_CONTROL_DEPLOY_SECRET_INPUTS) {
     const error = settingError("secret", name, env[name], secretValidators[name]);
@@ -78,12 +91,14 @@ export function validateUpdateControlDeployEnvironment(env) {
   const variableValidators = {
     CLOUDFLARE_ACCOUNT_ID: (value) => /^[a-f0-9]{32}$/iu.test(value),
     MCP_UPDATE_CONTROL_PUBLIC_URL: isWorkersDevOrigin,
+    MICROSOFT_CLIENT_ID: isGuid,
+    MICROSOFT_TENANT: isMicrosoftTenant,
+    UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: isBootstrapAdminEmail,
   };
   for (const name of UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS) {
     const error = settingError("variable", name, env[name], variableValidators[name]);
     if (error) errors.push(error);
   }
-
   return errors;
 }
 

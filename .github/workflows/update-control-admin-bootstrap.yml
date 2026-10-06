@@ -1,21 +1,21 @@
-name: Update Control OAuth controlled reprovision
+name: Update Control admin bootstrap
 
 on:
   workflow_dispatch:
     inputs:
       operation_id:
-        description: "UUID for this exact reprovision intent. Reuse the same UUID to reconcile this operation."
+        description: "UUID for this exact first-admin bootstrap intent."
         required: true
         type: string
-      confirm_reprovision:
-        description: "Choose read-only status diagnosis or explicitly authorize destructive OAuth reprovisioning."
+      confirm_bootstrap:
+        description: "Diagnose or explicitly open the short first-admin enrollment window."
         required: true
         type: choice
         default: "NO"
         options:
           - "NO"
           - "DIAGNOSE_STATUS"
-          - "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS"
+          - "BOOTSTRAP_UPDATE_CONTROL_ADMIN"
 
 permissions:
   contents: read
@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   diagnose:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'DIAGNOSE_STATUS' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_bootstrap == 'DIAGNOSE_STATUS' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment:
@@ -47,17 +47,17 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Diagnose operation status with administrative HMAC-SHA-256
+      - name: Diagnose bootstrap status
         env:
-          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
+          UPDATE_CONTROL_ADMIN_BOOTSTRAP_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
-        run: node tooling/update-control-oauth-reprovision.mjs diagnose
+        run: node tooling/update-control-admin-bootstrap.mjs diagnose
 
-  reprovision:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS' }}
+  bootstrap:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_bootstrap == 'BOOTSTRAP_UPDATE_CONTROL_ADMIN' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     environment:
       name: update-control-production
     permissions:
@@ -76,19 +76,10 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
-      - name: Check the same operation ID with administrative HMAC-SHA-256
-        id: preflight
+      - name: Open first-admin enrollment window
         env:
-          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
-          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
+          UPDATE_CONTROL_ADMIN_BOOTSTRAP_CONFIRM: ${{ inputs.confirm_bootstrap }}
+          UPDATE_CONTROL_ADMIN_BOOTSTRAP_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
-        run: node tooling/update-control-oauth-reprovision.mjs preflight
-      - name: Reconcile and apply the same operation ID
-        if: steps.preflight.outputs.completed != 'true'
-        env:
-          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
-          UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
-          MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
-          UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
-        run: node tooling/update-control-oauth-reprovision.mjs apply
+        run: node tooling/update-control-admin-bootstrap.mjs activate

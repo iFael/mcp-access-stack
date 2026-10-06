@@ -7,7 +7,9 @@ on:
     paths:
       - .github/workflows/update-control-deploy.yml
       - .github/workflows/update-control-oauth-reprovision.yml
+      - .github/workflows/update-control-admin-bootstrap.yml
       - tooling/update-control-oauth-reprovision.mjs
+      - tooling/update-control-admin-bootstrap.mjs
       - services/update-control-worker/**
       - packages/edge-protocol/**
       - packages/mcp-owner-auth/**
@@ -63,7 +65,7 @@ jobs:
         run: npm ci
       - name: Check Update Control Worker (uses locked workspace Wrangler, dry-run only)
         run: npm run check:update-control
-      - name: Test Update Control Worker and OAuth operator workflow
+      - name: Test Update Control Worker and operator workflows
         run: npm run test:update-control-worker
       - name: Build and test Oracle read API and runtime stager
         run: npm run test:update-control-oracle-runtime && npm run test:oracle-release-orchestrator
@@ -99,9 +101,13 @@ jobs:
         env:
           UPDATE_CONTROL_CF_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: ${{ secrets.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
+          UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
+          MICROSOFT_CLIENT_SECRET: ${{ secrets.MICROSOFT_CLIENT_SECRET }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+          MICROSOFT_CLIENT_ID: ${{ vars.MICROSOFT_CLIENT_ID }}
+          MICROSOFT_TENANT: ${{ vars.MICROSOFT_TENANT }}
+          UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: ${{ vars.UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL }}
         run: node tooling/update-control-deploy-preflight.mjs
       - name: Install Oracle WSS channel secret through locked Wrangler stdin
         shell: bash
@@ -112,21 +118,33 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN --cwd ../.. --config services/update-control-worker/wrangler.jsonc
-      - name: Install OAuth reprovision HMAC key through locked Wrangler stdin
+      - name: Install administrative HMAC key through locked Wrangler stdin
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY }}
+          UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
         run: |
           set -euo pipefail
-          printf '%s' "$UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+          printf '%s' "$UPDATE_CONTROL_ADMIN_HMAC_KEY" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put UPDATE_CONTROL_ADMIN_HMAC_KEY --cwd ../.. --config services/update-control-worker/wrangler.jsonc
+      - name: Install Microsoft application secret through locked Wrangler stdin
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          MICROSOFT_CLIENT_SECRET: ${{ secrets.MICROSOFT_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MICROSOFT_CLIENT_SECRET" | npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler secret put MICROSOFT_CLIENT_SECRET --cwd ../.. --config services/update-control-worker/wrangler.jsonc
       - name: Deploy only Update Control
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATE_CONTROL_CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
+          MICROSOFT_CLIENT_ID: ${{ vars.MICROSOFT_CLIENT_ID }}
+          MICROSOFT_TENANT: ${{ vars.MICROSOFT_TENANT }}
+          UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: ${{ vars.UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL }}
         run: |
           set -euo pipefail
-          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --var "MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL"
+          npm exec --offline --workspace @mcp-access-stack/update-control-worker -- wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --var "MCP_UPDATE_CONTROL_PUBLIC_URL:$MCP_UPDATE_CONTROL_PUBLIC_URL" --var "MICROSOFT_CLIENT_ID:$MICROSOFT_CLIENT_ID" --var "MICROSOFT_TENANT:$MICROSOFT_TENANT" --var "UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL:$UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL"
