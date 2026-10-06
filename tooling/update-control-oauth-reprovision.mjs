@@ -19,8 +19,8 @@ function requireValue(env, name) {
   return value;
 }
 
-function readSettings(env) {
-  if (env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
+function readSettings(env, { requireConfirmation = true } = {}) {
+  if (requireConfirmation && env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
     throw new Error("Explicit OAuth reprovision confirmation is required.");
   }
 
@@ -162,8 +162,8 @@ async function requestGitHubActionsAssertion(settings, fetchImpl) {
   return payload.value;
 }
 
-async function createAuthenticatedSettings(env, fetchImpl) {
-  const settings = readSettings(env);
+async function createAuthenticatedSettings(env, fetchImpl, options) {
+  const settings = readSettings(env, options);
   const assertion = await requestGitHubActionsAssertion(settings, fetchImpl);
   return { ...settings, assertion };
 }
@@ -185,6 +185,54 @@ async function requestJson(fetchImpl, url, method, settings, body) {
     throw new Error("OAuth reprovision request failed; no credential was emitted.");
   }
   return { response, payload: await readBoundedJson(response) };
+}
+
+function decodeJwtJsonPart(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/u.test(value)) return undefined;
+  try {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+    const bytes = Uint8Array.from(
+      atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4)),
+      (character) => character.charCodeAt(0),
+    );
+    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeDiagnosticText(value, maxLength = 512) {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength &&
+    !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
+}
+
+function summarizeAssertion(assertion) {
+  const parts = assertion.split(".");
+  const header = parts.length === 3 ? decodeJwtJsonPart(parts[0]) : undefined;
+  const claims = parts.length === 3 ? decodeJwtJsonPart(parts[1]) : undefined;
+  return {
+    format: header && claims ? "jwt" : "invalid",
+    alg: sanitizeDiagnosticText(header?.alg, 32),
+    kid: sanitizeDiagnosticText(header?.kid, 256),
+    issuer: sanitizeDiagnosticText(claims?.iss),
+    audience: sanitizeDiagnosticText(claims?.aud),
+    subject: sanitizeDiagnosticText(claims?.sub),
+    repository: sanitizeDiagnosticText(claims?.repository),
+    workflowRef: sanitizeDiagnosticText(claims?.workflow_ref),
+    ref: sanitizeDiagnosticText(claims?.ref),
+    eventName: sanitizeDiagnosticText(claims?.event_name),
+    environment: sanitizeDiagnosticText(claims?.environment),
+    hasJti: typeof claims?.jti === "string" && claims.jti.length > 0,
+    iat: Number.isSafeInteger(claims?.iat) ? claims.iat : null,
+    nbf: Number.isSafeInteger(claims?.nbf) ? claims.nbf : null,
+    exp: Number.isSafeInteger(claims?.exp) ? claims.exp : null,
+  };
+}
+
+function safeEndpointError(payload) {
+  const error = payload && typeof payload === "object" && !Array.isArray(payload) ? payload.error : undefined;
+  return typeof error === "string" && /^[a-z0-9_]{1,64}$/u.test(error) ? error : null;
 }
 
 function validateStatusPayload(payload, operationId) {
@@ -222,6 +270,30 @@ async function appendGitHubOutput(env, status) {
   const path = env.GITHUB_OUTPUT;
   if (typeof path !== "string" || path.length === 0) return;
   await appendFile(path, `status=${status}\ncompleted=${status === "completed"}\n`, { encoding: "utf8" });
+}
+
+export async function diagnoseOAuthReprovisionStatus({
+  env = process.env,
+  fetchImpl = fetch,
+} = {}) {
+  const settings = await createAuthenticatedSettings(env, fetchImpl, { requireConfirmation: false });
+  const assertion = summarizeAssertion(settings.assertion);
+  const { response, payload } = await requestJson(
+    fetchImpl,
+    requestUrl(settings.endpoint, settings.operationId),
+    "GET",
+    settings,
+  );
+  const status = payload && typeof payload === "object" && !Array.isArray(payload) &&
+    payload.operationId === settings.operationId && typeof payload.status === "string" &&
+    VALID_STATUSES.has(payload.status) ? payload.status : null;
+  return {
+    operationId: settings.operationId,
+    httpStatus: response.status,
+    status,
+    error: safeEndpointError(payload),
+    assertion,
+  };
 }
 
 export async function preflightOAuthReprovision({
@@ -276,6 +348,11 @@ export async function executeOAuthReprovision({
 async function main() {
   const mode = process.argv[2];
   try {
+    if (mode === "diagnose") {
+      const result = await diagnoseOAuthReprovisionStatus();
+      process.stdout.write(`OAuth reprovision diagnosis: ${JSON.stringify(result)}\n`);
+      return;
+    }
     if (mode === "preflight") {
       const result = await preflightOAuthReprovision();
       process.stdout.write(`OAuth reprovision preflight status: ${result.status}.\n`);
@@ -286,7 +363,7 @@ async function main() {
       process.stdout.write(`OAuth reprovision terminal status: ${result.status}.\n`);
       return;
     }
-    throw new Error("Expected mode: preflight or apply.");
+    throw new Error("Expected mode: diagnose, preflight or apply.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected failure.";
     process.stderr.write(`OAuth reprovision ${mode === "preflight" ? "preflight" : "operation"} stopped safely: ${message}\n`);

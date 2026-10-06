@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "@jest/globals";
 import { parse as parseYaml } from "yaml";
 import {
+  diagnoseOAuthReprovisionStatus,
   executeOAuthReprovision,
   OAUTH_REPROVISION_CONFIRMATION,
   preflightOAuthReprovision,
@@ -26,6 +27,30 @@ function makeEnv(overrides = {}) {
     UPDATE_CONTROL_OWNER_TOKEN_NEXT: OWNER_TOKEN,
     ...overrides,
   };
+}
+
+function diagnosticAssertion(overrides = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (value) => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return [
+    encode({ alg: "RS256", typ: "JWT", kid: "public-test-key" }),
+    encode({
+      iss: "https://token.actions.githubusercontent.com",
+      aud: `urn:mcp-v3-update-control:oauth-reprovision:${OPERATION_ID}`,
+      sub: "repo:iFael/mcp-access-stack:environment:update-control-production",
+      repository: "iFael/mcp-access-stack",
+      workflow_ref: "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main",
+      ref: "refs/heads/main",
+      event_name: "workflow_dispatch",
+      environment: "update-control-production",
+      iat: now,
+      nbf: now - 5,
+      exp: now + 300,
+      jti: "diagnostic-jti-value",
+      ...overrides,
+    }),
+    "c2lnbmF0dXJl",
+  ].join(".");
 }
 
 function jsonResponse(body, status = 200) {
@@ -108,6 +133,8 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     const workflow = await parseWorkflow("update-control-oauth-reprovision.yml");
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.on.workflow_dispatch.inputs.confirm_reprovision.default).toBe("NO");
+    expect(workflow.on.workflow_dispatch.inputs.confirm_reprovision.options)
+      .toEqual(["NO", "DIAGNOSE_STATUS", "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS"]);
     expect(workflow.jobs.reprovision.if).toContain("refs/heads/main");
     expect(workflow.jobs.reprovision.if).toContain("REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS");
     expect(workflow.jobs.reprovision.environment.name).toBe("update-control-production");
@@ -127,6 +154,18 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     expect(JSON.stringify([preflight.env, reconcile.env])).not.toMatch(/CLOUDFLARE.*ACCESS|UPDATE_CONTROL_OAUTH_ACCESS/iu);
     expect(JSON.stringify(workflow.jobs.reprovision)).not.toMatch(/CF-Access|cloudflareaccess/iu);
 
+    const diagnose = workflow.jobs.diagnose;
+    expect(diagnose.if).toContain("DIAGNOSE_STATUS");
+    expect(diagnose.if).not.toContain("REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS");
+    expect(diagnose.environment.name).toBe("update-control-production");
+    expect(diagnose.permissions).toEqual({ contents: "read", "id-token": "write" });
+    const diagnoseStep = findStep(workflow, "diagnose", "Diagnose operation status with operation-bound GitHub OIDC");
+    expect(diagnoseStep.run).toBe("node tooling/update-control-oauth-reprovision.mjs diagnose");
+    expect(diagnoseStep.env.UPDATE_CONTROL_OAUTH_OPERATION_ID).toBe("${{ inputs.operation_id }}");
+    expect(diagnoseStep.env.MCP_UPDATE_CONTROL_PUBLIC_URL).toBe("${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}");
+    const serializedDiagnose = JSON.stringify(diagnose);
+    expect(serializedDiagnose).not.toMatch(/secrets\.|UPDATE_CONTROL_OWNER_TOKEN_NEXT|MCP_OWNER_TOKEN|CLOUDFLARE|wrangler|\bapply\b/iu);
+
     const triggerNames = Object.keys(workflow.on);
     expect(triggerNames).not.toContain("push");
     expect(triggerNames).not.toContain("pull_request");
@@ -134,6 +173,44 @@ describe("Update Control OAuth reprovision operator workflow", () => {
 });
 
 describe("OAuth reprovision operator client", () => {
+  it("diagnoses the GET status response without destructive confirmation or secret material", async () => {
+    const assertion = diagnosticAssertion();
+    const requests = [];
+    const result = await diagnoseOAuthReprovisionStatus({
+      env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "", UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" }),
+      fetchImpl: async (url, init) => {
+        const requestUrl = new URL(String(url));
+        if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
+          return jsonResponse({ value: assertion });
+        }
+        requests.push({ url: requestUrl, init });
+        return jsonResponse({ error: "operation_auth_required" }, 401);
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].init.method).toBe("GET");
+    expect(result.httpStatus).toBe(401);
+    expect(result.status).toBeNull();
+    expect(result.error).toBe("operation_auth_required");
+    expect(result.assertion).toMatchObject({
+      format: "jwt",
+      alg: "RS256",
+      kid: "public-test-key",
+      issuer: "https://token.actions.githubusercontent.com",
+      audience: `urn:mcp-v3-update-control:oauth-reprovision:${OPERATION_ID}`,
+      subject: "repo:iFael/mcp-access-stack:environment:update-control-production",
+      repository: "iFael/mcp-access-stack",
+      workflowRef: "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main",
+      ref: "refs/heads/main",
+      eventName: "workflow_dispatch",
+      environment: "update-control-production",
+      hasJti: true,
+    });
+    expect(JSON.stringify(result)).not.toContain(assertion);
+    expect(JSON.stringify(result)).not.toContain("diagnostic-jti-value");
+    expect(JSON.stringify(result)).not.toContain(OWNER_TOKEN);
+  });
+
   it("requests a UUID-bound GitHub OIDC token and checks completed status without a replacement token", async () => {
     const dir = await mkdtemp(join(tmpdir(), "update-control-oauth-"));
     try {
