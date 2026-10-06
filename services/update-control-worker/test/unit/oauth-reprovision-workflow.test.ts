@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "@jest/globals";
 import { parse as parseYaml } from "yaml";
 import {
+  createTestGitHubActionsAssertion,
+  testGitHubActionsJwksFetch,
+} from "./github-actions-oidc-fixture.js";
+import {
   diagnoseOAuthReprovisionStatus,
   executeOAuthReprovision,
   OAUTH_REPROVISION_CONFIRMATION,
@@ -27,32 +31,6 @@ function makeEnv(overrides = {}) {
     UPDATE_CONTROL_OWNER_TOKEN_NEXT: OWNER_TOKEN,
     ...overrides,
   };
-}
-
-function diagnosticAssertion(overrides = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  const encode = (value) => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-  return [
-    encode({ alg: "RS256", typ: "JWT", kid: "public-test-key" }),
-    encode({
-      iss: "https://token.actions.githubusercontent.com",
-      aud: `urn:mcp-v3-update-control:oauth-reprovision:${OPERATION_ID}`,
-      sub: "repo:iFael@185357494/mcp-access-stack@1379020190:environment:update-control-production",
-      repository: "iFael/mcp-access-stack",
-      repository_owner_id: "185357494",
-      repository_id: "1379020190",
-      workflow_ref: "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main",
-      ref: "refs/heads/main",
-      event_name: "workflow_dispatch",
-      environment: "update-control-production",
-      iat: now,
-      nbf: now - 5,
-      exp: now + 300,
-      jti: "diagnostic-jti-value",
-      ...overrides,
-    }),
-    "c2lnbmF0dXJl",
-  ].join(".");
 }
 
 function jsonResponse(body, status = 200) {
@@ -176,12 +154,15 @@ describe("Update Control OAuth reprovision operator workflow", () => {
 
 describe("OAuth reprovision operator client", () => {
   it("diagnoses the GET status response without destructive confirmation or secret material", async () => {
-    const assertion = diagnosticAssertion();
+    const assertion = await createTestGitHubActionsAssertion(OPERATION_ID);
     const requests = [];
     const result = await diagnoseOAuthReprovisionStatus({
       env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "", UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" }),
       fetchImpl: async (url, init) => {
         const requestUrl = new URL(String(url));
+        if (requestUrl.hostname === "token.actions.githubusercontent.com") {
+          return testGitHubActionsJwksFetch(requestUrl);
+        }
         if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
           return jsonResponse({ value: assertion });
         }
@@ -198,6 +179,12 @@ describe("OAuth reprovision operator client", () => {
       formatValid: true,
       algMatches: true,
       kidPresent: true,
+      headerGuardsMatch: true,
+      jwksFetchOk: true,
+      jwksShapeValid: true,
+      kidInJwks: true,
+      keyImportValid: true,
+      signatureValid: true,
       issuerMatches: true,
       audienceMatches: true,
       subjectMatches: true,
@@ -219,7 +206,6 @@ describe("OAuth reprovision operator client", () => {
       temporalOrderValid: true,
     });
     expect(JSON.stringify(result)).not.toContain(assertion);
-    expect(JSON.stringify(result)).not.toContain("diagnostic-jti-value");
     expect(JSON.stringify(result)).not.toContain(OWNER_TOKEN);
   });
 

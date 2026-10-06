@@ -4,9 +4,12 @@ import { pathToFileURL } from "node:url";
 export const OAUTH_REPROVISION_CONFIRMATION = "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS";
 const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
 const GITHUB_ACTIONS_OIDC_HOST_SUFFIX = ".actions.githubusercontent.com";
+const GITHUB_ACTIONS_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const VALID_STATUSES = new Set(["not_executed", "in_progress", "completed", "outcome_unknown"]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
+const MAX_JWKS_RESPONSE_BYTES = 32 * 1024;
+const MAX_JWKS_KEYS = 16;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
@@ -79,11 +82,15 @@ function requestUrl(endpoint, operationId) {
   return url;
 }
 
-async function readBoundedJson(response) {
+async function readBoundedJson(
+  response,
+  maxBytes = MAX_RESPONSE_BYTES,
+  sizeError = "OAuth reprovision response exceeded the configured size limit.",
+) {
   const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > MAX_RESPONSE_BYTES)) {
+  if (declaredLength !== null && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maxBytes)) {
     await response.body?.cancel();
-    throw new Error("OAuth reprovision response exceeded the configured size limit.");
+    throw new Error(sizeError);
   }
 
   const reader = response.body?.getReader();
@@ -95,9 +102,9 @@ async function readBoundedJson(response) {
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel();
-        throw new Error("OAuth reprovision response exceeded the configured size limit.");
+        throw new Error(sizeError);
       }
       chunks.push(next.value);
     }
@@ -211,7 +218,26 @@ function decodeJwtJsonPart(value) {
   }
 }
 
-function summarizeAssertion(assertion, operationId) {
+function isDiagnosticGitHubJwk(value) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    value.kty === "RSA" &&
+    typeof value.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(value.kid) &&
+    (value.alg === undefined || value.alg === "RS256") &&
+    (value.use === undefined || value.use === "sig") &&
+    (value.key_ops === undefined ||
+      (Array.isArray(value.key_ops) && value.key_ops.includes("verify") &&
+       value.key_ops.every((operation) => operation === "verify"))) &&
+    typeof value.n === "string" && /^[A-Za-z0-9_-]+$/u.test(value.n) &&
+    typeof value.e === "string" && /^[A-Za-z0-9_-]+$/u.test(value.e);
+}
+
+function diagnosticArrayBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+async function summarizeAssertion(assertion, operationId, fetchImpl) {
   const parts = assertion.split(".");
   const header = parts.length === 3 ? decodeJwtJsonPart(parts[0]) : undefined;
   const claims = parts.length === 3 ? decodeJwtJsonPart(parts[1]) : undefined;
@@ -219,10 +245,73 @@ function summarizeAssertion(assertion, operationId) {
   const iat = Number.isSafeInteger(claims?.iat) ? claims.iat : null;
   const nbf = Number.isSafeInteger(claims?.nbf) ? claims.nbf : null;
   const exp = Number.isSafeInteger(claims?.exp) ? claims.exp : null;
+  const headerGuardsMatch = Boolean(header && header.alg === "RS256" &&
+    typeof header.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid) &&
+    header.jku === undefined && header.x5u === undefined && header.crit === undefined);
+  let jwksFetchOk = false;
+  let jwksShapeValid = false;
+  let kidInJwks = false;
+  let keyImportValid = false;
+  let signatureValid = false;
+  if (headerGuardsMatch && parts.length === 3) {
+    try {
+      const response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
+        method: "GET",
+        redirect: "error",
+        cache: "no-store",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: { accept: "application/json" },
+      });
+      jwksFetchOk = response.ok;
+      if (response.ok) {
+        const payload = await readBoundedJson(
+          response,
+          MAX_JWKS_RESPONSE_BYTES,
+          "GitHub JWKS response exceeded the configured size limit.",
+        );
+        jwksShapeValid = Boolean(payload && typeof payload === "object" && !Array.isArray(payload) &&
+          Array.isArray(payload.keys) && payload.keys.length > 0 && payload.keys.length <= MAX_JWKS_KEYS);
+        if (jwksShapeValid) {
+          const candidate = payload.keys.find((value) => isDiagnosticGitHubJwk(value) && value.kid === header.kid);
+          kidInJwks = Boolean(candidate);
+          if (candidate) {
+            const key = await crypto.subtle.importKey(
+              "jwk",
+              { kty: "RSA", n: candidate.n, e: candidate.e, alg: "RS256", ext: true },
+              { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+              false,
+              ["verify"],
+            );
+            keyImportValid = true;
+            const signature = Uint8Array.from(
+              atob(parts[2].replaceAll("-", "+").replaceAll("_", "/") +
+                "=".repeat((4 - (parts[2].length % 4)) % 4)),
+              (character) => character.charCodeAt(0),
+            );
+            const signingInput = new TextEncoder().encode(parts[0] + "." + parts[1]);
+            signatureValid = await crypto.subtle.verify(
+              { name: "RSASSA-PKCS1-v1_5" },
+              key,
+              diagnosticArrayBuffer(signature),
+              diagnosticArrayBuffer(signingInput),
+            );
+          }
+        }
+      }
+    } catch {
+      // Diagnosis stays boolean-only and fail-closed; no token/key material is emitted.
+    }
+  }
   return {
     formatValid: Boolean(header && claims),
     algMatches: header?.alg === "RS256",
     kidPresent: typeof header?.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid),
+    headerGuardsMatch,
+    jwksFetchOk,
+    jwksShapeValid,
+    kidInJwks,
+    keyImportValid,
+    signatureValid,
     issuerMatches: claims?.iss === EXPECTED_OIDC_ISSUER,
     audienceMatches: claims?.aud === `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`,
     subjectMatches: claims?.sub === EXPECTED_OIDC_SUBJECT,
@@ -292,7 +381,7 @@ export async function diagnoseOAuthReprovisionStatus({
   fetchImpl = fetch,
 } = {}) {
   const settings = await createAuthenticatedSettings(env, fetchImpl, { requireConfirmation: false });
-  const assertion = summarizeAssertion(settings.assertion, settings.operationId);
+  const assertion = await summarizeAssertion(settings.assertion, settings.operationId, fetchImpl);
   const { response, payload } = await requestJson(
     fetchImpl,
     requestUrl(settings.endpoint, settings.operationId),
