@@ -27,6 +27,12 @@ const OWNER_OAUTH_DELETE_BATCH_SIZE = 256;
 const OWNER_OAUTH_DELETE_LIMIT_PER_REQUEST = 2048;
 const OAUTH_REPROVISION_OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
+type DiagnosticTypeErrorReason = "network_connection_lost" | "unknown_type_error";
+
+function safeDiagnosticTypeErrorReason(value: unknown): DiagnosticTypeErrorReason | null {
+  return value === "network_connection_lost" || value === "unknown_type_error" ? value : null;
+}
+
 type OAuthReprovisionStatus = "in_progress" | "completed" | "outcome_unknown";
 type OAuthReprovisionEventType =
   | "started"
@@ -230,6 +236,16 @@ export class UpdateControlAuthController {
         verification.jwksFetchFailureCategory === "fetch_rejected" &&
         verification.jwksFetchRejectionClass
           ? { diagnosticRejectionClass: verification.jwksFetchRejectionClass }
+          : {}),
+        ...(diagnosticRequested &&
+        verification.stage === "jwks_fetch" &&
+        verification.jwksFetchFailureCategory === "fetch_rejected" &&
+        verification.jwksFetchRejectionClass === "type_error"
+          ? {
+            diagnosticTypeErrorReason:
+              safeDiagnosticTypeErrorReason(verification.jwksFetchTypeErrorReason) ??
+              "unknown_type_error",
+          }
           : {}),
       }, 401);
     }

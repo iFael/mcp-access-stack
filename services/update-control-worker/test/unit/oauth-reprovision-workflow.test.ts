@@ -173,6 +173,7 @@ describe("OAuth reprovision operator client", () => {
           diagnosticStage: "jwks_fetch",
           diagnosticFailureCategory: "fetch_rejected",
           diagnosticRejectionClass: "type_error",
+          diagnosticTypeErrorReason: "network_connection_lost",
         }, 401);
       },
     });
@@ -185,6 +186,7 @@ describe("OAuth reprovision operator client", () => {
     expect(result.workerStage).toBe("jwks_fetch");
     expect(result.workerFailureCategory).toBe("fetch_rejected");
     expect(result.workerRejectionClass).toBe("type_error");
+    expect(result.workerTypeErrorReason).toBe("network_connection_lost");
     expect(result.assertion).toEqual({
       formatValid: true,
       algMatches: true,
@@ -217,6 +219,45 @@ describe("OAuth reprovision operator client", () => {
     });
     expect(JSON.stringify(result)).not.toContain(assertion);
     expect(JSON.stringify(result)).not.toContain(OWNER_TOKEN);
+  });
+
+  it.each([
+    ["unknown fallback", "unknown_type_error", "type_error", "unknown_type_error"],
+    ["unrecognized reason", "raw-reason-sentinel", "type_error", null],
+    ["reason outside TypeError class", "network_connection_lost", "error", null],
+  ])("accepts only closed TypeError reasons: %s", async (_label, reason, rejectionClass, expectedReason) => {
+    const assertion = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const rawMessage = "raw-message-sentinel";
+    const rawStack = "raw-stack-sentinel";
+    const rawCause = "raw-cause-sentinel";
+    const result = await diagnoseOAuthReprovisionStatus({
+      env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "", UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" }),
+      fetchImpl: async (url) => {
+        const requestUrl = new URL(String(url));
+        if (requestUrl.hostname === "token.actions.githubusercontent.com") {
+          return testGitHubActionsJwksFetch(requestUrl);
+        }
+        if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
+          return jsonResponse({ value: assertion });
+        }
+        return jsonResponse({
+          error: "operation_auth_required",
+          diagnosticStage: "jwks_fetch",
+          diagnosticFailureCategory: "fetch_rejected",
+          diagnosticRejectionClass: rejectionClass,
+          diagnosticTypeErrorReason: reason,
+          message: rawMessage,
+          stack: rawStack,
+          cause: rawCause,
+        }, 401);
+      },
+    });
+    expect(result.workerTypeErrorReason).toBe(expectedReason);
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(rawMessage);
+    expect(serialized).not.toContain(rawStack);
+    expect(serialized).not.toContain(rawCause);
+    expect(serialized).not.toContain("raw-reason-sentinel");
   });
 
   it("drops an unrecognized Worker fetch failure category", async () => {

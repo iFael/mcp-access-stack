@@ -225,12 +225,18 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(await post.json()).toEqual({ error: "operation_auth_required" });
   });
 
-  it("returns a fetch rejection class only on the opt-in GET and never on POST", async () => {
+  it("returns a bounded TypeError reason only on the opt-in GET and never on POST", async () => {
     const storage = new MemoryStorage();
     const operationId = "6f7fcf36-00f5-4d98-bf66-55c1d9dfd465";
     const assertion = await createTestGitHubActionsAssertion(operationId);
+    const rawMessage = "Network connection lost";
+    const rawStack = "raw-stack-sentinel";
+    const rawCause = "raw-cause-sentinel";
     const fetchImpl = (async () => {
-      throw new TypeError("unsafe fetch detail");
+      const rejected = new TypeError(rawMessage);
+      rejected.stack = rawStack;
+      Object.defineProperty(rejected, "cause", { value: rawCause });
+      throw rejected;
     }) as typeof fetch;
     const controller = makeController(storage, "", fetchImpl);
     const url = REPROVISION_URL + "?operationId=" + operationId;
@@ -252,9 +258,12 @@ describe("controlled Update Control OAuth reprovision", () => {
       diagnosticStage: "jwks_fetch",
       diagnosticFailureCategory: "fetch_rejected",
       diagnosticRejectionClass: "type_error",
+      diagnosticTypeErrorReason: "network_connection_lost",
     });
-    expect(JSON.stringify(diagnosticBody)).not.toContain("unsafe fetch detail");
-    expect(JSON.stringify(diagnosticBody)).not.toContain("TypeError");
+    const serializedDiagnostic = JSON.stringify(diagnosticBody);
+    expect(serializedDiagnostic).not.toContain(rawMessage);
+    expect(serializedDiagnostic).not.toContain(rawStack);
+    expect(serializedDiagnostic).not.toContain(rawCause);
 
     const post = await controller.fetch(new Request(REPROVISION_URL, {
       method: "POST",
