@@ -181,6 +181,46 @@ describe("controlled Update Control OAuth reprovision", () => {
     await issueTokens(provisioned, SECOND_OWNER_TOKEN);
   });
 
+  it("exposes bounded verification stage only for read-only diagnostic GETs", async () => {
+    const storage = new MemoryStorage();
+    const operationId = "c29e6014-5da0-4191-a509-f0e18ab2ff80";
+    const controller = makeController(storage, "");
+    const invalidAssertion = await createTestGitHubActionsAssertion(operationId, {
+      repository: "attacker/mcp-access-stack",
+    });
+    const url = REPROVISION_URL + "?operationId=" + operationId;
+
+    const normal = await controller.fetch(new Request(url, {
+      headers: { authorization: `Bearer ${invalidAssertion}` },
+    }));
+    expect(normal.status).toBe(401);
+    expect(await normal.json()).toEqual({ error: "operation_auth_required" });
+
+    const diagnostic = await controller.fetch(new Request(url, {
+      headers: {
+        authorization: `Bearer ${invalidAssertion}`,
+        "x-update-control-oidc-diagnose": "v1",
+      },
+    }));
+    expect(diagnostic.status).toBe(401);
+    expect(await diagnostic.json()).toEqual({
+      error: "operation_auth_required",
+      diagnosticStage: "claims",
+    });
+
+    const post = await controller.fetch(new Request(REPROVISION_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${invalidAssertion}`,
+        "content-type": "application/json",
+        "x-update-control-oidc-diagnose": "v1",
+      },
+      body: JSON.stringify({ operationId }),
+    }));
+    expect(post.status).toBe(401);
+    expect(await post.json()).toEqual({ error: "operation_auth_required" });
+  });
+
   it("invalidates OAuth state, rotates authority, preserves non-OAuth state, and is idempotent", async () => {
     const storage = new MemoryStorage();
     const initialController = makeController(storage, FIRST_OWNER_TOKEN);

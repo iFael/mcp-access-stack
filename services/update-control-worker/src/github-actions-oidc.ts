@@ -51,6 +51,25 @@ interface CachedGitHubKeys {
   readonly keys: ReadonlyMap<string, CryptoKey>;
 }
 
+export type GitHubActionsOidcVerificationStage =
+  | "verified"
+  | "input"
+  | "structure"
+  | "header"
+  | "claims"
+  | "jwks_fetch"
+  | "jwks_http"
+  | "jwks_shape"
+  | "jwks_kid"
+  | "jwks_import"
+  | "signature"
+  | "exception";
+
+export interface GitHubActionsOidcVerificationResult {
+  readonly valid: boolean;
+  readonly stage: GitHubActionsOidcVerificationStage;
+}
+
 export function githubActionsOAuthReprovisionAudience(operationId: string): string {
   return `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`;
 }
@@ -61,58 +80,90 @@ export class GitHubActionsOidcAssertionVerifier {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
   async verify(assertion: string, operationId: string): Promise<boolean> {
+    return (await this.verifyWithStage(assertion, operationId)).valid;
+  }
+
+  async verifyWithStage(assertion: string, operationId: string): Promise<GitHubActionsOidcVerificationResult> {
     try {
       if (typeof assertion !== "string" || assertion.length === 0 ||
           assertion.length > MAX_ASSERTION_BYTES ||
-          !OPERATION_ID_PATTERN.test(operationId)) return false;
+          !OPERATION_ID_PATTERN.test(operationId)) return { valid: false, stage: "input" };
 
       const parts = assertion.split(".");
       if (parts.length !== 3 ||
-          parts.some((part) => part.length === 0 || part.length > MAX_ASSERTION_BYTES)) return false;
+          parts.some((part) => part.length === 0 || part.length > MAX_ASSERTION_BYTES)) {
+        return { valid: false, stage: "structure" };
+      }
 
-      const header = parseJsonPart(parts[0]!);
-      const claims = parseJsonPart(parts[1]!) as GitHubActionsClaims;
+      let header: unknown;
+      let claims: GitHubActionsClaims;
+      try {
+        header = parseJsonPart(parts[0]!);
+        claims = parseJsonPart(parts[1]!) as GitHubActionsClaims;
+      } catch {
+        return { valid: false, stage: "structure" };
+      }
       if (!isRecord(header) || header.alg !== "RS256" ||
           typeof header.kid !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid) ||
-          header.jku !== undefined || header.x5u !== undefined || header.crit !== undefined) return false;
-      if (!validClaims(claims, operationId)) return false;
+          header.jku !== undefined || header.x5u !== undefined || header.crit !== undefined) {
+        return { valid: false, stage: "header" };
+      }
+      if (!validClaims(claims, operationId)) return { valid: false, stage: "claims" };
 
-      const key = await this.getKey(header.kid);
-      if (!key) return false;
+      const keyResult = await this.getKeyWithStage(header.kid);
+      if (!keyResult.key) return { valid: false, stage: keyResult.stage };
       const signature = decodeBase64Url(parts[2]!);
       const signingInput = new TextEncoder().encode(parts[0] + "." + parts[1]);
-      return await crypto.subtle.verify(
+      const valid = await crypto.subtle.verify(
         { name: "RSASSA-PKCS1-v1_5" },
-        key,
+        keyResult.key,
         toArrayBuffer(signature),
         toArrayBuffer(signingInput),
       );
+      return { valid, stage: valid ? "verified" : "signature" };
     } catch {
-      return false;
+      return { valid: false, stage: "exception" };
     }
   }
 
-  private async getKey(kid: string): Promise<CryptoKey | undefined> {
+  private async getKeyWithStage(
+    kid: string,
+  ): Promise<{ readonly key?: CryptoKey; readonly stage: GitHubActionsOidcVerificationStage }> {
     if (this.cache && this.cache.expiresAt > Date.now()) {
       const cached = this.cache.keys.get(kid);
-      if (cached) return cached;
+      if (cached) return { key: cached, stage: "verified" };
     }
 
-    const fetchImpl = this.fetchImpl;
-    const response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
-      method: "GET",
-      redirect: "error",
-      cache: "no-store",
-      signal: AbortSignal.timeout(5_000),
-      headers: { accept: "application/json" },
-    });
-    if (!response.ok) return undefined;
-    const payload = await readBoundedJson(response);
+    let response: Response;
+    try {
+      const fetchImpl = this.fetchImpl;
+      response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
+        method: "GET",
+        redirect: "error",
+        cache: "no-store",
+        signal: AbortSignal.timeout(5_000),
+        headers: { accept: "application/json" },
+      });
+    } catch {
+      return { stage: "jwks_fetch" };
+    }
+    if (!response.ok) return { stage: "jwks_http" };
+
+    let payload: unknown;
+    try {
+      payload = await readBoundedJson(response);
+    } catch {
+      return { stage: "jwks_shape" };
+    }
     if (!isRecord(payload) || !Array.isArray(payload.keys) ||
-        payload.keys.length === 0 || payload.keys.length > MAX_JWKS_KEYS) return undefined;
+        payload.keys.length === 0 || payload.keys.length > MAX_JWKS_KEYS) {
+      return { stage: "jwks_shape" };
+    }
 
     const imported = new Map<string, CryptoKey>();
+    let matchingKidSeen = false;
     for (const value of payload.keys) {
+      if (isRecord(value) && value.kid === kid) matchingKidSeen = true;
       if (!isGitHubJwk(value)) continue;
       try {
         const key = await crypto.subtle.importKey(
@@ -132,7 +183,9 @@ export class GitHubActionsOidcAssertionVerifier {
       expiresAt: Date.now() + parseMaxAge(response.headers.get("cache-control")),
       keys: imported,
     };
-    return imported.get(kid);
+    const key = imported.get(kid);
+    if (key) return { key, stage: "verified" };
+    return { stage: matchingKidSeen ? "jwks_import" : "jwks_kid" };
   }
 }
 
