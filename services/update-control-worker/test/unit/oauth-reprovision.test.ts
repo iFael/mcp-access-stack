@@ -42,9 +42,8 @@ function makeController(storage: MemoryStorage) {
   const state: UpdateControlDurableState = { storage };
   return new UpdateControlAuthController(state, {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
-    MICROSOFT_CLIENT_ID: "11111111-2222-4333-8444-555555555555",
-    MICROSOFT_TENANT: "organizations",
     UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: "rafael@example.com",
+    UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: "e".repeat(64),
   });
 }
 

@@ -5,14 +5,12 @@ export const UPDATE_CONTROL_DEPLOY_SECRET_INPUTS = Object.freeze([
   "UPDATE_CONTROL_CF_API_TOKEN",
   "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN",
   "UPDATE_CONTROL_ADMIN_HMAC_KEY",
-  "MICROSOFT_CLIENT_SECRET",
+  "UPDATE_CONTROL_TOTP_ENCRYPTION_KEY",
 ]);
 
 export const UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS = Object.freeze([
   "CLOUDFLARE_ACCOUNT_ID",
   "MCP_UPDATE_CONTROL_PUBLIC_URL",
-  "MICROSOFT_CLIENT_ID",
-  "MICROSOFT_TENANT",
   "UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL",
 ]);
 
@@ -51,14 +49,6 @@ function isWorkersDevOrigin(value) {
   }
 }
 
-function isGuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
-}
-
-function isMicrosoftTenant(value) {
-  return value === "common" || value === "organizations" || value === "consumers" || isGuid(value);
-}
-
 function isBootstrapAdminEmail(value) {
   return value.length >= 3 &&
     value.length <= 320 &&
@@ -81,7 +71,7 @@ export function validateUpdateControlDeployEnvironment(env) {
     UPDATE_CONTROL_CF_API_TOKEN: cleanText(1, 4096),
     UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: cleanText(32, 2048),
     UPDATE_CONTROL_ADMIN_HMAC_KEY: (value) => /^[0-9a-f]{64}$/u.test(value),
-    MICROSOFT_CLIENT_SECRET: cleanText(16, 4096),
+    UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: (value) => /^[0-9a-f]{64}$/u.test(value),
   };
   for (const name of UPDATE_CONTROL_DEPLOY_SECRET_INPUTS) {
     const error = settingError("secret", name, env[name], secretValidators[name]);
@@ -91,8 +81,6 @@ export function validateUpdateControlDeployEnvironment(env) {
   const variableValidators = {
     CLOUDFLARE_ACCOUNT_ID: (value) => /^[a-f0-9]{32}$/iu.test(value),
     MCP_UPDATE_CONTROL_PUBLIC_URL: isWorkersDevOrigin,
-    MICROSOFT_CLIENT_ID: isGuid,
-    MICROSOFT_TENANT: isMicrosoftTenant,
     UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: isBootstrapAdminEmail,
   };
   for (const name of UPDATE_CONTROL_DEPLOY_VARIABLE_INPUTS) {

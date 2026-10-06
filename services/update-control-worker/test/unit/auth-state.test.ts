@@ -3,7 +3,6 @@ import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController } from "../../src/auth-state.js";
 
 const BASE_URL = "https://update-control.example/";
-const MICROSOFT_CLIENT_ID = "11111111-2222-4333-8444-555555555555";
 
 class MemoryStorage implements OwnerOAuthStorage {
   readonly values = new Map<string, unknown>();
@@ -28,9 +27,8 @@ function makeController(
     storage,
     controller: new UpdateControlAuthController({ storage }, {
       MCP_UPDATE_CONTROL_PUBLIC_URL: BASE_URL,
-      MICROSOFT_CLIENT_ID,
-      MICROSOFT_TENANT: "organizations",
       UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: "rafael@example.com",
+      UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: "e".repeat(64),
       ...overrides,
     }),
   };
@@ -53,12 +51,11 @@ describe("Update Control authorization boundary", () => {
     expect(await response.json()).toEqual({ error: "update_control_not_configured" });
   });
 
-  it("fails closed when Microsoft Identity configuration is missing or malformed", async () => {
+  it("fails closed when local identity configuration is missing or malformed", async () => {
     for (const overrides of [
-      { MICROSOFT_CLIENT_ID: undefined },
-      { MICROSOFT_CLIENT_ID: "not-a-guid" },
-      { MICROSOFT_TENANT: undefined },
-      { MICROSOFT_TENANT: "arbitrary-tenant" },
+      { UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: undefined },
+      { UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: "short" },
+      { UPDATE_CONTROL_TOTP_ENCRYPTION_KEY: "A".repeat(64) },
       { UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: undefined },
       { UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL: "not-an-email" },
     ]) {
@@ -69,12 +66,13 @@ describe("Update Control authorization boundary", () => {
     }
   });
 
-  it("exposes OAuth metadata while protecting MCP/API and contains no password-based authorization UX", async () => {
+  it("exposes OAuth metadata while protecting MCP/API and contains no password or external-IdP authorization UX", async () => {
     const { controller } = makeController();
     const metadata = await controller.fetch(new Request(new URL("/.well-known/oauth-authorization-server", BASE_URL)));
     expect(metadata.status).toBe(200);
     const body = await metadata.json() as Record<string, unknown>;
     expect(body.scopes_supported).toEqual(["update:read"]);
+    expect(JSON.stringify(body)).not.toContain("microsoft");
 
     const mcp = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
       method: "POST",
@@ -103,7 +101,7 @@ describe("Update Control authorization boundary", () => {
     expect(await response.json()).toEqual({ error: "oauth_reprovision_required" });
   });
 
-  it("does not use MCP_OWNER_TOKEN as a human authentication input", async () => {
+  it("does not use MCP_OWNER_TOKEN or owner_password as a human authentication input", async () => {
     const { controller } = makeController(new MemoryStorage(), {
       MCP_OWNER_TOKEN: "legacy-owner-token-with-more-than-thirty-two-characters",
     });
@@ -131,8 +129,10 @@ describe("Update Control authorization boundary", () => {
       owner_password: "legacy-owner-token-with-more-than-thirty-two-characters",
     }).toString();
     const response = await controller.fetch(new Request(authorize));
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toContain("login.microsoftonline.com");
-    expect(response.headers.get("location")).not.toContain("owner_password");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("Verification code");
+    expect(html).not.toContain("owner_password");
+    expect(html).not.toContain("login.microsoftonline.com");
   });
 });
