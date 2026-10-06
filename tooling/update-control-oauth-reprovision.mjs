@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 
 export const OAUTH_REPROVISION_CONFIRMATION = "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS";
 const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
+const GITHUB_ACTIONS_OIDC_HOST_SUFFIX = ".actions.githubusercontent.com";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const VALID_STATUSES = new Set(["not_executed", "in_progress", "completed", "outcome_unknown"]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
@@ -111,9 +112,12 @@ async function requestGitHubActionsAssertion(settings, fetchImpl) {
   let requestUrl;
   try {
     requestUrl = new URL(settings.oidcRequestUrl);
+    const isGitHubActionsOidcHost =
+      requestUrl.hostname.length > GITHUB_ACTIONS_OIDC_HOST_SUFFIX.length &&
+      requestUrl.hostname.endsWith(GITHUB_ACTIONS_OIDC_HOST_SUFFIX);
     if (
       requestUrl.protocol !== "https:" ||
-      requestUrl.hostname !== "pipelines.actions.githubusercontent.com" ||
+      !isGitHubActionsOidcHost ||
       requestUrl.port !== "" ||
       requestUrl.username ||
       requestUrl.password ||

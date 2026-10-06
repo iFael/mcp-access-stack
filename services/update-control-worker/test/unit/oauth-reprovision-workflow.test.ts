@@ -11,7 +11,7 @@ import {
 
 const OPERATION_ID = "ed1c5642-04aa-4e4d-8558-8aefc4f673c7";
 const OWNER_TOKEN = "replacement-owner-secret-long-random-test-value";
-const OIDC_REQUEST_URL = "https://pipelines.actions.githubusercontent.com/synthetic-run/idtoken?api-version=2.0";
+const OIDC_REQUEST_URL = "https://pipelinesghubeus7.actions.githubusercontent.com/synthetic-run/idtoken?api-version=2.0";
 const OIDC_REQUEST_TOKEN = "synthetic-runner-request-token";
 const OIDC_ASSERTION = "synthetic-github-oidc-assertion";
 const PUBLIC_URL = "https://mcp-v3-update-control.example.workers.dev/";
@@ -49,7 +49,7 @@ function findStep(workflow, jobName, stepName) {
 function makeOidcFetch(operationFetch, oidcRequests = []) {
   return async (url, init) => {
     const requestUrl = new URL(String(url));
-    if (requestUrl.hostname === "pipelines.actions.githubusercontent.com") {
+    if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
       oidcRequests.push({ url: requestUrl, init });
       return jsonResponse({ value: OIDC_ASSERTION });
     }
@@ -260,7 +260,11 @@ describe("OAuth reprovision operator client", () => {
       fetchImpl,
     })).rejects.toThrow("OIDC request endpoint is invalid");
     await expect(preflightOAuthReprovision({
-      env: makeEnv({ ACTIONS_ID_TOKEN_REQUEST_URL: "https://pipelines.actions.githubusercontent.com:8443/synthetic-run/idtoken" }),
+      env: makeEnv({ ACTIONS_ID_TOKEN_REQUEST_URL: "https://pipelinesghubeus7.actions.githubusercontent.com.attacker.example/token" }),
+      fetchImpl,
+    })).rejects.toThrow("OIDC request endpoint is invalid");
+    await expect(preflightOAuthReprovision({
+      env: makeEnv({ ACTIONS_ID_TOKEN_REQUEST_URL: "https://pipelinesghubeus7.actions.githubusercontent.com:8443/synthetic-run/idtoken" }),
       fetchImpl,
     })).rejects.toThrow("OIDC request endpoint is invalid");
     expect(calls).toBe(0);
