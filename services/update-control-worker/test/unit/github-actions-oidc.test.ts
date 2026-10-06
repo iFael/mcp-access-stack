@@ -135,8 +135,33 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
       valid: false,
       stage: "jwks_fetch",
       jwksFetchFailureCategory: "fetch_rejected",
+      jwksFetchRejectionClass: "type_error",
     });
     expect(JSON.stringify(result)).not.toContain("unsafe rejected fetch detail");
+  });
+
+  it.each([
+    ["Error", new Error("unsafe rejection detail"), "error"],
+    ["TypeError", new TypeError("unsafe rejection detail"), "type_error"],
+    ["DOMException AbortError", new DOMException("unsafe rejection detail", "AbortError"), "abort_error"],
+    ["DOMException TimeoutError", new DOMException("unsafe rejection detail", "TimeoutError"), "timeout_error"],
+    ["unlisted Error name", Object.assign(new Error("unsafe rejection detail"), { name: "UnlistedDiagnosticName" }), "other_error"],
+    ["non-Error value", { name: "TypeError", message: "unsafe rejection detail" }, "non_error"],
+  ])("returns only the closed rejection class for %s", async (_label, rejected, rejectionClass) => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const fetchImpl = (async () => {
+      throw rejected;
+    }) as typeof fetch;
+    const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+      .verifyWithStage(token, OPERATION_ID);
+    expect(result).toEqual({
+      valid: false,
+      stage: "jwks_fetch",
+      jwksFetchFailureCategory: "fetch_rejected",
+      jwksFetchRejectionClass: rejectionClass,
+    });
+    expect(JSON.stringify(result)).not.toContain("unsafe rejection detail");
+    expect(JSON.stringify(result)).not.toContain("UnlistedDiagnosticName");
   });
 
   it("classifies an aborted timeout signal deterministically without waiting", async () => {
@@ -157,6 +182,7 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
         stage: "jwks_fetch",
         jwksFetchFailureCategory: "timeout",
       });
+      expect(result.jwksFetchRejectionClass).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain("simulated timeout");
     } finally {
       timeoutSpy.mockRestore();
@@ -180,6 +206,7 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
         valid: false,
         stage: "jwks_fetch",
         jwksFetchFailureCategory: "fetch_rejected",
+        jwksFetchRejectionClass: "type_error",
       });
       expect(JSON.stringify(result)).not.toContain("unrelated rejection detail");
     } finally {

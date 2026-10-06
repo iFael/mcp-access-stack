@@ -71,10 +71,21 @@ export type GitHubActionsOidcJwksFetchFailureCategory =
   | "timeout"
   | "fetch_rejected";
 
+export type GitHubActionsOidcJwksFetchRejectionClass =
+  | "error"
+  | "type_error"
+  | "abort_error"
+  | "timeout_error"
+  | "dom_exception_other"
+  | "other_error"
+  | "non_error"
+  | "other";
+
 export interface GitHubActionsOidcVerificationResult {
   readonly valid: boolean;
   readonly stage: GitHubActionsOidcVerificationStage;
   readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
+  readonly jwksFetchRejectionClass?: GitHubActionsOidcJwksFetchRejectionClass;
 }
 
 export function githubActionsOAuthReprovisionAudience(operationId: string): string {
@@ -125,6 +136,9 @@ export class GitHubActionsOidcAssertionVerifier {
           ...(keyResult.stage === "jwks_fetch" && keyResult.jwksFetchFailureCategory
             ? { jwksFetchFailureCategory: keyResult.jwksFetchFailureCategory }
             : {}),
+          ...(keyResult.stage === "jwks_fetch" && keyResult.jwksFetchRejectionClass
+            ? { jwksFetchRejectionClass: keyResult.jwksFetchRejectionClass }
+            : {}),
         };
       }
       const signature = decodeBase64Url(parts[2]!);
@@ -147,6 +161,7 @@ export class GitHubActionsOidcAssertionVerifier {
     readonly key?: CryptoKey;
     readonly stage: GitHubActionsOidcVerificationStage;
     readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
+    readonly jwksFetchRejectionClass?: GitHubActionsOidcJwksFetchRejectionClass;
   }> {
     if (this.cache && this.cache.expiresAt > Date.now()) {
       const cached = this.cache.keys.get(kid);
@@ -180,10 +195,14 @@ export class GitHubActionsOidcAssertionVerifier {
     try {
       response = await fetchPromise;
     } catch (rejected) {
+      const failureCategory =
+        timeoutSignal.aborted && rejected === timeoutSignal.reason ? "timeout" : "fetch_rejected";
       return {
         stage: "jwks_fetch",
-        jwksFetchFailureCategory:
-          timeoutSignal.aborted && rejected === timeoutSignal.reason ? "timeout" : "fetch_rejected",
+        jwksFetchFailureCategory: failureCategory,
+        ...(failureCategory === "fetch_rejected"
+          ? { jwksFetchRejectionClass: classifyJwksFetchRejection(rejected) }
+          : {}),
       };
     }
     if (!response.ok) return { stage: "jwks_http" };
@@ -225,6 +244,23 @@ export class GitHubActionsOidcAssertionVerifier {
     const key = imported.get(kid);
     if (key) return { key, stage: "verified" };
     return { stage: matchingKidSeen ? "jwks_import" : "jwks_kid" };
+  }
+}
+
+function classifyJwksFetchRejection(
+  rejected: unknown,
+): GitHubActionsOidcJwksFetchRejectionClass {
+  try {
+    if (typeof DOMException !== "undefined" && rejected instanceof DOMException) {
+      if (rejected.name === "AbortError") return "abort_error";
+      if (rejected.name === "TimeoutError") return "timeout_error";
+      return "dom_exception_other";
+    }
+    if (rejected instanceof TypeError) return "type_error";
+    if (rejected instanceof Error) return rejected.name === "Error" ? "error" : "other_error";
+    return "non_error";
+  } catch {
+    return "other";
   }
 }
 

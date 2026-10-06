@@ -14,6 +14,10 @@ const VALID_DIAGNOSTIC_STAGES = new Set([
 const VALID_DIAGNOSTIC_FAILURE_CATEGORIES = new Set([
   "request_setup", "fetch_sync_throw", "timeout", "fetch_rejected",
 ]);
+const VALID_DIAGNOSTIC_REJECTION_CLASSES = new Set([
+  "error", "type_error", "abort_error", "timeout_error", "dom_exception_other",
+  "other_error", "non_error", "other",
+]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const MAX_JWKS_RESPONSE_BYTES = 32 * 1024;
 const MAX_JWKS_KEYS = 16;
@@ -363,6 +367,15 @@ function safeEndpointDiagnosticFailureCategory(payload) {
     : null;
 }
 
+function safeEndpointDiagnosticRejectionClass(payload) {
+  const rejectionClass = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload.diagnosticRejectionClass
+    : undefined;
+  return typeof rejectionClass === "string" && VALID_DIAGNOSTIC_REJECTION_CLASSES.has(rejectionClass)
+    ? rejectionClass
+    : null;
+}
+
 function validateStatusPayload(payload, operationId) {
   if (
     typeof payload !== "object" ||
@@ -418,14 +431,18 @@ export async function diagnoseOAuthReprovisionStatus({
     payload.operationId === settings.operationId && typeof payload.status === "string" &&
     VALID_STATUSES.has(payload.status) ? payload.status : null;
   const workerStage = safeEndpointDiagnosticStage(payload);
+  const workerFailureCategory = workerStage === "jwks_fetch"
+    ? safeEndpointDiagnosticFailureCategory(payload)
+    : null;
   return {
     operationId: settings.operationId,
     httpStatus: response.status,
     status,
     error: safeEndpointError(payload),
     workerStage,
-    workerFailureCategory: workerStage === "jwks_fetch"
-      ? safeEndpointDiagnosticFailureCategory(payload)
+    workerFailureCategory,
+    workerRejectionClass: workerStage === "jwks_fetch" && workerFailureCategory === "fetch_rejected"
+      ? safeEndpointDiagnosticRejectionClass(payload)
       : null,
     assertion,
   };

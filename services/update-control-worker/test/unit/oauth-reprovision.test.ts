@@ -225,11 +225,11 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(await post.json()).toEqual({ error: "operation_auth_required" });
   });
 
-  it("returns a fetch failure category only on the opt-in GET and never on POST", async () => {
+  it("returns a fetch rejection class only on the opt-in GET and never on POST", async () => {
     const storage = new MemoryStorage();
     const operationId = "6f7fcf36-00f5-4d98-bf66-55c1d9dfd465";
     const assertion = await createTestGitHubActionsAssertion(operationId);
-    const fetchImpl = (() => {
+    const fetchImpl = (async () => {
       throw new TypeError("unsafe fetch detail");
     }) as typeof fetch;
     const controller = makeController(storage, "", fetchImpl);
@@ -250,9 +250,11 @@ describe("controlled Update Control OAuth reprovision", () => {
     expect(diagnosticBody).toEqual({
       error: "operation_auth_required",
       diagnosticStage: "jwks_fetch",
-      diagnosticFailureCategory: "fetch_sync_throw",
+      diagnosticFailureCategory: "fetch_rejected",
+      diagnosticRejectionClass: "type_error",
     });
     expect(JSON.stringify(diagnosticBody)).not.toContain("unsafe fetch detail");
+    expect(JSON.stringify(diagnosticBody)).not.toContain("TypeError");
 
     const post = await controller.fetch(new Request(REPROVISION_URL, {
       method: "POST",
