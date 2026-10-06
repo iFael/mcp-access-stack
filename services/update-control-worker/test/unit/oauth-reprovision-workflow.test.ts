@@ -77,8 +77,9 @@ describe("Update Control OAuth reprovision operator workflow", () => {
     const deploy = findStep(workflow, "deploy", "Deploy only Update Control");
     const installSecrets = findStep(workflow, "deploy", "Install Oracle WSS channel secret through locked Wrangler stdin");
     const steps = workflow.jobs.deploy.steps;
-    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(deploy));
-    expect(steps.indexOf(deploy)).toBeLessThan(steps.indexOf(installSecrets));
+    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(installSecrets));
+    expect(steps.indexOf(installSecrets)).toBeLessThan(steps.indexOf(deploy));
+    expect(steps.at(-1)).toBe(deploy);
     expect(preflight.run).toBe("node tooling/update-control-deploy-preflight.mjs");
 
     const preflightSources = {
