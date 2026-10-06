@@ -54,8 +54,10 @@ export async function createTestGitHubActionsAssertion(
   const claims = base64UrlJson({
     iss: GITHUB_ACTIONS_OIDC_ISSUER,
     aud: `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`,
-    sub: "repo:iFael/mcp-access-stack:environment:update-control-production",
+    sub: "repo:iFael@185357494/mcp-access-stack@1379020190:environment:update-control-production",
     repository: "iFael/mcp-access-stack",
+    repository_owner_id: "185357494",
+    repository_id: "1379020190",
     workflow_ref: "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main",
     ref: "refs/heads/main",
     event_name: "workflow_dispatch",

@@ -1,12 +1,15 @@
 export const GITHUB_ACTIONS_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_ACTIONS_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
 const EXPECTED_REPOSITORY = "iFael/mcp-access-stack";
+const EXPECTED_REPOSITORY_OWNER_ID = "185357494";
+const EXPECTED_REPOSITORY_ID = "1379020190";
 const EXPECTED_WORKFLOW_REF =
   "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main";
 const EXPECTED_REF = "refs/heads/main";
 const EXPECTED_EVENT = "workflow_dispatch";
 const EXPECTED_ENVIRONMENT = "update-control-production";
-const EXPECTED_SUBJECT = "repo:iFael/mcp-access-stack:environment:update-control-production";
+const EXPECTED_SUBJECT =
+  "repo:iFael@185357494/mcp-access-stack@1379020190:environment:update-control-production";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_ASSERTION_BYTES = 8 * 1024;
 const MAX_JWKS_BYTES = 32 * 1024;
@@ -31,6 +34,8 @@ interface GitHubActionsClaims {
   readonly aud?: unknown;
   readonly sub?: unknown;
   readonly repository?: unknown;
+  readonly repository_owner_id?: unknown;
+  readonly repository_id?: unknown;
   readonly workflow_ref?: unknown;
   readonly ref?: unknown;
   readonly event_name?: unknown;
@@ -136,6 +141,8 @@ function validClaims(claims: GitHubActionsClaims, operationId: string): boolean 
       claims.aud !== githubActionsOAuthReprovisionAudience(operationId) ||
       claims.sub !== EXPECTED_SUBJECT ||
       claims.repository !== EXPECTED_REPOSITORY ||
+      claims.repository_owner_id !== EXPECTED_REPOSITORY_OWNER_ID ||
+      claims.repository_id !== EXPECTED_REPOSITORY_ID ||
       claims.workflow_ref !== EXPECTED_WORKFLOW_REF ||
       claims.ref !== EXPECTED_REF ||
       claims.event_name !== EXPECTED_EVENT ||
