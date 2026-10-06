@@ -62,7 +62,7 @@ function makeWorkerEnv(
   };
   return {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
-    UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: hmacKey,
+    UPDATE_CONTROL_ADMIN_HMAC_KEY: hmacKey,
     UPDATE_CONTROL_AUTH_STATE: authNamespace,
     UPDATE_CONTROL_ORACLE_CHANNEL: channelNamespace,
   } as unknown as UpdateControlWorkerEnv;

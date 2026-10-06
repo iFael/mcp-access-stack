@@ -10,8 +10,6 @@ const MAX_RESPONSE_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
-const MAX_READY_ATTEMPTS = 30;
-const READY_RETRY_DELAY_MS = 1_000;
 
 function requireValue(env, name) {
   const value = env[name];
@@ -22,56 +20,42 @@ function requireValue(env, name) {
 }
 
 function readPublicUrl(env) {
-  const publicUrlValue = requireValue(env, "MCP_UPDATE_CONTROL_PUBLIC_URL");
-  if (/[\u0000-\u001f\u007f]/u.test(publicUrlValue) || publicUrlValue.includes("?") || publicUrlValue.includes("#")) {
+  const raw = requireValue(env, "MCP_UPDATE_CONTROL_PUBLIC_URL");
+  if (/[\u0000-\u001f\u007f]/u.test(raw) || raw.includes("?") || raw.includes("#")) {
     throw new Error("The public URL is invalid.");
   }
-  let publicUrl;
+  let url;
   try {
-    publicUrl = new URL(publicUrlValue);
+    url = new URL(raw);
   } catch {
     throw new Error("The public URL is invalid.");
   }
-  if (publicUrl.protocol !== "https:") {
-    throw new Error("The public URL must use HTTPS.");
+  const isRootOrigin = raw === url.origin || raw === `${url.origin}/`;
+  if (url.protocol !== "https:" || url.username || url.password || url.port ||
+      url.pathname !== "/" || url.search || url.hash || !isRootOrigin) {
+    throw new Error("The public URL must be an HTTPS origin.");
   }
-  const isRootOrigin = publicUrlValue === publicUrl.origin || publicUrlValue === `${publicUrl.origin}/`;
-  if (publicUrl.username || publicUrl.password || publicUrl.port || publicUrl.pathname !== "/" ||
-      publicUrl.search || publicUrl.hash || !isRootOrigin) {
-    throw new Error("The public URL must be an HTTPS origin without credentials, nonstandard port, path, query, or fragment.");
-  }
-  return publicUrl;
+  return url;
 }
 
 function readSettings(env, { requireConfirmation = true } = {}) {
   if (requireConfirmation && env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
     throw new Error("Explicit OAuth reprovision confirmation is required.");
   }
-
   const operationId = requireValue(env, "UPDATE_CONTROL_OAUTH_OPERATION_ID");
   if (!OPERATION_ID_PATTERN.test(operationId)) {
     throw new Error("OAuth reprovision operation ID must be a UUID.");
   }
-
-  const publicUrl = readPublicUrl(env);
-
-  const hmacKey = requireValue(env, "UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
+  const hmacKey = requireValue(env, "UPDATE_CONTROL_ADMIN_HMAC_KEY");
   if (!/^[0-9a-f]{64}$/u.test(hmacKey)) {
-    throw new Error("The dedicated OAuth reprovision HMAC key must be 64 lowercase hexadecimal characters.");
+    throw new Error("The Update Control administrative HMAC key must be 64 lowercase hexadecimal characters.");
   }
-
+  const publicUrl = readPublicUrl(env);
   return {
     operationId,
     endpoint: new URL(OAUTH_REPROVISION_PATH, publicUrl.origin),
     hmacKey,
   };
-}
-
-function requireNextOwnerToken(env) {
-  const value = requireValue(env, "UPDATE_CONTROL_OWNER_TOKEN_NEXT");
-  if (value.length < 32 || /[\r\n]/u.test(value)) {
-    throw new Error("The replacement owner token must be at least 32 characters and contain no line breaks.");
-  }
 }
 
 function requestUrl(endpoint, operationId) {
@@ -81,11 +65,7 @@ function requestUrl(endpoint, operationId) {
 }
 
 function hexBytes(value) {
-  const bytes = new Uint8Array(value.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
+  return Uint8Array.from(value.match(/.{2}/gu) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
 function asArrayBuffer(bytes) {
@@ -123,17 +103,12 @@ async function createAuthorization(method, operationId, hmacKey) {
   return `HMAC-SHA256 v1=${timestamp}.${toHex(new Uint8Array(signature))}`;
 }
 
-async function readBoundedJson(
-  response,
-  maxBytes = MAX_RESPONSE_BYTES,
-  sizeError = "OAuth reprovision response exceeded the configured size limit.",
-) {
-  const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+async function readBoundedJson(response) {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_RESPONSE_BYTES)) {
     await response.body?.cancel();
-    throw new Error(sizeError);
+    throw new Error("OAuth reprovision response exceeded the configured size limit.");
   }
-
   const reader = response.body?.getReader();
   if (!reader) return {};
   const chunks = [];
@@ -143,9 +118,9 @@ async function readBoundedJson(
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
-      if (total > maxBytes) {
+      if (total > MAX_RESPONSE_BYTES) {
         await reader.cancel();
-        throw new Error(sizeError);
+        throw new Error("OAuth reprovision response exceeded the configured size limit.");
       }
       chunks.push(next.value);
     }
@@ -210,71 +185,26 @@ async function readStatus(fetchImpl, settings) {
     settings,
   );
   if (response.status === 409 && payload.error === "another_operation_active") {
-    throw new Error("A different OAuth reprovision is active; do not rotate the Worker secret under a new operation ID.");
+    throw new Error("A different OAuth reprovision is active; reconcile it before starting another.");
   }
   const status = validateStatusPayload(payload, settings.operationId);
   if (response.status !== 200) {
-    throw new Error("OAuth reprovision status is unavailable; no credential was emitted.");
+    throw new Error("OAuth reprovision status is unavailable.");
   }
   return status;
 }
 
 async function appendGitHubOutput(env, status) {
   const path = env.GITHUB_OUTPUT;
-  if (typeof path !== "string" || path.length === 0) return;
+  if (typeof path !== "string" || valueIsUnsafePath(path)) return;
   await appendFile(path, `status=${status}\ncompleted=${status === "completed"}\n`, { encoding: "utf8" });
 }
 
-export async function waitForOAuthReprovisionReadiness({
-  env = process.env,
-  fetchImpl = fetch,
-  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  maxAttempts = MAX_READY_ATTEMPTS,
-} = {}) {
-  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 120) {
-    throw new Error("OAuth reprovision readiness attempts are invalid.");
-  }
-  const publicUrl = readPublicUrl(env);
-  const endpoint = new URL("/mcp", publicUrl.origin);
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    let response;
-    try {
-      response = await fetchImpl(endpoint, {
-        method: "GET",
-        redirect: "error",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        headers: { accept: "application/json" },
-      });
-    } catch {
-      if (attempt + 1 >= maxAttempts) break;
-      await sleep(READY_RETRY_DELAY_MS);
-      continue;
-    }
-    if (response.status === 401) {
-      await response.body?.cancel();
-      return { state: "oauth_active" };
-    }
-    const payload = await readBoundedJson(
-      response,
-      4 * 1024,
-      "OAuth reprovision readiness response exceeded the configured size limit.",
-    );
-    const error = safeEndpointError(payload);
-    if (response.status === 503 && error === "oauth_reprovision_required") {
-      return { state: "oauth_reprovision_required" };
-    }
-    if (response.status !== 503 || error !== "update_control_not_configured") {
-      throw new Error("OAuth reprovision runtime readiness returned an unexpected response.");
-    }
-    if (attempt + 1 < maxAttempts) await sleep(READY_RETRY_DELAY_MS);
-  }
-  throw new Error("OAuth reprovision runtime did not become ready within the bounded wait.");
+function valueIsUnsafePath(value) {
+  return value.length === 0 || /[\r\n\0]/u.test(value);
 }
 
-export async function diagnoseOAuthReprovisionStatus({
-  env = process.env,
-  fetchImpl = fetch,
-} = {}) {
+export async function diagnoseOAuthReprovisionStatus({ env = process.env, fetchImpl = fetch } = {}) {
   const settings = readSettings(env, { requireConfirmation: false });
   const { response, payload } = await requestJson(
     fetchImpl,
@@ -290,13 +220,9 @@ export async function diagnoseOAuthReprovisionStatus({
   };
 }
 
-export async function preflightOAuthReprovision({
-  env = process.env,
-  fetchImpl = fetch,
-} = {}) {
+export async function preflightOAuthReprovision({ env = process.env, fetchImpl = fetch } = {}) {
   const settings = readSettings(env);
   const status = await readStatus(fetchImpl, settings);
-  if (status !== "completed") requireNextOwnerToken(env);
   await appendGitHubOutput(env, status);
   return { operationId: settings.operationId, status };
 }
@@ -308,11 +234,10 @@ export async function executeOAuthReprovision({
   maxAttempts = MAX_APPLY_ATTEMPTS,
 } = {}) {
   const settings = readSettings(env);
-  requireNextOwnerToken(env);
-
   const initialStatus = await readStatus(fetchImpl, settings);
-  if (initialStatus === "completed") {
-    return { operationId: settings.operationId, status: "completed" };
+  if (initialStatus === "completed") return { operationId: settings.operationId, status: "completed" };
+  if (initialStatus === "outcome_unknown") {
+    throw new Error("OAuth reprovision is outcome_unknown. Reconcile the same operation ID before any resume.");
   }
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -328,15 +253,14 @@ export async function executeOAuthReprovision({
       return { operationId: settings.operationId, status };
     }
     if (response.status === 503 && status === "outcome_unknown") {
-      throw new Error("OAuth reprovision is outcome_unknown. Keep the same operation ID and token; inspect status before an explicitly approved resume.");
+      throw new Error("OAuth reprovision is outcome_unknown. Reconcile the same operation ID before an explicitly approved resume.");
     }
     if (response.status !== 202 || status !== "in_progress") {
       throw new Error("OAuth reprovision did not reach a resumable state; no automatic retry was attempted.");
     }
     if (attempt + 1 < maxAttempts) await sleep(APPLY_RETRY_DELAY_MS);
   }
-
-  throw new Error("OAuth reprovision remains in_progress. Reconcile and resume only with the same operation ID and replacement token.");
+  throw new Error("OAuth reprovision remains in_progress. Reconcile and resume only with the same operation ID.");
 }
 
 async function main() {
@@ -345,11 +269,6 @@ async function main() {
     if (mode === "diagnose") {
       const result = await diagnoseOAuthReprovisionStatus();
       process.stdout.write(`OAuth reprovision diagnosis: ${JSON.stringify(result)}\n`);
-      return;
-    }
-    if (mode === "wait-ready") {
-      const result = await waitForOAuthReprovisionReadiness();
-      process.stdout.write(`OAuth reprovision runtime readiness: ${result.state}.\n`);
       return;
     }
     if (mode === "preflight") {
@@ -362,7 +281,7 @@ async function main() {
       process.stdout.write(`OAuth reprovision terminal status: ${result.status}.\n`);
       return;
     }
-    throw new Error("Expected mode: diagnose, wait-ready, preflight or apply.");
+    throw new Error("Expected mode: diagnose, preflight or apply.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected failure.";
     process.stderr.write(`OAuth reprovision ${mode === "preflight" ? "preflight" : "operation"} stopped safely: ${message}\n`);

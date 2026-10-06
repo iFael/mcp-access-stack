@@ -94,7 +94,7 @@ async function dispatch(
   };
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
-    UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY: secret === null ? undefined : secret,
+    UPDATE_CONTROL_ADMIN_HMAC_KEY: secret === null ? undefined : secret,
     UPDATE_CONTROL_AUTH_STATE: authState,
   } as unknown as UpdateControlWorkerEnv;
   return {

@@ -1,64 +1,75 @@
-import {
-  EdgeOwnerOAuth,
-  type OwnerIdentity,
-  type OwnerIdentityStore,
-  type OwnerOAuthStorage,
-} from "@mcp-access-stack/mcp-owner-auth";
+import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { createUpdateControlApiHandler } from "./api.js";
 import { createUpdateControlMcpHandler } from "./mcp.js";
 import { UpdateControlOracleChannelReadClient } from "./oracle-channel-client.js";
 import type { OracleChannelNamespace } from "./oracle-channel.js";
 import { createUpdateControlReadOnlyTools, type UpdateControlReadClient } from "./tools.js";
+import {
+  UpdateControlIdentityOAuth,
+  type UpdateControlIdentityStorage,
+} from "./update-control-identity-oauth.js";
 
-const UPDATE_CONTROL_OWNER_ID = "usr_85dd70bf-2a50-4b8e-97d6-3c20c7226757";
 const MAX_URL_LENGTH = 8 * 1024;
 const MAX_HEADER_COUNT = 64;
 const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_OAUTH_BODY_BYTES = 16 * 1024;
 const MAX_REPROVISION_BODY_BYTES = 1024;
 export const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
+export const ADMIN_BOOTSTRAP_PATH = "/_operations/admin/bootstrap";
 export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_HEADER = "x-update-control-internal-reprovision-authenticated";
+export const UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_HEADER = "x-update-control-internal-admin-operation-authenticated";
+export const UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER = "x-update-control-internal-microsoft-authenticated";
 export const UPDATE_CONTROL_INTERNAL_REPROVISION_AUTH_MARKER = "v1";
+export const UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_MARKER = "v1";
+export const UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER = "v1";
 const OAUTH_REPROVISION_ACTIVE_KEY = "update-control:oauth-reprovision:v1:active";
 const OAUTH_REPROVISION_OPERATION_PREFIX = "update-control:oauth-reprovision:v1:operation:";
 const OAUTH_REPROVISION_EVENT_PREFIX = "update-control:oauth-reprovision:v1:event:";
-const OWNER_CREDENTIAL_MATERIAL_KEY = "owner:credential-material:v1";
-const OWNER_OAUTH_STORAGE_PREFIX = "owner:";
-const OWNER_OAUTH_DELETE_BATCH_SIZE = 256;
-const OWNER_OAUTH_DELETE_LIMIT_PER_REQUEST = 2048;
+const OAUTH_DELETE_LIMIT_PER_REQUEST = 4096;
 const OAUTH_REPROVISION_OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export type OAuthReprovisionOperationIdResult =
   | { readonly ok: true; readonly operationId: string }
   | { readonly ok: false; readonly response: Response };
 
-export async function parseOAuthReprovisionOperationId(
+export function parseOAuthReprovisionOperationId(
   request: Request,
   publicBaseUrl: string | undefined,
+): Promise<OAuthReprovisionOperationIdResult> {
+  return parseFixedOperationId(request, publicBaseUrl, OAUTH_REPROVISION_PATH);
+}
+
+export function parseAdminBootstrapOperationId(
+  request: Request,
+  publicBaseUrl: string | undefined,
+): Promise<OAuthReprovisionOperationIdResult> {
+  return parseFixedOperationId(request, publicBaseUrl, ADMIN_BOOTSTRAP_PATH);
+}
+
+async function parseFixedOperationId(
+  request: Request,
+  publicBaseUrl: string | undefined,
+  pathname: string,
 ): Promise<OAuthReprovisionOperationIdResult> {
   if (request.url.length > MAX_URL_LENGTH || !headersWithinBounds(request.headers)) {
     return { ok: false, response: new Response(null, { status: 431, headers: { "cache-control": "no-store" } }) };
   }
-
   let url: URL;
   try {
     url = new URL(request.url);
   } catch {
     return { ok: false, response: jsonResponse({ error: "invalid_request" }, 400) };
   }
-
-  let reprovisionUrl: URL;
+  let expected: URL;
   try {
-    reprovisionUrl = deriveOAuthReprovisionUrl(publicBaseUrl);
+    expected = new URL(pathname, parseUpdateControlPublicUrl(publicBaseUrl).origin);
   } catch {
     return { ok: false, response: jsonResponse({ error: "not_found" }, 404) };
   }
-  if (url.origin !== reprovisionUrl.origin ||
-      url.pathname !== reprovisionUrl.pathname ||
+  if (url.origin !== expected.origin || url.pathname !== expected.pathname ||
       url.username || url.password || url.hash) {
     return { ok: false, response: jsonResponse({ error: "not_found" }, 404) };
   }
-
   let operationId: string;
   if (request.method === "GET") {
     if ([...url.searchParams.keys()].some((key) => key !== "operationId") ||
@@ -88,7 +99,6 @@ export async function parseOAuthReprovisionOperationId(
   } else {
     return { ok: false, response: jsonResponse({ error: "method_not_allowed" }, 405) };
   }
-
   if (!OAUTH_REPROVISION_OPERATION_ID_PATTERN.test(operationId)) {
     return { ok: false, response: jsonResponse({ error: "invalid_operation_id" }, 400) };
   }
@@ -129,14 +139,17 @@ interface OAuthReprovisionAuditEvent {
 
 export interface UpdateControlEnvironment {
   readonly MCP_UPDATE_CONTROL_PUBLIC_URL?: string;
-  readonly MCP_OWNER_TOKEN?: string;
-  readonly UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY?: string;
+  readonly MICROSOFT_CLIENT_ID?: string;
+  readonly MICROSOFT_TENANT?: string;
+  readonly MICROSOFT_CLIENT_SECRET?: string;
+  readonly UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL?: string;
+  readonly UPDATE_CONTROL_ADMIN_HMAC_KEY?: string;
   readonly MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS?: string;
   readonly MCP_OWNER_REFRESH_TOKEN_TTL_SECONDS?: string;
   readonly UPDATE_CONTROL_ORACLE_CHANNEL?: OracleChannelNamespace;
 }
 
-export interface UpdateControlDurableStorage extends OwnerOAuthStorage {
+export interface UpdateControlDurableStorage extends OwnerOAuthStorage, UpdateControlIdentityStorage {
   listPrefix(prefix: string, limit: number): Promise<Map<string, unknown>>;
   deleteMany(keys: string[]): Promise<number>;
 }
@@ -146,9 +159,8 @@ export interface UpdateControlDurableState {
 }
 
 export class UpdateControlAuthController {
-  private ownerOAuth: EdgeOwnerOAuth | undefined;
+  private identityOAuth: UpdateControlIdentityOAuth | undefined;
   private configurationValid = false;
-  private ownerIdentityPromise: Promise<void> | undefined;
   private readClient: UpdateControlOracleChannelReadClient | undefined;
   private requestQueue: Promise<void> = Promise.resolve();
 
@@ -163,9 +175,9 @@ export class UpdateControlAuthController {
       this.configurationValid = false;
     }
     try {
-      this.ownerOAuth = createOwnerOAuth(state.storage, env, createIdentityStore(state.storage));
+      this.identityOAuth = createIdentityOAuth(state.storage, env);
     } catch {
-      this.ownerOAuth = undefined;
+      this.identityOAuth = undefined;
     }
   }
 
@@ -187,34 +199,71 @@ export class UpdateControlAuthController {
     if (url.pathname === OAUTH_REPROVISION_PATH) {
       return this.handleOAuthReprovision(request);
     }
-    if (url.pathname === "/_operations" || url.pathname.startsWith("/_operations/")) {
+    if (url.pathname === ADMIN_BOOTSTRAP_PATH) {
+      return this.handleAdminBootstrap(request);
+    }
+    if (url.pathname === "/_internal/microsoft/pending") {
+      return this.handleMicrosoftPending(request);
+    }
+    if (url.pathname === "/_internal/microsoft/complete") {
+      return this.handleMicrosoftComplete(request);
+    }
+    if (url.pathname === "/_operations" || url.pathname.startsWith("/_operations/") ||
+        url.pathname === "/_internal" || url.pathname.startsWith("/_internal/")) {
       return jsonResponse({ error: "not_found" }, 404);
     }
-    if (!this.configurationValid || !this.ownerOAuth) {
+    if (!this.configurationValid || !this.identityOAuth) {
       return jsonResponse({ error: "update_control_not_configured" }, 503);
     }
 
     try {
-      const active = await this.state.storage.get<unknown>(OAUTH_REPROVISION_ACTIVE_KEY);
-      if (!isRecord(active) || active.status !== "completed" ||
-          !(await ownerSecretMatchesPersistedState(this.state.storage, this.env.MCP_OWNER_TOKEN))) {
+      const activeReprovision = await this.state.storage.get<unknown>(OAUTH_REPROVISION_ACTIVE_KEY);
+      if (isRecord(activeReprovision) &&
+          isOAuthReprovisionStatus(activeReprovision.status) &&
+          activeReprovision.status !== "completed") {
         return jsonResponse({ error: "oauth_reprovision_required" }, 503);
       }
-      await this.ensureOwnerIdentity();
+      if (url.pathname === "/admin/login") {
+        if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
+        return this.identityOAuth.beginAdminLogin();
+      }
+      if (url.pathname === "/join") {
+        if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
+        if ([...url.searchParams.keys()].some((key) => key !== "invite") ||
+            url.searchParams.getAll("invite").length !== 1) {
+          return jsonResponse({ error: "invalid_invite" }, 400);
+        }
+        return this.identityOAuth.beginInviteJoin(url.searchParams.get("invite") ?? "");
+      }
+      if (url.pathname === "/admin") {
+        if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
+        return this.identityOAuth.renderAdmin(request);
+      }
+      if (url.pathname === "/admin/invites") {
+        return this.identityOAuth.createInvite(request);
+      }
+      if (url.pathname === "/admin/logout") {
+        return this.identityOAuth.logoutAdmin(request);
+      }
+      const roleMatch = /^\/admin\/users\/(usr_[0-9a-f-]{36})\/role$/iu.exec(url.pathname);
+      if (roleMatch?.[1]) return this.identityOAuth.changeUserRole(request, roleMatch[1]);
+      const revokeMatch = /^\/admin\/users\/(usr_[0-9a-f-]{36})\/revoke$/iu.exec(url.pathname);
+      if (revokeMatch?.[1]) return this.identityOAuth.revokeUser(request, revokeMatch[1]);
+
       const oauthRequest = isOAuthPostPath(url.pathname) && request.method === "POST"
         ? await boundOAuthRequest(request)
         : request;
-      const oauthResponse = await this.ownerOAuth.handle(oauthRequest);
+      const oauthResponse = await this.identityOAuth.handle(oauthRequest);
       if (oauthResponse) return oauthResponse;
       if (url.pathname === "/mcp") {
         return createUpdateControlMcpHandler({
-          authenticate: (candidate) => this.ownerOAuth!.authenticate(candidate),
+          authenticate: (candidate) => this.identityOAuth!.authenticate(candidate),
           tools: createUpdateControlReadOnlyTools(this.createReadClientProxy()),
         })(oauthRequest);
       }
       if (url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/")) {
         return createUpdateControlApiHandler({
-          authenticate: (candidate) => this.ownerOAuth!.authenticate(candidate),
+          authenticate: (candidate) => this.identityOAuth!.authenticate(candidate),
           client: this.createReadClientProxy(),
         })(request);
       }
@@ -233,6 +282,69 @@ export class UpdateControlAuthController {
     return request.method === "GET"
       ? this.readOAuthReprovisionStatus(parsed.operationId)
       : this.runOAuthReprovision(parsed.operationId);
+  }
+
+  private async handleAdminBootstrap(request: Request): Promise<Response> {
+    const parsed = await parseAdminBootstrapOperationId(request, this.env.MCP_UPDATE_CONTROL_PUBLIC_URL);
+    if (!parsed.ok) return parsed.response;
+    if (request.headers.get(UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_HEADER) !==
+        UPDATE_CONTROL_INTERNAL_ADMIN_OPERATION_AUTH_MARKER) {
+      return jsonResponse({ error: "operation_auth_required" }, 401);
+    }
+    if (!this.configurationValid || !this.identityOAuth) {
+      return jsonResponse({ error: "update_control_not_configured" }, 503);
+    }
+    return request.method === "GET"
+      ? this.identityOAuth.readBootstrap(parsed.operationId)
+      : this.identityOAuth.beginBootstrap(parsed.operationId);
+  }
+
+  private async handleMicrosoftPending(request: Request): Promise<Response> {
+    if (request.headers.get(UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER) !==
+        UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER) {
+      return jsonResponse({ error: "operation_auth_required" }, 401);
+    }
+    if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405);
+    if (!this.configurationValid || !this.identityOAuth) {
+      return jsonResponse({ error: "update_control_not_configured" }, 503);
+    }
+    const url = new URL(request.url);
+    if ([...url.searchParams.keys()].some((key) => key !== "state") ||
+        url.searchParams.getAll("state").length !== 1) {
+      return jsonResponse({ error: "invalid_request" }, 400);
+    }
+    return this.identityOAuth.getPendingMicrosoft(url.searchParams.get("state") ?? "");
+  }
+
+  private async handleMicrosoftComplete(request: Request): Promise<Response> {
+    if (request.headers.get(UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_HEADER) !==
+        UPDATE_CONTROL_INTERNAL_MICROSOFT_AUTH_MARKER) {
+      return jsonResponse({ error: "operation_auth_required" }, 401);
+    }
+    if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
+    if (!this.configurationValid || !this.identityOAuth) {
+      return jsonResponse({ error: "update_control_not_configured" }, 503);
+    }
+    let input: unknown;
+    try {
+      input = JSON.parse(await readBoundedRequestText(request, MAX_OAUTH_BODY_BYTES)) as unknown;
+    } catch {
+      return jsonResponse({ error: "invalid_identity" }, 400);
+    }
+    if (!isRecord(input) ||
+        typeof input.state !== "string" ||
+        typeof input.subject !== "string" ||
+        typeof input.displayName !== "string" ||
+        (input.email !== undefined && typeof input.email !== "string") ||
+        Object.keys(input).some((key) => !["state", "subject", "displayName", "email"].includes(key))) {
+      return jsonResponse({ error: "invalid_identity" }, 400);
+    }
+    return this.identityOAuth.completeMicrosoftIdentity({
+      state: input.state,
+      subject: input.subject,
+      displayName: input.displayName,
+      ...(typeof input.email === "string" ? { email: input.email } : {}),
+    });
   }
 
   private async readOAuthReprovisionStatus(operationId: string): Promise<Response> {
@@ -268,9 +380,8 @@ export class UpdateControlAuthController {
   }
 
   private async runOAuthReprovision(operationId: string): Promise<Response> {
-    const ownerToken = this.env.MCP_OWNER_TOKEN;
-    if (!ownerToken || ownerToken.length < 32) {
-      return jsonResponse({ operationId, status: "not_executed", error: "owner_token_invalid" }, 503);
+    if (!this.configurationValid || !this.identityOAuth) {
+      return jsonResponse({ operationId, status: "not_executed", error: "runtime_configuration_invalid" }, 503);
     }
     const operationKey = oauthOperationKey(operationId);
     let operation: OAuthReprovisionOperation | undefined;
@@ -281,13 +392,8 @@ export class UpdateControlAuthController {
           active.status !== "completed" && active.operationId !== operationId) {
         return jsonResponse({ operationId, status: "in_progress", error: "another_operation_active" }, 409);
       }
-
       if (isOAuthReprovisionOperation(existing) && existing.status === "completed") {
         if (isRecord(active) && active.operationId === operationId && active.status !== "completed") {
-          if (!(await ownerSecretMatchesPersistedState(this.state.storage, this.env.MCP_OWNER_TOKEN))) {
-            return jsonResponse({ operationId, status: "outcome_unknown" }, 503);
-          }
-          await this.appendOAuthReprovisionEvent(operationId, existing.attempt, "completed");
           await this.state.storage.put(OAUTH_REPROVISION_ACTIVE_KEY, {
             operationId,
             status: "completed",
@@ -297,51 +403,16 @@ export class UpdateControlAuthController {
         return jsonResponse({ operationId, status: "completed", attempt: existing.attempt });
       }
 
-      const targetVerifierHash = await ownerSecretVerifierHash(ownerToken);
-      if (isOAuthReprovisionOperation(existing) &&
-          existing.targetOwnerVerifierHash !== targetVerifierHash) {
-        return jsonResponse({ operationId, status: existing.status, error: "operation_secret_changed" }, 409);
-      }
-      let replacementOAuth: EdgeOwnerOAuth;
-      try {
-        replacementOAuth = createOwnerOAuth(
-          this.state.storage,
-          this.env,
-          createIdentityStore(this.state.storage),
-        );
-      } catch {
-        const currentStatus = isOAuthReprovisionOperation(existing)
-          ? existing.status
-          : isRecord(active) && active.operationId === operationId &&
-            isOAuthReprovisionStatus(active.status)
-            ? active.status
-            : "not_executed";
-        return jsonResponse({ operationId, status: currentStatus, error: "runtime_configuration_invalid" }, 503);
-      }
       if (isOAuthReprovisionOperation(existing)) {
         operation = {
-          ...existing,
-          status: "in_progress",
-          attempt: existing.attempt + 1,
-          updatedAt: new Date().toISOString(),
-        };
-        await this.state.storage.put(OAUTH_REPROVISION_ACTIVE_KEY, {
           operationId,
           status: "in_progress",
-          updatedAt: operation.updatedAt,
-        } satisfies OAuthReprovisionActiveState);
-        await this.state.storage.put(operationKey, operation);
+          attempt: existing.attempt + 1,
+          startedAt: existing.startedAt,
+          updatedAt: new Date().toISOString(),
+        };
         await this.appendOAuthReprovisionEvent(operationId, operation.attempt, "resumed");
       } else {
-        const currentMaterial = await this.state.storage.get<unknown>(OWNER_CREDENTIAL_MATERIAL_KEY);
-        if (isRecord(currentMaterial) && typeof currentMaterial.ownerVerifierHash === "string" &&
-            await constantTimeTextEquals(currentMaterial.ownerVerifierHash, targetVerifierHash)) {
-          return jsonResponse({
-            operationId,
-            status: "not_executed",
-            error: "owner_token_must_change",
-          }, 409);
-        }
         const now = new Date().toISOString();
         operation = {
           operationId,
@@ -349,72 +420,48 @@ export class UpdateControlAuthController {
           attempt: 1,
           startedAt: now,
           updatedAt: now,
-          targetOwnerVerifierHash: targetVerifierHash,
         };
-        await this.state.storage.put(OAUTH_REPROVISION_ACTIVE_KEY, {
-          operationId,
-          status: "in_progress",
-          updatedAt: now,
-        } satisfies OAuthReprovisionActiveState);
-        await this.state.storage.put(operationKey, operation);
         await this.appendOAuthReprovisionEvent(operationId, 1, "started");
       }
-
-      const currentOperation = operation;
-      if (!currentOperation) throw new Error("Reprovision operation was not persisted.");
-
-      let deletedThisRequest = 0;
-      while (true) {
-        const batch = await this.state.storage.listPrefix(
-          OWNER_OAUTH_STORAGE_PREFIX,
-          OWNER_OAUTH_DELETE_BATCH_SIZE,
-        );
-        const keys = [...batch.keys()];
-        if (keys.length === 0) break;
-        if (deletedThisRequest >= OWNER_OAUTH_DELETE_LIMIT_PER_REQUEST) {
-          return jsonResponse({ operationId, status: "in_progress", attempt: currentOperation.attempt }, 202);
-        }
-        const allowed = keys.slice(0, OWNER_OAUTH_DELETE_LIMIT_PER_REQUEST - deletedThisRequest);
-        await this.state.storage.deleteMany(allowed);
-        deletedThisRequest += allowed.length;
-      }
-      await this.state.storage.delete(UPDATE_CONTROL_OWNER_KEY);
-      await this.appendOAuthReprovisionEvent(operationId, currentOperation.attempt, "oauth_state_cleared");
-      await ensureSingleOwner(this.state.storage);
-      await replacementOAuth.activateSingleUser(UPDATE_CONTROL_OWNER_ID);
-      this.ownerOAuth = replacementOAuth;
-      this.ownerIdentityPromise = undefined;
-      if (!(await ownerSecretMatchesPersistedState(this.state.storage, this.env.MCP_OWNER_TOKEN))) {
-        throw new Error("Reprovisioned OAuth authority did not match configured secret.");
-      }
-      await this.appendOAuthReprovisionEvent(
+      await this.state.storage.put(operationKey, operation);
+      await this.state.storage.put(OAUTH_REPROVISION_ACTIVE_KEY, {
         operationId,
-        currentOperation.attempt,
-        "owner_authority_reprovisioned",
-      );
+        status: "in_progress",
+        updatedAt: operation.updatedAt,
+      } satisfies OAuthReprovisionActiveState);
+
+      const deleted = await this.identityOAuth.deleteOAuthState(OAUTH_DELETE_LIMIT_PER_REQUEST);
+      if (!deleted.complete) {
+        return jsonResponse({ operationId, status: "in_progress", attempt: operation.attempt }, 202);
+      }
+      await this.appendOAuthReprovisionEvent(operationId, operation.attempt, "oauth_state_cleared");
+      await this.appendOAuthReprovisionEvent(operationId, operation.attempt, "owner_authority_reprovisioned");
+
       const completedAt = new Date().toISOString();
-      operation = {
+      const completed: OAuthReprovisionOperation = {
         operationId,
         status: "completed",
-        attempt: currentOperation.attempt,
-        startedAt: currentOperation.startedAt,
+        attempt: operation.attempt,
+        startedAt: operation.startedAt,
         updatedAt: completedAt,
       };
-      await this.state.storage.put(operationKey, operation);
-      await this.appendOAuthReprovisionEvent(operationId, currentOperation.attempt, "completed");
+      await this.state.storage.put(operationKey, completed);
+      await this.appendOAuthReprovisionEvent(operationId, operation.attempt, "completed");
       await this.state.storage.put(OAUTH_REPROVISION_ACTIVE_KEY, {
         operationId,
         status: "completed",
         updatedAt: completedAt,
       } satisfies OAuthReprovisionActiveState);
-      return jsonResponse({ operationId, status: "completed", attempt: currentOperation.attempt });
+      return jsonResponse({ operationId, status: "completed", attempt: operation.attempt });
     } catch {
       try {
         const persisted = await this.state.storage.get<unknown>(operationKey);
         if (isOAuthReprovisionOperation(persisted) && persisted.status !== "completed") {
           const unknown: OAuthReprovisionOperation = {
-            ...persisted,
+            operationId,
             status: "outcome_unknown",
+            attempt: persisted.attempt,
+            startedAt: persisted.startedAt,
             updatedAt: new Date().toISOString(),
           };
           await this.state.storage.put(operationKey, unknown);
@@ -427,7 +474,7 @@ export class UpdateControlAuthController {
           return jsonResponse({ operationId, status: "outcome_unknown" }, 503);
         }
       } catch {
-        // If persistence itself is unavailable, the last durable marker remains in progress and normal OAuth stays blocked.
+        // Last durable marker is authoritative when persistence cannot be reconciled.
       }
       return jsonResponse({ operationId, status: "outcome_unknown" }, 503);
     }
@@ -476,19 +523,6 @@ export class UpdateControlAuthController {
         release();
       }
     });
-  }
-
-  private ensureOwnerIdentity(): Promise<void> {
-    if (!this.ownerIdentityPromise) {
-      this.ownerIdentityPromise = ensureSingleOwner(this.state.storage)
-        .then(() => this.ownerOAuth!.activateSingleUser(UPDATE_CONTROL_OWNER_ID))
-        .then(() => undefined)
-        .catch((error: unknown) => {
-          this.ownerIdentityPromise = undefined;
-          throw error;
-        });
-    }
-    return this.ownerIdentityPromise;
   }
 
   private createReadClientProxy(): UpdateControlReadClient {
@@ -580,42 +614,6 @@ function deriveOAuthReprovisionUrl(publicBaseUrl: string | undefined): URL {
   return new URL(OAUTH_REPROVISION_PATH, parseUpdateControlPublicUrl(publicBaseUrl).origin);
 }
 
-async function ownerSecretMatchesPersistedState(
-  storage: OwnerOAuthStorage,
-  ownerSecret: string | undefined,
-): Promise<boolean> {
-  if (!ownerSecret || ownerSecret.length < 32) return false;
-  const material = await storage.get<unknown>(OWNER_CREDENTIAL_MATERIAL_KEY);
-  if (!isRecord(material) || typeof material.ownerVerifierHash !== "string" ||
-      !/^[A-Za-z0-9_-]{43}$/u.test(material.ownerVerifierHash)) return false;
-  return constantTimeTextEquals(material.ownerVerifierHash, await ownerSecretVerifierHash(ownerSecret));
-}
-
-async function ownerSecretVerifierHash(ownerSecret: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(ownerSecret),
-  ));
-  let binary = "";
-  for (const byte of digest) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-
-async function constantTimeTextEquals(left: string, right: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [leftDigest, rightDigest] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(left)),
-    crypto.subtle.digest("SHA-256", encoder.encode(right)),
-  ]);
-  const leftBytes = new Uint8Array(leftDigest);
-  const rightBytes = new Uint8Array(rightDigest);
-  let difference = 0;
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index]! ^ rightBytes[index]!;
-  }
-  return difference === 0;
-}
-
 async function readBoundedRequestText(request: Request, maximumBytes: number): Promise<string> {
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) {
@@ -649,63 +647,26 @@ async function readBoundedRequestText(request: Request, maximumBytes: number): P
   return new TextDecoder("utf-8", { fatal: true }).decode(joined);
 }
 
-
-const UPDATE_CONTROL_OWNER_KEY = "update-control:owner-identity:v1";
-
-export async function ensureSingleOwner(storage: OwnerOAuthStorage): Promise<void> {
-  const owner = await storage.get<OwnerIdentity>(UPDATE_CONTROL_OWNER_KEY);
-  if (owner === undefined) {
-    await storage.put(UPDATE_CONTROL_OWNER_KEY, {
-      id: UPDATE_CONTROL_OWNER_ID,
-      displayName: "MCP V3 Update Control Owner",
-    } satisfies OwnerIdentity);
-    return;
-  }
-  if (!isUpdateControlOwner(owner)) {
-    throw new Error("Update Control authorization storage has an unexpected owner identity.");
-  }
-}
-
 function isOAuthPostPath(pathname: string): boolean {
   return pathname === "/register" || pathname === "/authorize" ||
     pathname === "/token" || pathname === "/revoke";
 }
 
-function createIdentityStore(storage: OwnerOAuthStorage): OwnerIdentityStore {
-  return {
-    async getUser(userId) {
-      const owner = await storage.get<OwnerIdentity>(UPDATE_CONTROL_OWNER_KEY);
-      return userId === UPDATE_CONTROL_OWNER_ID && isUpdateControlOwner(owner) ? owner : null;
-    },
-    async listUsers() {
-      const owner = await storage.get<OwnerIdentity>(UPDATE_CONTROL_OWNER_KEY);
-      return isUpdateControlOwner(owner) ? [owner] : [];
-    },
-  };
-}
-
-function isUpdateControlOwner(value: unknown): value is OwnerIdentity {
-  return typeof value === "object" && value !== null && !Array.isArray(value) &&
-    "id" in value && value.id === UPDATE_CONTROL_OWNER_ID &&
-    "displayName" in value && value.displayName === "MCP V3 Update Control Owner";
-}
-
-function createOwnerOAuth(
-  storage: OwnerOAuthStorage,
+function createIdentityOAuth(
+  storage: UpdateControlDurableStorage,
   env: UpdateControlEnvironment,
-  identityStore: OwnerIdentityStore,
-): EdgeOwnerOAuth {
-  const ownerSecret = requireValue(env.MCP_OWNER_TOKEN, "MCP_OWNER_TOKEN");
-  if (ownerSecret.length < 32) throw new Error("MCP_OWNER_TOKEN must contain at least 32 characters.");
-  const baseUrlValue = requireValue(
-    env.MCP_UPDATE_CONTROL_PUBLIC_URL,
-    "MCP_UPDATE_CONTROL_PUBLIC_URL",
+): UpdateControlIdentityOAuth {
+  const publicBaseUrl = parseUpdateControlPublicUrl(
+    requireValue(env.MCP_UPDATE_CONTROL_PUBLIC_URL, "MCP_UPDATE_CONTROL_PUBLIC_URL"),
   );
-  const publicBaseUrl = parseUpdateControlPublicUrl(baseUrlValue);
-  return new EdgeOwnerOAuth(storage, {
-    ownerSecret,
+  return new UpdateControlIdentityOAuth(storage, {
     publicBaseUrl,
-    mcpPath: "/mcp",
+    microsoftClientId: requireValue(env.MICROSOFT_CLIENT_ID, "MICROSOFT_CLIENT_ID"),
+    microsoftTenant: requireValue(env.MICROSOFT_TENANT, "MICROSOFT_TENANT"),
+    bootstrapAdminEmail: requireValue(
+      env.UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL,
+      "UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL",
+    ),
     scopes: ["update:read"],
     accessTokenTtlSeconds: readBoundedInteger(
       env.MCP_OWNER_ACCESS_TOKEN_TTL_SECONDS,
@@ -720,7 +681,7 @@ function createOwnerOAuth(
       31_536_000,
     ),
     resourceName: "MCP V3 Update Center",
-  }, identityStore);
+  });
 }
 
 async function boundOAuthRequest(request: Request): Promise<Request> {
