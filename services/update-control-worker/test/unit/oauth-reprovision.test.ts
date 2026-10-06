@@ -47,13 +47,17 @@ class MemoryStorage implements OwnerOAuthStorage {
   }
 }
 
-function makeController(storage: MemoryStorage, ownerToken: string) {
+function makeController(
+  storage: MemoryStorage,
+  ownerToken: string,
+  fetchImpl: typeof fetch = testGitHubActionsJwksFetch,
+) {
   const state: UpdateControlDurableState = { storage };
   const env = {
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
     MCP_OWNER_TOKEN: ownerToken,
   };
-  return new UpdateControlAuthController(state, env, testGitHubActionsJwksFetch);
+  return new UpdateControlAuthController(state, env, fetchImpl);
 }
 
 async function reprovisionRequest(operationId: string): Promise<Request> {
@@ -218,6 +222,47 @@ describe("controlled Update Control OAuth reprovision", () => {
       body: JSON.stringify({ operationId }),
     }));
     expect(post.status).toBe(401);
+    expect(await post.json()).toEqual({ error: "operation_auth_required" });
+  });
+
+  it("returns a fetch failure category only on the opt-in GET and never on POST", async () => {
+    const storage = new MemoryStorage();
+    const operationId = "6f7fcf36-00f5-4d98-bf66-55c1d9dfd465";
+    const assertion = await createTestGitHubActionsAssertion(operationId);
+    const fetchImpl = (() => {
+      throw new TypeError("unsafe fetch detail");
+    }) as typeof fetch;
+    const controller = makeController(storage, "", fetchImpl);
+    const url = REPROVISION_URL + "?operationId=" + operationId;
+
+    const normal = await controller.fetch(new Request(url, {
+      headers: { authorization: `Bearer ${assertion}` },
+    }));
+    expect(await normal.json()).toEqual({ error: "operation_auth_required" });
+
+    const diagnostic = await controller.fetch(new Request(url, {
+      headers: {
+        authorization: `Bearer ${assertion}`,
+        "x-update-control-oidc-diagnose": "v1",
+      },
+    }));
+    const diagnosticBody = await diagnostic.json();
+    expect(diagnosticBody).toEqual({
+      error: "operation_auth_required",
+      diagnosticStage: "jwks_fetch",
+      diagnosticFailureCategory: "fetch_sync_throw",
+    });
+    expect(JSON.stringify(diagnosticBody)).not.toContain("unsafe fetch detail");
+
+    const post = await controller.fetch(new Request(REPROVISION_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${assertion}`,
+        "content-type": "application/json",
+        "x-update-control-oidc-diagnose": "v1",
+      },
+      body: JSON.stringify({ operationId }),
+    }));
     expect(await post.json()).toEqual({ error: "operation_auth_required" });
   });
 

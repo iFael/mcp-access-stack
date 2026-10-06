@@ -168,7 +168,11 @@ describe("OAuth reprovision operator client", () => {
           return jsonResponse({ value: assertion });
         }
         requests.push({ url: requestUrl, init });
-        return jsonResponse({ error: "operation_auth_required", diagnosticStage: "signature" }, 401);
+        return jsonResponse({
+          error: "operation_auth_required",
+          diagnosticStage: "jwks_fetch",
+          diagnosticFailureCategory: "fetch_rejected",
+        }, 401);
       },
     });
     expect(requests).toHaveLength(1);
@@ -177,7 +181,8 @@ describe("OAuth reprovision operator client", () => {
     expect(result.httpStatus).toBe(401);
     expect(result.status).toBeNull();
     expect(result.error).toBe("operation_auth_required");
-    expect(result.workerStage).toBe("signature");
+    expect(result.workerStage).toBe("jwks_fetch");
+    expect(result.workerFailureCategory).toBe("fetch_rejected");
     expect(result.assertion).toEqual({
       formatValid: true,
       algMatches: true,
@@ -212,6 +217,30 @@ describe("OAuth reprovision operator client", () => {
     expect(JSON.stringify(result)).not.toContain(OWNER_TOKEN);
   });
 
+  it("drops an unrecognized Worker fetch failure category", async () => {
+    const assertion = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const result = await diagnoseOAuthReprovisionStatus({
+      env: makeEnv({ UPDATE_CONTROL_OAUTH_CONFIRM: "", UPDATE_CONTROL_OWNER_TOKEN_NEXT: "" }),
+      fetchImpl: async (url) => {
+        const requestUrl = new URL(String(url));
+        if (requestUrl.hostname === "token.actions.githubusercontent.com") {
+          return testGitHubActionsJwksFetch(requestUrl);
+        }
+        if (requestUrl.hostname.endsWith(".actions.githubusercontent.com")) {
+          return jsonResponse({ value: assertion });
+        }
+        return jsonResponse({
+          error: "operation_auth_required",
+          diagnosticStage: "jwks_fetch",
+          diagnosticFailureCategory: "unrecognized-category",
+        }, 401);
+      },
+    });
+    expect(result.workerStage).toBe("jwks_fetch");
+    expect(result.workerFailureCategory).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("unrecognized-category");
+  });
+
   it("requests a UUID-bound GitHub OIDC token and checks completed status without a replacement token", async () => {
     const dir = await mkdtemp(join(tmpdir(), "update-control-oauth-"));
     try {
@@ -238,6 +267,7 @@ describe("OAuth reprovision operator client", () => {
       expect(new URL(requests[0].url).origin).toBe(new URL(PUBLIC_URL).origin);
       expect(new URL(requests[0].url).pathname).toBe("/_operations/oauth/reprovision");
       expect(requests[0].init.headers.authorization).toBe(`Bearer ${OIDC_ASSERTION}`);
+      expect(requests[0].init.headers["x-update-control-oidc-diagnose"]).toBeUndefined();
       expect(requests[0].init.headers["CF-Access-Client-Id"]).toBeUndefined();
       expect(requests[0].init.headers["CF-Access-Client-Secret"]).toBeUndefined();
       expect(await readFile(outputPath, "utf8")).toContain("completed=true");
@@ -280,6 +310,8 @@ describe("OAuth reprovision operator client", () => {
     });
     expect(result).toEqual({ operationId: OPERATION_ID, status: "completed" });
     expect(requests.map(({ init }) => init.method)).toEqual(["GET", "POST", "POST"]);
+    expect(requests.every(({ init }) =>
+      init.headers["x-update-control-oidc-diagnose"] === undefined)).toBe(true);
     expect(requests[1].init.body).toBe(JSON.stringify({ operationId: OPERATION_ID }));
     expect(requests[2].init.body).toBe(JSON.stringify({ operationId: OPERATION_ID }));
     expect(requests.every(({ init }) => init.headers.authorization === `Bearer ${OIDC_ASSERTION}`)).toBe(true);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import {
   GitHubActionsOidcAssertionVerifier,
   githubActionsOAuthReprovisionAudience,
@@ -86,5 +86,104 @@ describe("GitHub Actions OIDC assertion verifier for fixed OAuth reprovision ope
     const signature = new GitHubActionsOidcAssertionVerifier(testGitHubActionsJwksFetch);
     await expect(signature.verifyWithStage(invalid.join("."), OPERATION_ID))
       .resolves.toEqual({ valid: false, stage: "signature" });
+  });
+
+  it("classifies request setup failures without invoking fetch", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const fetchImpl = jest.fn(testGitHubActionsJwksFetch);
+    const timeoutSpy = jest.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      throw new TypeError("unsafe request setup detail");
+    });
+    try {
+      const verifier = new GitHubActionsOidcAssertionVerifier(fetchImpl);
+      const result = await verifier.verifyWithStage(token, OPERATION_ID);
+      expect(result).toEqual({
+        valid: false,
+        stage: "jwks_fetch",
+        jwksFetchFailureCategory: "request_setup",
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("unsafe request setup detail");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("classifies a synchronous fetch throw without preserving the error", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const fetchImpl = (() => {
+      throw new TypeError("unsafe synchronous fetch detail");
+    }) as typeof fetch;
+    const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+      .verifyWithStage(token, OPERATION_ID);
+    expect(result).toEqual({
+      valid: false,
+      stage: "jwks_fetch",
+      jwksFetchFailureCategory: "fetch_sync_throw",
+    });
+    expect(JSON.stringify(result)).not.toContain("unsafe synchronous fetch detail");
+  });
+
+  it("classifies a rejected fetch promise without preserving the error", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const fetchImpl = (async () => {
+      throw new TypeError("unsafe rejected fetch detail");
+    }) as typeof fetch;
+    const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+      .verifyWithStage(token, OPERATION_ID);
+    expect(result).toEqual({
+      valid: false,
+      stage: "jwks_fetch",
+      jwksFetchFailureCategory: "fetch_rejected",
+    });
+    expect(JSON.stringify(result)).not.toContain("unsafe rejected fetch detail");
+  });
+
+  it("classifies an aborted timeout signal deterministically without waiting", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const timeoutController = new AbortController();
+    const timeoutSpy = jest.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      timeoutController.abort(new DOMException("simulated timeout", "TimeoutError"));
+      return timeoutController.signal;
+    });
+    const fetchImpl = (async () => {
+      throw timeoutController.signal.reason;
+    }) as typeof fetch;
+    try {
+      const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+        .verifyWithStage(token, OPERATION_ID);
+      expect(result).toEqual({
+        valid: false,
+        stage: "jwks_fetch",
+        jwksFetchFailureCategory: "timeout",
+      });
+      expect(JSON.stringify(result)).not.toContain("simulated timeout");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps an unrelated rejection classified as fetch_rejected after signal abort", async () => {
+    const token = await createTestGitHubActionsAssertion(OPERATION_ID);
+    const timeoutController = new AbortController();
+    const timeoutSpy = jest.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      timeoutController.abort(new DOMException("simulated timeout", "TimeoutError"));
+      return timeoutController.signal;
+    });
+    const fetchImpl = (async () => {
+      throw new TypeError("unrelated rejection detail");
+    }) as typeof fetch;
+    try {
+      const result = await new GitHubActionsOidcAssertionVerifier(fetchImpl)
+        .verifyWithStage(token, OPERATION_ID);
+      expect(result).toEqual({
+        valid: false,
+        stage: "jwks_fetch",
+        jwksFetchFailureCategory: "fetch_rejected",
+      });
+      expect(JSON.stringify(result)).not.toContain("unrelated rejection detail");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

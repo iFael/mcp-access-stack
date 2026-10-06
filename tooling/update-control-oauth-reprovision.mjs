@@ -11,6 +11,9 @@ const VALID_DIAGNOSTIC_STAGES = new Set([
   "verified", "input", "structure", "header", "claims", "jwks_fetch", "jwks_http",
   "jwks_shape", "jwks_kid", "jwks_import", "signature", "exception",
 ]);
+const VALID_DIAGNOSTIC_FAILURE_CATEGORIES = new Set([
+  "request_setup", "fetch_sync_throw", "timeout", "fetch_rejected",
+]);
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const MAX_JWKS_RESPONSE_BYTES = 32 * 1024;
 const MAX_JWKS_KEYS = 16;
@@ -351,6 +354,15 @@ function safeEndpointDiagnosticStage(payload) {
   return typeof stage === "string" && VALID_DIAGNOSTIC_STAGES.has(stage) ? stage : null;
 }
 
+function safeEndpointDiagnosticFailureCategory(payload) {
+  const category = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload.diagnosticFailureCategory
+    : undefined;
+  return typeof category === "string" && VALID_DIAGNOSTIC_FAILURE_CATEGORIES.has(category)
+    ? category
+    : null;
+}
+
 function validateStatusPayload(payload, operationId) {
   if (
     typeof payload !== "object" ||
@@ -405,12 +417,16 @@ export async function diagnoseOAuthReprovisionStatus({
   const status = payload && typeof payload === "object" && !Array.isArray(payload) &&
     payload.operationId === settings.operationId && typeof payload.status === "string" &&
     VALID_STATUSES.has(payload.status) ? payload.status : null;
+  const workerStage = safeEndpointDiagnosticStage(payload);
   return {
     operationId: settings.operationId,
     httpStatus: response.status,
     status,
     error: safeEndpointError(payload),
-    workerStage: safeEndpointDiagnosticStage(payload),
+    workerStage,
+    workerFailureCategory: workerStage === "jwks_fetch"
+      ? safeEndpointDiagnosticFailureCategory(payload)
+      : null,
     assertion,
   };
 }

@@ -65,9 +65,16 @@ export type GitHubActionsOidcVerificationStage =
   | "signature"
   | "exception";
 
+export type GitHubActionsOidcJwksFetchFailureCategory =
+  | "request_setup"
+  | "fetch_sync_throw"
+  | "timeout"
+  | "fetch_rejected";
+
 export interface GitHubActionsOidcVerificationResult {
   readonly valid: boolean;
   readonly stage: GitHubActionsOidcVerificationStage;
+  readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
 }
 
 export function githubActionsOAuthReprovisionAudience(operationId: string): string {
@@ -111,7 +118,15 @@ export class GitHubActionsOidcAssertionVerifier {
       if (!validClaims(claims, operationId)) return { valid: false, stage: "claims" };
 
       const keyResult = await this.getKeyWithStage(header.kid);
-      if (!keyResult.key) return { valid: false, stage: keyResult.stage };
+      if (!keyResult.key) {
+        return {
+          valid: false,
+          stage: keyResult.stage,
+          ...(keyResult.stage === "jwks_fetch" && keyResult.jwksFetchFailureCategory
+            ? { jwksFetchFailureCategory: keyResult.jwksFetchFailureCategory }
+            : {}),
+        };
+      }
       const signature = decodeBase64Url(parts[2]!);
       const signingInput = new TextEncoder().encode(parts[0] + "." + parts[1]);
       const valid = await crypto.subtle.verify(
@@ -128,24 +143,48 @@ export class GitHubActionsOidcAssertionVerifier {
 
   private async getKeyWithStage(
     kid: string,
-  ): Promise<{ readonly key?: CryptoKey; readonly stage: GitHubActionsOidcVerificationStage }> {
+  ): Promise<{
+    readonly key?: CryptoKey;
+    readonly stage: GitHubActionsOidcVerificationStage;
+    readonly jwksFetchFailureCategory?: GitHubActionsOidcJwksFetchFailureCategory;
+  }> {
     if (this.cache && this.cache.expiresAt > Date.now()) {
       const cached = this.cache.keys.get(kid);
       if (cached) return { key: cached, stage: "verified" };
     }
 
-    let response: Response;
+    let timeoutSignal: AbortSignal;
+    let requestInit: RequestInit;
     try {
-      const fetchImpl = this.fetchImpl;
-      response = await fetchImpl(GITHUB_ACTIONS_JWKS_URL, {
+      timeoutSignal = AbortSignal.timeout(5_000);
+      requestInit = {
         method: "GET",
         redirect: "error",
         cache: "no-store",
-        signal: AbortSignal.timeout(5_000),
+        signal: timeoutSignal,
         headers: { accept: "application/json" },
-      });
+      };
     } catch {
-      return { stage: "jwks_fetch" };
+      return { stage: "jwks_fetch", jwksFetchFailureCategory: "request_setup" };
+    }
+
+    let fetchPromise: Promise<Response>;
+    try {
+      const fetchImpl = this.fetchImpl;
+      fetchPromise = fetchImpl(GITHUB_ACTIONS_JWKS_URL, requestInit);
+    } catch {
+      return { stage: "jwks_fetch", jwksFetchFailureCategory: "fetch_sync_throw" };
+    }
+
+    let response: Response;
+    try {
+      response = await fetchPromise;
+    } catch (rejected) {
+      return {
+        stage: "jwks_fetch",
+        jwksFetchFailureCategory:
+          timeoutSignal.aborted && rejected === timeoutSignal.reason ? "timeout" : "fetch_rejected",
+      };
     }
     if (!response.ok) return { stage: "jwks_http" };
 
