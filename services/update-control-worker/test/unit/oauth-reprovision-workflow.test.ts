@@ -192,19 +192,27 @@ describe("OAuth reprovision operator client", () => {
     expect(result.httpStatus).toBe(401);
     expect(result.status).toBeNull();
     expect(result.error).toBe("operation_auth_required");
-    expect(result.assertion).toMatchObject({
-      format: "jwt",
-      alg: "RS256",
-      kid: "public-test-key",
-      issuer: "https://token.actions.githubusercontent.com",
-      audience: `urn:mcp-v3-update-control:oauth-reprovision:${OPERATION_ID}`,
-      subject: "repo:iFael/mcp-access-stack:environment:update-control-production",
-      repository: "iFael/mcp-access-stack",
-      workflowRef: "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main",
-      ref: "refs/heads/main",
-      eventName: "workflow_dispatch",
-      environment: "update-control-production",
-      hasJti: true,
+    expect(result.assertion).toEqual({
+      formatValid: true,
+      algMatches: true,
+      kidPresent: true,
+      issuerMatches: true,
+      audienceMatches: true,
+      subjectMatches: true,
+      repositoryMatches: true,
+      workflowRefMatches: true,
+      refMatches: true,
+      eventNameMatches: true,
+      environmentMatches: true,
+      jtiPresent: true,
+      issuedAtPresent: true,
+      notBeforePresent: true,
+      expiresAtPresent: true,
+      issuedAtFresh: true,
+      notBeforeValid: true,
+      notExpired: true,
+      lifetimeValid: true,
+      temporalOrderValid: true,
     });
     expect(JSON.stringify(result)).not.toContain(assertion);
     expect(JSON.stringify(result)).not.toContain("diagnostic-jti-value");

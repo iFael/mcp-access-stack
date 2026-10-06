@@ -10,6 +10,13 @@ const MAX_RESPONSE_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_APPLY_ATTEMPTS = 20;
 const APPLY_RETRY_DELAY_MS = 1_000;
+const EXPECTED_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const EXPECTED_OIDC_SUBJECT = "repo:iFael/mcp-access-stack:environment:update-control-production";
+const EXPECTED_OIDC_REPOSITORY = "iFael/mcp-access-stack";
+const EXPECTED_OIDC_WORKFLOW_REF = "iFael/mcp-access-stack/.github/workflows/update-control-oauth-reprovision.yml@refs/heads/main";
+const EXPECTED_OIDC_REF = "refs/heads/main";
+const EXPECTED_OIDC_EVENT = "workflow_dispatch";
+const EXPECTED_OIDC_ENVIRONMENT = "update-control-production";
 
 function requireValue(env, name) {
   const value = env[name];
@@ -202,31 +209,35 @@ function decodeJwtJsonPart(value) {
   }
 }
 
-function sanitizeDiagnosticText(value, maxLength = 512) {
-  return typeof value === "string" && value.length > 0 && value.length <= maxLength &&
-    !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
-}
-
-function summarizeAssertion(assertion) {
+function summarizeAssertion(assertion, operationId) {
   const parts = assertion.split(".");
   const header = parts.length === 3 ? decodeJwtJsonPart(parts[0]) : undefined;
   const claims = parts.length === 3 ? decodeJwtJsonPart(parts[1]) : undefined;
+  const now = Math.floor(Date.now() / 1000);
+  const iat = Number.isSafeInteger(claims?.iat) ? claims.iat : null;
+  const nbf = Number.isSafeInteger(claims?.nbf) ? claims.nbf : null;
+  const exp = Number.isSafeInteger(claims?.exp) ? claims.exp : null;
   return {
-    format: header && claims ? "jwt" : "invalid",
-    alg: sanitizeDiagnosticText(header?.alg, 32),
-    kid: sanitizeDiagnosticText(header?.kid, 256),
-    issuer: sanitizeDiagnosticText(claims?.iss),
-    audience: sanitizeDiagnosticText(claims?.aud),
-    subject: sanitizeDiagnosticText(claims?.sub),
-    repository: sanitizeDiagnosticText(claims?.repository),
-    workflowRef: sanitizeDiagnosticText(claims?.workflow_ref),
-    ref: sanitizeDiagnosticText(claims?.ref),
-    eventName: sanitizeDiagnosticText(claims?.event_name),
-    environment: sanitizeDiagnosticText(claims?.environment),
-    hasJti: typeof claims?.jti === "string" && claims.jti.length > 0,
-    iat: Number.isSafeInteger(claims?.iat) ? claims.iat : null,
-    nbf: Number.isSafeInteger(claims?.nbf) ? claims.nbf : null,
-    exp: Number.isSafeInteger(claims?.exp) ? claims.exp : null,
+    formatValid: Boolean(header && claims),
+    algMatches: header?.alg === "RS256",
+    kidPresent: typeof header?.kid === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(header.kid),
+    issuerMatches: claims?.iss === EXPECTED_OIDC_ISSUER,
+    audienceMatches: claims?.aud === `urn:mcp-v3-update-control:oauth-reprovision:${operationId}`,
+    subjectMatches: claims?.sub === EXPECTED_OIDC_SUBJECT,
+    repositoryMatches: claims?.repository === EXPECTED_OIDC_REPOSITORY,
+    workflowRefMatches: claims?.workflow_ref === EXPECTED_OIDC_WORKFLOW_REF,
+    refMatches: claims?.ref === EXPECTED_OIDC_REF,
+    eventNameMatches: claims?.event_name === EXPECTED_OIDC_EVENT,
+    environmentMatches: claims?.environment === EXPECTED_OIDC_ENVIRONMENT,
+    jtiPresent: typeof claims?.jti === "string" && claims.jti.length > 0 && claims.jti.length <= 256,
+    issuedAtPresent: iat !== null,
+    notBeforePresent: nbf !== null,
+    expiresAtPresent: exp !== null,
+    issuedAtFresh: iat !== null && iat <= now + 30 && iat >= now - 600,
+    notBeforeValid: nbf !== null && nbf <= now + 30,
+    notExpired: exp !== null && exp > now,
+    lifetimeValid: iat !== null && exp !== null && exp > iat && exp - iat <= 600,
+    temporalOrderValid: nbf !== null && exp !== null && nbf <= exp,
   };
 }
 
@@ -277,7 +288,7 @@ export async function diagnoseOAuthReprovisionStatus({
   fetchImpl = fetch,
 } = {}) {
   const settings = await createAuthenticatedSettings(env, fetchImpl, { requireConfirmation: false });
-  const assertion = summarizeAssertion(settings.assertion);
+  const assertion = summarizeAssertion(settings.assertion, settings.operationId);
   const { response, payload } = await requestJson(
     fetchImpl,
     requestUrl(settings.endpoint, settings.operationId),
