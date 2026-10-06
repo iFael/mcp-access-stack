@@ -122,6 +122,12 @@ describe("Update Control local TOTP identity", () => {
       const enrollmentHtml = await enrollment.text();
       expect(enrollmentHtml).toContain("<svg");
       expect(enrollmentHtml).toContain("Authenticator QR code");
+      expect(enrollmentHtml).toContain('width="240" height="240"');
+      expect(enrollmentHtml).toContain('style="display:block;max-width:100%;height:auto"');
+      expect(enrollmentHtml).toContain('class="card"');
+      expect(enrollmentHtml).toContain("MCP V3 Update Center");
+      expect(enrollmentHtml).toContain("--background:#09090b");
+      expect(enrollmentHtml).toContain("Enable secure access");
       expect(enrollmentHtml).not.toContain("login.microsoftonline.com");
       expect(enrollmentHtml).not.toContain("graph.microsoft.com");
 
@@ -139,6 +145,8 @@ describe("Update Control local TOTP identity", () => {
       const enrolledHtml = await enrolled.text();
       const recoveries = recoveryCodes(enrolledHtml);
       expect(recoveries).toHaveLength(8);
+      expect(enrolledHtml).toContain('class="codes"');
+      expect(enrolledHtml).toContain("Save these recovery codes now.");
 
       const persisted = JSON.stringify([...storage.values.entries()]);
       expect(persisted).not.toContain(secret);
