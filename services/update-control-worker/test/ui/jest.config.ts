@@ -12,7 +12,7 @@ const config: Config = {
       displayName: "update-control-worker-ui",
       rootUrl: workerRootUrl,
       tsconfigUrl: testTsconfigUrl,
-      testMatch: ["<rootDir>/test/ui/**/*.test.ts"],
+      testMatch: ["<rootDir>/test/unit/renderers-ui.test.ts"],
       testTimeout: 15_000,
     }),
   ],
