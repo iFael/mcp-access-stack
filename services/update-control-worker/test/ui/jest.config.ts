@@ -3,7 +3,7 @@ import type { Config } from "jest";
 import { createNodeJestProject } from "../../../../jest.preset.ts";
 
 const workerRootUrl = new URL("../../", import.meta.url);
-const testTsconfigUrl = new URL("../../../../tsconfig.jest.json", import.meta.url);
+const testTsconfigUrl = new URL("../../tsconfig.jest.json", import.meta.url);
 
 const config: Config = {
   rootDir: fileURLToPath(workerRootUrl),
