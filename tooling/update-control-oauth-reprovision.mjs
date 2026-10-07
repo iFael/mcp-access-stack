@@ -1,7 +1,6 @@
 import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-export const OAUTH_REPROVISION_CONFIRMATION = "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS";
 const OAUTH_REPROVISION_PATH = "/_operations/oauth/reprovision";
 const SIGNATURE_DOMAIN = "mcp-v3-update-control:oauth-reprovision";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -38,9 +37,9 @@ function readPublicUrl(env) {
   return url;
 }
 
-function readSettings(env, { requireConfirmation = true } = {}) {
-  if (requireConfirmation && env.UPDATE_CONTROL_OAUTH_CONFIRM !== OAUTH_REPROVISION_CONFIRMATION) {
-    throw new Error("Explicit OAuth reprovision confirmation is required.");
+function readSettings(env, { requiredMode } = {}) {
+  if (requiredMode && env.UPDATE_CONTROL_OAUTH_MODE !== requiredMode) {
+    throw new Error(`OAuth reprovision mode ${requiredMode} is required.`);
   }
   const operationId = requireValue(env, "UPDATE_CONTROL_OAUTH_OPERATION_ID");
   if (!OPERATION_ID_PATTERN.test(operationId)) {
@@ -205,7 +204,7 @@ function valueIsUnsafePath(value) {
 }
 
 export async function diagnoseOAuthReprovisionStatus({ env = process.env, fetchImpl = fetch } = {}) {
-  const settings = readSettings(env, { requireConfirmation: false });
+  const settings = readSettings(env);
   const { response, payload } = await requestJson(
     fetchImpl,
     requestUrl(settings.endpoint, settings.operationId),
@@ -221,7 +220,7 @@ export async function diagnoseOAuthReprovisionStatus({ env = process.env, fetchI
 }
 
 export async function preflightOAuthReprovision({ env = process.env, fetchImpl = fetch } = {}) {
-  const settings = readSettings(env);
+  const settings = readSettings(env, { requiredMode: "apply" });
   const status = await readStatus(fetchImpl, settings);
   await appendGitHubOutput(env, status);
   return { operationId: settings.operationId, status };
@@ -233,7 +232,7 @@ export async function executeOAuthReprovision({
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   maxAttempts = MAX_APPLY_ATTEMPTS,
 } = {}) {
-  const settings = readSettings(env);
+  const settings = readSettings(env, { requiredMode: "apply" });
   const initialStatus = await readStatus(fetchImpl, settings);
   if (initialStatus === "completed") return { operationId: settings.operationId, status: "completed" };
   if (initialStatus === "outcome_unknown") {
@@ -253,7 +252,7 @@ export async function executeOAuthReprovision({
       return { operationId: settings.operationId, status };
     }
     if (response.status === 503 && status === "outcome_unknown") {
-      throw new Error("OAuth reprovision is outcome_unknown. Reconcile the same operation ID before an explicitly approved resume.");
+      throw new Error("OAuth reprovision is outcome_unknown. Reconcile the same operation ID before any resume.");
     }
     if (response.status !== 202 || status !== "in_progress") {
       throw new Error("OAuth reprovision did not reach a resumable state; no automatic retry was attempted.");
