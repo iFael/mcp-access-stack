@@ -372,8 +372,12 @@ export class UpdateControlIdentityOAuth {
       await this.storage.delete(key);
       return jsonResponse({ error: "enrollment_expired" }, 400);
     }
-    const role = normalizeRole(pending.role);
-    if (!role) return jsonResponse({ error: "invalid_enrollment" }, 400);
+    const pendingRole = normalizeRole(pending.role);
+    if (!pendingRole) return jsonResponse({ error: "invalid_enrollment" }, 400);
+    if (pending.kind === "bootstrap" && pendingRole !== "admin") {
+      return jsonResponse({ error: "invalid_enrollment" }, 400);
+    }
+    const role: UpdateControlRole = pending.kind === "bootstrap" ? "admin" : "user";
     if (await this.findUserByEmail(email)) return jsonResponse({ error: "identity_already_enrolled" }, 409);
 
     if (pending.kind === "bootstrap") {
@@ -389,8 +393,7 @@ export class UpdateControlIdentityOAuth {
     } else {
       if (!pending.inviteHash) return jsonResponse({ error: "invalid_invite" }, 400);
       const invitation = await this.storage.get<InvitationRecord>(INVITE_PREFIX + pending.inviteHash);
-      if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now() ||
-          normalizeRole(invitation.role) !== role) {
+      if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now()) {
         return jsonResponse({ error: "invalid_invite" }, 400);
       }
     }
@@ -492,10 +495,10 @@ export class UpdateControlIdentityOAuth {
     }
     const role = normalizeRole(invitation.role);
     if (!role) return jsonResponse({ error: "invalid_invite" }, 400);
-    if (role !== invitation.role) {
-      await this.storage.put(INVITE_PREFIX + inviteHash, { ...invitation, role });
+    if (invitation.role !== "user") {
+      await this.storage.put(INVITE_PREFIX + inviteHash, { ...invitation, role: "user" });
     }
-    return this.beginEnrollment({ kind: "join", role, inviteHash });
+    return this.beginEnrollment({ kind: "join", role: "user", inviteHash });
   }
 
   async renderAdmin(request: Request): Promise<Response> {
@@ -537,15 +540,16 @@ export class UpdateControlIdentityOAuth {
     const context = await this.requireAdminPost(request);
     if (context instanceof Response) return context;
     const role = context.fields.get("role");
-    if (!isRole(role)) return jsonResponse({ error: "invalid_role" }, 400);
+    if (role !== "user") return jsonResponse({ error: "invalid_role" }, 400);
     const target = await this.getUser(userId);
     if (!target || target.status !== "active") return jsonResponse({ error: "user_not_found" }, 404);
-    if (target.role === "admin" && role !== "admin" && await this.activeAdminCount() <= 1) {
+    if (normalizeEmail(target.email) === normalizeEmail(this.config.bootstrapAdminEmail) ||
+        (target.role === "admin" && await this.activeAdminCount() <= 1)) {
       return jsonResponse({ error: "last_admin_required" }, 409);
     }
     await this.storage.put(USER_PREFIX + target.id, {
       ...target,
-      role,
+      role: "user",
       updatedAt: new Date().toISOString(),
     } satisfies UpdateControlUser);
     return new Response(null, { status: 303, headers: { location: "/admin", "cache-control": "no-store" } });
@@ -705,6 +709,28 @@ export class UpdateControlIdentityOAuth {
     return this.createHumanSession(user, response);
   }
 
+  private async completeLegacyMcpLogin(fields: URLSearchParams): Promise<Response | null> {
+    if (!isLegacyAuthorizationLoginForm(fields)) return null;
+    const state = fields.get("state") ?? "";
+    if (!isOpaqueToken(state)) return null;
+    const pending = await this.storage.get<unknown>(LOGIN_PENDING_PREFIX + state);
+    if (!isPendingLogin(pending) || pending.state !== state || pending.kind !== "mcp" ||
+        pending.expiresAtMs <= Date.now()) {
+      return null;
+    }
+
+    const email = normalizeEmail(fields.get("email") ?? "");
+    const code = normalizeVerificationCode(fields.get("code") ?? "");
+    if (!isBootstrapAdminEmail(email) || !code) {
+      return jsonResponse({ error: "invalid_credentials" }, 401);
+    }
+    const user = await this.authenticateLocalUser(email, code);
+    if (!user || user.status !== "active") return jsonResponse({ error: "invalid_credentials" }, 401);
+
+    const callback = await this.completeAuthorization(state, pending, user);
+    return this.createHumanSession(user, callback);
+  }
+
   private async handleAuthorization(request: Request): Promise<Response> {
     let fields: URLSearchParams;
     if (request.method === "GET") {
@@ -720,6 +746,11 @@ export class UpdateControlIdentityOAuth {
         return jsonResponse({ error: "invalid_request" }, 400);
       }
     }
+    if (request.method === "POST" && new URL(request.url).pathname === "/authorize") {
+      const legacyResponse = await this.completeLegacyMcpLogin(fields);
+      if (legacyResponse) return legacyResponse;
+    }
+
     const validated = await this.validateAuthorizationRequest(fields);
     if (validated instanceof Response) return validated;
 
@@ -1229,8 +1260,14 @@ export class UpdateControlIdentityOAuth {
   private async getUser(userId: string): Promise<UpdateControlUser | null> {
     const value = await this.storage.get<unknown>(USER_PREFIX + userId);
     if (!isStoredUpdateControlUser(value)) return null;
-    const role = normalizeRole(value.role);
-    if (!role) return null;
+    const storedRole = normalizeRole(value.role);
+    if (!storedRole) return null;
+    const isBootstrapAdmin = normalizeEmail(value.email) === normalizeEmail(this.config.bootstrapAdminEmail);
+    const role: UpdateControlRole = isBootstrapAdmin
+      ? "admin"
+      : storedRole === "admin"
+        ? "user"
+        : storedRole;
     const user = { ...value, role } as UpdateControlUser;
     if (value.role !== role) {
       const migrated = { ...user, updatedAt: new Date().toISOString() };
@@ -1665,6 +1702,14 @@ function isOAuthClient(value: unknown): value is OAuthClient {
     value.response_types.every((entry) => typeof entry === "string");
 }
 
+function isLegacyAuthorizationLoginForm(fields: URLSearchParams): boolean {
+  const keys = [...fields.keys()];
+  return keys.length === 3 &&
+    keys.includes("state") &&
+    keys.includes("email") &&
+    keys.includes("code");
+}
+
 function isPendingLogin(value: unknown): value is PendingLogin {
   if (!isRecord(value) || value.version !== 1 || typeof value.state !== "string" ||
       (value.kind !== "mcp" && value.kind !== "oauth" && value.kind !== "admin" && value.kind !== "user") ||
@@ -1813,10 +1858,6 @@ function isHumanSessionRecord(value: unknown): value is HumanSessionRecord {
     Number.isFinite(Date.parse(value.createdAt)) &&
     typeof value.expiresAt === "string" &&
     Number.isFinite(Date.parse(value.expiresAt));
-}
-
-function isRole(value: unknown): value is UpdateControlRole {
-  return value === "admin" || value === "user";
 }
 
 function isStoredRole(value: unknown): value is StoredUpdateControlRole {

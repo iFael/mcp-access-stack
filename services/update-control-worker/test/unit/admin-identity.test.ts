@@ -250,9 +250,20 @@ describe("Update Control multi-user local admin surface", () => {
       { csrf: refreshedPage.csrf, role: "admin" },
       cookie,
     );
-    expect(roleChanged.status).toBe(303);
-    expect((storage.values.get("update-control:identity:user:" + viewer!.id) as { role: string }).role)
-      .toBe("admin");
+    expect(roleChanged.status).toBe(400);
+    expect(await roleChanged.json()).toEqual({ error: "invalid_role" });
+    const viewerKey = "update-control:identity:user:" + viewer!.id;
+    expect((storage.values.get(viewerKey) as { role: string }).role).toBe("user");
+
+    storage.values.set(viewerKey, {
+      ...(storage.values.get(viewerKey) as object),
+      role: "admin",
+    });
+    const staleAdminSession = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie: viewerCookie },
+    }));
+    expect(staleAdminSession.status).toBe(403);
+    expect((storage.values.get(viewerKey) as { role: string }).role).toBe("user");
   });
 
   it("stores human session tokens only by hash and requires CSRF to log out", async () => {
@@ -353,6 +364,139 @@ describe("Update Control multi-user local admin surface", () => {
     expect(callback.pathname).toBe("/connector/oauth/admin-test");
     expect(callback.searchParams.get("state")).toBe("chatgpt-state");
     expect(callback.searchParams.get("code")).toMatch(/^code-/u);
+  });
+
+  it("accepts only an exact legacy /authorize form for a live MCP transaction", async () => {
+    const { controller, storage } = makeController();
+    const enrollment = await createFirstAdmin(controller);
+    const clientId = await registerClient(controller);
+    const verifier = "v".repeat(64);
+    const redirectUri = "https://chatgpt.com/connector/oauth/admin-test";
+    const resource = new URL("/mcp", BASE_URL).href;
+    const pendingKey = "update-control:oauth:login-pending:";
+    const pendingState = "L".repeat(43);
+    const pending = {
+      version: 1,
+      state: pendingState,
+      kind: "mcp",
+      clientId,
+      redirectUri,
+      codeChallenge: await sha256Base64Url(verifier),
+      scopes: ["update:read"],
+      resource,
+      clientState: "legacy-client-state",
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    const extraFieldState = "E".repeat(43);
+    storage.values.set(pendingKey + extraFieldState, { ...pending, state: extraFieldState });
+    const extraField = await form(controller, "/authorize", {
+      state: extraFieldState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+      extra: "not-legacy",
+    });
+    expect(extraField.status).toBe(400);
+    expect(await extraField.json()).toEqual({ error: "invalid_request" });
+    expect(storage.values.has(pendingKey + extraFieldState)).toBe(true);
+
+    storage.values.set(pendingKey + pendingState, pending);
+    const completed = await form(controller, "/authorize", {
+      state: pendingState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+    });
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("set-cookie")).toContain("update_control_session=");
+    const callback = new URL(completed.headers.get("location")!);
+    expect(callback.origin + callback.pathname).toBe(redirectUri);
+    expect(callback.searchParams.get("state")).toBe("legacy-client-state");
+    expect(callback.searchParams.get("code")).toMatch(/^code-/u);
+    expect(storage.values.has(pendingKey + pendingState)).toBe(false);
+
+    const replay = await form(controller, "/authorize", {
+      state: pendingState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+    });
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toEqual({ error: "invalid_request" });
+    expect([...storage.values.keys()].filter((key) => key.startsWith("update-control:oauth:code:")))
+      .toHaveLength(1);
+
+    const nonMcpState = "N".repeat(43);
+    storage.values.set(pendingKey + nonMcpState, {
+      ...pending,
+      state: nonMcpState,
+      kind: "oauth",
+    });
+    const nonMcp = await form(controller, "/authorize", {
+      state: nonMcpState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[1]!,
+    });
+    expect(nonMcp.status).toBe(400);
+    expect(await nonMcp.json()).toEqual({ error: "invalid_request" });
+    expect(storage.values.has(pendingKey + nonMcpState)).toBe(true);
+
+    const ordinaryLogin = await humanLogin(
+      controller,
+      "rafael@example.com",
+      enrollment.recoveryCodes[1]!,
+    );
+    expect(ordinaryLogin.status).toBe(303);
+  });
+
+  it("converts legacy admin invitations and pending enrollments to user", async () => {
+    const { controller, storage } = makeController();
+    await createFirstAdmin(controller);
+    const admin = [...storage.values.values()].find((value) =>
+      typeof value === "object" && value !== null &&
+      "email" in value && value.email === "rafael@example.com" &&
+      "provider" in value && value.provider === "local-totp"
+    ) as { id: string; role: string } | undefined;
+    expect(admin?.id).toMatch(/^usr_/u);
+
+    const inviteToken = "I".repeat(43);
+    const inviteKey = "update-control:identity:invite:" + await sha256Base64Url(inviteToken);
+    storage.values.set(inviteKey, {
+      version: 1,
+      role: "admin",
+      createdByUserId: admin!.id,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const joinUrl = new URL("/join", BASE_URL);
+    joinUrl.searchParams.set("invite", inviteToken);
+    const page = await controller.fetch(new Request(joinUrl));
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const state = hiddenState(html);
+    const provisioning = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
+    const secret = new URL(provisioning!).searchParams.get("secret")!;
+    expect((storage.values.get(inviteKey) as { role: string }).role).toBe("user");
+
+    const pendingKey = "update-control:identity:enrollment:" + state;
+    const pending = storage.values.get(pendingKey) as object;
+    expect((pending as { role: string }).role).toBe("user");
+    storage.values.set(pendingKey, { ...pending, role: "admin" });
+
+    const completed = await form(controller, "/enroll", {
+      state,
+      email: "felipe@example.com",
+      display_name: "Felipe",
+      code: await totp(secret, Date.now()),
+    });
+    expect(completed.status).toBe(200);
+    const invitedUser = [...storage.values.values()].find((value) =>
+      typeof value === "object" && value !== null &&
+      "email" in value && value.email === "felipe@example.com" &&
+      "provider" in value && value.provider === "local-totp"
+    ) as { role: string } | undefined;
+    expect(invitedUser?.role).toBe("user");
+    expect((storage.values.get("update-control:identity:user:" + admin!.id) as { role: string }).role)
+      .toBe("admin");
   });
 
   it("cannot demote or revoke the final admin", async () => {
