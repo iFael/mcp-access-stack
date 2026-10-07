@@ -33,12 +33,12 @@ describe("human /user session flow", () => {
     const loginForm = await beginUserLogin(controller);
     expect(loginForm.response.status).toBe(200);
     expect(loginForm.state.length > 0).toBe(true);
-    expect(loginForm.html).toContain("Verification code");
+    expect(loginForm.html).toContain("Authenticator or recovery code");
 
     jest.advanceTimersByTime(30_000);
     const code = await totp(enrollment.secret, Date.now());
     const login = await submitUserLogin(controller, loginForm.state, enrollment.email, code);
-    expect(login.status).toBe(302);
+    expect(login.status).toBe(303);
 
     const setCookie = login.headers.get("set-cookie") ?? "";
     const cookie = cookiePair(login);
@@ -80,10 +80,10 @@ describe("human /user session flow", () => {
     const firstForm = await beginUserLogin(controller);
     expect(firstForm.response.status).toBe(200);
     const firstLogin = await submitUserLogin(controller, firstForm.state, enrollment.email, code);
-    expect(firstLogin.status).toBe(302);
+    expect(firstLogin.status).toBe(303);
 
     const formStateReplay = await submitUserLogin(controller, firstForm.state, enrollment.email, code);
-    expect(formStateReplay.status === 302).toBe(false);
+    expect(formStateReplay.status === 303).toBe(false);
 
     if (await totp(enrollment.secret, Date.now() + 30_000) === code) {
       jest.advanceTimersByTime(30_000);
@@ -95,7 +95,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       code,
     );
-    expect(totpReplay.status === 302).toBe(false);
+    expect(totpReplay.status === 303).toBe(false);
 
     const recovery = enrollment.recoveryCodes[0] ?? "";
     const recoveryForm = await beginUserLogin(controller);
@@ -105,7 +105,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       recovery,
     );
-    expect(recoveryLogin.status).toBe(302);
+    expect(recoveryLogin.status).toBe(303);
 
     const recoveryReplayForm = await beginUserLogin(controller);
     const recoveryReplay = await submitUserLogin(
@@ -114,14 +114,30 @@ describe("human /user session flow", () => {
       enrollment.email,
       recovery,
     );
-    expect(recoveryReplay.status === 302).toBe(false);
+    expect(recoveryReplay.status === 303).toBe(false);
   });
 
   it("legacy operator and viewer records remain user-level and cannot obtain /admin access", async () => {
     for (const legacyRole of ["operator", "viewer"] as const) {
       const { controller, storage } = createHarness();
-      const enrollment = await bootstrapAndEnrollAdmin(controller, storage);
-      const record = findStoredUserByEmail(storage, enrollment.email);
+      const adminEnrollment = await bootstrapAndEnrollAdmin(controller, storage);
+      const adminLoginForm = await beginUserLogin(controller);
+      const adminLogin = await submitUserLogin(
+        controller,
+        adminLoginForm.state,
+        adminEnrollment.email,
+        adminEnrollment.recoveryCodes[0] ?? "",
+      );
+      expect(adminLogin.status).toBe(303);
+
+      const legacyEmail = `legacy-${legacyRole}@example.invalid`;
+      const enrollment = await joinUser(
+        controller,
+        storage,
+        cookiePair(adminLogin),
+        legacyEmail,
+      );
+      const record = findStoredUserByEmail(storage, legacyEmail);
       expect(record !== undefined).toBe(true);
       if (!record) continue;
       record.role = legacyRole;
@@ -134,7 +150,7 @@ describe("human /user session flow", () => {
         enrollment.email,
         enrollment.recoveryCodes[0] ?? "",
       );
-      expect(login.status).toBe(302);
+      expect(login.status).toBe(303);
       const admin = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
         headers: { cookie: cookiePair(login) },
       }));
@@ -159,7 +175,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(login.status === 302).toBe(false);
+    expect(login.status === 303).toBe(false);
     expect((login.headers.get("set-cookie") ?? "").length).toBe(0);
   });
 
@@ -174,7 +190,7 @@ describe("human /user session flow", () => {
       adminEnrollment.email,
       adminEnrollment.recoveryCodes[0] ?? "",
     );
-    expect(adminLogin.status).toBe(302);
+    expect(adminLogin.status).toBe(303);
 
     const userEmail = "ordinary-user@example.invalid";
     const userEnrollment = await joinUser(
@@ -194,7 +210,7 @@ describe("human /user session flow", () => {
       userEnrollment.email,
       userEnrollment.recoveryCodes[0] ?? "",
     );
-    expect(userLogin.status).toBe(302);
+    expect(userLogin.status).toBe(303);
 
     const admin = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
       headers: { cookie: cookiePair(userLogin) },
@@ -212,7 +228,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(login.status).toBe(302);
+    expect(login.status).toBe(303);
     const cookie = cookiePair(login);
 
     const getLogout = await controller.fetch(new Request(new URL("/user/logout", BASE_URL), {
@@ -252,7 +268,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(login.status).toBe(302);
+    expect(login.status).toBe(303);
     const cookie = cookiePair(login);
 
     const storedSession = [...storage.values.values()].find((value) => {
@@ -285,7 +301,7 @@ describe("human /user session flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(login.status).toBe(302);
+    expect(login.status).toBe(303);
     const cookie = cookiePair(login);
     const adminPage = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
       headers: { cookie },

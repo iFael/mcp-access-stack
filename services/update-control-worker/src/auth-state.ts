@@ -655,7 +655,7 @@ function createAuthObservation(request: Request): AuthObservation | null {
 }
 
 function recordAuthObservation(observation: AuthObservation, status: number): void {
-  const resultCategory = status >= 500
+  const result = status >= 500
     ? "server_error"
     : status >= 400
       ? "client_error"
@@ -668,7 +668,7 @@ function recordAuthObservation(observation: AuthObservation, status: number): vo
     method: observation.method,
     pathname: observation.pathname,
     status,
-    resultCategory,
+    result,
     durationMs: Math.max(0, Date.now() - observation.startedAt),
   }));
 }

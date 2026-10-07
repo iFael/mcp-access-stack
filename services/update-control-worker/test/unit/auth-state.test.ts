@@ -118,7 +118,7 @@ describe("Update Control authorization boundary", () => {
         "flowId",
         "method",
         "pathname",
-        "resultCategory",
+        "result",
         "stage",
         "status",
       ]);

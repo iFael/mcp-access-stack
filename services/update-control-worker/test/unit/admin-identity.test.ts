@@ -113,9 +113,8 @@ async function enroll(
   expect(page.status).toBe(200);
   const html = await page.text();
   const state = hiddenState(html);
-  const provisioning = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
-  expect(provisioning).toContain("otpauth://totp/");
-  const secret = new URL(provisioning!).searchParams.get("secret")!;
+  const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
+  expect(secret).toMatch(/^[A-Z2-7]{32}$/u);
   const response = await form(controller, "/enroll", {
     state,
     email,
@@ -473,8 +472,8 @@ describe("Update Control multi-user local admin surface", () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     const state = hiddenState(html);
-    const provisioning = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
-    const secret = new URL(provisioning!).searchParams.get("secret")!;
+    const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
+    expect(secret).toMatch(/^[A-Z2-7]{32}$/u);
     expect((storage.values.get(inviteKey) as { role: string }).role).toBe("user");
 
     const pendingKey = "update-control:identity:enrollment:" + state;

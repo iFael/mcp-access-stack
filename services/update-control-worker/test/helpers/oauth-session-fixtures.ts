@@ -102,8 +102,11 @@ export async function enrollFromPage(
 export async function beginUserLogin(
   controller: UpdateControlAuthController,
   url = "/user",
+  cookie?: string,
 ): Promise<{ response: Response; html: string; state: string }> {
-  const response = await controller.fetch(new Request(new URL(url, BASE_URL)));
+  const response = await controller.fetch(new Request(new URL(url, BASE_URL), {
+    ...(cookie ? { headers: { cookie } } : {}),
+  }));
   const html = await response.text();
   const state = /name="state" value="([^"]+)"/u.exec(html)?.[1] ?? "";
   return { response, html, state };
@@ -116,7 +119,12 @@ export async function submitUserLogin(
   code: string,
   cookie?: string,
 ): Promise<Response> {
-  return postForm(controller, "/user", { state, email, code }, cookie);
+  return postForm(
+    controller,
+    "/user",
+    { state, email, code },
+    cookie ?? `update_control_login=${state}`,
+  );
 }
 
 export async function postForm(
@@ -243,10 +251,10 @@ export function hiddenField(html: string, name: string): string {
 }
 
 export function provisioningSecret(html: string): string {
-  const encoded = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
-  if (!encoded) throw new Error("Provisioning URI is missing from enrollment fixture.");
-  const secret = new URL(encoded).searchParams.get("secret");
-  if (!secret) throw new Error("Provisioning secret is missing from enrollment fixture.");
+  const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
+  if (!secret || !/^[A-Z2-7]{32}$/u.test(secret)) {
+    throw new Error("Provisioning secret is missing from enrollment fixture.");
+  }
   return secret;
 }
 

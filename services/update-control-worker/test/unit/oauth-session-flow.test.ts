@@ -81,9 +81,11 @@ describe("OAuth human-session authorization flow", () => {
     const storageAfterAuthorization = JSON.stringify([...storage.values.entries()]);
     expect(storageAfterAuthorization !== storageBeforeAuthorization).toBe(true);
 
+    const oauthLoginCookie = cookiePair(started.response);
     const userPage = await beginUserLogin(
       controller,
       loginTarget.pathname + loginTarget.search,
+      oauthLoginCookie,
     );
     expect(userPage.response.status).toBe(200);
     expect(userPage.state.length > 0).toBe(true);
@@ -95,6 +97,7 @@ describe("OAuth human-session authorization flow", () => {
       controller,
       loginTarget.pathname + loginTarget.search,
       { state: userPage.state, email: enrollment.email, code },
+      oauthLoginCookie,
     );
     expect(login.status).toBe(302);
     const callback = new URL(login.headers.get("location") ?? BASE_URL);
@@ -130,6 +133,7 @@ describe("OAuth human-session authorization flow", () => {
       controller,
       loginTarget.pathname + loginTarget.search,
       { state: userPage.state, email: enrollment.email, code },
+      oauthLoginCookie,
     );
     expect(loginStateReplay.status === 302).toBe(false);
 
@@ -150,9 +154,11 @@ describe("OAuth human-session authorization flow", () => {
     });
     expect(repeatedClientState.response.status).toBe(302);
     const repeatedTarget = new URL(repeatedClientState.response.headers.get("location") ?? BASE_URL);
+    const repeatedLoginCookie = cookiePair(repeatedClientState.response);
     const repeatedLoginForm = await beginUserLogin(
       controller,
       repeatedTarget.pathname + repeatedTarget.search,
+      repeatedLoginCookie,
     );
     expect(repeatedLoginForm.response.status).toBe(200);
     expect(repeatedLoginForm.state === userPage.state).toBe(false);
@@ -165,6 +171,7 @@ describe("OAuth human-session authorization flow", () => {
         email: enrollment.email,
         code: enrollment.recoveryCodes[0] ?? "",
       },
+      repeatedLoginCookie,
     );
     expect(repeatedLogin.status).toBe(302);
     const repeatedCallback = new URL(repeatedLogin.headers.get("location") ?? BASE_URL);
@@ -184,7 +191,7 @@ describe("OAuth human-session authorization flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(session.status).toBe(302);
+    expect(session.status).toBe(303);
     const cookie = cookiePair(session);
     const clientId = await registerClient(controller);
 
@@ -344,7 +351,7 @@ describe("OAuth human-session authorization flow", () => {
       enrollment.email,
       enrollment.recoveryCodes[0] ?? "",
     );
-    expect(session.status).toBe(302);
+    expect(session.status).toBe(303);
     const clientId = await registerClient(controller);
     const verifier = "r".repeat(64);
     const started = await beginOAuth(controller, clientId, { verifier, state: "refresh-state" });
@@ -421,7 +428,7 @@ describe("OAuth human-session authorization flow", () => {
       adminEnrollment.email,
       adminEnrollment.recoveryCodes[0] ?? "",
     );
-    expect(adminSession.status).toBe(302);
+    expect(adminSession.status).toBe(303);
     const adminCookie = cookiePair(adminSession);
 
     const userEmail = "oauth-user@example.invalid";
@@ -484,7 +491,7 @@ describe("OAuth human-session authorization flow", () => {
     expect(refresh.status).toBe(400);
     expect((await refresh.json() as { error: string }).error).toBe("invalid_grant");
 
-    const revokedSession = await controller.fetch(new Request(new URL("/oauth", BASE_URL), {
+    const revokedSession = await controller.fetch(new Request(started.requestUrl, {
       headers: { cookie: userCookie },
     }));
     expect(revokedSession.status).toBe(302);

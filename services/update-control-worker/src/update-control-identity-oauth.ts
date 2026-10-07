@@ -12,6 +12,14 @@ import {
   TOTP_PERIOD_SECONDS,
   UPDATE_CONTROL_TOTP_ISSUER,
 } from "./local-totp.js";
+import {
+  renderAdminPage,
+  renderEnrollmentPage,
+  renderInviteCreatedPage,
+  renderRecoveryPage,
+  renderUserPage,
+  renderUserSessionPage,
+} from "./ui/renderers.js";
 
 const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
 const LOGIN_PENDING_TTL_MS = 10 * 60 * 1000;
@@ -438,7 +446,7 @@ export class UpdateControlIdentityOAuth {
       }
     }
 
-    return htmlResponse(enrollmentCompletedPage(user, recoveryCodes));
+    return htmlResponse(renderRecoveryPage({ codes: recoveryCodes }));
   }
 
   async beginAdminLogin(request: Request): Promise<Response> {
@@ -462,13 +470,19 @@ export class UpdateControlIdentityOAuth {
           return response;
         }
       }
-      return htmlResponse(userPage(human.user, human.session.csrfToken));
+      return htmlResponse(renderUserSessionPage({
+        displayName: human.user.displayName,
+        email: human.user.email,
+        role: human.user.role,
+        csrf: { name: "csrf", value: human.session.csrfToken },
+        ...(human.user.role === "admin" ? { adminHref: "/admin" } : {}),
+      }));
     }
 
     if (state && isOpaqueToken(state)) {
       const pending = await this.storage.get<unknown>(LOGIN_PENDING_PREFIX + state);
       if (isPendingLogin(pending) && pending.expiresAtMs > Date.now()) {
-        return htmlResponse(loginPage(state, "/user", "Sign in"));
+        return htmlResponse(renderUserPage({ state }));
       }
       await this.storage.delete(LOGIN_PENDING_PREFIX + state);
     }
@@ -481,7 +495,7 @@ export class UpdateControlIdentityOAuth {
       expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
     };
     await this.storage.put(LOGIN_PENDING_PREFIX + nextState, pending);
-    const response = htmlResponse(loginPage(nextState, "/user", "Sign in"));
+    const response = htmlResponse(renderUserPage({ state: nextState }));
     response.headers.set("set-cookie", cookieHeader(LOGIN_STATE_COOKIE, nextState, LOGIN_STATE_TTL_SECONDS));
     return response;
   }
@@ -510,7 +524,20 @@ export class UpdateControlIdentityOAuth {
       });
     }
     if (context.user.role !== "admin") return jsonResponse({ error: "admin_required" }, 403);
-    return htmlResponse(adminPage(await this.listUsers(), context.session.csrfToken));
+    const users = await this.listUsers();
+    return htmlResponse(renderAdminPage({
+      csrf: { name: "csrf", value: context.session.csrfToken },
+      actions: { invite: "/admin/invites", logout: "/admin/logout" },
+      users: users.map((user) => ({
+        email: user.email,
+        displayName: user.displayName,
+        role: user.role,
+        status: user.status,
+        ...(user.status === "active" && user.role === "user"
+          ? { revokeAction: `/admin/users/${encodeURIComponent(user.id)}/revoke` }
+          : {}),
+      })),
+    }));
   }
 
   async createInvite(request: Request): Promise<Response> {
@@ -533,7 +560,7 @@ export class UpdateControlIdentityOAuth {
     await this.storage.put(INVITE_PREFIX + await sha256Base64Url(token), invitation);
     const join = new URL("/join", this.config.publicBaseUrl);
     join.searchParams.set("invite", token);
-    return htmlResponse(`<!doctype html><html><body><main><h1>Invitation created</h1><p><a href="${htmlEscape(join.href)}">${htmlEscape(join.href)}</a></p><p>This link expires in 30 minutes and can be used once.</p><p><a href="/admin">Back</a></p></main></body></html>`);
+    return htmlResponse(renderInviteCreatedPage({ joinHref: join.href, expiresMinutes: 30 }));
   }
 
   async changeUserRole(request: Request, userId: string): Promise<Response> {
@@ -644,13 +671,17 @@ export class UpdateControlIdentityOAuth {
       ...(input.kind === "join" ? { inviteHash: input.inviteHash } : {}),
     };
     await this.storage.put(ENROLLMENT_PREFIX + state, pending);
-    const provisioningUri = createProvisioningUri(encodeBase32(secret));
-    return htmlResponse(enrollmentPage(
+    const encodedSecret = encodeBase32(secret);
+    const provisioningUri = createProvisioningUri(encodedSecret);
+    const qrImageSrc = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(qrSvg(provisioningUri));
+    return htmlResponse(renderEnrollmentPage({
+      action: input.kind === "bootstrap" ? "/enroll" : "/join",
       state,
-      provisioningUri,
-      input.kind === "bootstrap" ? normalizeEmail(this.config.bootstrapAdminEmail) : "",
-      input.kind === "bootstrap",
-    ));
+      email: input.kind === "bootstrap" ? normalizeEmail(this.config.bootstrapAdminEmail) : "",
+      emailReadonly: input.kind === "bootstrap",
+      qrImageSrc,
+      manualSecret: encodedSecret,
+    }));
   }
 
 
@@ -1342,52 +1373,12 @@ function createProvisioningUri(secret: string): string {
   return url.href;
 }
 
-function loginPage(state: string, action: string, title: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>${htmlEscape(title)}</title></head><body><main><h1>${htmlEscape(title)}</h1><form method="post" action="${htmlEscape(action)}"><input type="hidden" name="state" value="${htmlEscape(state)}"><label>Email <input name="email" type="email" autocomplete="username" required></label><label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Continue</button></form></main></body></html>`;
-}
-
-function userPage(user: UpdateControlUser, csrfToken: string): string {
-  const adminLink = user.role === "admin" ? '<p><a href="/admin">Admin</a></p>' : "";
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Update Center session</title></head><body><main><h1>Signed in</h1><p>' +
-    htmlEscape(user.displayName) + '</p><p>Role: ' + htmlEscape(user.role) + '</p>' + adminLink +
-    '<form method="post" action="/user/logout"><input type="hidden" name="csrf" value="' +
-    htmlEscape(csrfToken) + '"><button type="submit">Sign out</button></form></main></body></html>';
-}
-
 function cookieHeader(name: string, value: string, maxAgeSeconds: number): string {
   return name + "=" + value + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + maxAgeSeconds;
 }
 
 function expiredCookie(name: string): string {
   return name + "=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
-}
-
-function enrollmentPage(
-  state: string,
-  provisioningUri: string,
-  email: string,
-  emailReadonly: boolean,
-): string {
-  const qr = qrSvg(provisioningUri);
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Enroll Authenticator</title><style>:root{--background:#09090b;--foreground:#fafafa;--card:#0c0c0f;--card-foreground:#fafafa;--muted:#18181b;--muted-foreground:#a1a1aa;--border:#27272a;--input:#27272a;--primary:#fafafa;--primary-foreground:#18181b;--ring:#d4d4d8}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#18181b 0,#09090b 42%);color:var(--foreground);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}main{min-height:100vh;display:grid;place-items:center;padding:32px 20px}.card{width:min(100%,680px);background:color-mix(in srgb,var(--card) 94%,transparent);border:1px solid var(--border);border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.42);padding:28px}.eyebrow{display:inline-flex;align-items:center;border:1px solid var(--border);background:var(--muted);border-radius:999px;padding:5px 10px;color:var(--muted-foreground);font-size:12px;font-weight:600;letter-spacing:.02em}h1{margin:14px 0 8px;font-size:28px;line-height:1.15;letter-spacing:-.03em}.subtitle{margin:0;color:var(--muted-foreground);font-size:14px;line-height:1.6}.qr-section{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;margin:26px 0;padding:20px;background:var(--muted);border:1px solid var(--border);border-radius:14px}.qr-shell{width:272px;max-width:100%;padding:16px;background:#fff;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.15)}.qr-shell svg{margin:auto}.qr-copy{min-width:0}.qr-copy h2{margin:0 0 6px;font-size:16px;letter-spacing:-.01em}.qr-copy p{margin:0;color:var(--muted-foreground);font-size:13px;line-height:1.55}details{margin-top:12px}summary{cursor:pointer;color:#d4d4d8;font-size:13px}details code{display:block;margin-top:10px;padding:10px 12px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#09090b;color:#e4e4e7;font-size:12px}form{display:grid;gap:16px}.field{display:grid;gap:7px}.field span{font-size:13px;font-weight:600;color:#e4e4e7}input{width:100%;height:42px;border:1px solid var(--input);border-radius:9px;background:#09090b;color:var(--foreground);padding:0 12px;font:inherit;font-size:14px;outline:none;transition:border-color .15s,box-shadow .15s}input:focus{border-color:var(--ring);box-shadow:0 0 0 3px rgba(212,212,216,.14)}input[readonly]{color:var(--muted-foreground);background:#111113}.code-input{font-variant-numeric:tabular-nums;letter-spacing:.28em;font-weight:700}button{height:42px;border:0;border-radius:9px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s,transform .15s}button:hover{opacity:.92}button:active{transform:translateY(1px)}.hint{margin:2px 0 0;color:var(--muted-foreground);font-size:12px;line-height:1.5}@media(max-width:640px){main{padding:18px}.card{padding:20px}.qr-section{grid-template-columns:1fr;justify-items:center;text-align:center}.qr-copy{width:100%}.qr-shell{width:min(272px,100%)}h1{font-size:24px}}</style></head><body><main><section class="card"><span class="eyebrow">MCP V3 Update Center</span><h1>Enroll Authenticator</h1><p class="subtitle">Connect your authenticator to secure administrative access with a time-based verification code.</p><div class="qr-section"><div class="qr-shell" data-provisioning-uri="${htmlEscape(provisioningUri)}">${qr}</div><div class="qr-copy"><h2>Scan the QR code</h2><p>Open Microsoft Authenticator, add another account, then scan this code. After that, enter the current 6-digit code below.</p><details><summary>Use a manual setup key instead</summary><code>${htmlEscape(new URL(provisioningUri).searchParams.get("secret") ?? "")}</code></details></div></div><form method="post" action="/enroll"><input type="hidden" name="state" value="${htmlEscape(state)}"><label class="field"><span>Email</span><input name="email" type="email" value="${htmlEscape(email)}"${emailReadonly ? " readonly" : ""} required></label><label class="field"><span>Name</span><input name="display_name" maxlength="200" autocomplete="name" placeholder="Your name" required></label><label class="field"><span>Verification code</span><input class="code-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" required><p class="hint">Use the 6-digit code currently shown in your authenticator app.</p></label><button type="submit">Enable secure access</button></form></section></main></body></html>`;
-}
-
-function enrollmentCompletedPage(user: UpdateControlUser, recoveryCodes: string[]): string {
-  const codes = recoveryCodes.map((code) =>
-    `<li><code data-recovery-code="${htmlEscape(code)}">${htmlEscape(code)}</code></li>`).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Access enabled</title><style>:root{--background:#09090b;--foreground:#fafafa;--card:#0c0c0f;--muted:#18181b;--muted-foreground:#a1a1aa;--border:#27272a}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#18181b 0,#09090b 42%);color:var(--foreground);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}main{min-height:100vh;display:grid;place-items:center;padding:32px 20px}.card{width:min(100%,680px);background:var(--card);border:1px solid var(--border);border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.42);padding:28px}.eyebrow{display:inline-flex;border:1px solid var(--border);background:var(--muted);border-radius:999px;padding:5px 10px;color:var(--muted-foreground);font-size:12px;font-weight:600}h1{margin:14px 0 8px;font-size:28px;letter-spacing:-.03em}.subtitle{margin:0;color:var(--muted-foreground);font-size:14px;line-height:1.6}.notice{margin:24px 0;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--muted);color:#e4e4e7;font-size:13px;line-height:1.55}.codes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0;margin:18px 0 0;list-style:none}.codes li{margin:0}.codes code{display:block;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:#09090b;color:#fafafa;text-align:center;font-size:13px;letter-spacing:.08em}@media(max-width:560px){main{padding:18px}.card{padding:20px}.codes{grid-template-columns:1fr}h1{font-size:24px}}</style></head><body><main><section class="card"><span class="eyebrow">MCP V3 Update Center</span><h1>Access enabled</h1><p class="subtitle">${htmlEscape(user.displayName)} is enrolled as <strong>${htmlEscape(user.role)}</strong>.</p><div class="notice"><strong>Save these recovery codes now.</strong><br>Each code can be used once and will not be shown again.</div><ul class="codes">${codes}</ul></section></main></body></html>`;
-}
-
-function adminPage(users: UpdateControlUser[], csrfToken: string): string {
-  const rows = users.map((user) => {
-    const roleOptions = ["admin", "user"].map((role) =>
-      `<option value="${role}"${user.role === role ? " selected" : ""}>${role}</option>`).join("");
-    const controls = user.status === "active"
-      ? `<form method="post" action="/admin/users/${encodeURIComponent(user.id)}/role"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role">${roleOptions}</select><button type="submit">Change role</button></form><form method="post" action="/admin/users/${encodeURIComponent(user.id)}/revoke"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Revoke</button></form>`
-      : "";
-    return `<tr><td>${htmlEscape(user.displayName)}</td><td>${htmlEscape(user.email)}</td><td>${htmlEscape(user.role)}</td><td>${htmlEscape(user.status)}</td><td>${controls}</td></tr>`;
-  }).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 Update Center admin</title></head><body><main><h1>MCP V3 Update Center</h1><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table><h2>Invite user</h2><form method="post" action="/admin/invites"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><input type="hidden" name="role" value="user"><button type="submit">Create invite</button></form><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Sign out</button></form></main></body></html>`;
 }
 
 async function verifyTotp(
@@ -1480,7 +1471,7 @@ function qrSvg(text: string): string {
       if (matrix[row]?.[col]) path += `M${col + quiet} ${row + quiet}h1v1h-1z`;
     }
   }
-  return `<svg role="img" aria-label="Authenticator QR code" width="240" height="240" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" style="display:block;max-width:100%;height:auto"><title>Authenticator QR code</title><rect width="100%" height="100%" fill="white"/><path d="${path}" fill="black"/></svg>`;
+  return `<svg role="img" aria-label="Authenticator QR code" width="240" height="240" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges"><title>Authenticator QR code</title><rect width="100%" height="100%" fill="white"/><path d="${path}" fill="black"/></svg>`;
 }
 
 function qrMatrixVersion6L(text: string): boolean[][] {
@@ -1938,15 +1929,6 @@ async function constantTimeTextEquals(left: string, right: string): Promise<bool
   return difference === 0;
 }
 
-function htmlEscape(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function htmlResponse(body: string, status = 200): Response {
   return new Response(body, {
     status,
@@ -1955,7 +1937,7 @@ function htmlResponse(body: string, status = 200): Response {
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "content-security-policy": "default-src 'none'; script-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     },
   });
 }

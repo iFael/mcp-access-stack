@@ -36,6 +36,14 @@ export interface UserPageViewModel {
   error?: string;
 }
 
+export interface UserSessionPageViewModel {
+  displayName: string;
+  email: string;
+  role: UpdateCenterRole;
+  csrf: CsrfFieldViewModel;
+  adminHref?: string;
+}
+
 export interface CsrfFieldViewModel {
   name: string;
   value: string;
@@ -45,6 +53,7 @@ export interface AdminUserViewModel {
   email: string;
   displayName: string;
   role: UpdateCenterRole;
+  status: "active" | "revoked";
   /** Supply only when the server offers revoke for this user. */
   revokeAction?: string;
 }
@@ -66,16 +75,23 @@ export interface OAuthPageViewModel {
 }
 
 /**
- * qrImagePath is an optional same-origin image path produced by the server.
- * Never pass the provisioning URI here. Its endpoint must be private and no-store.
+ * qrImageSrc accepts only a same-origin path or the server-generated SVG data URI.
+ * Never pass the provisioning URI itself.
  */
 export interface EnrollmentPageViewModel {
   action: EnrollmentAction;
   state: string;
   email?: string;
+  emailReadonly?: boolean;
   displayName?: string;
-  qrImagePath?: string;
+  qrImageSrc?: string;
+  manualSecret?: string;
   error?: string;
+}
+
+export interface InviteCreatedPageViewModel {
+  joinHref: string;
+  expiresMinutes: number;
 }
 
 /** Displays recovery codes issued by enrollment; login recovery uses /user's code field. */
@@ -242,6 +258,52 @@ export function renderUserPage(viewModel: UserPageViewModel): string {
   );
 }
 
+export function renderUserSessionPage(viewModel: UserSessionPageViewModel): string {
+  return documentMarkup(
+    "Signed in",
+    <Page>
+      <PageHeading
+        eyebrow="Human session"
+        title="Signed in to Update Center"
+        description="Your web session is active. MCP access continues to use its separate OAuth credential."
+      />
+      <Card>
+        <CardHeader>
+          <CardTitle>{viewModel.displayName}</CardTitle>
+          <CardDescription>{viewModel.email}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-5">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">Role</span>
+            <Badge variant={viewModel.role === "admin" ? "default" : "secondary"}>
+              {viewModel.role}
+            </Badge>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            {viewModel.adminHref ? (
+              <a
+                href={viewModel.adminHref}
+                className={cn(
+                  "inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground",
+                  "outline-none hover:bg-primary/90 focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                )}
+              >
+                Open administration
+              </a>
+            ) : null}
+            <form method="post" action="/user/logout">
+              <input type="hidden" name={viewModel.csrf.name} value={viewModel.csrf.value} />
+              <Button type="submit" variant="outline">
+                Sign out
+              </Button>
+            </form>
+          </div>
+        </CardContent>
+      </Card>
+    </Page>,
+  );
+}
+
 export function renderAdminPage(viewModel: AdminPageViewModel): string {
   const csrfField = (
     <input type="hidden" name={viewModel.csrf.name} value={viewModel.csrf.value} />
@@ -301,28 +363,15 @@ export function renderAdminPage(viewModel: AdminPageViewModel): string {
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>Invite user</CardTitle>
-            <CardDescription>New invitations always create a user account.</CardDescription>
+            <CardTitle>Create invite link</CardTitle>
+            <CardDescription>
+              Generate a one-time link for a new user. The link expires after 30 minutes.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <form
-              method="post"
-              action={viewModel.actions.invite}
-              className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
-            >
+            <form method="post" action={viewModel.actions.invite}>
               {csrfField}
-              <div className="grid gap-2">
-                <Label htmlFor="invite-email">Email</Label>
-                <Input
-                  id="invite-email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  autoCapitalize="none"
-                  required
-                />
-              </div>
-              <Button type="submit">Invite user</Button>
+              <Button type="submit">Create invite link</Button>
             </form>
           </CardContent>
         </Card>
@@ -339,13 +388,14 @@ export function renderAdminPage(viewModel: AdminPageViewModel): string {
                   <TableHead>Email</TableHead>
                   <TableHead>Display name</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {viewModel.users.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-muted-foreground">
+                    <TableCell colSpan={5} className="text-muted-foreground">
                       No users are available.
                     </TableCell>
                   </TableRow>
@@ -358,6 +408,9 @@ export function renderAdminPage(viewModel: AdminPageViewModel): string {
                         <Badge variant={user.role === "admin" ? "default" : "secondary"}>
                           {user.role}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{user.status}</Badge>
                       </TableCell>
                       <TableCell>
                         {user.revokeAction ? (
@@ -419,15 +472,17 @@ export function renderOAuthPage(viewModel: OAuthPageViewModel): string {
 }
 
 export function renderEnrollmentPage(viewModel: EnrollmentPageViewModel): string {
-  if (
-    viewModel.qrImagePath &&
-    (!viewModel.qrImagePath.startsWith("/") ||
-      viewModel.qrImagePath.startsWith("//") ||
-      viewModel.qrImagePath.includes("\\") ||
-      viewModel.qrImagePath.includes("?") ||
-      viewModel.qrImagePath.includes("#"))
-  ) {
-    throw new TypeError("Enrollment QR image must use a same-origin path without query or fragment.");
+  const isSvgDataImage = viewModel.qrImageSrc?.startsWith("data:image/svg+xml;charset=utf-8,") ?? false;
+  const isSameOriginPath = Boolean(
+    viewModel.qrImageSrc &&
+    viewModel.qrImageSrc.startsWith("/") &&
+    !viewModel.qrImageSrc.startsWith("//") &&
+    !viewModel.qrImageSrc.includes("\\") &&
+    !viewModel.qrImageSrc.includes("?") &&
+    !viewModel.qrImageSrc.includes("#"),
+  );
+  if (viewModel.qrImageSrc && !isSvgDataImage && !isSameOriginPath) {
+    throw new TypeError("Enrollment QR image must use a safe same-origin path or server-generated SVG data URI.");
   }
 
   return documentMarkup(
@@ -445,12 +500,23 @@ export function renderEnrollmentPage(viewModel: EnrollmentPageViewModel): string
           <CardDescription>{viewModel.email ?? "Update Center account"}</CardDescription>
         </CardHeader>
         <CardContent className="grid justify-items-center gap-5">
-          {viewModel.qrImagePath ? (
+          {viewModel.qrImageSrc ? (
             <img
-              src={viewModel.qrImagePath}
+              src={viewModel.qrImageSrc}
               alt="Authenticator enrollment QR code"
               className="size-52 rounded-md bg-white p-3"
             />
+          ) : null}
+          {viewModel.manualSecret ? (
+            <details className="w-full max-w-sm rounded-md border border-border bg-background p-4 text-sm">
+              <summary className="cursor-pointer font-medium">Use a manual setup key instead</summary>
+              <code
+                data-manual-totp-secret={viewModel.manualSecret}
+                className="mt-3 block overflow-x-auto rounded-md border border-border p-3 font-mono text-xs"
+              >
+                {viewModel.manualSecret}
+              </code>
+            </details>
           ) : null}
           <form method="post" action={viewModel.action} className="grid w-full max-w-sm gap-4">
             <input type="hidden" name="state" value={viewModel.state} />
@@ -463,6 +529,7 @@ export function renderEnrollmentPage(viewModel: EnrollmentPageViewModel): string
                 autoComplete="email"
                 autoCapitalize="none"
                 required
+                readOnly={viewModel.emailReadonly}
                 defaultValue={viewModel.email ?? ""}
               />
             </div>
@@ -495,6 +562,41 @@ export function renderEnrollmentPage(viewModel: EnrollmentPageViewModel): string
   );
 }
 
+export function renderInviteCreatedPage(viewModel: InviteCreatedPageViewModel): string {
+  return documentMarkup(
+    "Invitation created",
+    <Page>
+      <PageHeading
+        eyebrow="Administrator"
+        title="Invitation created"
+        description={`This one-time link expires in ${viewModel.expiresMinutes} minutes.`}
+      />
+      <Card>
+        <CardHeader>
+          <CardTitle>Share this invite link</CardTitle>
+          <CardDescription>
+            Send the link to the intended user through a trusted channel. It can be used once.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <a
+            href={viewModel.joinHref}
+            className="break-all rounded-md border border-border bg-background p-3 font-mono text-sm underline underline-offset-4"
+          >
+            {viewModel.joinHref}
+          </a>
+          <a
+            href="/admin"
+            className="w-fit rounded-sm text-sm text-muted-foreground underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            Back to administration
+          </a>
+        </CardContent>
+      </Card>
+    </Page>,
+  );
+}
+
 export function renderRecoveryPage(viewModel: RecoveryPageViewModel): string {
   return documentMarkup(
     "Recovery codes",
@@ -515,7 +617,7 @@ export function renderRecoveryPage(viewModel: RecoveryPageViewModel): string {
           <ul aria-label="Recovery codes" className="grid gap-2 rounded-md border border-border bg-background p-4 sm:grid-cols-2">
             {viewModel.codes.map((code, index) => (
               <li key={index}>
-                <code className="font-mono text-sm">{code}</code>
+                <code data-recovery-code={code} className="font-mono text-sm">{code}</code>
               </li>
             ))}
           </ul>

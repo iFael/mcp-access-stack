@@ -2,9 +2,11 @@ import { strict as assert } from "node:assert";
 import {
   renderAdminPage,
   renderEnrollmentPage,
+  renderInviteCreatedPage,
   renderOAuthPage,
   renderRecoveryPage,
   renderUserPage,
+  renderUserSessionPage,
 } from "../../src/ui/renderers.js";
 
 function expectStaticDarkDocument(markup: string): void {
@@ -41,6 +43,24 @@ describe("Update Center server-rendered UI", () => {
     assert.match(markup, /admin\+&lt;test&gt;@example\.invalid/);
   });
 
+  it("renders an authenticated human session with role-gated administration and CSRF logout", () => {
+    const markup = renderUserSessionPage({
+      displayName: "Rafael Example",
+      email: "rafael@example.invalid",
+      role: "admin",
+      csrf: { name: "csrf", value: "csrf-session" },
+      adminHref: "/admin",
+    });
+
+    expectStaticDarkDocument(markup);
+    assert.match(markup, /<h1[^>]*>Signed in to Update Center<\/h1>/);
+    assert.match(markup, /Rafael Example/);
+    assert.match(markup, /rafael@example\.invalid/);
+    assert.match(markup, /href="\/admin"/);
+    assert.match(markup, /<form[^>]*action="\/user\/logout"[^>]*method="post"/);
+    assert.match(markup, /name="csrf" value="csrf-session"/);
+  });
+
   it("renders the admin Users panel with parameterized actions and no run or role controls", () => {
     const markup = renderAdminPage({
       csrf: { name: "csrf", value: "csrf-admin" },
@@ -53,12 +73,14 @@ describe("Update Center server-rendered UI", () => {
           email: "user@example.invalid",
           displayName: "User Example",
           role: "user",
+          status: "active",
           revokeAction: "/admin/revoke/user-1",
         },
         {
           email: "admin@example.invalid",
           displayName: "Admin Example",
           role: "admin",
+          status: "active",
         },
       ],
     });
@@ -71,14 +93,16 @@ describe("Update Center server-rendered UI", () => {
     assert.match(markup, /<form[^>]*action="\/admin\/revoke\/user-1"[^>]*method="post"/);
     assert.match(markup, /aria-label="Revoke access for user@example\.invalid"/);
     assert.match(markup, /name="csrf" value="csrf-admin"/);
-    assert.match(markup, /name="email"/);
-    assert.match(markup, /Invite user/);
+    assert.doesNotMatch(markup, /name="email"/);
+    assert.match(markup, /Create invite link/);
     assert.match(markup, /User Example/);
     assert.match(markup, /Admin Example/);
     assert.match(markup, />user</);
     assert.match(markup, />admin</);
     assert.doesNotMatch(markup, /Recent runs|Run history|<select|name="role"|promote/i);
     assert.match(markup, /<th[^>]*scope="col"[^>]*>Email<\/th>/);
+    assert.match(markup, /<th[^>]*scope="col"[^>]*>Status<\/th>/);
+    assert.match(markup, />active</);
     assert.match(markup, /<caption class="sr-only">Update Center users<\/caption>/);
   });
 
@@ -101,27 +125,44 @@ describe("Update Center server-rendered UI", () => {
       state: "state-join",
       email: "user@example.invalid",
       displayName: "User Example",
-      qrImagePath: "/server-provided/enrollment-image",
+      qrImageSrc: "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3C%2Fsvg%3E",
+      manualSecret: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+      emailReadonly: true,
     });
 
     expectStaticDarkDocument(markup);
     assert.match(markup, /<h1[^>]*>Set up an authenticator<\/h1>/);
-    assert.match(markup, /<img[^>]*src="\/server-provided\/enrollment-image"/);
+    assert.match(markup, /<img[^>]*src="data:image\/svg\+xml;charset=utf-8,%3Csvg/);
     assert.match(markup, /alt="Authenticator enrollment QR code"/);
     assert.match(markup, /<form[^>]*action="\/join"[^>]*method="post"/);
     assert.match(markup, /name="state" value="state-join"/);
     assert.match(markup, /name="email"/);
     assert.match(markup, /name="display_name"/);
     assert.match(markup, /name="code"/);
+    assert.match(markup, /data-manual-totp-secret="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"/);
     assert.doesNotMatch(markup, /user\/enrollment|name="csrfToken"|name="totp"|otpauth:\/\//i);
     assert.throws(
       () => renderEnrollmentPage({
         action: "/enroll",
         state: "state-enroll",
-        qrImagePath: "//external.example.invalid/image",
+        qrImageSrc: "//external.example.invalid/image",
       }),
-      /same-origin path/,
+      /safe same-origin path or server-generated SVG data URI/,
     );
+  });
+
+  it("renders the one-time invite link without inventing an email-bound invitation", () => {
+    const markup = renderInviteCreatedPage({
+      joinHref: "https://update-control.example/join?invite=opaque-token",
+      expiresMinutes: 30,
+    });
+
+    expectStaticDarkDocument(markup);
+    assert.match(markup, /<h1[^>]*>Invitation created<\/h1>/);
+    assert.match(markup, /opaque-token/);
+    assert.match(markup, /expires in 30 minutes/);
+    assert.match(markup, /href="\/admin"/);
+    assert.doesNotMatch(markup, /<form|name="email"/);
   });
 
   it("shows recovery codes as static HTML and leaves login recovery on /user", () => {
@@ -132,8 +173,8 @@ describe("Update Center server-rendered UI", () => {
     expectStaticDarkDocument(markup);
     assert.match(markup, /<h1[^>]*>Save your recovery codes<\/h1>/);
     assert.match(markup, /role="status"/);
-    assert.match(markup, /<code[^>]*>recovery-ONE-TIME-01<\/code>/);
-    assert.match(markup, /<code[^>]*>recovery-ONE-TIME-02<\/code>/);
+    assert.match(markup, /<code[^>]*data-recovery-code="recovery-ONE-TIME-01"[^>]*>recovery-ONE-TIME-01<\/code>/);
+    assert.match(markup, /<code[^>]*data-recovery-code="recovery-ONE-TIME-02"[^>]*>recovery-ONE-TIME-02<\/code>/);
     assert.match(markup, /Login recovery uses the code field on the sign-in form\./);
     assert.doesNotMatch(markup, /<form|user\/recovery|csrfToken|data-react/i);
   });
