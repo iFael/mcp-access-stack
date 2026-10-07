@@ -503,7 +503,7 @@ describe("GitRepositoryService push", () => {
     ).rejects.toMatchObject({ code: "GIT_REMOTE_CHANGED" });
   }, 30_000);
 
-  it("pushes main after the caller has satisfied the confirmation policy", async () => {
+  it("blocks direct push to protected main", async () => {
     const { service, headSha } = await setupRepository();
     await addBareOrigin();
 
@@ -514,14 +514,7 @@ describe("GitRepositoryService push", () => {
         expectedLocalSha: headSha,
         remote: "origin",
       }),
-    ).resolves.toEqual({
-      status: "completed",
-      root: ".",
-      remote: "origin",
-      branch: "main",
-      localSha: headSha,
-      remoteSha: headSha,
-    });
+    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
   });
 
   it("reconciles an ambiguous push before deciding completion", async () => {

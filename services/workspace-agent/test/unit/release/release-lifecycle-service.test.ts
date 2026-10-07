@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import type { ResolvedWorkspace } from "../../../src/internal-types.js";
 import { ReleaseLifecycleService } from "../../../src/release/release-lifecycle-service.js";
@@ -231,15 +231,16 @@ describe("ReleaseLifecycleService", () => {
     process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
     await writeState({ candidate: null });
     await writeBootstrap("Update-McpAccessStack.ps1");
+    const canonicalRootPath = await realpath(workspace.rootPath);
     const trusted = {
       ...workspace,
       confirmationMode: "trusted-workspace",
       permissionProfile: "full-repo-write",
-      canonicalRootPath: workspace.rootPath,
+      canonicalRootPath,
       allowedRoots: [{
         logicalPath: ".",
         absolutePath: workspace.rootPath,
-        canonicalPath: workspace.rootPath,
+        canonicalPath: canonicalRootPath,
         kind: "directory",
       }],
       blockedGlobs: [],
@@ -338,15 +339,16 @@ describe("ReleaseLifecycleService", () => {
       },
     });
     await writeBootstrap("Start-McpV3LocalUpdate.ps1");
+    const canonicalRootPath = await realpath(workspace.rootPath);
     const trusted = {
       ...workspace,
       confirmationMode: "trusted-workspace",
       permissionProfile: "full-repo-write",
-      canonicalRootPath: workspace.rootPath,
+      canonicalRootPath,
       allowedRoots: [{
         logicalPath: ".",
         absolutePath: workspace.rootPath,
-        canonicalPath: workspace.rootPath,
+        canonicalPath: canonicalRootPath,
         kind: "directory",
       }],
       blockedGlobs: [],
