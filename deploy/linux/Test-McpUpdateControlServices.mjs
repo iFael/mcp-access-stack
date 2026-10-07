@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const workflow = readFileSync(".github/workflows/update-control-deploy.yml", "utf8").replace(/\r\n/gu, "\n");
+const bootstrapWorkflow = readFileSync(".github/workflows/update-control-admin-bootstrap.yml", "utf8").replace(/\r\n/gu, "\n");
+const reprovisionWorkflow = readFileSync(".github/workflows/update-control-oauth-reprovision.yml", "utf8").replace(/\r\n/gu, "\n");
+const updateControlWorkflows = [
+  [".github/workflows/update-control-deploy.yml", workflow],
+  [".github/workflows/update-control-admin-bootstrap.yml", bootstrapWorkflow],
+  [".github/workflows/update-control-oauth-reprovision.yml", reprovisionWorkflow],
+];
 const workflowTriggers = workflow.split("\njobs:\n", 1)[0] ?? "";
 const validateJob = workflow.split("  validate:\n", 2)[1]?.split("\n  deploy:\n", 1)[0] ?? "";
 const deployJob = workflow.split("  deploy:\n", 2)[1] ?? "";
@@ -9,14 +16,31 @@ assert.ok(workflowTriggers.includes("pull_request:"), "PR validation must remain
 assert.ok(workflowTriggers.includes(".github/workflows/update-control-deploy.yml"), "PR validation must cover workflow edits");
 assert.ok(workflowTriggers.includes("deploy/linux/mcp-v3-oracle-read-api.service"), "PR validation must cover Oracle unit edits");
 assert.ok(workflowTriggers.includes("deploy/linux/mcp-v3-update-control-oracle-channel.service"), "PR validation must cover the outbound connector unit");
-assert.ok(workflowTriggers.includes("workflow_dispatch:"), "production deploy must require manual dispatch");
-assert.ok(workflowTriggers.includes("DEPLOY_UPDATE_CONTROL"), "manual deploy must require explicit confirmation");
+assert.ok(workflowTriggers.includes("workflow_dispatch:"), "production deploy must remain manually dispatched");
 assert.ok(!workflowTriggers.includes("cloudflared"), "Update Control deploy must not depend on Cloudflare Tunnel");
 assert.ok(!workflowTriggers.includes("  push:"), "merge/push must not deploy Update Control automatically");
 assert.ok(deployJob.includes("github.event_name == 'workflow_dispatch'"), "deploy must run only from manual dispatch");
 assert.ok(deployJob.includes("github.ref == 'refs/heads/main'"), "deploy must run only from main");
-assert.ok(deployJob.includes("inputs.confirm_deploy == 'DEPLOY_UPDATE_CONTROL'"), "deploy must require the explicit confirmation input");
 assert.ok(deployJob.includes("name: update-control-production"), "deploy must use the protected Environment");
+
+for (const [path, contents] of updateControlWorkflows) {
+  assert.ok(contents.includes("workflow_dispatch:"), `${path} must remain manually dispatched`);
+  assert.ok(contents.includes("github.ref == 'refs/heads/main'"), `${path} must remain restricted to main`);
+  assert.ok(contents.includes("group: update-control-production"), `${path} must preserve production concurrency`);
+  assert.ok(contents.includes("cancel-in-progress: false"), `${path} must not cancel an in-progress production operation`);
+  assert.ok(contents.includes("name: update-control-production"), `${path} must preserve its Environment`);
+}
+assert.ok(bootstrapWorkflow.includes("operation_id:"), "admin bootstrap must preserve its operation ID input");
+assert.ok(bootstrapWorkflow.includes("UPDATE_CONTROL_ADMIN_BOOTSTRAP_OPERATION_ID: ${{ inputs.operation_id }}"), "admin bootstrap must pass through the same operation ID");
+assert.ok(reprovisionWorkflow.includes("operation_id:"), "OAuth reprovision must preserve its operation ID input");
+assert.ok(reprovisionWorkflow.includes("UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}"), "OAuth reprovision must pass through the same operation ID");
+
+for (const [path, contents] of updateControlWorkflows) {
+  assert.ok(
+    !/confirm_(?:deploy|bootstrap|reprovision)|(?:DEPLOY_UPDATE_CONTROL|BOOTSTRAP_UPDATE_CONTROL_ADMIN|REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS)|UPDATE_CONTROL_(?:OAUTH|ADMIN_BOOTSTRAP)_CONFIRM/u.test(contents),
+    `${path} must not depend on a magic confirmation phrase`,
+  );
+}
 assert.ok(!/secrets\.|vars\./u.test(validateJob), "PR validation must not read GitHub secrets or variables");
 assert.ok(!/environment:/u.test(validateJob), "PR validation must not enter a protected Environment");
 assert.ok(deployJob.includes("secrets.UPDATE_CONTROL_CF_API_TOKEN"));
