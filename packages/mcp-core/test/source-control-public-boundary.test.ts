@@ -151,7 +151,6 @@ const inputCases = [
       workspaceId: "repo",
       branch: "feature/task8",
       expectedLocalSha: shaA,
-      confirmationId: "opaque-confirmation-id",
     },
   },
   {
@@ -205,7 +204,6 @@ const inputCases = [
       owner: "octo",
       name: "app",
       visibility: "private" as const,
-      confirmationId: "opaque-confirmation-id",
     },
   },
   {
@@ -228,7 +226,6 @@ const inputCases = [
       title: "Task 8",
       head: "feature/task8",
       base: "main",
-      confirmationId: "opaque-confirmation-id",
     },
   },
   {
@@ -240,7 +237,6 @@ const inputCases = [
       repository: "app",
       pullNumber: 7,
       expectedPullRequestHeadSha: shaB,
-      confirmationId: "opaque-confirmation-id",
     },
   },
   {
@@ -253,7 +249,6 @@ const inputCases = [
       pullNumber: 7,
       expectedPullRequestHeadSha: shaB,
       mergeMethod: "squash" as const,
-      confirmationId: "opaque-confirmation-id",
     },
   },
 ] as const;
@@ -306,6 +301,55 @@ describe("typed source-control public boundary", () => {
         expect(fixtureKeys).not.toContain(forbiddenKey);
         expect(schema.safeParse({ ...input, [forbiddenKey]: forbiddenValue }).success).toBe(false);
       }
+      expect(schema.safeParse(input).success).toBe(true);
+    }
+  });
+
+  it("keeps optional legacy confirmationId accepted on confirmable inputs", () => {
+    const confirmationId = "legacy-confirmation-id";
+    const confirmableCases = [
+      [gitPushBranchInputSchema, {
+        workspaceId: "repo",
+        branch: "feature/task8",
+        expectedLocalSha: shaA,
+        confirmationId,
+      }],
+      [githubCreateRepositoryInputSchema, {
+        workspaceId: "repo",
+        owner: "octo",
+        name: "app",
+        visibility: "private",
+        confirmationId,
+      }],
+      [githubCreatePullRequestInputSchema, {
+        workspaceId: "repo",
+        owner: "octo",
+        repository: "app",
+        title: "Task 8",
+        head: "feature/task8",
+        base: "main",
+        confirmationId,
+      }],
+      [githubClosePullRequestInputSchema, {
+        workspaceId: "repo",
+        owner: "octo",
+        repository: "app",
+        pullNumber: 7,
+        expectedPullRequestHeadSha: shaB,
+        confirmationId,
+      }],
+      [githubMergePullRequestInputSchema, {
+        workspaceId: "repo",
+        owner: "octo",
+        repository: "app",
+        pullNumber: 7,
+        expectedPullRequestHeadSha: shaB,
+        mergeMethod: "squash",
+        confirmationId,
+      }],
+    ] as const;
+
+    for (const [schema, input] of confirmableCases) {
       expect(schema.safeParse(input).success).toBe(true);
     }
   });

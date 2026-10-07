@@ -220,12 +220,12 @@ describe("typed protected-main policy", () => {
     })).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
   });
 
-  test("allows main push to reach the typed confirmation policy", () => {
+  test("blocks direct push to protected main", () => {
     expect(() => assertTypedGitBranchMutationAllowed({
       operation: "git_push_branch",
       currentBranch: "feature/x",
       branch: "main",
-    })).not.toThrow();
+    })).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
   });
 
   test("allows feature-branch creation from main and index-only changes on main", () => {

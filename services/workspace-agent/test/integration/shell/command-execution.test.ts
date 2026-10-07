@@ -524,7 +524,7 @@ describe("run command", () => {
     await expect(access(`${fixture.workspacePath}/untracked.txt`)).rejects.toMatchObject({ code: "ENOENT" });
   }, 45_000);
 
-  test("keeps external package execution and deploys behind confirmation in trusted workspace", async () => {
+  test("fails closed instead of prompting for unbounded external effects in trusted workspace", async () => {
     fixture = await createWritableShellFixture("trusted-workspace");
     const agent = await LocalAgent.create(fixture.policyPath);
 
@@ -536,16 +536,16 @@ describe("run command", () => {
           command,
           timeoutMs: 30_000,
         }),
-      ).resolves.toMatchObject({ status: "confirmation_required" });
+      ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     }
   });
 
-  test("blocks protected paths and keeps ambiguous traversal on confirmation in trusted workspace", async () => {
+  test("blocks protected paths and workspace traversal without a confirmation round-trip", async () => {
     fixture = await createWritableShellFixture("trusted-workspace");
     await writeWorkspaceFile(fixture.workspacePath, "secret/.env", "SECRET=value\n");
     const agent = await LocalAgent.create(fixture.policyPath);
     await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "Remove-Item -LiteralPath 'secret' -Recurse -Force", timeoutMs: 30_000 })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
-    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "Remove-Item '..\\outside.txt' -Force", timeoutMs: 30_000 })).resolves.toMatchObject({ status: "confirmation_required" });
+    await expect(agent.runCommand({ workspaceId: "test", shell: runtimePowerShell, command: "Remove-Item '..\\outside.txt' -Force", timeoutMs: 30_000 })).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
   });
 });
 

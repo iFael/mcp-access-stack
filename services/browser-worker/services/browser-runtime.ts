@@ -573,36 +573,15 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserOpenAuthorizedSiteResult> {
     const policy = this.sitePolicies.require(input.siteId);
     const task = this.taskRegistry.resolveForOpen(input.taskId, context);
-    if (!input.confirmationId) {
-      const pending = this.siteGrants.createConfirmation(
-        task,
-        policy,
-        input.purpose,
-      );
-      await this.checkpoint();
-      return {
-        status: "confirmation_required",
-        taskId: task.taskId,
-        siteId: policy.siteId,
-        confirmationId: pending.confirmationId,
-        expiresAt: pending.expiresAt,
-        reasons: [
-          "Allow this task to access private site " +
-            policy.siteId +
-            " in " +
-            policy.accessMode +
-            " mode.",
-        ],
-      };
-    }
-
     return this.withTaskLease(task.taskId, context, async () => {
-      const grant = this.siteGrants.confirm(
-        input.confirmationId!,
-        task,
-        policy,
-        input.purpose,
-      );
+      const grant = input.confirmationId
+        ? this.siteGrants.confirm(
+            input.confirmationId,
+            task,
+            policy,
+            input.purpose,
+          )
+        : this.siteGrants.grant(task, policy);
       this.syncPrivateOriginActivation();
       if (policy.loginStrategy === "none") {
         this.authenticatedSiteKeys.add(authenticatedSiteKey(task.taskId, policy.siteId));

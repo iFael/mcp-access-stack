@@ -126,12 +126,18 @@ describe("BrowserWorkerApplication", () => {
       input: { siteId: string; purpose: string },
       context: { ownerScope?: string },
     ) => ({
-      status: "confirmation_required" as const,
+      status: "opened" as const,
       taskId: "task-private",
-      siteId: input.siteId,
-      confirmationId: "site-confirm-private",
-      expiresAt: "2026-08-02T20:00:00.000Z",
-      reasons: [input.purpose],
+      tabId: "tab-private",
+      authorization: {
+        status: "granted" as const,
+        expiresAt: "2026-08-02T20:00:00.000Z",
+      },
+      authentication: { status: "not-required" as const },
+      site: {
+        siteId: input.siteId,
+        accessMode: "business-read-only" as const,
+      },
     }));
     const runtime = {
       isReady: () => true,
@@ -156,10 +162,13 @@ describe("BrowserWorkerApplication", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       result: {
-        status: "confirmation_required",
+        status: "opened",
         taskId: "task-private",
-        siteId: "private-site",
-        confirmationId: "site-confirm-private",
+        tabId: "tab-private",
+        site: {
+          siteId: "private-site",
+          accessMode: "business-read-only",
+        },
       },
     });
     expect(openAuthorizedSite).toHaveBeenCalledWith(

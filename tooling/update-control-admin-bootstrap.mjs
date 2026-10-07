@@ -1,6 +1,5 @@
 import { pathToFileURL } from "node:url";
 
-export const ADMIN_BOOTSTRAP_CONFIRMATION = "BOOTSTRAP_UPDATE_CONTROL_ADMIN";
 const ADMIN_BOOTSTRAP_PATH = "/_operations/admin/bootstrap";
 const SIGNATURE_DOMAIN = "mcp-v3-update-control:admin-bootstrap";
 const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -16,9 +15,9 @@ function requireValue(env, name) {
   return value;
 }
 
-function readSettings(env, { requireConfirmation = true } = {}) {
-  if (requireConfirmation && env.UPDATE_CONTROL_ADMIN_BOOTSTRAP_CONFIRM !== ADMIN_BOOTSTRAP_CONFIRMATION) {
-    throw new Error("Explicit admin-bootstrap confirmation is required.");
+function readSettings(env, { requiredMode } = {}) {
+  if (requiredMode && env.UPDATE_CONTROL_ADMIN_BOOTSTRAP_MODE !== requiredMode) {
+    throw new Error(`Admin-bootstrap mode ${requiredMode} is required.`);
   }
   const operationId = requireValue(env, "UPDATE_CONTROL_ADMIN_BOOTSTRAP_OPERATION_ID");
   if (!OPERATION_ID_PATTERN.test(operationId)) {
@@ -157,7 +156,7 @@ function safeError(payload) {
 }
 
 export async function diagnoseAdminBootstrap({ env = process.env, fetchImpl = fetch } = {}) {
-  const settings = readSettings(env, { requireConfirmation: false });
+  const settings = readSettings(env);
   const { response, payload } = await requestJson(fetchImpl, settings, "GET");
   return {
     operationId: settings.operationId,
@@ -168,7 +167,7 @@ export async function diagnoseAdminBootstrap({ env = process.env, fetchImpl = fe
 }
 
 export async function activateAdminBootstrap({ env = process.env, fetchImpl = fetch } = {}) {
-  const settings = readSettings(env);
+  const settings = readSettings(env, { requiredMode: "bootstrap" });
   const statusResult = await requestJson(fetchImpl, settings, "GET");
   const current = safeStatus(statusResult.payload, settings.operationId);
   if (statusResult.response.status !== 200 || !current) {
@@ -178,7 +177,7 @@ export async function activateAdminBootstrap({ env = process.env, fetchImpl = fe
     return { operationId: settings.operationId, status: current };
   }
   if (current === "expired") {
-    throw new Error("Admin-bootstrap operation is expired. Use a new operation ID after explicit approval.");
+    throw new Error("Admin-bootstrap operation is expired. Reconcile its expiration before using a new operation ID.");
   }
   const { response, payload } = await requestJson(fetchImpl, settings, "POST");
   const status = safeStatus(payload, settings.operationId);
@@ -196,12 +195,12 @@ async function main() {
       process.stdout.write(`Admin bootstrap diagnosis: ${JSON.stringify(result)}\n`);
       return;
     }
-    if (mode === "activate") {
+    if (mode === "bootstrap") {
       const result = await activateAdminBootstrap();
       process.stdout.write(`Admin bootstrap status: ${result.status}.\n`);
       return;
     }
-    throw new Error("Expected mode: diagnose or activate.");
+    throw new Error("Expected mode: diagnose or bootstrap.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected failure.";
     process.stderr.write(`Admin bootstrap stopped safely: ${message}\n`);

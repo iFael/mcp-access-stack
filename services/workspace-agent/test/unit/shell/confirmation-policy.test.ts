@@ -64,8 +64,8 @@ describe("confirmation policy", () => {
         fallbackReasons: [],
       }),
     ).resolves.toMatchObject({
-      disposition: "confirmation_required",
-      reasons: [expect.stringMatching(/Scheduled Task/u)],
+      disposition: "blocked",
+      code: "PERMISSION_DENIED",
     });
   });
 
@@ -95,8 +95,8 @@ describe("confirmation policy", () => {
         fallbackReasons: [],
       }),
     ).resolves.toMatchObject({
-      disposition: "confirmation_required",
-      reasons: [expect.stringMatching(/Docker mutation/u)],
+      disposition: "blocked",
+      code: "PERMISSION_DENIED",
     });
 
     await expect(
@@ -113,15 +113,16 @@ describe("confirmation policy", () => {
         currentRequiresConfirmation: true,
         fallbackReasons: ["docker cleanup or volume-removing operation"],
       }),
-    ).resolves.toMatchObject({ disposition: "confirmation_required" });
+    ).resolves.toMatchObject({ disposition: "blocked", code: "PERMISSION_DENIED" });
   });
 
-  test("never treats sc.exe as the PowerShell Set-Content alias", async () => {
+  test("keeps legacy confirmationId recognizable for a trusted critical command", async () => {
     await expect(
       decideCommandAuthorization({
         workspace: workspace("trusted-workspace"),
         shell: "powershell",
         command: "sc.exe stop FixtureService",
+        confirmationId: "legacy-confirmation-id",
         logicalCwd: ".",
         absoluteCwd: process.cwd(),
         directRisk: {
@@ -133,6 +134,7 @@ describe("confirmation policy", () => {
       }),
     ).resolves.toMatchObject({
       disposition: "confirmation_required",
+      reasons: ["service or process control"],
     });
   });
 
@@ -151,7 +153,7 @@ describe("confirmation policy", () => {
         currentRequiresConfirmation: true,
         fallbackReasons: ["move, overwrite or direct file write operation"],
       }),
-    ).resolves.toMatchObject({ disposition: "confirmation_required" });
+    ).resolves.toMatchObject({ disposition: "blocked", code: "PERMISSION_DENIED" });
   });
 
   test("keeps trusted Git mutation bypass on deterministic Windows shells only", async () => {
@@ -169,6 +171,6 @@ describe("confirmation policy", () => {
         currentRequiresConfirmation: true,
         fallbackReasons: ["destructive git operation"],
       }),
-    ).resolves.toMatchObject({ disposition: "confirmation_required" });
+    ).resolves.toMatchObject({ disposition: "blocked", code: "PERMISSION_DENIED" });
   });
 });

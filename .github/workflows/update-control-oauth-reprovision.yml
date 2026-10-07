@@ -7,15 +7,14 @@ on:
         description: "UUID for this exact reprovision intent. Reuse the same UUID to reconcile this operation."
         required: true
         type: string
-      confirm_reprovision:
-        description: "Choose read-only status diagnosis or explicitly authorize destructive OAuth reprovisioning."
+      mode:
+        description: "Diagnose the operation or apply the same operation ID after preflight."
         required: true
         type: choice
-        default: "NO"
+        default: diagnose
         options:
-          - "NO"
-          - "DIAGNOSE_STATUS"
-          - "REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS"
+          - diagnose
+          - apply
 
 permissions:
   contents: read
@@ -26,7 +25,7 @@ concurrency:
 
 jobs:
   diagnose:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'DIAGNOSE_STATUS' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'diagnose' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment:
@@ -55,7 +54,7 @@ jobs:
         run: node tooling/update-control-oauth-reprovision.mjs diagnose
 
   reprovision:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_reprovision == 'REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'apply' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -79,7 +78,7 @@ jobs:
       - name: Check the same operation ID with administrative HMAC-SHA-256
         id: preflight
         env:
-          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
+          UPDATE_CONTROL_OAUTH_MODE: ${{ inputs.mode }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}
@@ -87,7 +86,7 @@ jobs:
       - name: Reconcile and apply the same operation ID
         if: steps.preflight.outputs.completed != 'true'
         env:
-          UPDATE_CONTROL_OAUTH_CONFIRM: ${{ inputs.confirm_reprovision }}
+          UPDATE_CONTROL_OAUTH_MODE: ${{ inputs.mode }}
           UPDATE_CONTROL_OAUTH_OPERATION_ID: ${{ inputs.operation_id }}
           MCP_UPDATE_CONTROL_PUBLIC_URL: ${{ vars.MCP_UPDATE_CONTROL_PUBLIC_URL }}
           UPDATE_CONTROL_ADMIN_HMAC_KEY: ${{ secrets.UPDATE_CONTROL_ADMIN_HMAC_KEY }}

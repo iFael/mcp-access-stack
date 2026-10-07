@@ -15,6 +15,7 @@ export interface CommandAuthorizationInput {
   workspace: ResolvedWorkspace;
   shell: ShellName;
   command: string;
+  confirmationId?: string;
   logicalCwd: string;
   absoluteCwd: string;
   directRisk: CommandRisk;
@@ -44,9 +45,17 @@ export async function decideCommandAuthorization(
     input.absoluteCwd,
   );
   if (criticalReason) {
+    if (input.confirmationId !== undefined) {
+      return {
+        disposition: "confirmation_required",
+        reasons: [criticalReason],
+      };
+    }
     return {
-      disposition: "confirmation_required",
-      reasons: [criticalReason],
+      disposition: "blocked",
+      code: "PERMISSION_DENIED",
+      reason:
+        "Trusted-workspace automation requires a typed MCP capability for privileged, external, nested-shell or otherwise unbounded effects.",
     };
   }
 
@@ -54,7 +63,7 @@ export async function decideCommandAuthorization(
     return { disposition: "execute", authorization: "standard" };
   }
 
-  return authorizeTrustedWorkspaceCommand({
+  const delegated = await authorizeTrustedWorkspaceCommand({
     workspace: input.workspace,
     shell: input.shell,
     command: input.command,
@@ -62,4 +71,14 @@ export async function decideCommandAuthorization(
     absoluteCwd: input.absoluteCwd,
     fallbackReasons: input.fallbackReasons,
   });
+  if (delegated.disposition === "confirmation_required") {
+    if (input.confirmationId !== undefined) return delegated;
+    return {
+      disposition: "blocked",
+      code: "PERMISSION_DENIED",
+      reason:
+        "Trusted-workspace automation could not prove this shell mutation is bounded by the workspace policy. Use a typed MCP capability or a more explicit workspace-local command.",
+    };
+  }
+  return delegated;
 }

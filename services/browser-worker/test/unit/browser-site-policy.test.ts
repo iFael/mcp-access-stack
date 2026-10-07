@@ -138,6 +138,19 @@ describe("BrowserSitePolicyRegistry", () => {
 });
 
 describe("BrowserSiteGrantRegistry", () => {
+  it("grants an already policy-authorized site directly for the scoped task", () => {
+    const registry = new BrowserSiteGrantRegistry();
+    const grant = registry.grant(task, policy);
+
+    expect(grant).toMatchObject({
+      taskId: task.taskId,
+      ownerScopeHash: task.ownerScopeHash,
+      siteId: policy.siteId,
+      allowedOrigins: policy.allowedOrigins,
+    });
+    expect(registry.requireGrant(task, policy)).toEqual(grant);
+  });
+
   it("binds a one-time confirmation to task, owner, site and purpose", () => {
     const registry = new BrowserSiteGrantRegistry();
     const pending = registry.createConfirmation(task, policy, "read-report");

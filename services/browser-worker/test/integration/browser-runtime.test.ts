@@ -2166,21 +2166,21 @@ describe("BrowserRuntime Playwright layer", () => {
       },
     );
 
-    const pending = await runtime.openAuthorizedSite({
-      siteId: "private-site",
-      purpose: "concurrent-login",
+    const seed = await runtime.open({
+      url: "https://example.com/concurrent-login",
+      purpose: "concurrent-login-seed",
+      reusable: false,
     });
-    if (pending.status !== "confirmation_required") {
-      throw new Error("Expected private-site confirmation.");
-    }
+    const taskId = seed.tab.taskId;
     const opening = runtime.openAuthorizedSite({
       siteId: "private-site",
       purpose: "concurrent-login",
-      taskId: pending.taskId,
-      confirmationId: pending.confirmationId,
+      taskId,
     });
     await entered;
-    const [tab] = (await runtime.tabs({ taskId: pending.taskId })).tabs;
+    const tab = (await runtime.tabs({ taskId })).tabs.find(
+      (candidate) => candidate.tabId !== seed.tab.tabId,
+    );
     if (!tab) throw new Error("Expected private tab during authentication.");
 
     await expect(runtime.snapshot({ tabId: tab.tabId })).rejects.toMatchObject({
@@ -2191,7 +2191,7 @@ describe("BrowserRuntime Playwright layer", () => {
     });
 
     let finishCompleted = false;
-    const finishing = runtime.finishTask({ taskId: pending.taskId }).then((result) => {
+    const finishing = runtime.finishTask({ taskId }).then((result) => {
       finishCompleted = true;
       return result;
     });
@@ -2205,7 +2205,7 @@ describe("BrowserRuntime Playwright layer", () => {
     });
     await expect(finishing).resolves.toMatchObject({
       completed: true,
-      taskId: pending.taskId,
+      taskId,
     });
   });
 
@@ -2722,22 +2722,13 @@ async function authorizeLegacySite(
   >;
   tab: BrowserTab;
 }> {
-  const pending = await runtime.openAuthorizedSite({
+  const opened = await runtime.openAuthorizedSite({
     siteId: "private-site",
     purpose,
     ...(taskId === undefined ? {} : { taskId }),
   });
-  if (pending.status !== "confirmation_required") {
-    throw new Error("Expected private-site confirmation.");
-  }
-  const opened = await runtime.openAuthorizedSite({
-    siteId: "private-site",
-    purpose,
-    taskId: pending.taskId,
-    confirmationId: pending.confirmationId,
-  });
   if (opened.status !== "opened") {
-    throw new Error("Expected private site to open after confirmation.");
+    throw new Error("Expected authorized private site to open directly.");
   }
   const tab = (await runtime.tabs({ taskId: opened.taskId })).tabs.find(
     (candidate) => candidate.tabId === opened.tabId,

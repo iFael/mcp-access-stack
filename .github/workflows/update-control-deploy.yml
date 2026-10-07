@@ -24,16 +24,7 @@ on:
       - tooling/update-control-oracle-runtime.test.mjs
       - package.json
       - package-lock.json
-  workflow_dispatch:
-    inputs:
-      confirm_deploy:
-        description: "Explicitly confirm deployment of the independent Update Control Worker."
-        required: true
-        type: choice
-        default: "NO"
-        options:
-          - "NO"
-          - "DEPLOY_UPDATE_CONTROL"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -75,7 +66,7 @@ jobs:
         run: systemd-analyze verify deploy/linux/mcp-v3-oracle-read-api.service deploy/linux/mcp-v3-update-control-oracle-channel.service
 
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_deploy == 'DEPLOY_UPDATE_CONTROL' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:

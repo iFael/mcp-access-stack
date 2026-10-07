@@ -5,12 +5,10 @@ import { parse } from "yaml";
 import {
   diagnoseOAuthReprovisionStatus,
   executeOAuthReprovision,
-  OAUTH_REPROVISION_CONFIRMATION,
   preflightOAuthReprovision,
 } from "../../../../tooling/update-control-oauth-reprovision.mjs";
 import {
   activateAdminBootstrap,
-  ADMIN_BOOTSTRAP_CONFIRMATION,
   diagnoseAdminBootstrap,
 } from "../../../../tooling/update-control-admin-bootstrap.mjs";
 
@@ -31,7 +29,7 @@ function response(payload: unknown, status = 200) {
 
 function reproEnv(overrides: Record<string, string | undefined> = {}) {
   return {
-    UPDATE_CONTROL_OAUTH_CONFIRM: OAUTH_REPROVISION_CONFIRMATION,
+    UPDATE_CONTROL_OAUTH_MODE: "apply",
     UPDATE_CONTROL_OAUTH_OPERATION_ID: OPERATION_ID,
     UPDATE_CONTROL_ADMIN_HMAC_KEY: HMAC_KEY,
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
@@ -41,7 +39,7 @@ function reproEnv(overrides: Record<string, string | undefined> = {}) {
 
 function bootstrapEnv(overrides: Record<string, string | undefined> = {}) {
   return {
-    UPDATE_CONTROL_ADMIN_BOOTSTRAP_CONFIRM: ADMIN_BOOTSTRAP_CONFIRMATION,
+    UPDATE_CONTROL_ADMIN_BOOTSTRAP_MODE: "bootstrap",
     UPDATE_CONTROL_ADMIN_BOOTSTRAP_OPERATION_ID: OPERATION_ID,
     UPDATE_CONTROL_ADMIN_HMAC_KEY: HMAC_KEY,
     MCP_UPDATE_CONTROL_PUBLIC_URL: PUBLIC_URL,
@@ -50,30 +48,48 @@ function bootstrapEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("Update Control operational workflows", () => {
-  it("reprovisions OAuth with one administrative HMAC and no human owner credential", () => {
+  it("reprovisions OAuth using functional mode and operation ID without a confirmation phrase", () => {
     const definition = workflow("../../../../.github/workflows/update-control-oauth-reprovision.yml");
-    expect(definition.on.workflow_dispatch.inputs.confirm_reprovision.options).toEqual([
-      "NO",
-      "DIAGNOSE_STATUS",
-      OAUTH_REPROVISION_CONFIRMATION,
-    ]);
+    const inputs = definition.on.workflow_dispatch.inputs;
+    expect(inputs.operation_id).toMatchObject({ required: true, type: "string" });
+    expect(definition.jobs.diagnose.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(definition.jobs.diagnose.if).toContain("github.ref == 'refs/heads/main'");
+    expect(definition.jobs.reprovision.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(definition.jobs.reprovision.if).toContain("github.ref == 'refs/heads/main'");
     expect(definition.concurrency).toEqual({
       group: "update-control-production",
       "cancel-in-progress": false,
     });
+    expect(definition.jobs.reprovision.environment.name).toBe("update-control-production");
     const serialized = JSON.stringify(definition);
     expect(serialized).toContain("UPDATE_CONTROL_ADMIN_HMAC_KEY");
     expect(serialized).not.toContain("UPDATE_CONTROL_OWNER_TOKEN_NEXT");
     expect(serialized).not.toContain("MCP_OWNER_TOKEN");
     expect(serialized).not.toContain("UPDATE_CONTROL_OAUTH_REPROVISION_HMAC_KEY");
     expect(serialized).not.toContain("wrangler secret put");
-    expect(definition.jobs.reprovision.environment.name).toBe("update-control-production");
+
+    expect(inputs.confirm_reprovision).toBeUndefined();
+    expect(inputs).toMatchObject({
+      mode: { required: true, type: "choice", options: ["diagnose", "apply"] },
+    });
+    expect(definition.jobs.diagnose.if).toContain("inputs.mode == 'diagnose'");
+    expect(definition.jobs.reprovision.if).toContain("inputs.mode == 'apply'");
+    expect(serialized).not.toMatch(/confirm_reprovision|REPROVISION_OAUTH_AND_INVALIDATE_ALL_SESSIONS|UPDATE_CONTROL_OAUTH_CONFIRM/u);
   });
 
-  it("normal deploy provisions local TOTP encryption and the administrative HMAC without external identity credentials", () => {
+  it("normal deploy uses workflow dispatch on main without a magic confirmation input", () => {
     const definition = workflow("../../../../.github/workflows/update-control-deploy.yml");
     const deploy = definition.jobs.deploy;
+    expect(deploy.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(deploy.if).toContain("github.ref == 'refs/heads/main'");
+    expect(deploy.environment.name).toBe("update-control-production");
+    expect(definition.concurrency).toEqual({
+      group: "update-control-production",
+      "cancel-in-progress": false,
+    });
     const serialized = JSON.stringify(deploy);
+    expect(Object.keys(definition.on.workflow_dispatch.inputs ?? {})).toEqual([]);
+    expect(serialized).not.toMatch(/confirm_deploy|DEPLOY_UPDATE_CONTROL/u);
     expect(serialized).toContain("UPDATE_CONTROL_ADMIN_HMAC_KEY");
     expect(serialized).toContain("UPDATE_CONTROL_TOTP_ENCRYPTION_KEY");
     expect(serialized).toContain("UPDATE_CONTROL_BOOTSTRAP_ADMIN_EMAIL");
@@ -137,20 +153,33 @@ describe("Update Control operational workflows", () => {
     expect(requests.map((item) => item.method)).toEqual(["GET", "POST"]);
   });
 
-  it("uses a distinct explicitly-confirmed bootstrap operation and opens only a short enrollment window", async () => {
+  it("activates first-admin bootstrap using functional mode and operation ID without a confirmation phrase", async () => {
     const definition = workflow("../../../../.github/workflows/update-control-admin-bootstrap.yml");
-    expect(definition.on.workflow_dispatch.inputs.confirm_bootstrap.options).toEqual([
-      "NO",
-      "DIAGNOSE_STATUS",
-      ADMIN_BOOTSTRAP_CONFIRMATION,
-    ]);
-    expect(definition.concurrency.group).toBe("update-control-production");
+    const inputs = definition.on.workflow_dispatch.inputs;
+    expect(inputs.operation_id).toMatchObject({ required: true, type: "string" });
+    expect(definition.jobs.diagnose.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(definition.jobs.diagnose.if).toContain("github.ref == 'refs/heads/main'");
+    expect(definition.jobs.bootstrap.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(definition.jobs.bootstrap.if).toContain("github.ref == 'refs/heads/main'");
+    expect(definition.concurrency).toEqual({
+      group: "update-control-production",
+      "cancel-in-progress": false,
+    });
+    expect(definition.jobs.bootstrap.environment.name).toBe("update-control-production");
     const serialized = JSON.stringify(definition);
     expect(serialized).toContain("UPDATE_CONTROL_ADMIN_HMAC_KEY");
     expect(serialized).not.toContain("MCP_OWNER_TOKEN");
 
+    expect(inputs.confirm_bootstrap).toBeUndefined();
+    expect(inputs).toMatchObject({
+      mode: { required: true, type: "choice", options: ["diagnose", "bootstrap"] },
+    });
+    expect(definition.jobs.diagnose.if).toContain("inputs.mode == 'diagnose'");
+    expect(definition.jobs.bootstrap.if).toContain("inputs.mode == 'bootstrap'");
+    expect(serialized).not.toMatch(/confirm_bootstrap|BOOTSTRAP_UPDATE_CONTROL_ADMIN|UPDATE_CONTROL_ADMIN_BOOTSTRAP_CONFIRM/u);
+
     expect(await diagnoseAdminBootstrap({
-      env: bootstrapEnv({ UPDATE_CONTROL_ADMIN_BOOTSTRAP_CONFIRM: undefined }),
+      env: bootstrapEnv({ UPDATE_CONTROL_ADMIN_BOOTSTRAP_MODE: undefined }),
       fetchImpl: async () => response({ operationId: OPERATION_ID, status: "not_executed" }),
     })).toEqual({
       operationId: OPERATION_ID,

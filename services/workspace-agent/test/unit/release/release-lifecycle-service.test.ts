@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import type { ResolvedWorkspace } from "../../../src/internal-types.js";
 import { ReleaseLifecycleService } from "../../../src/release/release-lifecycle-service.js";
@@ -225,6 +225,176 @@ describe("ReleaseLifecycleService", () => {
     expect(executedInput.command).toContain(process.env.MCP_V3_STATE_ROOT);
     expect(executedInput.command).not.toContain("Start-McpAccessStackCutover.ps1");
     expect(executedInput.command).not.toContain("connector-token.txt");
+  });
+
+  it("prepares directly inside a trusted workspace without a confirmation round-trip", async () => {
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    await writeState({ candidate: null });
+    await writeBootstrap("Update-McpAccessStack.ps1");
+    const canonicalRootPath = await realpath(workspace.rootPath);
+    const trusted = {
+      ...workspace,
+      confirmationMode: "trusted-workspace",
+      permissionProfile: "full-repo-write",
+      canonicalRootPath,
+      allowedRoots: [{
+        logicalPath: ".",
+        absolutePath: workspace.rootPath,
+        canonicalPath: canonicalRootPath,
+        kind: "directory",
+      }],
+      blockedGlobs: [],
+      allowWrites: ["."],
+      allowShell: ["."],
+      allowedShells: ["powershell", "pwsh"],
+    } as ResolvedWorkspace;
+
+    let authorizationCalls = 0;
+    const shell = {
+      authorizeBackgroundCommand: async () => {
+        authorizationCalls += 1;
+        throw new Error("trusted release preparation must not request confirmation");
+      },
+      runAuthorizedCommandToFiles: async () => {
+        throw new Error("not used");
+      },
+      runCommand: async () => {
+        throw new Error("not used");
+      },
+    };
+    const background = {
+      start_background_task: async (input: any) => ({
+        version: 1 as const,
+        id: "123e4567-e89b-42d3-a456-426614174000",
+        workspaceId: "ws",
+        operation: "prepare_release",
+        commandHash: "0".repeat(64),
+        command: input.command,
+        shell: input.shell,
+        cwd: ".",
+        state: "running" as const,
+        createdAt: ISO,
+        startedAt: ISO,
+        timeoutMs: input.timeoutMs,
+        pid: 4242,
+      }),
+    };
+
+    const service = new ReleaseLifecycleService(shell as any, background as any, "win32");
+    await expect(
+      service.prepare(
+        trusted,
+        "iFael/mcp-access-stack",
+        { workspaceId: "ws", tag: "v1.1.0-beta.51" },
+        {},
+      ),
+    ).resolves.toMatchObject({ status: "background_task_started" });
+    expect(authorizationCalls).toBe(0);
+  });
+
+  it("preserves release preparation confirmation in standard mode", async () => {
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    await writeState({ candidate: null });
+    await writeBootstrap("Update-McpAccessStack.ps1");
+
+    const shell = {
+      authorizeBackgroundCommand: async () => ({
+        status: "confirmation_required" as const,
+        confirmationId: "release-confirmation",
+        expiresAt: ISO,
+        reasons: ["legacy confirmation"],
+      }),
+      runCommand: async () => {
+        throw new Error("not used");
+      },
+    };
+    const background = {
+      start_background_task: async () => {
+        throw new Error("must not start");
+      },
+    };
+    const service = new ReleaseLifecycleService(shell as any, background as any, "win32");
+
+    await expect(
+      service.prepare(
+        workspace,
+        "iFael/mcp-access-stack",
+        { workspaceId: "ws", tag: "v1.1.0-beta.51" },
+        {},
+      ),
+    ).resolves.toMatchObject({
+      status: "confirmation_required",
+      confirmationId: "release-confirmation",
+    });
+  });
+
+  it("promotes directly inside a trusted workspace through the bounded release executor", async () => {
+    process.env.MCP_V3_RELEASE_ROOT = path.join(installationRoot, "releases", ACTIVE);
+    process.env.MCP_V3_STATE_ROOT = path.join(installationRoot, "local-state");
+    await writeState({
+      candidate: {
+        releaseId: CANDIDATE,
+        manifestSha256: "1".repeat(64),
+        materializedAt: ISO,
+      },
+    });
+    await writeBootstrap("Start-McpV3LocalUpdate.ps1");
+    const canonicalRootPath = await realpath(workspace.rootPath);
+    const trusted = {
+      ...workspace,
+      confirmationMode: "trusted-workspace",
+      permissionProfile: "full-repo-write",
+      canonicalRootPath,
+      allowedRoots: [{
+        logicalPath: ".",
+        absolutePath: workspace.rootPath,
+        canonicalPath: canonicalRootPath,
+        kind: "directory",
+      }],
+      blockedGlobs: [],
+      allowWrites: ["."],
+      allowShell: ["."],
+      allowedShells: ["powershell", "pwsh"],
+    } as ResolvedWorkspace;
+
+    let executionCalls = 0;
+    const shell = {
+      authorizeBackgroundCommand: async () => {
+        throw new Error("not used");
+      },
+      runCommand: async () => {
+        throw new Error("trusted release promotion must use the bounded executor");
+      },
+      runAuthorizedCommandToFiles: async (_workspace: ResolvedWorkspace, input: any) => {
+        executionCalls += 1;
+        return {
+          status: "executed" as const,
+          shell: "powershell" as const,
+          cwd: ".",
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: "accepted",
+            operationId: "123e4567e89b42d3a456426614174000",
+            tag: `v${CANDIDATE}`,
+            taskName: "MCP V3 local updater",
+            resultPath: path.join(installationRoot, "local-state", "updates", "result.json"),
+            activeReleaseId: ACTIVE,
+          }) + "\n",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+    const service = new ReleaseLifecycleService(shell as any, {} as any, "win32");
+
+    await expect(
+      service.promote(
+        trusted,
+        { workspaceId: "ws", releaseId: CANDIDATE },
+        {},
+      ),
+    ).resolves.toMatchObject({ status: "handover_started" });
+    expect(executionCalls).toBe(1);
   });
 
   it("reports whether the active release contains signed lifecycle bootstraps", async () => {

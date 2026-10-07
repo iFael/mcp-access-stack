@@ -240,6 +240,18 @@ describe("LocalAgent typed source-control authorization", () => {
     expect(gitExecutor.stagePaths).not.toHaveBeenCalled();
   });
 
+  it("rejects workspace identity mismatches before invoking the authorized mutation", async () => {
+    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.index.write"] });
+
+    await expect(
+      (agent as any).gitStagePaths(
+        { workspaceId: "outside-workspace", paths: ["base.txt"] },
+        { idempotencyKey: "outside-workspace-stage" },
+      ),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_FOUND" });
+    expect(gitExecutor.stagePaths).not.toHaveBeenCalled();
+  });
+
   it("allows unstage with the shared git.index.write capability", async () => {
     const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.index.write"] });
 
@@ -273,7 +285,7 @@ describe("LocalAgent typed source-control authorization", () => {
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
   });
 
-  it("blocks commit/merge on current main while routing main push through confirmation", async () => {
+  it("blocks direct commit, merge and push on protected main", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.branch.write", "git.commit.write", "git.merge.write", "git.remote.push"],
       branch: "main",
@@ -295,31 +307,20 @@ describe("LocalAgent typed source-control authorization", () => {
         expectedSourceHeadSha: SHA_B,
       }),
     ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
-    const pendingMainPush = await (agent as any).gitPushBranch({
-      workspaceId: "test",
-      branch: "main",
-      expectedLocalSha: SHA_A,
-    }, { invocationId: "main-push" });
-    expect(pendingMainPush).toMatchObject({
-      status: "confirmation_required",
-      operation: "git_push_branch",
-    });
+
+    await expect(
+      (agent as any).gitPushBranch(
+        {
+          workspaceId: "test",
+          branch: "main",
+          expectedLocalSha: SHA_A,
+        },
+        { invocationId: "main-push" },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
     expect(gitExecutor.commit).not.toHaveBeenCalled();
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
     expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
-
-    if (pendingMainPush.status !== "confirmation_required") {
-      throw new Error("Expected main push confirmation");
-    }
-    await expect(
-      (agent as any).gitPushBranch({
-        workspaceId: "test",
-        branch: "main",
-        expectedLocalSha: SHA_A,
-        confirmationId: pendingMainPush.confirmationId,
-      }, { invocationId: "main-push" }),
-    ).resolves.toMatchObject({ status: "completed", branch: "main", remoteSha: SHA_A });
-    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
 
     await expect(
       (agent as any).gitCreateBranch(
@@ -358,8 +359,8 @@ describe("LocalAgent typed source-control authorization", () => {
   });
 });
 
-describe("LocalAgent typed confirmation and mutation receipts", () => {
-  it("returns confirmation-required, executes once, then replays completed push without backend re-execution", async () => {
+describe("LocalAgent direct authorization and mutation receipts", () => {
+  it("preserves confirmation flow in standard mode", async () => {
     const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
     const input = {
       workspaceId: "test",
@@ -368,21 +369,34 @@ describe("LocalAgent typed confirmation and mutation receipts", () => {
       remote: "origin",
     };
 
-    const pending = await (agent as any).gitPushBranch(input, { invocationId: "push-invocation" });
-    expect(pending).toMatchObject({
+    await expect(
+      (agent as any).gitPushBranch(input, { invocationId: "standard-push" }),
+    ).resolves.toMatchObject({
       status: "confirmation_required",
       operation: "git_push_branch",
     });
     expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
+  });
 
-    const confirmedInput = { ...input, confirmationId: pending.confirmationId };
-    const completed = await (agent as any).gitPushBranch(confirmedInput, {
+  it("executes an authorized push directly and replays its receipt without backend re-execution", async () => {
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
+    });
+    const input = {
+      workspaceId: "test",
+      branch: "feature/task6",
+      expectedLocalSha: SHA_A,
+      remote: "origin",
+    };
+
+    const completed = await (agent as any).gitPushBranch(input, {
       invocationId: "push-invocation",
     });
     expect(completed).toMatchObject({ status: "completed", remoteSha: SHA_A });
     expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
 
-    const replay = await (agent as any).gitPushBranch(confirmedInput, {
+    const replay = await (agent as any).gitPushBranch(input, {
       invocationId: "push-invocation",
     });
     expect(replay).toEqual(completed);
@@ -406,7 +420,7 @@ describe("LocalAgent typed confirmation and mutation receipts", () => {
   });
 });
 
-describe("LocalAgent trusted-workspace typed confirmation policy", () => {
+describe("LocalAgent trusted-workspace typed source-control authorization", () => {
   it("executes feature push without a confirmation round-trip", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.remote.push"],
@@ -427,18 +441,21 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
     expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps main push confirmation-bound in trusted workspace", async () => {
+  it("blocks direct main push even in a trusted workspace", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.remote.push"],
       confirmationMode: "trusted-workspace",
     });
+    const input = {
+      workspaceId: "test",
+      branch: "main",
+      expectedLocalSha: SHA_A,
+      remote: "origin",
+    };
 
     await expect(
-      (agent as any).gitPushBranch(
-        { workspaceId: "test", branch: "main", expectedLocalSha: SHA_A, remote: "origin" },
-        { invocationId: "trusted-main-push" },
-      ),
-    ).resolves.toMatchObject({ status: "confirmation_required", operation: "git_push_branch" });
+      (agent as any).gitPushBranch(input, { invocationId: "trusted-main-push" }),
+    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
     expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
   });
 
@@ -464,7 +481,7 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
     expect(githubExecutor.createPullRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps repository creation and pull-request close/merge confirmation-bound", async () => {
+  it("executes authorized repository and pull-request mutations directly with functional preconditions", async () => {
     const { agent, githubExecutor } = await setupAgent({
       capabilities: ["github.repository.create", "github.pull_request.close", "github.pull_request.merge"],
       accountOwners: ["octo"],
@@ -476,7 +493,11 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
         { workspaceId: "test", owner: "octo", name: "trusted-repo", visibility: "private" },
         { invocationId: "trusted-repo-create" },
       ),
-    ).resolves.toMatchObject({ status: "confirmation_required" });
+    ).resolves.toMatchObject({
+      status: "completed",
+      owner: "octo",
+      name: "trusted-repo",
+    });
     await expect(
       (agent as any).githubClosePullRequest(
         {
@@ -488,7 +509,7 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
         },
         { invocationId: "trusted-pr-close" },
       ),
-    ).resolves.toMatchObject({ status: "confirmation_required" });
+    ).resolves.toMatchObject({ status: "completed", state: "closed" });
     await expect(
       (agent as any).githubMergePullRequest(
         {
@@ -501,13 +522,13 @@ describe("LocalAgent trusted-workspace typed confirmation policy", () => {
         },
         { invocationId: "trusted-pr-merge" },
       ),
-    ).resolves.toMatchObject({ status: "confirmation_required" });
-    expect(githubExecutor.createRepository).not.toHaveBeenCalled();
-    expect(githubExecutor.closePullRequest).not.toHaveBeenCalled();
-    expect(githubExecutor.mergePullRequest).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: "completed", merged: true });
+    expect(githubExecutor.createRepository).toHaveBeenCalledTimes(1);
+    expect(githubExecutor.closePullRequest).toHaveBeenCalledTimes(1);
+    expect(githubExecutor.mergePullRequest).toHaveBeenCalledTimes(1);
   });
 });
-describe("LocalAgent confirmation and receipt completeness", () => {
+describe("LocalAgent direct authorization and receipt completeness", () => {
   it.each([
     {
       name: "repository creation",
@@ -562,47 +583,54 @@ describe("LocalAgent confirmation and receipt completeness", () => {
         mergeMethod: "squash",
       },
     },
-  ])("requires typed confirmation for $name before backend invocation", async (candidate) => {
+  ])("executes authorized $name directly and replays it idempotently", async (candidate) => {
     const { agent, githubExecutor } = await setupAgent({
       capabilities: candidate.capabilities,
       ...(candidate.accountOwners === undefined ? {} : { accountOwners: candidate.accountOwners }),
+      confirmationMode: "trusted-workspace",
     });
+    const invocationId = `direct-${candidate.operation}`;
 
-    const pending = await (agent as any)[candidate.method](candidate.input, {
-      invocationId: `confirm-${candidate.operation}`,
+    const completed = await (agent as any)[candidate.method](candidate.input, {
+      invocationId,
     });
+    expect(completed).toMatchObject({ status: "completed" });
+    expect((githubExecutor as any)[candidate.backend]).toHaveBeenCalledTimes(1);
 
-    expect(pending).toMatchObject({
-      status: "confirmation_required",
-      operation: candidate.operation,
-    });
-    expect((githubExecutor as any)[candidate.backend]).not.toHaveBeenCalled();
+    await expect(
+      (agent as any)[candidate.method](candidate.input, { invocationId }),
+    ).resolves.toEqual(completed);
+    expect((githubExecutor as any)[candidate.backend]).toHaveBeenCalledTimes(1);
   });
 
-  it("does not consume or accept a typed confirmation when arguments or target change", async () => {
-    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
+  it("rejects changed arguments under a completed invocation ID and keeps replay idempotent", async () => {
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
+    });
     const input = {
       workspaceId: "test",
       branch: "feature/task6",
       expectedLocalSha: SHA_A,
       remote: "origin",
     };
-    const pending = await (agent as any).gitPushBranch(input, { invocationId: "changed-grant" });
+    const completed = await (agent as any).gitPushBranch(input, {
+      invocationId: "stable-push",
+    });
+    expect(completed).toMatchObject({ status: "completed" });
+    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
 
     await expect(
       (agent as any).gitPushBranch(
-        { ...input, branch: "feature/other", confirmationId: pending.confirmationId },
-        { invocationId: "changed-grant" },
+        { ...input, branch: "feature/other" },
+        { invocationId: "stable-push" },
       ),
-    ).rejects.toMatchObject({ code: "SOURCE_CONTROL_CONFIRMATION_INVALID" });
-    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
+    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
 
     await expect(
-      (agent as any).gitPushBranch(
-        { ...input, confirmationId: pending.confirmationId },
-        { invocationId: "changed-grant" },
-      ),
-    ).resolves.toMatchObject({ status: "completed" });
+      (agent as any).gitPushBranch(input, { invocationId: "stable-push" }),
+    ).resolves.toEqual(completed);
     expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
   });
 
@@ -716,6 +744,39 @@ describe("LocalAgent canonical GitHub targets", () => {
       }),
     ).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
     expect(githubExecutor.getRepository).not.toHaveBeenCalled();
+  });
+
+  it("denies owner and repository mismatches before direct GitHub mutations", async () => {
+    const ownerMismatch = await setupAgent({
+      capabilities: ["github.repository.create"],
+      accountOwners: ["octo"],
+    });
+    await expect(
+      (ownerMismatch.agent as any).githubCreateRepository({
+        workspaceId: "test",
+        owner: "other",
+        name: "repo",
+        visibility: "private",
+      }, { invocationId: "wrong-owner" }),
+    ).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(ownerMismatch.githubExecutor.createRepository).not.toHaveBeenCalled();
+
+    await fixture?.cleanup();
+    fixture = undefined;
+    const repositoryMismatch = await setupAgent({
+      capabilities: ["github.pull_request.close"],
+      origin: "https://github.com/octo/repo.git",
+    });
+    await expect(
+      (repositoryMismatch.agent as any).githubClosePullRequest({
+        workspaceId: "test",
+        owner: "octo",
+        repository: "outside",
+        pullNumber: 7,
+        expectedPullRequestHeadSha: SHA_B,
+      }, { invocationId: "wrong-repository" }),
+    ).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(repositoryMismatch.githubExecutor.closePullRequest).not.toHaveBeenCalled();
   });
   it("rejects malformed/non-GitHub canonical origins unless repository is explicitly additional", async () => {
     const denied = await setupAgent({
