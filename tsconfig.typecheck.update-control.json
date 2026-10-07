@@ -11,6 +11,7 @@
   "include": [
     "packages/update-control-contract/src/**/*.ts",
     "packages/mcp-owner-auth/src/**/*.ts",
-    "services/update-control-worker/src/**/*.ts"
+    "services/update-control-worker/src/**/*.ts",
+    "services/update-control-worker/src/**/*.tsx"
   ]
 }

@@ -5,17 +5,28 @@
   "type": "module",
   "description": "Independent read-only MCP Update Control Worker.",
   "scripts": {
-    "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand",
-    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && npm run build --workspace @mcp-access-stack/update-control-contract && tsc --noEmit -p tsconfig.json && wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --dry-run --outdir services/update-control-worker/.wrangler/dry-run --var \"MCP_UPDATE_CONTROL_PUBLIC_URL:https://mcp-v3-update-control.example.workers.dev/\""
+    "test": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand && npm run test:ui",
+    "test:ui": "node ../../tooling/testing/run-jest.mjs --config test/ui/jest.config.ts --runInBand",
+    "build:ui": "tailwindcss -i src/ui/theme.css -o .wrangler/ui-assets/assets/update-control.css --minify",
+    "check": "npm run build --workspace @mcp-access-stack/edge-protocol && npm run build --workspace @mcp-access-stack/mcp-owner-auth && npm run build --workspace @mcp-access-stack/update-control-contract && tsc --noEmit -p tsconfig.json && npm run build:ui && wrangler deploy --cwd ../.. --config services/update-control-worker/wrangler.jsonc --dry-run --outdir services/update-control-worker/.wrangler/dry-run --var \"MCP_UPDATE_CONTROL_PUBLIC_URL:https://mcp-v3-update-control.example.workers.dev/\""
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260817.1",
+    "@tailwindcss/cli": "4.3.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.0",
     "typescript": "6.0.3",
     "wrangler": "4.135.0"
   },
   "dependencies": {
     "@mcp-access-stack/edge-protocol": "0.1.0",
+    "@mcp-access-stack/mcp-owner-auth": "0.1.0",
     "@mcp-access-stack/update-control-contract": "0.1.0",
-    "@mcp-access-stack/mcp-owner-auth": "0.1.0"
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwind-merge": "3.7.0"
   }
 }

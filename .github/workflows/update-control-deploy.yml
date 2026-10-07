@@ -96,6 +96,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies
         run: npm ci
+      - name: Build Update Center CSS assets
+        run: npm run build:ui --workspace @mcp-access-stack/update-control-worker
       - name: Validate all normal-deploy runtime settings without printing values
         shell: bash
         env:
