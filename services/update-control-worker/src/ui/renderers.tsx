@@ -11,7 +11,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "./components/card.js";
@@ -29,52 +28,59 @@ import {
 import { cn } from "./lib/utils.js";
 
 export type UpdateCenterRole = "admin" | "user";
+export type EnrollmentAction = "/enroll" | "/join";
 
 export interface UserPageViewModel {
-  csrfToken: string;
+  state: string;
   email?: string;
   error?: string;
-  recoveryHref: string;
 }
 
-export interface AdminRunViewModel {
-  id: string;
-  status: string;
-  startedAt: string;
-  summary: string;
+export interface CsrfFieldViewModel {
+  name: string;
+  value: string;
+}
+
+export interface AdminUserViewModel {
+  email: string;
+  displayName: string;
+  role: UpdateCenterRole;
+  /** Supply only when the server offers revoke for this user. */
+  revokeAction?: string;
 }
 
 export interface AdminPageViewModel {
-  administrator: {
-    displayName: string;
-    email: string;
-    role: UpdateCenterRole;
+  csrf: CsrfFieldViewModel;
+  actions: {
+    invite: string;
+    logout: string;
   };
+  users: readonly AdminUserViewModel[];
   error?: string;
-  runs: readonly AdminRunViewModel[];
 }
 
+/** Rendered only for an informational or error state; successful OAuth redirects directly. */
 export interface OAuthPageViewModel {
-  clientName: string;
-  csrfToken: string;
+  message: string;
   error?: string;
-  scopes: readonly string[];
 }
 
 /**
- * The fixed same-origin QR endpoint must return a no-store image and must never
- * log or expose the provisioning URI in request metadata.
+ * qrImagePath is an optional same-origin image path produced by the server.
+ * Never pass the provisioning URI here. Its endpoint must be private and no-store.
  */
 export interface EnrollmentPageViewModel {
-  accountLabel: string;
-  csrfToken: string;
+  action: EnrollmentAction;
+  state: string;
+  email?: string;
+  displayName?: string;
+  qrImagePath?: string;
   error?: string;
 }
 
+/** Displays recovery codes issued by enrollment; login recovery uses /user's code field. */
 export interface RecoveryPageViewModel {
   codes: readonly string[];
-  continueAction: string;
-  csrfToken: string;
 }
 
 interface DocumentProps {
@@ -191,19 +197,19 @@ export function renderUserPage(viewModel: UserPageViewModel): string {
       <PageHeading
         eyebrow="Human session"
         title="Sign in to Update Center"
-        description="Use your account and a current code from your authenticator."
+        description="Sign in with your account and an authenticator or single-use recovery code."
       />
       <Card>
         <CardHeader>
-          <CardTitle>Authenticator sign-in</CardTitle>
+          <CardTitle>Human session sign-in</CardTitle>
           <CardDescription>
             This session is for the web interface. MCP access uses its separate OAuth credential.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-5">
+        <CardContent>
           <ErrorAlert message={viewModel.error} />
-          <form method="post" action="/user" className="grid gap-5">
-            <input type="hidden" name="csrfToken" value={viewModel.csrfToken} />
+          <form method="post" action="/user" className="mt-5 grid gap-5">
+            <input type="hidden" name="state" value={viewModel.state} />
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -217,16 +223,12 @@ export function renderUserPage(viewModel: UserPageViewModel): string {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="totp">Authenticator code</Label>
+              <Label htmlFor="code">Authenticator or recovery code</Label>
               <Input
-                id="totp"
-                name="totp"
+                id="code"
+                name="code"
                 type="text"
-                inputMode="numeric"
                 autoComplete="one-time-code"
-                pattern="[0-9]{6,8}"
-                minLength={6}
-                maxLength={8}
                 required
               />
             </div>
@@ -234,14 +236,6 @@ export function renderUserPage(viewModel: UserPageViewModel): string {
               Sign in
             </Button>
           </form>
-          <p className="text-center text-sm">
-            <a
-              href={viewModel.recoveryHref}
-              className="rounded-sm text-muted-foreground underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              Use a recovery code
-            </a>
-          </p>
         </CardContent>
       </Card>
     </Page>,
@@ -249,6 +243,10 @@ export function renderUserPage(viewModel: UserPageViewModel): string {
 }
 
 export function renderAdminPage(viewModel: AdminPageViewModel): string {
+  const csrfField = (
+    <input type="hidden" name={viewModel.csrf.name} value={viewModel.csrf.value} />
+  );
+
   return documentMarkup(
     "Update Center",
     <Page wide>
@@ -256,62 +254,127 @@ export function renderAdminPage(viewModel: AdminPageViewModel): string {
         <PageHeading
           eyebrow="Administrator"
           title="Update Center"
-          description="Review update runs and their read-only evidence."
+          description="Manage Update Center users and invitations."
         />
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-          <div className="grid gap-1">
-            <span className="text-sm font-medium">{viewModel.administrator.displayName}</span>
-            <span className="text-xs text-muted-foreground">{viewModel.administrator.email}</span>
-          </div>
-          <Badge variant={viewModel.administrator.role === "admin" ? "default" : "secondary"}>
-            {viewModel.administrator.role}
-          </Badge>
-        </div>
+        <form method="post" action={viewModel.actions.logout}>
+          {csrfField}
+          <Button type="submit" variant="outline">
+            Sign out
+          </Button>
+        </form>
       </div>
       <ErrorAlert message={viewModel.error} />
-      <section aria-labelledby="runs-heading" className="grid gap-4">
+      <section aria-labelledby="overview-heading" className="grid gap-4">
         <div className="grid gap-4">
-          <h2 id="runs-heading" className="text-lg font-semibold tracking-tight">
-            Recent runs
+          <h2 id="overview-heading" className="text-lg font-semibold tracking-tight">
+            Overview
+          </h2>
+          <Separator />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Human access</CardTitle>
+              <CardDescription>Local sign-in uses an authenticator or recovery code.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Badge variant="secondary">Web session</Badge>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>MCP access</CardTitle>
+              <CardDescription>OAuth credentials remain separate from the human session.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Badge variant="outline">OAuth</Badge>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+      <section aria-labelledby="users-heading" className="grid gap-4">
+        <div className="grid gap-4">
+          <h2 id="users-heading" className="text-lg font-semibold tracking-tight">
+            Users
           </h2>
           <Separator />
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>Run history</CardTitle>
-            <CardDescription>Update state and evidence from the Update Center read API.</CardDescription>
+            <CardTitle>Invite user</CardTitle>
+            <CardDescription>New invitations always create a user account.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              method="post"
+              action={viewModel.actions.invite}
+              className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+            >
+              {csrfField}
+              <div className="grid gap-2">
+                <Label htmlFor="invite-email">Email</Label>
+                <Input
+                  id="invite-email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  required
+                />
+              </div>
+              <Button type="submit">Invite user</Button>
+            </form>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Current users</CardTitle>
+            <CardDescription>Review existing accounts and server-provided revoke actions.</CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
-              <caption className="sr-only">Recent Update Center runs</caption>
+              <caption className="sr-only">Update Center users</caption>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Run</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Started</TableHead>
-                  <TableHead>Summary</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Display name</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {viewModel.runs.length === 0 ? (
+                {viewModel.users.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="text-muted-foreground">
-                      No update runs are available.
+                      No users are available.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  viewModel.runs.map((run) => (
-                    <TableRow key={run.id}>
+                  viewModel.users.map((user) => (
+                    <TableRow key={user.email}>
+                      <TableCell>{user.email}</TableCell>
+                      <TableCell>{user.displayName}</TableCell>
                       <TableCell>
-                        <code className="font-mono text-xs">{run.id}</code>
+                        <Badge variant={user.role === "admin" ? "default" : "secondary"}>
+                          {user.role}
+                        </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{run.status}</Badge>
+                        {user.revokeAction ? (
+                          <form method="post" action={user.revokeAction}>
+                            {csrfField}
+                            <Button
+                              type="submit"
+                              variant="outline"
+                              aria-label={`Revoke access for ${user.email}`}
+                            >
+                              Revoke
+                            </Button>
+                          </form>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">—</span>
+                        )}
                       </TableCell>
-                      <TableCell>
-                        <time dateTime={run.startedAt}>{run.startedAt}</time>
-                      </TableCell>
-                      <TableCell className="min-w-56 whitespace-normal">{run.summary}</TableCell>
                     </TableRow>
                   ))
                 )}
@@ -326,97 +389,105 @@ export function renderAdminPage(viewModel: AdminPageViewModel): string {
 
 export function renderOAuthPage(viewModel: OAuthPageViewModel): string {
   return documentMarkup(
-    "Authorize access",
+    "OAuth status",
     <Page>
       <PageHeading
-        eyebrow="OAuth authorization"
-        title="Authorize access"
-        description="Review the access requested by this connected application."
+        eyebrow="OAuth"
+        title={viewModel.error ? "Authorization unavailable" : "OAuth request"}
+        description="A valid human session continues through the server redirect. Without one, sign in at /user."
       />
-      <ErrorAlert message={viewModel.error} />
+      <Alert
+        variant={viewModel.error ? "destructive" : "default"}
+        role={viewModel.error ? "alert" : "status"}
+      >
+        <AlertTitle>{viewModel.error ? "Unable to continue" : "Request status"}</AlertTitle>
+        <AlertDescription>{viewModel.error ?? viewModel.message}</AlertDescription>
+      </Alert>
       <Card>
         <CardHeader>
-          <CardTitle>{viewModel.clientName}</CardTitle>
+          <CardTitle>Separate credentials</CardTitle>
           <CardDescription>
-            This application requests access to Update Center read-only data.
+            The human web session and MCP OAuth credential are handled separately.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          <h2 className="text-sm font-medium">Requested access</h2>
-          <ul className="grid gap-2 text-sm text-muted-foreground">
-            {viewModel.scopes.map((scope) => (
-              <li key={scope}>
-                <Badge variant="secondary">{scope}</Badge>
-              </li>
-            ))}
-          </ul>
-          <Separator />
-          <p className="text-sm leading-6 text-muted-foreground">
-            Continuing reuses your existing human session. This page does not expose MCP credentials.
-          </p>
+        <CardContent>
+          <p className="text-sm leading-6 text-muted-foreground">{viewModel.message}</p>
         </CardContent>
-        <CardFooter className="flex-col items-stretch sm:flex-row sm:justify-end">
-          <form method="post" action="/oauth" className="w-full sm:w-auto">
-            <input type="hidden" name="csrfToken" value={viewModel.csrfToken} />
-            <input type="hidden" name="decision" value="deny" />
-            <Button type="submit" variant="outline" className="w-full sm:w-auto">
-              Cancel
-            </Button>
-          </form>
-          <form method="post" action="/oauth" className="w-full sm:w-auto">
-            <input type="hidden" name="csrfToken" value={viewModel.csrfToken} />
-            <input type="hidden" name="decision" value="approve" />
-            <Button type="submit" className="w-full sm:w-auto">
-              Continue
-            </Button>
-          </form>
-        </CardFooter>
       </Card>
     </Page>,
   );
 }
 
 export function renderEnrollmentPage(viewModel: EnrollmentPageViewModel): string {
+  if (
+    viewModel.qrImagePath &&
+    (!viewModel.qrImagePath.startsWith("/") ||
+      viewModel.qrImagePath.startsWith("//") ||
+      viewModel.qrImagePath.includes("\\") ||
+      viewModel.qrImagePath.includes("?") ||
+      viewModel.qrImagePath.includes("#"))
+  ) {
+    throw new TypeError("Enrollment QR image must use a same-origin path without query or fragment.");
+  }
+
   return documentMarkup(
     "Authenticator enrollment",
     <Page>
       <PageHeading
         eyebrow="Secure enrollment"
         title="Set up an authenticator"
-        description="Scan this one-time enrollment code, then verify a current code to finish setup."
+        description="Follow the enrollment instructions, then enter a current authenticator code."
       />
       <ErrorAlert message={viewModel.error} />
       <Card>
         <CardHeader>
           <CardTitle>Authenticator setup</CardTitle>
-          <CardDescription>{viewModel.accountLabel}</CardDescription>
+          <CardDescription>{viewModel.email ?? "Update Center account"}</CardDescription>
         </CardHeader>
         <CardContent className="grid justify-items-center gap-5">
-          <img
-            src="/user/enrollment/qr"
-            alt="Authenticator enrollment QR code"
-            className="size-52 rounded-md bg-white p-3"
-          />
-          <p className="max-w-md text-center text-sm leading-6 text-muted-foreground">
-            Scan the code with your authenticator app. The enrollment image is private to this session.
-          </p>
-          <form method="post" action="/user/enrollment" className="grid w-full max-w-sm gap-4">
-            <input type="hidden" name="csrfToken" value={viewModel.csrfToken} />
+          {viewModel.qrImagePath ? (
+            <img
+              src={viewModel.qrImagePath}
+              alt="Authenticator enrollment QR code"
+              className="size-52 rounded-md bg-white p-3"
+            />
+          ) : null}
+          <form method="post" action={viewModel.action} className="grid w-full max-w-sm gap-4">
+            <input type="hidden" name="state" value={viewModel.state} />
             <div className="grid gap-2">
-              <Label htmlFor="totp">Current authenticator code</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="totp"
-                name="totp"
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                required
+                defaultValue={viewModel.email ?? ""}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="display_name">Display name</Label>
+              <Input
+                id="display_name"
+                name="display_name"
                 type="text"
-                inputMode="numeric"
+                autoComplete="name"
+                required
+                defaultValue={viewModel.displayName ?? ""}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="code">Current authenticator code</Label>
+              <Input
+                id="code"
+                name="code"
+                type="text"
                 autoComplete="one-time-code"
-                pattern="[0-9]{6,8}"
-                minLength={6}
-                maxLength={8}
                 required
               />
             </div>
-            <Button type="submit">Verify and finish setup</Button>
+            <Button type="submit">Continue enrollment</Button>
           </form>
         </CardContent>
       </Card>
@@ -451,18 +522,10 @@ export function renderRecoveryPage(viewModel: RecoveryPageViewModel): string {
           <Alert role="status">
             <AlertTitle>Keep these codes private</AlertTitle>
             <AlertDescription>
-              Leave this page only after you have stored the codes safely.
+              Login recovery uses the code field on the sign-in form.
             </AlertDescription>
           </Alert>
         </CardContent>
-        <CardFooter>
-          <form method="post" action={viewModel.continueAction} className="w-full">
-            <input type="hidden" name="csrfToken" value={viewModel.csrfToken} />
-            <Button type="submit" className="w-full sm:w-auto">
-              Continue
-            </Button>
-          </form>
-        </CardFooter>
       </Card>
     </Page>,
   );
