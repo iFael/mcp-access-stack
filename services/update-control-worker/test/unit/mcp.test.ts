@@ -42,13 +42,28 @@ describe("Update Control MCP endpoint", () => {
     expect(initialized.headers.get("mcp-session-id")).toBeNull();
 
     const listed = await handle(mcpRequest({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-    const body = await listed.json() as { result: { tools: Array<{ name: string; annotations: unknown }> } };
+    const body = await listed.json() as {
+      result: {
+        tools: Array<{
+          name: string;
+          annotations: unknown;
+          securitySchemes?: unknown;
+          _meta?: { securitySchemes?: unknown };
+        }>;
+      };
+    };
     expect(body.result.tools).toHaveLength(3);
     expect(body.result.tools.map((tool) => tool.name)).toEqual(
       UPDATE_CONTROL_TOOL_MANIFEST.map((tool) => tool.name),
     );
     expect(body.result.tools.every((tool) =>
       (tool.annotations as { readOnlyHint?: boolean }).readOnlyHint === true,
+    )).toBe(true);
+    expect(body.result.tools.every((tool) =>
+      JSON.stringify(tool.securitySchemes) ===
+        JSON.stringify([{ type: "oauth2", scopes: ["update:read"] }]) &&
+      JSON.stringify(tool._meta?.securitySchemes) ===
+        JSON.stringify([{ type: "oauth2", scopes: ["update:read"] }]),
     )).toBe(true);
   });
 
@@ -85,13 +100,32 @@ describe("Update Control MCP endpoint", () => {
       authenticate: async () => {
         throw Object.assign(new Error("denied"), {
           name: "EdgeAuthenticationError",
-          toResponse: () => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }),
+          toResponse: () => new Response(JSON.stringify({ error: "invalid_token" }), {
+            status: 401,
+            headers: {
+              "www-authenticate":
+                'Bearer resource_metadata="https://update-control.example/.well-known/oauth-protected-resource/mcp", scope="update:read", error="invalid_token"',
+            },
+          }),
         });
       },
       tools: createUpdateControlReadOnlyTools(reader),
     });
     const deniedResponse = await denied(mcpRequest({ jsonrpc: "2.0", id: 1, method: "ping" }));
     expect(deniedResponse.status).toBe(401);
+
+    const deniedGet = await denied(new Request("https://update-control.example/mcp"));
+    expect(deniedGet.status).toBe(401);
+    expect(deniedGet.headers.get("www-authenticate")).toContain("resource_metadata=");
+    expect(deniedGet.headers.get("www-authenticate")).toContain('scope="update:read"');
+
+    const authenticatedGet = createUpdateControlMcpHandler({
+      authenticate: async () => principal,
+      tools: createUpdateControlReadOnlyTools(reader),
+    });
+    const methodNotAllowed = await authenticatedGet(new Request("https://update-control.example/mcp"));
+    expect(methodNotAllowed.status).toBe(405);
+    expect(methodNotAllowed.headers.get("allow")).toBe("POST");
 
     const bounded = createUpdateControlMcpHandler({
       authenticate: async () => principal,

@@ -26,15 +26,15 @@ export function createUpdateControlMcpHandler(
   }
 
   return async (request): Promise<Response> => {
-    if (request.method !== "POST") {
-      return new Response(null, { status: 405, headers: { allow: "POST", "cache-control": "no-store" } });
-    }
     let principal: AuthenticatedEdgePrincipal;
     try {
       principal = await options.authenticate(request);
     } catch (error) {
       if (isAuthenticationResponseError(error)) return error.toResponse();
       return jsonResponse({ error: "authentication_unavailable" }, 503);
+    }
+    if (request.method !== "POST") {
+      return new Response(null, { status: 405, headers: { allow: "POST", "cache-control": "no-store" } });
     }
 
     const mediaType = (request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase();

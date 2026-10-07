@@ -137,6 +137,16 @@ export interface UpdateControlToolDescriptor {
     idempotentHint: true;
     openWorldHint: false;
   }>;
+  readonly securitySchemes: readonly [{
+    readonly type: "oauth2";
+    readonly scopes: readonly ["update:read"];
+  }];
+  readonly _meta: Readonly<{
+    securitySchemes: readonly [{
+      readonly type: "oauth2";
+      readonly scopes: readonly ["update:read"];
+    }];
+  }>;
 }
 
 const annotation = {
@@ -145,6 +155,9 @@ const annotation = {
   idempotentHint: true,
   openWorldHint: false,
 } as const;
+
+const oauthSecuritySchemes = [{ type: "oauth2", scopes: ["update:read"] }] as const;
+const oauthMeta = { securitySchemes: oauthSecuritySchemes } as const;
 
 export const UPDATE_CONTROL_TOOL_MANIFEST: readonly UpdateControlToolDescriptor[] = [
   {
@@ -160,6 +173,8 @@ export const UPDATE_CONTROL_TOOL_MANIFEST: readonly UpdateControlToolDescriptor[
       additionalProperties: false,
     },
     annotations: annotation,
+    securitySchemes: oauthSecuritySchemes,
+    _meta: oauthMeta,
   },
   {
     name: "update_get_run",
@@ -176,6 +191,8 @@ export const UPDATE_CONTROL_TOOL_MANIFEST: readonly UpdateControlToolDescriptor[
       additionalProperties: false,
     },
     annotations: annotation,
+    securitySchemes: oauthSecuritySchemes,
+    _meta: oauthMeta,
   },
   {
     name: "update_wait_events",
@@ -193,6 +210,8 @@ export const UPDATE_CONTROL_TOOL_MANIFEST: readonly UpdateControlToolDescriptor[
       additionalProperties: false,
     },
     annotations: annotation,
+    securitySchemes: oauthSecuritySchemes,
+    _meta: oauthMeta,
   },
 ] as const;
 
