@@ -48,12 +48,12 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(91);
+      expect(listed.tools).toHaveLength(93);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining(["patch_file", "patch_files", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "github_get_commit_checks", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "sync_repository", "list_devices", "revoke_device"]),
       );
       expect(metadata).toMatchObject({
-        toolCount: 91,
+        toolCount: 93,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);
@@ -115,7 +115,7 @@ describe("MCP public catalog stability", () => {
         client.connect(clientTransport),
       ]);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(91);
+      expect(listed.tools).toHaveLength(93);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL)).toBe(false);
 

@@ -121,6 +121,20 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.runCommand(input, context);
   }
 
+  serviceGetStatus(
+    input: import("@vs-code-gpt/shared").ServiceGetStatusInput,
+    context?: OperationContext,
+  ): Promise<import("@vs-code-gpt/shared").ManagedServiceSnapshot> {
+    return this.agent.serviceGetStatus(input, context);
+  }
+
+  serviceStart(
+    input: import("@vs-code-gpt/shared").ServiceStartInput,
+    context?: OperationContext,
+  ): Promise<import("@vs-code-gpt/shared").ServiceStartResult> {
+    return this.agent.serviceStart(input, context);
+  }
+
   searchFiles(input: SearchFilesInput, context?: OperationContext): Promise<SearchFilesResult> {
     return this.agent.searchFiles(input, context);
   }

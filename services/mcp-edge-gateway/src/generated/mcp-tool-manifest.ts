@@ -2243,6 +2243,399 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Reads bounded status for one allowlisted MCP V3 Linux service. Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "serviceName": {
+          "enum": [
+            "mcp-v3-oracle-read-api.service",
+            "mcp-v3-update-control-oracle-channel.service"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "serviceName"
+      ],
+      "type": "object"
+    },
+    "name": "service_get_status",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activeState": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "execMainStatus": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loadState": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "mainPid": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nRestarts": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "serviceName": {
+          "enum": [
+            "mcp-v3-oracle-read-api.service",
+            "mcp-v3-update-control-oracle-channel.service"
+          ],
+          "type": "string"
+        },
+        "stateChangeTimestamp": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subState": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "unitFileState": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "serviceName",
+        "loadState",
+        "unitFileState",
+        "activeState",
+        "subState",
+        "result",
+        "mainPid",
+        "nRestarts",
+        "execMainStatus",
+        "stateChangeTimestamp"
+      ],
+      "type": "object"
+    },
+    "title": "Get managed Linux service status"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Starts one allowlisted MCP V3 Linux service through a fixed privileged systemctl path. Requires an explicit operationId and exact expected inactive/enabled state; it cannot stop, restart, reload, enable, disable, target arbitrary units, or execute shell text. If the outcome is uncertain, reconcile with service_get_status before any retry.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedActiveState": {
+          "const": "inactive",
+          "type": "string"
+        },
+        "expectedUnitFileState": {
+          "const": "enabled",
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "serviceName": {
+          "enum": [
+            "mcp-v3-oracle-read-api.service",
+            "mcp-v3-update-control-oracle-channel.service"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "serviceName",
+        "operationId",
+        "expectedActiveState",
+        "expectedUnitFileState"
+      ],
+      "type": "object"
+    },
+    "name": "service_start",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "additionalProperties": false,
+          "properties": {
+            "activeState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "execMainStatus": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loadState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "mainPid": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "nRestarts": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "result": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "serviceName": {
+              "enum": [
+                "mcp-v3-oracle-read-api.service",
+                "mcp-v3-update-control-oracle-channel.service"
+              ],
+              "type": "string"
+            },
+            "stateChangeTimestamp": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "subState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "unitFileState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "serviceName",
+            "loadState",
+            "unitFileState",
+            "activeState",
+            "subState",
+            "result",
+            "mainPid",
+            "nRestarts",
+            "execMainStatus",
+            "stateChangeTimestamp"
+          ],
+          "type": "object"
+        },
+        "before": {
+          "additionalProperties": false,
+          "properties": {
+            "activeState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "execMainStatus": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "loadState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "mainPid": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "nRestarts": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "result": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "serviceName": {
+              "enum": [
+                "mcp-v3-oracle-read-api.service",
+                "mcp-v3-update-control-oracle-channel.service"
+              ],
+              "type": "string"
+            },
+            "stateChangeTimestamp": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "subState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "unitFileState": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "serviceName",
+            "loadState",
+            "unitFileState",
+            "activeState",
+            "subState",
+            "result",
+            "mainPid",
+            "nRestarts",
+            "execMainStatus",
+            "stateChangeTimestamp"
+          ],
+          "type": "object"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "serviceName": {
+          "enum": [
+            "mcp-v3-oracle-read-api.service",
+            "mcp-v3-update-control-oracle-channel.service"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "const": "started",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operationId",
+        "serviceName",
+        "before",
+        "after"
+      ],
+      "type": "object"
+    },
+    "title": "Start managed Linux service"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Runs a predefined, read-only validation in an authorized workspace. Available validations are diff-check, legacy-format, legacy-compat and secret-scan. The validation name selects a fixed implementation; arbitrary commands are not accepted.",
     "execution": {
       "taskSupport": "forbidden"
@@ -20607,13 +21000,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8ac4d648ac3cd72426d5e210f25511ba8f8de57b1896925ef23658fd23e54890",
-  "serverVersion": "0.4.0-catalog.c8ac4d648ac3c.s8b73637247cd",
-  "toolCount": 91,
-  "toolSetRevision": "8b73637247cd160eef06bd65049b8b78bde9cb254df5494fffc9d88d3f0e873b"
+  "contractRevision": "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c",
+  "serverVersion": "0.4.0-catalog.c39889807df9c.sefcdb2a168d5",
+  "toolCount": 93,
+  "toolSetRevision": "efcdb2a168d51787247066da367661d86c42072893b6452a0fcd0b4c29eec4f1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8ac4d648ac3c.s8b73637247cd"
+  "version": "0.4.0-catalog.c39889807df9c.sefcdb2a168d5"
 } as const;

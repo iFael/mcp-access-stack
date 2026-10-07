@@ -23,6 +23,7 @@ export * from "./read-orchestration-contracts.js";
 export * from "./release-lifecycle-contracts.js";
 export * from "./repository-contracts.js";
 export * from "./repository-executor.js";
+export * from "./service-control-contracts.js";
 export * from "./source-control-contracts.js";
 export * from "./source-control-executor.js";
 export * from "./source-control-policy.js";
