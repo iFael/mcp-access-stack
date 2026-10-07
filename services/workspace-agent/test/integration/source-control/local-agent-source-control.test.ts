@@ -285,7 +285,7 @@ describe("LocalAgent typed source-control authorization", () => {
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
   });
 
-  it("blocks direct commit/merge on current main but executes an authorized main push directly", async () => {
+  it("blocks direct commit, merge and push on protected main", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.branch.write", "git.commit.write", "git.merge.write", "git.remote.push"],
       branch: "main",
@@ -308,27 +308,19 @@ describe("LocalAgent typed source-control authorization", () => {
       }),
     ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
 
-    const mainPushInput = {
-      workspaceId: "test",
-      branch: "main",
-      expectedLocalSha: SHA_A,
-    };
-    const pushedMain = await (agent as any).gitPushBranch(mainPushInput, {
-      invocationId: "main-push",
-    });
-    expect(pushedMain).toMatchObject({
-      status: "completed",
-      branch: "main",
-      remoteSha: SHA_A,
-    });
+    await expect(
+      (agent as any).gitPushBranch(
+        {
+          workspaceId: "test",
+          branch: "main",
+          expectedLocalSha: SHA_A,
+        },
+        { invocationId: "main-push" },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
     expect(gitExecutor.commit).not.toHaveBeenCalled();
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
-    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
-
-    await expect(
-      (agent as any).gitPushBranch(mainPushInput, { invocationId: "main-push" }),
-    ).resolves.toEqual(pushedMain);
-    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
+    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
 
     await expect(
       (agent as any).gitCreateBranch(
@@ -368,7 +360,7 @@ describe("LocalAgent typed source-control authorization", () => {
 });
 
 describe("LocalAgent direct authorization and mutation receipts", () => {
-  it("executes a standard-mode source-control mutation directly when the workspace capability authorizes it", async () => {
+  it("preserves confirmation flow in standard mode", async () => {
     const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
     const input = {
       workspaceId: "test",
@@ -379,13 +371,17 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
 
     await expect(
       (agent as any).gitPushBranch(input, { invocationId: "standard-push" }),
-    ).resolves.toMatchObject({ status: "completed", remoteSha: SHA_A });
-    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
+    ).resolves.toMatchObject({
+      status: "confirmation_required",
+      operation: "git_push_branch",
+    });
+    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
   });
 
   it("executes an authorized push directly and replays its receipt without backend re-execution", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
     });
     const input = {
       workspaceId: "test",
@@ -445,7 +441,7 @@ describe("LocalAgent trusted-workspace typed source-control authorization", () =
     expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
   });
 
-  it("executes an authorized main push directly in a trusted workspace", async () => {
+  it("blocks direct main push even in a trusted workspace", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.remote.push"],
       confirmationMode: "trusted-workspace",
@@ -459,12 +455,8 @@ describe("LocalAgent trusted-workspace typed source-control authorization", () =
 
     await expect(
       (agent as any).gitPushBranch(input, { invocationId: "trusted-main-push" }),
-    ).resolves.toMatchObject({
-      status: "completed",
-      branch: "main",
-      remoteSha: SHA_A,
-    });
-    expect(gitExecutor.pushBranch).toHaveBeenCalledTimes(1);
+    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
+    expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
   });
 
   it("executes pull-request creation from a non-main head without confirmation", async () => {
@@ -595,6 +587,7 @@ describe("LocalAgent direct authorization and receipt completeness", () => {
     const { agent, githubExecutor } = await setupAgent({
       capabilities: candidate.capabilities,
       ...(candidate.accountOwners === undefined ? {} : { accountOwners: candidate.accountOwners }),
+      confirmationMode: "trusted-workspace",
     });
     const invocationId = `direct-${candidate.operation}`;
 
@@ -611,7 +604,10 @@ describe("LocalAgent direct authorization and receipt completeness", () => {
   });
 
   it("rejects changed arguments under a completed invocation ID and keeps replay idempotent", async () => {
-    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"],
+      confirmationMode: "trusted-workspace",
+    });
     const input = {
       workspaceId: "test",
       branch: "feature/task6",

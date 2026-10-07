@@ -98,7 +98,8 @@ export function assertTypedGitBranchMutationAllowed(input: {
 
   if (
     (input.operation === "git_commit" && currentIsMain) ||
-    (input.operation === "git_merge_branch" && currentIsMain)
+    (input.operation === "git_merge_branch" && currentIsMain) ||
+    (input.operation === "git_push_branch" && isProtectedMain(input.branch))
   ) {
     throw new AppError(
       "GIT_PROTECTED_BRANCH",

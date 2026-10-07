@@ -1,27 +1,37 @@
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { constants as fsConstants } from "node:fs";
 import { z } from "zod";
 import {
+  abortSignalError,
   AppError,
+  createOperationDeadline,
+  createOperationLifecycle,
   prepareReleaseResultSchema,
+  redactSensitiveText,
+  remainingOperationTimeMs,
   promoteReleaseResultSchema,
   runCommandInputSchema,
   startBackgroundTaskInputSchema,
   windowsExecutionNodeStateSchema,
+  type DirectRunCommandInput,
   type GetReleaseStateResult,
   type OperationContext,
+  type RunCommandResult,
   type PrepareReleaseInput,
   type PrepareReleaseResult,
   type PromoteReleaseInput,
   type PromoteReleaseResult,
 } from "@vs-code-gpt/shared";
 import type { ResolvedWorkspace } from "../internal-types.js";
+import { PathSecurity } from "../path-security.js";
 import type { ShellService } from "../shell/service.js";
 import type { BackgroundTaskManager } from "../tasks/background-task-manager.js";
 
 interface ReleaseShellService {
   authorizeBackgroundCommand: ShellService["authorizeBackgroundCommand"];
+  runAuthorizedCommandToFiles: ShellService["runAuthorizedCommandToFiles"];
   runCommand: ShellService["runCommand"];
 }
 
@@ -168,21 +178,27 @@ export class ReleaseLifecycleService {
         ? {}
         : { confirmationId: input.confirmationId }),
     });
-    const authorization = await this.shellService.authorizeBackgroundCommand(
-      workspace,
-      parsed,
-      context.signal,
-    );
-    if ("status" in authorization) {
-      return prepareReleaseResultSchema.parse({
-        status: "confirmation_required",
-        tag: input.tag,
-        confirmationId: authorization.confirmationId,
-        expiresAt: authorization.expiresAt,
-        reasons: authorization.reasons?.length
-          ? authorization.reasons
-          : ["release preparation requires confirmation"],
-      });
+    let authorizedCwd = ".";
+    if (input.confirmationId !== undefined || !releaseAutonomyEnabled(workspace)) {
+      const authorization = await this.shellService.authorizeBackgroundCommand(
+        workspace,
+        parsed,
+        context.signal,
+      );
+      if ("status" in authorization) {
+        return prepareReleaseResultSchema.parse({
+          status: "confirmation_required",
+          tag: input.tag,
+          confirmationId: authorization.confirmationId,
+          expiresAt: authorization.expiresAt,
+          reasons: authorization.reasons?.length
+            ? authorization.reasons
+            : ["release preparation requires confirmation"],
+        });
+      }
+      authorizedCwd = authorization.logicalCwd;
+    } else {
+      await assertReleaseShellAllowed(workspace, lifecycleShell);
     }
 
     const task = await this.backgroundTaskManager.start_background_task(
@@ -191,7 +207,7 @@ export class ReleaseLifecycleService {
         operation: "prepare_release",
         command,
         shell: lifecycleShell,
-        cwd: authorization.logicalCwd,
+        cwd: authorizedCwd,
         timeoutMs: PREPARE_TIMEOUT_MS,
       },
       context.ownerScope === undefined ? {} : { ownerScope: context.ownerScope },
@@ -243,20 +259,25 @@ export class ReleaseLifecycleService {
         stateRoot,
         input.releaseId,
       );
-      const execution = await this.shellService.runCommand(
-        workspace,
-        runCommandInputSchema.parse({
-          workspaceId: workspace.id,
-          shell: resolveLifecycleShell(this.platform),
-          cwd: ".",
-          command,
-          timeoutMs: PROMOTE_TIMEOUT_MS,
-          ...(input.confirmationId === undefined
-            ? {}
-            : { confirmationId: input.confirmationId }),
-        }),
-        context,
-      );
+      const commandInput = runCommandInputSchema.parse({
+        workspaceId: workspace.id,
+        shell: resolveLifecycleShell(this.platform),
+        cwd: ".",
+        command,
+        timeoutMs: PROMOTE_TIMEOUT_MS,
+        ...(input.confirmationId === undefined
+          ? {}
+          : { confirmationId: input.confirmationId }),
+      });
+      const execution =
+        input.confirmationId === undefined && releaseAutonomyEnabled(workspace)
+          ? await runAuthorizedReleaseCommand(
+              this.shellService,
+              workspace,
+              commandInput,
+              context,
+            )
+          : await this.shellService.runCommand(workspace, commandInput, context);
       if (execution.status === "confirmation_required") {
         return promoteReleaseResultSchema.parse({
           status: "confirmation_required",
@@ -267,6 +288,15 @@ export class ReleaseLifecycleService {
             ? execution.reasons
             : ["release promotion requires confirmation"],
         });
+      }
+      if (execution.status === "executed" && execution.timedOut) {
+        throw new AppError(
+          "EXECUTION_OUTCOME_UNKNOWN",
+          "Local release handoff timed out; reconcile the existing handoff before retrying.",
+          execution.lifecycle === undefined
+            ? undefined
+            : { lifecycle: execution.lifecycle },
+        );
       }
       if (execution.status !== "executed" || execution.exitCode !== 0) {
         throw new AppError(
@@ -324,20 +354,25 @@ export class ReleaseLifecycleService {
       config,
     );
 
-    const execution = await this.shellService.runCommand(
-      workspace,
-      runCommandInputSchema.parse({
-        workspaceId: workspace.id,
-        shell: "pwsh",
-        cwd: ".",
-        command,
-        timeoutMs: PROMOTE_TIMEOUT_MS,
-        ...(input.confirmationId === undefined
-          ? {}
-          : { confirmationId: input.confirmationId }),
-      }),
-      context,
-    );
+    const commandInput = runCommandInputSchema.parse({
+      workspaceId: workspace.id,
+      shell: "pwsh",
+      cwd: ".",
+      command,
+      timeoutMs: PROMOTE_TIMEOUT_MS,
+      ...(input.confirmationId === undefined
+        ? {}
+        : { confirmationId: input.confirmationId }),
+    });
+    const execution =
+      input.confirmationId === undefined && releaseAutonomyEnabled(workspace)
+        ? await runAuthorizedReleaseCommand(
+            this.shellService,
+            workspace,
+            commandInput,
+            context,
+          )
+        : await this.shellService.runCommand(workspace, commandInput, context);
 
     if (execution.status === "confirmation_required") {
       return promoteReleaseResultSchema.parse({
@@ -349,6 +384,15 @@ export class ReleaseLifecycleService {
           ? execution.reasons
           : ["release promotion requires confirmation"],
       });
+    }
+    if (execution.status === "executed" && execution.timedOut) {
+      throw new AppError(
+        "EXECUTION_OUTCOME_UNKNOWN",
+        "Release cutover timed out; reconcile the existing handover before retrying.",
+        execution.lifecycle === undefined
+          ? undefined
+          : { lifecycle: execution.lifecycle },
+      );
     }
     if (execution.status !== "executed" || execution.exitCode !== 0) {
       throw new AppError(
@@ -374,6 +418,84 @@ export class ReleaseLifecycleService {
       installationRoot,
       projectRoot,
     });
+  }
+}
+
+function releaseAutonomyEnabled(workspace: ResolvedWorkspace): boolean {
+  return (
+    workspace.confirmationMode === "trusted-workspace" &&
+    workspace.permissionProfile === "full-repo-write"
+  );
+}
+
+async function assertReleaseShellAllowed(
+  workspace: ResolvedWorkspace,
+  shell: "powershell" | "pwsh",
+): Promise<void> {
+  if (workspace.allowShell.length === 0) {
+    throw new AppError(
+      "SHELL_NOT_ALLOWED",
+      "Workspace policy does not allow shell execution.",
+    );
+  }
+  if (!workspace.allowedShells.includes(shell)) {
+    throw new AppError(
+      "SHELL_NOT_ALLOWED",
+      `Workspace policy does not allow the ${shell} shell.`,
+    );
+  }
+  if (!workspace.allowShell.includes(".")) {
+    throw new AppError(
+      "SHELL_NOT_ALLOWED",
+      "Path is outside the workspace allowShell policy.",
+    );
+  }
+  await new PathSecurity(workspace).authorizeExisting(
+    ".",
+    "directory",
+    true,
+    "prepare_release",
+  );
+}
+
+async function runAuthorizedReleaseCommand(
+  shellService: ReleaseShellService,
+  workspace: ResolvedWorkspace,
+  input: DirectRunCommandInput,
+  context: OperationContext,
+): Promise<RunCommandResult> {
+  if (context.signal?.aborted) {
+    throw abortSignalError(context.signal, "Release command operation was cancelled.");
+  }
+
+  const startedAt = Date.now();
+  const deadline = createOperationDeadline(input.timeoutMs, context.deadline, startedAt);
+  const temporaryDirectory = await mkdtemp(
+    path.join(tmpdir(), "mcp-release-lifecycle-"),
+  );
+  try {
+    const timeoutMs = remainingOperationTimeMs(deadline);
+    if (timeoutMs <= 0) {
+      throw new AppError("AGENT_TIMEOUT", "Release command deadline has expired.", {
+        lifecycle: createOperationLifecycle(deadline, startedAt, {
+          layer: "executor",
+          reason: "timeout",
+          diagnostic: "The release command executor received an expired deadline.",
+        }),
+      });
+    }
+    return await shellService.runAuthorizedCommandToFiles(
+      workspace,
+      { ...input, timeoutMs },
+      {
+        stdoutPath: path.join(temporaryDirectory, "stdout.log"),
+        stderrPath: path.join(temporaryDirectory, "stderr.log"),
+        transformOutput: redactSensitiveText,
+      },
+      context.signal,
+    );
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
 

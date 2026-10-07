@@ -152,6 +152,9 @@ export class ShellService {
       workspace,
       shell: input.shell,
       command: input.command,
+      ...(input.confirmationId === undefined
+        ? {}
+        : { confirmationId: input.confirmationId }),
       logicalCwd: cwd.logicalPath,
       absoluteCwd: cwd.absolutePath,
       directRisk: risk,

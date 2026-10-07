@@ -45,6 +45,14 @@ export class BrowserSiteGrantRegistry {
     return { ...confirmation };
   }
 
+  grant(
+    task: BrowserTask,
+    policy: AuthorizedSitePolicy,
+  ): BrowserSiteGrant {
+    this.pruneExpired();
+    return this.createGrant(task, policy);
+  }
+
   confirm(
     confirmationId: string,
     task: BrowserTask,
@@ -71,18 +79,7 @@ export class BrowserSiteGrantRegistry {
       );
     }
     this.pending.delete(confirmationId);
-    const expiresAt = new Date(
-      Math.min(Date.parse(task.expiresAt), Date.now() + GRANT_TTL_MS),
-    ).toISOString();
-    const grant: BrowserSiteGrant = {
-      taskId: task.taskId,
-      ownerScopeHash: task.ownerScopeHash,
-      siteId: policy.siteId,
-      allowedOrigins: [...policy.allowedOrigins],
-      expiresAt,
-    };
-    this.grants.set(grantKey(task.taskId, policy.siteId), grant);
-    return cloneGrant(grant);
+    return this.createGrant(task, policy);
   }
 
   requireGrant(
@@ -147,6 +144,24 @@ export class BrowserSiteGrantRegistry {
   activeGrants(): BrowserSiteGrant[] {
     this.pruneExpired();
     return [...this.grants.values()].map(cloneGrant);
+  }
+
+  private createGrant(
+    task: BrowserTask,
+    policy: AuthorizedSitePolicy,
+  ): BrowserSiteGrant {
+    const expiresAt = new Date(
+      Math.min(Date.parse(task.expiresAt), Date.now() + GRANT_TTL_MS),
+    ).toISOString();
+    const grant: BrowserSiteGrant = {
+      taskId: task.taskId,
+      ownerScopeHash: task.ownerScopeHash,
+      siteId: policy.siteId,
+      allowedOrigins: [...policy.allowedOrigins],
+      expiresAt,
+    };
+    this.grants.set(grantKey(task.taskId, policy.siteId), grant);
+    return cloneGrant(grant);
   }
 
   private pruneExpired(now = Date.now()): void {

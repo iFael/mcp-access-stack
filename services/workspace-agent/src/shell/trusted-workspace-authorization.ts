@@ -895,13 +895,14 @@ async function authorizeExistingMutablePath(
   security: PathSecurity,
   operand: string,
 ): Promise<MutablePath | undefined> {
-  const logicalPath = resolveLiteralLogical(input.logicalCwd, operand, false);
-  if (!logicalPath) return undefined;
+  const logicalPath = resolveMutableLogicalPath(input, operand);
   security.authorizeWriteLogical(logicalPath);
   if (security.isSubtreeBlocked(logicalPath)) {
     throw new AppError("BLOCKED_PATH", "Target subtree is blocked by workspace policy.");
   }
-  if (await security.isSymbolicLink(logicalPath)) return undefined;
+  if (await security.isSymbolicLink(logicalPath)) {
+    throw new AppError("BLOCKED_PATH", "Mutation targets cannot be symbolic links.");
+  }
   const authorized = await security.authorizeExisting(logicalPath);
   return {
     logicalPath,
@@ -915,8 +916,7 @@ async function authorizeMutableTarget(
   security: PathSecurity,
   operand: string,
 ): Promise<MutablePath | undefined> {
-  const logicalPath = resolveLiteralLogical(input.logicalCwd, operand, false);
-  if (!logicalPath) return undefined;
+  const logicalPath = resolveMutableLogicalPath(input, operand);
   security.authorizeWriteLogical(logicalPath);
   if (security.isSubtreeBlocked(logicalPath)) {
     throw new AppError("BLOCKED_PATH", "Target subtree is blocked by workspace policy.");
@@ -924,7 +924,9 @@ async function authorizeMutableTarget(
 
   try {
     const existing = await security.authorizeExisting(logicalPath);
-    if (await security.isSymbolicLink(logicalPath)) return undefined;
+    if (await security.isSymbolicLink(logicalPath)) {
+      throw new AppError("BLOCKED_PATH", "Mutation targets cannot be symbolic links.");
+    }
     return {
       logicalPath,
       kind: existing.kind,
@@ -959,7 +961,9 @@ async function authorizeMutableTree(
       if (security.isSubtreeBlocked(logicalPath)) {
         throw new AppError("BLOCKED_PATH", "Directory subtree is blocked by workspace policy.");
       }
-      if (entry.isSymbolicLink()) return false;
+      if (entry.isSymbolicLink()) {
+        throw new AppError("BLOCKED_PATH", "Recursive mutation cannot traverse symbolic links.");
+      }
       const authorized = await security.authorizeExisting(logicalPath);
       if (authorized.kind === "directory") {
         stack.push({
@@ -1001,6 +1005,82 @@ function parseSourceDestination(
   destination ??= positionals.shift();
   if (!source || !destination || positionals.length > 0) return undefined;
   return { source, destination };
+}
+
+function resolveMutableLogicalPath(
+  input: TrustedWorkspaceAuthorizationInput,
+  operand: string,
+): string {
+  if (operand.length === 0 || operand.includes("\0")) {
+    throw new AppError("INVALID_PATH", "Trusted workspace mutation target is invalid.");
+  }
+  if (operand.startsWith("~") || operand.startsWith(":")) {
+    throw new AppError(
+      "PATH_OUTSIDE_WORKSPACE",
+      "Trusted workspace mutation target must remain inside the workspace.",
+    );
+  }
+
+  const portable = operand.replaceAll("\\", "/");
+  if (/[?*\[\]]/u.test(portable)) {
+    throw new AppError(
+      "INVALID_PATH",
+      "Trusted workspace mutation target must not contain wildcard syntax.",
+    );
+  }
+
+  const absolute =
+    path.isAbsolute(operand) ||
+    path.win32.isAbsolute(operand) ||
+    path.posix.isAbsolute(operand) ||
+    operand.startsWith("\\\\") ||
+    /^[a-zA-Z]:/u.test(operand);
+  let logicalPath: string;
+  if (absolute) {
+    if (!path.isAbsolute(operand)) {
+      throw new AppError(
+        "PATH_OUTSIDE_WORKSPACE",
+        "Trusted workspace mutation target must use a path within the current workspace.",
+      );
+    }
+    const absolutePath = path.resolve(operand);
+    if (!isContained(input.workspace.canonicalRootPath, absolutePath)) {
+      throw new AppError(
+        "PATH_OUTSIDE_WORKSPACE",
+        "Trusted workspace mutation target must remain inside the workspace.",
+      );
+    }
+    const relative = path
+      .relative(input.workspace.canonicalRootPath, absolutePath)
+      .split(path.sep)
+      .join("/");
+    try {
+      logicalPath = normalizeRelativePath(relative);
+    } catch {
+      throw new AppError("INVALID_PATH", "Trusted workspace mutation target is invalid.");
+    }
+  } else {
+    const combined =
+      input.logicalCwd === "." ? portable : `${input.logicalCwd}/${portable}`;
+    const normalized = path.posix.normalize(combined);
+    if (
+      normalized === ".." ||
+      normalized.startsWith("../") ||
+      normalized.startsWith("/")
+    ) {
+      throw new AppError(
+        "PATH_OUTSIDE_WORKSPACE",
+        "Trusted workspace mutation target must remain inside the workspace.",
+      );
+    }
+    try {
+      logicalPath = normalizeRelativePath(normalized);
+    } catch {
+      throw new AppError("INVALID_PATH", "Trusted workspace mutation target is invalid.");
+    }
+  }
+
+  return logicalPath;
 }
 
 function resolveLiteralLogical(

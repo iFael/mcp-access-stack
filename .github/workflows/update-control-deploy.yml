@@ -24,7 +24,7 @@ on:
       - tooling/update-control-oracle-runtime.test.mjs
       - package.json
       - package-lock.json
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: read

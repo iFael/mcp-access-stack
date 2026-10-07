@@ -1040,15 +1040,11 @@ export class LocalAgent {
         metadata.sourceControlCapability = "git.remote.push";
         metadata.targetResource = targetResource;
         metadata.expectedSha = parsed.expectedLocalSha;
-        const confirmableOperation = sourceControlConfirmationOperation(
-          workspace,
-          "git_push_branch",
-          parsed.branch,
-        );
         return this.executeSourceControlMutation({
           workspace,
           operation: "git_push_branch",
-          ...(confirmableOperation === undefined ? {} : { confirmableOperation }),
+          confirmableOperation: "git_push_branch",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
           capability: "git.remote.push",
           targetResource,
           input: parsed,
@@ -1216,6 +1212,7 @@ export class LocalAgent {
           workspace,
           operation: "github_create_repository",
           confirmableOperation: "github_create_repository",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
           capability: "github.repository.create",
           accountOwner: parsed.owner,
           targetResource,
@@ -1279,15 +1276,11 @@ export class LocalAgent {
           true,
           activeContext.signal,
         );
-        const confirmableOperation = sourceControlConfirmationOperation(
-          workspace,
-          "github_create_pull_request",
-          parsed.head,
-        );
         return this.executeSourceControlMutation({
           workspace,
           operation: "github_create_pull_request",
-          ...(confirmableOperation === undefined ? {} : { confirmableOperation }),
+          confirmableOperation: "github_create_pull_request",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
           capability: "github.pull_request.create",
           repository,
           canonicalRepositoryAlreadyAuthorized: true,
@@ -1330,6 +1323,7 @@ export class LocalAgent {
           workspace,
           operation: "github_close_pull_request",
           confirmableOperation: "github_close_pull_request",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
           capability: "github.pull_request.close",
           repository,
           canonicalRepositoryAlreadyAuthorized: true,
@@ -1372,6 +1366,7 @@ export class LocalAgent {
           workspace,
           operation: "github_merge_pull_request",
           confirmableOperation: "github_merge_pull_request",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
           capability: "github.pull_request.merge",
           repository,
           canonicalRepositoryAlreadyAuthorized: true,
@@ -1459,6 +1454,7 @@ export class LocalAgent {
         | "github_create_pull_request"
         | "github_close_pull_request"
         | "github_merge_pull_request";
+      requireConfirmation?: boolean;
       capability: SourceControlCapability;
       repository?: string;
       canonicalRepositoryAlreadyAuthorized?: boolean;
@@ -1518,7 +1514,7 @@ export class LocalAgent {
         canonicalArgumentsDigest: digest,
       };
       const confirmationId = readConfirmationId(options.input);
-      if (confirmationId === undefined) {
+      if (confirmationId === undefined && options.requireConfirmation !== false) {
         const confirmation = this.typedConfirmationRegistry.create(binding);
         options.metadata.idempotencyOutcome = "confirmation_required";
         return options.resultSchema.parse({
@@ -1529,7 +1525,9 @@ export class LocalAgent {
           targetResource: options.targetResource,
         });
       }
-      this.typedConfirmationRegistry.consume(confirmationId, binding);
+      if (confirmationId !== undefined) {
+        this.typedConfirmationRegistry.consume(confirmationId, binding);
+      }
     }
 
     const reservation = await store.reserve(identity);
@@ -1739,29 +1737,11 @@ function deriveSourceControlIdempotencyKey(
   return value;
 }
 
-type ConfirmableSourceControlOperation =
-  | "git_push_branch"
-  | "github_create_repository"
-  | "github_create_pull_request"
-  | "github_close_pull_request"
-  | "github_merge_pull_request";
-
-function sourceControlConfirmationOperation(
-  workspace: ResolvedWorkspace,
-  operation: ConfirmableSourceControlOperation,
-  sourceBranch?: string,
-): ConfirmableSourceControlOperation | undefined {
-  const trusted =
+function sourceControlAutonomyEnabled(workspace: ResolvedWorkspace): boolean {
+  return (
     workspace.confirmationMode === "trusted-workspace" &&
-    workspace.permissionProfile === "full-repo-write";
-  const trustedFeatureFlow =
-    operation === "git_push_branch" || operation === "github_create_pull_request";
-  const sourceIsProtectedMain = sourceBranch?.toLocaleLowerCase("en-US") === "main";
-
-  if (trusted && trustedFeatureFlow && sourceBranch && !sourceIsProtectedMain) {
-    return undefined;
-  }
-  return operation;
+    workspace.permissionProfile === "full-repo-write"
+  );
 }
 
 function readConfirmationId(input: unknown): string | undefined {
