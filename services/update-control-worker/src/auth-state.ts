@@ -178,7 +178,17 @@ export class UpdateControlAuthController {
   }
 
   fetch(request: Request): Promise<Response> {
-    return this.serialize(() => this.fetchSerialized(request));
+    const observation = createAuthObservation(request);
+    return this.serialize(async () => {
+      try {
+        const response = await this.fetchSerialized(request);
+        if (observation) recordAuthObservation(observation, response.status);
+        return response;
+      } catch {
+        if (observation) recordAuthObservation(observation, 503);
+        return jsonResponse({ error: "update_control_unavailable" }, 503);
+      }
+    });
   }
 
   private async fetchSerialized(request: Request): Promise<Response> {
@@ -219,7 +229,7 @@ export class UpdateControlAuthController {
         return jsonResponse({ error: "method_not_allowed" }, 405);
       }
       if (url.pathname === "/admin/login") {
-        if (request.method === "GET") return this.identityOAuth.beginAdminLogin();
+        if (request.method === "GET") return this.identityOAuth.beginAdminLogin(request);
         if (request.method === "POST") return this.identityOAuth.completeAdminLogin(request);
         return jsonResponse({ error: "method_not_allowed" }, 405);
       }
@@ -596,8 +606,75 @@ async function readBoundedRequestText(request: Request, maximumBytes: number): P
   return new TextDecoder("utf-8", { fatal: true }).decode(joined);
 }
 
+type AuthObservationStage =
+  | "oauth_metadata"
+  | "resource_metadata"
+  | "client_registration"
+  | "authorization"
+  | "human_login"
+  | "human_logout"
+  | "token"
+  | "revocation";
+
+type AuthObservation = {
+  flowId: string;
+  stage: AuthObservationStage;
+  method: "GET" | "POST" | "OTHER";
+  pathname: string;
+  startedAt: number;
+};
+
+function createAuthObservation(request: Request): AuthObservation | null {
+  let pathname: string;
+  try {
+    pathname = new URL(request.url).pathname;
+  } catch {
+    return null;
+  }
+
+  let stage: AuthObservationStage | null = null;
+  let safePathname = pathname;
+  if (pathname === "/.well-known/oauth-authorization-server") stage = "oauth_metadata";
+  else if (pathname === "/.well-known/oauth-protected-resource" ||
+      pathname === "/.well-known/oauth-protected-resource/mcp") stage = "resource_metadata";
+  else if (pathname === "/register") stage = "client_registration";
+  else if (pathname === "/oauth" || pathname === "/authorize") stage = "authorization";
+  else if (pathname === "/user" || pathname === "/admin/login") stage = "human_login";
+  else if (pathname === "/user/logout" || pathname === "/admin/logout") stage = "human_logout";
+  else if (pathname === "/token") stage = "token";
+  else if (pathname === "/revoke") stage = "revocation";
+  if (!stage) return null;
+
+  return {
+    flowId: crypto.randomUUID(),
+    stage,
+    method: request.method === "GET" || request.method === "POST" ? request.method : "OTHER",
+    pathname: safePathname,
+    startedAt: Date.now(),
+  };
+}
+
+function recordAuthObservation(observation: AuthObservation, status: number): void {
+  const resultCategory = status >= 500
+    ? "server_error"
+    : status >= 400
+      ? "client_error"
+      : status >= 300
+        ? "redirect"
+        : "success";
+  console.log("update_control_auth_stage", JSON.stringify({
+    flowId: observation.flowId,
+    stage: observation.stage,
+    method: observation.method,
+    pathname: observation.pathname,
+    status,
+    resultCategory,
+    durationMs: Math.max(0, Date.now() - observation.startedAt),
+  }));
+}
+
 function isOAuthPostPath(pathname: string): boolean {
-  return pathname === "/register" || pathname === "/authorize" ||
+  return pathname === "/register" || pathname === "/oauth" || pathname === "/authorize" ||
     pathname === "/token" || pathname === "/revoke";
 }
 

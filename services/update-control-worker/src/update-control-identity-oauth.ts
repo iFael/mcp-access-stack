@@ -18,7 +18,11 @@ const LOGIN_PENDING_TTL_MS = 10 * 60 * 1000;
 const ENROLLMENT_PENDING_TTL_MS = 10 * 60 * 1000;
 const BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
 const INVITE_TTL_MS = 30 * 60 * 1000;
-const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const HUMAN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const LOGIN_STATE_TTL_SECONDS = Math.floor(LOGIN_PENDING_TTL_MS / 1000);
+const HUMAN_SESSION_COOKIE = "update_control_session";
+const LOGIN_STATE_COOKIE = "update_control_login";
+const LEGACY_ADMIN_SESSION_COOKIE = "update_control_admin_session";
 const TOTP_MAX_FAILURES = 5;
 const TOTP_LOCK_MS = 5 * 60 * 1000;
 const MAX_CLIENTS = 256;
@@ -34,6 +38,7 @@ const INVITE_PREFIX = "update-control:identity:invite:";
 const ENROLLMENT_PREFIX = "update-control:identity:enrollment:";
 export const UPDATE_CONTROL_OAUTH_STORAGE_PREFIX = "update-control:oauth:";
 const ADMIN_SESSION_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "admin-session:";
+const HUMAN_SESSION_PREFIX = "update-control:identity:session:";
 const CLIENT_COUNT_KEY = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "client-count";
 const CLIENT_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "client:";
 const LOGIN_PENDING_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "login-pending:";
@@ -42,7 +47,8 @@ const REFRESH_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "refresh:";
 const REVOKED_PREFIX = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "revoked:";
 const SIGNING_KEY = UPDATE_CONTROL_OAUTH_STORAGE_PREFIX + "signing:v1";
 
-export type UpdateControlRole = "admin" | "operator" | "viewer";
+export type UpdateControlRole = "admin" | "user";
+type StoredUpdateControlRole = UpdateControlRole | "operator" | "viewer";
 
 export type UpdateControlUser = {
   version: 1;
@@ -69,7 +75,7 @@ type OAuthClient = {
 type PendingLogin = {
   version: 1;
   state: string;
-  kind: "mcp" | "admin";
+  kind: "mcp" | "oauth" | "admin" | "user";
   expiresAtMs: number;
   clientId?: string;
   redirectUri?: string;
@@ -83,7 +89,7 @@ type PendingEnrollment = {
   version: 1;
   state: string;
   kind: "bootstrap" | "join";
-  role: UpdateControlRole;
+  role: StoredUpdateControlRole;
   encryptedSecret: EncryptedSecret;
   expiresAtMs: number;
   inviteHash?: string;
@@ -126,18 +132,25 @@ type BootstrapOperation = {
 
 type InvitationRecord = {
   version: 1;
-  role: UpdateControlRole;
+  role: StoredUpdateControlRole;
   createdByUserId: string;
   createdAt: string;
   expiresAt: string;
 };
 
-type AdminSessionRecord = {
+type HumanSessionRecord = {
   version: 1;
   userId: string;
   csrfToken: string;
   createdAt: string;
   expiresAt: string;
+};
+
+type HumanSessionContext = {
+  user: UpdateControlUser;
+  session: HumanSessionRecord;
+  key: string;
+  cookieName: string;
 };
 
 type EncryptedSecret = {
@@ -216,7 +229,7 @@ export class UpdateControlIdentityOAuth {
     if (request.method === "GET" && url.pathname === "/.well-known/oauth-authorization-server") {
       return jsonResponse({
         issuer: this.config.publicBaseUrl.href,
-        authorization_endpoint: new URL("/authorize", this.config.publicBaseUrl).href,
+        authorization_endpoint: new URL("/oauth", this.config.publicBaseUrl).href,
         token_endpoint: new URL("/token", this.config.publicBaseUrl).href,
         registration_endpoint: new URL("/register", this.config.publicBaseUrl).href,
         revocation_endpoint: new URL("/revoke", this.config.publicBaseUrl).href,
@@ -238,9 +251,16 @@ export class UpdateControlIdentityOAuth {
         resource_name: this.config.resourceName,
       });
     }
+    if (url.pathname === "/user") {
+      if (request.method === "GET") return this.beginUserLogin(request);
+      if (request.method === "POST") return this.completeUserLogin(request);
+      return jsonResponse({ error: "method_not_allowed" }, 405);
+    }
+    if (url.pathname === "/user/logout") return this.logoutUser(request);
     if (url.pathname === "/register" && request.method === "POST") return this.register(request);
-    if (url.pathname === "/authorize" && (request.method === "GET" || request.method === "POST")) {
-      return request.method === "GET" ? this.beginAuthorization(request) : this.completeLogin(request, "mcp");
+    if (url.pathname === "/oauth" || url.pathname === "/authorize") {
+      if (request.method === "GET" || request.method === "POST") return this.handleAuthorization(request);
+      return jsonResponse({ error: "method_not_allowed" }, 405);
     }
     if (url.pathname === "/token" && request.method === "POST") return this.token(request);
     if (url.pathname === "/revoke" && request.method === "POST") return this.revoke(request);
@@ -352,6 +372,8 @@ export class UpdateControlIdentityOAuth {
       await this.storage.delete(key);
       return jsonResponse({ error: "enrollment_expired" }, 400);
     }
+    const role = normalizeRole(pending.role);
+    if (!role) return jsonResponse({ error: "invalid_enrollment" }, 400);
     if (await this.findUserByEmail(email)) return jsonResponse({ error: "identity_already_enrolled" }, 409);
 
     if (pending.kind === "bootstrap") {
@@ -368,7 +390,7 @@ export class UpdateControlIdentityOAuth {
       if (!pending.inviteHash) return jsonResponse({ error: "invalid_invite" }, 400);
       const invitation = await this.storage.get<InvitationRecord>(INVITE_PREFIX + pending.inviteHash);
       if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now() ||
-          invitation.role !== pending.role) {
+          normalizeRole(invitation.role) !== role) {
         return jsonResponse({ error: "invalid_invite" }, 400);
       }
     }
@@ -382,7 +404,7 @@ export class UpdateControlIdentityOAuth {
     const acceptedCounter = await verifyTotp(secret, code, undefined);
     if (acceptedCounter === null) return jsonResponse({ error: "invalid_credentials" }, 401);
 
-    const user = await this.createLocalUser(email, displayName, pending.role);
+    const user = await this.createLocalUser(email, displayName, role);
     const recoveryCodes = generateRecoveryCodes();
     const credential: TotpCredential = {
       version: 1,
@@ -416,19 +438,49 @@ export class UpdateControlIdentityOAuth {
     return htmlResponse(enrollmentCompletedPage(user, recoveryCodes));
   }
 
-  async beginAdminLogin(): Promise<Response> {
-    const state = randomToken();
-    await this.storage.put(LOGIN_PENDING_PREFIX + state, {
-      version: 1,
-      state,
-      kind: "admin",
-      expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
-    } satisfies PendingLogin);
-    return htmlResponse(loginPage(state, "/admin/login", "Administrator sign in"));
+  async beginAdminLogin(request: Request): Promise<Response> {
+    return this.beginUserLogin(request);
   }
 
   async completeAdminLogin(request: Request): Promise<Response> {
-    return this.completeLogin(request, "admin");
+    return this.completeUserLogin(request);
+  }
+
+  async beginUserLogin(request: Request): Promise<Response> {
+    const human = await this.readHumanSession(request);
+    const state = readCookie(request.headers.get("cookie"), LOGIN_STATE_COOKIE);
+    if (human) {
+      if (state && isOpaqueToken(state)) {
+        const pending = await this.storage.get<unknown>(LOGIN_PENDING_PREFIX + state);
+        if (isPendingLogin(pending) && pending.expiresAtMs > Date.now() &&
+            (pending.kind === "oauth" || pending.kind === "mcp")) {
+          const response = await this.completeAuthorization(state, pending, human.user);
+          response.headers.append("set-cookie", expiredCookie(LOGIN_STATE_COOKIE));
+          return response;
+        }
+      }
+      return htmlResponse(userPage(human.user, human.session.csrfToken));
+    }
+
+    if (state && isOpaqueToken(state)) {
+      const pending = await this.storage.get<unknown>(LOGIN_PENDING_PREFIX + state);
+      if (isPendingLogin(pending) && pending.expiresAtMs > Date.now()) {
+        return htmlResponse(loginPage(state, "/user", "Sign in"));
+      }
+      await this.storage.delete(LOGIN_PENDING_PREFIX + state);
+    }
+
+    const nextState = randomToken();
+    const pending: PendingLogin = {
+      version: 1,
+      state: nextState,
+      kind: "user",
+      expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
+    };
+    await this.storage.put(LOGIN_PENDING_PREFIX + nextState, pending);
+    const response = htmlResponse(loginPage(nextState, "/user", "Sign in"));
+    response.headers.set("set-cookie", cookieHeader(LOGIN_STATE_COOKIE, nextState, LOGIN_STATE_TTL_SECONDS));
+    return response;
   }
 
   async beginInviteJoin(inviteToken: string): Promise<Response> {
@@ -438,25 +490,34 @@ export class UpdateControlIdentityOAuth {
     if (!isInvitationRecord(invitation) || Date.parse(invitation.expiresAt) <= Date.now()) {
       return jsonResponse({ error: "invalid_invite" }, 400);
     }
-    return this.beginEnrollment({ kind: "join", role: invitation.role, inviteHash });
+    const role = normalizeRole(invitation.role);
+    if (!role) return jsonResponse({ error: "invalid_invite" }, 400);
+    if (role !== invitation.role) {
+      await this.storage.put(INVITE_PREFIX + inviteHash, { ...invitation, role });
+    }
+    return this.beginEnrollment({ kind: "join", role, inviteHash });
   }
 
   async renderAdmin(request: Request): Promise<Response> {
-    const context = await this.readAdminSession(request);
+    const context = await this.readHumanSession(request);
     if (!context) {
       return new Response(null, {
         status: 302,
-        headers: { location: new URL("/admin/login", this.config.publicBaseUrl).href, "cache-control": "no-store" },
+        headers: { location: new URL("/user", this.config.publicBaseUrl).href, "cache-control": "no-store" },
       });
     }
+    if (context.user.role !== "admin") return jsonResponse({ error: "admin_required" }, 403);
     return htmlResponse(adminPage(await this.listUsers(), context.session.csrfToken));
   }
 
   async createInvite(request: Request): Promise<Response> {
     const context = await this.requireAdminPost(request);
     if (context instanceof Response) return context;
-    const role = context.fields.get("role");
-    if (!isRole(role)) return jsonResponse({ error: "invalid_role" }, 400);
+    const requestedRole = context.fields.get("role");
+    if (requestedRole !== null && requestedRole !== "user") {
+      return jsonResponse({ error: "invalid_role" }, 400);
+    }
+    const role: UpdateControlRole = "user";
     const token = randomToken();
     const now = new Date().toISOString();
     const invitation: InvitationRecord = {
@@ -507,20 +568,36 @@ export class UpdateControlIdentityOAuth {
   }
 
   async logoutAdmin(request: Request): Promise<Response> {
-    const context = await this.requireAdminPost(request);
-    if (context instanceof Response) return context;
-    const token = readCookie(request.headers.get("cookie"), "update_control_admin_session");
-    if (token && isOpaqueToken(token)) {
-      await this.storage.delete(ADMIN_SESSION_PREFIX + await sha256Base64Url(token));
+    return this.logoutUser(request);
+  }
+
+  async logoutUser(request: Request): Promise<Response> {
+    if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
+    const context = await this.readHumanSession(request);
+    if (!context) return jsonResponse({ error: "session_required" }, 401);
+    const mediaType = (request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType !== "application/x-www-form-urlencoded") {
+      return jsonResponse({ error: "invalid_content_type" }, 415);
     }
-    return new Response(null, {
+    let fields: URLSearchParams;
+    try {
+      fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
+    } catch {
+      return jsonResponse({ error: "invalid_request" }, 400);
+    }
+    const csrf = fields.get("csrf") ?? "";
+    if (!isOpaqueToken(csrf) || !await constantTimeTextEquals(csrf, context.session.csrfToken)) {
+      return jsonResponse({ error: "csrf_rejected" }, 403);
+    }
+    await this.storage.delete(context.key);
+    const response = new Response(null, {
       status: 303,
-      headers: {
-        location: "/admin",
-        "set-cookie": "update_control_admin_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
-        "cache-control": "no-store",
-      },
+      headers: { location: "/user", "cache-control": "no-store" },
     });
+    response.headers.append("set-cookie", expiredCookie(HUMAN_SESSION_COOKIE));
+    response.headers.append("set-cookie", expiredCookie(LEGACY_ADMIN_SESSION_COOKIE));
+    response.headers.append("set-cookie", expiredCookie(LOGIN_STATE_COOKIE));
+    return response;
   }
 
   async deleteOAuthState(limit = 4096): Promise<{ deleted: number; complete: boolean }> {
@@ -572,15 +649,85 @@ export class UpdateControlIdentityOAuth {
     ));
   }
 
-  private async beginAuthorization(request: Request): Promise<Response> {
-    const fields = new URL(request.url).searchParams;
+
+
+  private async completeUserLogin(request: Request): Promise<Response> {
+    if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
+    const mediaType = (request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType !== "application/x-www-form-urlencoded") {
+      return jsonResponse({ error: "invalid_content_type" }, 415);
+    }
+    let fields: URLSearchParams;
+    try {
+      fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
+    } catch {
+      return jsonResponse({ error: "invalid_request" }, 400);
+    }
+    const state = fields.get("state") ?? "";
+    const loginState = readCookie(request.headers.get("cookie"), LOGIN_STATE_COOKIE);
+    if (!isOpaqueToken(state) || loginState !== state) {
+      return jsonResponse({ error: "csrf_rejected" }, 403);
+    }
+    const pendingKey = LOGIN_PENDING_PREFIX + state;
+    const pendingValue = await this.storage.get<unknown>(pendingKey);
+    if (!isPendingLogin(pendingValue) || pendingValue.state !== state ||
+        pendingValue.expiresAtMs <= Date.now()) {
+      await this.storage.delete(pendingKey);
+      return jsonResponse({ error: "authorization_expired" }, 400);
+    }
+
+    const email = normalizeEmail(fields.get("email") ?? "");
+    const code = normalizeVerificationCode(fields.get("code") ?? "");
+    if (!isBootstrapAdminEmail(email) || !code) {
+      return jsonResponse({ error: "invalid_credentials" }, 401);
+    }
+    const user = await this.authenticateLocalUser(email, code);
+    if (!user || user.status !== "active") return jsonResponse({ error: "invalid_credentials" }, 401);
+
+    if (pendingValue.kind === "admin" && user.role !== "admin") {
+      await this.storage.delete(pendingKey);
+      return jsonResponse({ error: "admin_required" }, 403);
+    }
+
+    let response: Response;
+    if (pendingValue.kind === "oauth" || pendingValue.kind === "mcp") {
+      response = await this.completeAuthorization(state, pendingValue, user);
+    } else {
+      await this.storage.delete(pendingKey);
+      response = new Response(null, {
+        status: 303,
+        headers: {
+          location: pendingValue.kind === "admin" ? "/admin" : "/user",
+          "cache-control": "no-store",
+        },
+      });
+    }
+    return this.createHumanSession(user, response);
+  }
+
+  private async handleAuthorization(request: Request): Promise<Response> {
+    let fields: URLSearchParams;
+    if (request.method === "GET") {
+      fields = new URL(request.url).searchParams;
+    } else {
+      const mediaType = (request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase();
+      if (mediaType !== "application/x-www-form-urlencoded") {
+        return jsonResponse({ error: "invalid_content_type" }, 415);
+      }
+      try {
+        fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
+      } catch {
+        return jsonResponse({ error: "invalid_request" }, 400);
+      }
+    }
     const validated = await this.validateAuthorizationRequest(fields);
     if (validated instanceof Response) return validated;
+
     const state = randomToken();
     const pending: PendingLogin = {
       version: 1,
       state,
-      kind: "mcp",
+      kind: "oauth",
       clientId: validated.clientId,
       redirectUri: validated.redirectUri,
       codeChallenge: validated.codeChallenge,
@@ -590,32 +737,34 @@ export class UpdateControlIdentityOAuth {
       expiresAtMs: Date.now() + LOGIN_PENDING_TTL_MS,
     };
     await this.storage.put(LOGIN_PENDING_PREFIX + state, pending);
-    return htmlResponse(loginPage(state, "/authorize", "Authorize MCP V3 Update Center"));
+
+    const human = await this.readHumanSession(request);
+    if (human) return this.completeAuthorization(state, pending, human.user);
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: new URL("/user", this.config.publicBaseUrl).href,
+        "set-cookie": cookieHeader(LOGIN_STATE_COOKIE, state, LOGIN_STATE_TTL_SECONDS),
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+      },
+    });
   }
 
-  private async completeLogin(request: Request, expectedKind: "mcp" | "admin"): Promise<Response> {
-    const fields = new URLSearchParams(await readBoundedText(request, 16 * 1024));
-    const state = fields.get("state") ?? "";
-    const email = normalizeEmail(fields.get("email") ?? "");
-    const code = normalizeVerificationCode(fields.get("code") ?? "");
-    if (!isOpaqueToken(state) || !isBootstrapAdminEmail(email) || !code) {
-      return jsonResponse({ error: "invalid_credentials" }, 401);
-    }
+  private async completeAuthorization(
+    state: string,
+    pendingValue: PendingLogin,
+    user: UpdateControlUser,
+  ): Promise<Response> {
     const pendingKey = LOGIN_PENDING_PREFIX + state;
-    const pending = await this.storage.get<PendingLogin>(pendingKey);
-    if (!isPendingLogin(pending) || pending.kind !== expectedKind || pending.expiresAtMs <= Date.now()) {
+    const pending = await this.storage.get<unknown>(pendingKey);
+    if (!isPendingLogin(pending) || pending.state !== state ||
+        pending.expiresAtMs <= Date.now() ||
+        (pending.kind !== "oauth" && pending.kind !== "mcp")) {
       await this.storage.delete(pendingKey);
       return jsonResponse({ error: "authorization_expired" }, 400);
     }
-    const user = await this.authenticateLocalUser(email, code);
-    if (!user || user.status !== "active") return jsonResponse({ error: "invalid_credentials" }, 401);
-
-    if (expectedKind === "admin") {
-      await this.storage.delete(pendingKey);
-      if (user.role !== "admin") return jsonResponse({ error: "admin_required" }, 403);
-      return this.createAdminSession(user);
-    }
-
     if (!pending.clientId || !pending.redirectUri || !pending.codeChallenge ||
         !pending.scopes || !pending.resource) {
       await this.storage.delete(pendingKey);
@@ -741,48 +890,69 @@ export class UpdateControlIdentityOAuth {
     return user;
   }
 
-  private async createAdminSession(user: UpdateControlUser): Promise<Response> {
+  private async createHumanSession(
+    user: UpdateControlUser,
+    response = new Response(null, {
+      status: 303,
+      headers: { location: "/user", "cache-control": "no-store" },
+    }),
+  ): Promise<Response> {
     const token = randomToken();
     const now = new Date().toISOString();
-    const session: AdminSessionRecord = {
+    const session: HumanSessionRecord = {
       version: 1,
       userId: user.id,
       csrfToken: randomToken(),
       createdAt: now,
-      expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS).toISOString(),
+      expiresAt: new Date(Date.now() + HUMAN_SESSION_TTL_MS).toISOString(),
     };
-    await this.storage.put(ADMIN_SESSION_PREFIX + await sha256Base64Url(token), session);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: new URL("/admin", this.config.publicBaseUrl).href,
-        "set-cookie": `update_control_admin_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1000)}`,
-        "cache-control": "no-store",
-      },
-    });
+    await this.storage.put(HUMAN_SESSION_PREFIX + await sha256Base64Url(token), session);
+    response.headers.append(
+      "set-cookie",
+      cookieHeader(HUMAN_SESSION_COOKIE, token, Math.floor(HUMAN_SESSION_TTL_MS / 1000)),
+    );
+    response.headers.append("set-cookie", expiredCookie(LOGIN_STATE_COOKIE));
+    return response;
   }
 
-  private async readAdminSession(
-    request: Request,
-  ): Promise<{ user: UpdateControlUser; session: AdminSessionRecord } | null> {
-    const token = readCookie(request.headers.get("cookie"), "update_control_admin_session");
+  private async readHumanSession(request: Request): Promise<HumanSessionContext | null> {
+    const requestCookie = request.headers.get("cookie");
+    const currentToken = readCookie(requestCookie, HUMAN_SESSION_COOKIE);
+    const legacyToken = currentToken ? null : readCookie(requestCookie, LEGACY_ADMIN_SESSION_COOKIE);
+    const token = currentToken ?? legacyToken;
     if (!token || !isOpaqueToken(token)) return null;
-    const key = ADMIN_SESSION_PREFIX + await sha256Base64Url(token);
-    const session = await this.storage.get<AdminSessionRecord>(key);
-    if (!isAdminSessionRecord(session) || Date.parse(session.expiresAt) <= Date.now()) {
+
+    const key = currentToken
+      ? HUMAN_SESSION_PREFIX + await sha256Base64Url(token)
+      : ADMIN_SESSION_PREFIX + await sha256Base64Url(token);
+    const session = await this.storage.get<unknown>(key);
+    if (!isHumanSessionRecord(session) || Date.parse(session.expiresAt) <= Date.now()) {
       await this.storage.delete(key);
       return null;
     }
     const user = await this.getUser(session.userId);
-    if (!user || user.status !== "active" || user.role !== "admin") return null;
-    return { user, session };
+    if (!user || user.status !== "active" || (legacyToken && user.role !== "admin")) {
+      await this.storage.delete(key);
+      return null;
+    }
+    return {
+      user,
+      session,
+      key,
+      cookieName: currentToken ? HUMAN_SESSION_COOKIE : LEGACY_ADMIN_SESSION_COOKIE,
+    };
+  }
+
+  private async readAdminSession(request: Request): Promise<HumanSessionContext | null> {
+    const context = await this.readHumanSession(request);
+    return context?.user.role === "admin" ? context : null;
   }
 
   private async requireAdminPost(
     request: Request,
   ): Promise<Response | {
     user: UpdateControlUser;
-    session: AdminSessionRecord;
+    session: HumanSessionRecord;
     fields: URLSearchParams;
   }> {
     if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
@@ -1058,7 +1228,16 @@ export class UpdateControlIdentityOAuth {
 
   private async getUser(userId: string): Promise<UpdateControlUser | null> {
     const value = await this.storage.get<unknown>(USER_PREFIX + userId);
-    return isUpdateControlUser(value) ? value : null;
+    if (!isStoredUpdateControlUser(value)) return null;
+    const role = normalizeRole(value.role);
+    if (!role) return null;
+    const user = { ...value, role } as UpdateControlUser;
+    if (value.role !== role) {
+      const migrated = { ...user, updatedAt: new Date().toISOString() };
+      await this.storage.put(USER_PREFIX + userId, migrated);
+      return migrated;
+    }
+    return user;
   }
 
   private async encryptionKey(): Promise<CryptoKey> {
@@ -1127,7 +1306,23 @@ function createProvisioningUri(secret: string): string {
 }
 
 function loginPage(state: string, action: string, title: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)}</title></head><body><main><h1>${htmlEscape(title)}</h1><form method="post" action="${htmlEscape(action)}"><input type="hidden" name="state" value="${htmlEscape(state)}"><label>Email <input name="email" type="email" autocomplete="username" required></label><label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Continue</button></form></main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>${htmlEscape(title)}</title></head><body><main><h1>${htmlEscape(title)}</h1><form method="post" action="${htmlEscape(action)}"><input type="hidden" name="state" value="${htmlEscape(state)}"><label>Email <input name="email" type="email" autocomplete="username" required></label><label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Continue</button></form></main></body></html>`;
+}
+
+function userPage(user: UpdateControlUser, csrfToken: string): string {
+  const adminLink = user.role === "admin" ? '<p><a href="/admin">Admin</a></p>' : "";
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Update Center session</title></head><body><main><h1>Signed in</h1><p>' +
+    htmlEscape(user.displayName) + '</p><p>Role: ' + htmlEscape(user.role) + '</p>' + adminLink +
+    '<form method="post" action="/user/logout"><input type="hidden" name="csrf" value="' +
+    htmlEscape(csrfToken) + '"><button type="submit">Sign out</button></form></main></body></html>';
+}
+
+function cookieHeader(name: string, value: string, maxAgeSeconds: number): string {
+  return name + "=" + value + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + maxAgeSeconds;
+}
+
+function expiredCookie(name: string): string {
+  return name + "=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
 }
 
 function enrollmentPage(
@@ -1148,14 +1343,14 @@ function enrollmentCompletedPage(user: UpdateControlUser, recoveryCodes: string[
 
 function adminPage(users: UpdateControlUser[], csrfToken: string): string {
   const rows = users.map((user) => {
-    const roleOptions = ["admin", "operator", "viewer"].map((role) =>
+    const roleOptions = ["admin", "user"].map((role) =>
       `<option value="${role}"${user.role === role ? " selected" : ""}>${role}</option>`).join("");
     const controls = user.status === "active"
       ? `<form method="post" action="/admin/users/${encodeURIComponent(user.id)}/role"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role">${roleOptions}</select><button type="submit">Change role</button></form><form method="post" action="/admin/users/${encodeURIComponent(user.id)}/revoke"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Revoke</button></form>`
       : "";
     return `<tr><td>${htmlEscape(user.displayName)}</td><td>${htmlEscape(user.email)}</td><td>${htmlEscape(user.role)}</td><td>${htmlEscape(user.status)}</td><td>${controls}</td></tr>`;
   }).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 Update Center admin</title></head><body><main><h1>MCP V3 Update Center</h1><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table><h2>Invite user</h2><form method="post" action="/admin/invites"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><select name="role"><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select><button type="submit">Create invite</button></form><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Sign out</button></form></main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 Update Center admin</title></head><body><main><h1>MCP V3 Update Center</h1><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table><h2>Invite user</h2><form method="post" action="/admin/invites"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><input type="hidden" name="role" value="user"><button type="submit">Create invite</button></form><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${htmlEscape(csrfToken)}"><button type="submit">Sign out</button></form></main></body></html>`;
 }
 
 async function verifyTotp(
@@ -1472,8 +1667,9 @@ function isOAuthClient(value: unknown): value is OAuthClient {
 
 function isPendingLogin(value: unknown): value is PendingLogin {
   if (!isRecord(value) || value.version !== 1 || typeof value.state !== "string" ||
-      (value.kind !== "mcp" && value.kind !== "admin") || !Number.isFinite(value.expiresAtMs)) return false;
-  if (value.kind === "mcp") {
+      (value.kind !== "mcp" && value.kind !== "oauth" && value.kind !== "admin" && value.kind !== "user") ||
+      !Number.isFinite(value.expiresAtMs)) return false;
+  if (value.kind === "mcp" || value.kind === "oauth") {
     return typeof value.clientId === "string" &&
       typeof value.redirectUri === "string" &&
       typeof value.codeChallenge === "string" &&
@@ -1490,7 +1686,7 @@ function isPendingEnrollment(value: unknown): value is PendingEnrollment {
     value.version === 1 &&
     typeof value.state === "string" &&
     (value.kind === "bootstrap" || value.kind === "join") &&
-    isRole(value.role) &&
+    isStoredRole(value.role) &&
     isEncryptedSecret(value.encryptedSecret) &&
     Number.isFinite(value.expiresAtMs) &&
     (value.inviteHash === undefined || typeof value.inviteHash === "string");
@@ -1541,14 +1737,16 @@ function isBootstrapOperation(value: unknown): value is BootstrapOperation {
       (typeof value.completedAt === "string" && Number.isFinite(Date.parse(value.completedAt))));
 }
 
-function isUpdateControlUser(value: unknown): value is UpdateControlUser {
+type StoredUpdateControlUser = Omit<UpdateControlUser, "role"> & { role: string };
+
+function isStoredUpdateControlUser(value: unknown): value is StoredUpdateControlUser {
   return isRecord(value) &&
     value.version === 1 &&
     typeof value.id === "string" &&
     /^usr_[0-9a-f-]{36}$/iu.test(value.id) &&
     typeof value.displayName === "string" &&
     typeof value.email === "string" &&
-    (value.role === "admin" || value.role === "operator" || value.role === "viewer") &&
+    typeof value.role === "string" &&
     (value.status === "active" || value.status === "revoked") &&
     value.provider === "local-totp" &&
     typeof value.createdAt === "string" &&
@@ -1597,7 +1795,7 @@ function isAccessClaims(value: unknown): value is AccessClaims {
 function isInvitationRecord(value: unknown): value is InvitationRecord {
   return isRecord(value) &&
     value.version === 1 &&
-    isRole(value.role) &&
+    isStoredRole(value.role) &&
     typeof value.createdByUserId === "string" &&
     typeof value.createdAt === "string" &&
     Number.isFinite(Date.parse(value.createdAt)) &&
@@ -1605,7 +1803,7 @@ function isInvitationRecord(value: unknown): value is InvitationRecord {
     Number.isFinite(Date.parse(value.expiresAt));
 }
 
-function isAdminSessionRecord(value: unknown): value is AdminSessionRecord {
+function isHumanSessionRecord(value: unknown): value is HumanSessionRecord {
   return isRecord(value) &&
     value.version === 1 &&
     typeof value.userId === "string" &&
@@ -1618,7 +1816,17 @@ function isAdminSessionRecord(value: unknown): value is AdminSessionRecord {
 }
 
 function isRole(value: unknown): value is UpdateControlRole {
-  return value === "admin" || value === "operator" || value === "viewer";
+  return value === "admin" || value === "user";
+}
+
+function isStoredRole(value: unknown): value is StoredUpdateControlRole {
+  return value === "admin" || value === "user" || value === "operator" || value === "viewer";
+}
+
+function normalizeRole(value: unknown): UpdateControlRole | null {
+  if (value === "admin") return "admin";
+  if (value === "user" || value === "operator" || value === "viewer") return "user";
+  return null;
 }
 
 function isBootstrapAdminEmail(value: string): boolean {
