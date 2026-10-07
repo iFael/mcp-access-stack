@@ -1,0 +1,4 @@
+# MCP V3 typed Linux service-control capability.
+# Keep this list exact: no wildcards, no shell, no stop/restart/reload actions.
+mcp-access-stack ALL=(root) NOPASSWD: /usr/bin/systemctl start mcp-v3-oracle-read-api.service
+mcp-access-stack ALL=(root) NOPASSWD: /usr/bin/systemctl start mcp-v3-update-control-oracle-channel.service

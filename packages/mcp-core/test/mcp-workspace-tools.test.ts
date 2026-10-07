@@ -247,6 +247,42 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async serviceGetStatus(): Promise<import("@vs-code-gpt/shared").ManagedServiceSnapshot> {
+    this.calls.push("serviceGetStatus");
+    return {
+      serviceName: "mcp-v3-update-control-oracle-channel.service",
+      loadState: "loaded",
+      unitFileState: "enabled",
+      activeState: "inactive",
+      subState: "dead",
+      result: "success",
+      mainPid: 0,
+      nRestarts: 0,
+      execMainStatus: 0,
+      stateChangeTimestamp: "Tue 2026-10-06 00:22:26 UTC",
+    };
+  }
+
+  async serviceStart(
+    input: import("@vs-code-gpt/shared").ServiceStartInput,
+  ): Promise<import("@vs-code-gpt/shared").ServiceStartResult> {
+    this.calls.push("serviceStart");
+    const before = await this.serviceGetStatus();
+    return {
+      status: "started",
+      operationId: input.operationId,
+      serviceName: input.serviceName,
+      before: { ...before, serviceName: input.serviceName },
+      after: {
+        ...before,
+        serviceName: input.serviceName,
+        activeState: "active",
+        subState: "running",
+        mainPid: 4242,
+      },
+    };
+  }
+
   async searchFiles(input: SearchFilesInput): Promise<SearchFilesResult> {
     this.calls.push("searchFiles");
     if (this.searchFailures.has(input.query)) {
@@ -453,6 +489,63 @@ describe("registerWorkspaceTools", () => {
       "list_workspaces",
       "read_file",
       "start_background_task",
+    ]);
+  });
+
+  it("publishes bounded managed-service status and start tools", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["service_get_status", "service_start"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+
+    const tools = registeredTools(server);
+    expect(tools["service_get_status"]?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    expect(tools["service_start"]?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+    });
+
+    const status = await tools["service_get_status"]!.handler(
+      {
+        workspaceId: "ws",
+        serviceName: "mcp-v3-update-control-oracle-channel.service",
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(status.structuredContent).toMatchObject({
+      activeState: "inactive",
+      unitFileState: "enabled",
+    });
+
+    const started = await tools["service_start"]!.handler(
+      {
+        workspaceId: "ws",
+        serviceName: "mcp-v3-update-control-oracle-channel.service",
+        operationId: "123e4567-e89b-42d3-a456-426614174000",
+        expectedActiveState: "inactive",
+        expectedUnitFileState: "enabled",
+      },
+      { signal: new AbortController().signal },
+    );
+    expect(started.structuredContent).toMatchObject({
+      status: "started",
+      serviceName: "mcp-v3-update-control-oracle-channel.service",
+      after: { activeState: "active", mainPid: 4242 },
+    });
+    expect(executor.calls).toEqual([
+      "serviceGetStatus",
+      "serviceStart",
+      "serviceGetStatus",
     ]);
   });
 
@@ -1674,7 +1767,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes eighteen source-control tools inside the 47-tool workspace surface", () => {
+  it("publishes eighteen source-control tools inside the 49-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1696,8 +1789,8 @@ describe("registerSourceControlTools", () => {
       "github_merge_pull_request",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(18);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(47);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(47);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(49);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(49);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

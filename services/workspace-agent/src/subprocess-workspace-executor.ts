@@ -76,6 +76,15 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("runCommand"));
   }
 
+  serviceGetStatus(...args: Parameters<WorkspaceExecutor["serviceGetStatus"]>) {
+    return this.fallback?.serviceGetStatus(...args) ??
+      Promise.reject(this.notImplemented("serviceGetStatus"));
+  }
+
+  serviceStart(...args: Parameters<WorkspaceExecutor["serviceStart"]>) {
+    return this.fallback?.serviceStart(...args) ??
+      Promise.reject(this.notImplemented("serviceStart"));
+  }
 
   searchFiles(...args: Parameters<WorkspaceExecutor["searchFiles"]>) {
     return this.fallback?.searchFiles(...args) ??

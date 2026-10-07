@@ -78,6 +78,12 @@ import {
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
 import {
+  managedServiceSnapshotSchema,
+  serviceGetStatusInputSchema,
+  serviceStartInputSchema,
+  serviceStartResultSchema,
+} from "./service-control-contracts.js";
+import {
   gitCommitInputSchema,
   gitCommitResultSchema,
   gitCommitPathsInputSchema,
@@ -211,6 +217,8 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "get_release_state",
   "prepare_release",
   "promote_release",
+  "service_get_status",
+  "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
   "run_command",
@@ -1280,6 +1288,90 @@ export function registerWorkspaceTools(
           );
           return {
             content: [{ type: "text", text: structuredContent.status === "confirmation_required" ? "Release promotion requires confirmation." : `Release cutover started with request ${structuredContent.requestId}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("service_get_status", include)) {
+    server.registerTool(
+      "service_get_status",
+      {
+        title: "Get managed Linux service status",
+        description:
+          "Reads bounded status for one allowlisted MCP V3 Linux service. " +
+          "Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
+        inputSchema: serviceGetStatusInputSchema,
+        outputSchema: managedServiceSnapshotSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = managedServiceSnapshotSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.serviceGetStatus(input, context),
+            ),
+          );
+          return {
+            content: [{
+              type: "text",
+              text: `${structuredContent.serviceName}: ${structuredContent.activeState}/${structuredContent.subState}; enabled=${structuredContent.unitFileState}; pid=${structuredContent.mainPid}.`,
+            }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("service_start", include)) {
+    server.registerTool(
+      "service_start",
+      {
+        title: "Start managed Linux service",
+        description:
+          "Starts one allowlisted MCP V3 Linux service through a fixed privileged systemctl path. " +
+          "Requires an explicit operationId and exact expected inactive/enabled state; it cannot stop, restart, reload, enable, disable, target arbitrary units, or execute shell text. " +
+          "If the outcome is uncertain, reconcile with service_get_status before any retry.",
+        inputSchema: serviceStartInputSchema,
+        outputSchema: serviceStartResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: false,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = serviceStartResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.serviceStart(input, context),
+            ),
+          );
+          return {
+            content: [{
+              type: "text",
+              text: `Started ${structuredContent.serviceName}; operationId=${structuredContent.operationId}; state=${structuredContent.after.activeState}/${structuredContent.after.subState}; pid=${structuredContent.after.mainPid}.`,
+            }],
             structuredContent,
           };
         } catch (error) {

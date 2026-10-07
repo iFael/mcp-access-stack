@@ -23,6 +23,8 @@ import {
   readBinaryFileInputSchema,
   runWorkspaceValidationInputSchema,
   runCommandInputSchema,
+  serviceGetStatusInputSchema,
+  serviceStartInputSchema,
   writeFileInputSchema,
   searchFilesInputSchema,
   type BackgroundTaskListResult,
@@ -67,6 +69,10 @@ import {
   type RunWorkspaceValidationResult,
   type RunCommandInput,
   type RunCommandResult,
+  type ManagedServiceSnapshot,
+  type ServiceGetStatusInput,
+  type ServiceStartInput,
+  type ServiceStartResult,
   type SearchFilesInput,
   type SearchFilesResult,
   type WriteFileInput,
@@ -160,6 +166,7 @@ import { GitService } from "./git/service.js";
 import { CommandConfirmationRegistry } from "./shell/confirmation.js";
 import { ShellService } from "./shell/service.js";
 import type { ElevationBroker } from "./shell/elevation-broker.js";
+import { LinuxServiceControlService } from "./service-control/service.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
@@ -213,6 +220,7 @@ export class LocalAgent {
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
   private readonly releaseLifecycleService: ReleaseLifecycleService;
+  private readonly serviceControlService = new LinuxServiceControlService();
   private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
   private readonly injectedGitOriginResolver: GitOriginResolver | undefined;
@@ -527,6 +535,41 @@ export class LocalAgent {
       (parsed) => (parsed.cwd === undefined ? {} : { path: parsed.cwd }),
       (workspace, parsed, activeContext) =>
         this.shellService.runCommand(workspace, parsed, activeContext),
+    );
+  }
+
+  async serviceGetStatus(
+    input: ServiceGetStatusInput,
+    context: OperationContext = {},
+  ): Promise<ManagedServiceSnapshot> {
+    return this.runValidatedAudited(
+      "serviceGetStatus",
+      "read",
+      serviceGetStatusInputSchema,
+      input,
+      context,
+      (parsed) => ({ targetResource: parsed.serviceName }),
+      (_workspace, parsed, activeContext) =>
+        this.serviceControlService.getStatus(parsed.serviceName, activeContext.signal),
+    );
+  }
+
+  async serviceStart(
+    input: ServiceStartInput,
+    context: OperationContext = {},
+  ): Promise<ServiceStartResult> {
+    return this.runValidatedAudited(
+      "serviceStart",
+      "shell",
+      serviceStartInputSchema,
+      input,
+      context,
+      (parsed) => ({
+        targetResource: parsed.serviceName,
+        query: parsed.operationId,
+      }),
+      (_workspace, parsed, activeContext) =>
+        this.serviceControlService.start(parsed, activeContext.signal),
     );
   }
 

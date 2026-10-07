@@ -49,6 +49,12 @@ import type {
   WriteFileResult,
   WorkspaceSummary,
 } from "./contracts.js";
+import type {
+  ManagedServiceSnapshot,
+  ServiceGetStatusInput,
+  ServiceStartInput,
+  ServiceStartResult,
+} from "./service-control-contracts.js";
 
 /** Operations that may move to a worker/subprocess if the extension host is impacted. */
 export const HEAVY_WORKSPACE_OPERATIONS = [
@@ -94,6 +100,14 @@ export interface WorkspaceExecutor {
     context?: OperationContext,
   ): Promise<RunWorkspaceValidationResult>;
   runCommand(input: RunCommandInput, context?: OperationContext): Promise<RunCommandResult>;
+  serviceGetStatus(
+    input: ServiceGetStatusInput,
+    context?: OperationContext,
+  ): Promise<ManagedServiceSnapshot>;
+  serviceStart(
+    input: ServiceStartInput,
+    context?: OperationContext,
+  ): Promise<ServiceStartResult>;
   searchFiles(input: SearchFilesInput, context?: OperationContext): Promise<SearchFilesResult>;
   inspectGit(input: InspectGitInput, context?: OperationContext): Promise<InspectGitResult>;
   getWorkspaceContext(
