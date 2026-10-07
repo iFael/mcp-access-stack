@@ -65,7 +65,7 @@ async function registerClient(controller: UpdateControlAuthController): Promise<
 async function beginMcpAuthorization(controller: UpdateControlAuthController, clientId: string) {
   const verifier = "v".repeat(64);
   const challenge = await sha256Base64Url(verifier);
-  const url = new URL("/authorize", BASE_URL);
+  const url = new URL("/oauth", BASE_URL);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -77,8 +77,14 @@ async function beginMcpAuthorization(controller: UpdateControlAuthController, cl
     state: "chatgpt-state",
   }).toString();
   const response = await controller.fetch(new Request(url));
-  expect(response.status).toBe(200);
-  return { state: hiddenState(await response.text()), verifier };
+  expect(response.status).toBe(302);
+  expect(response.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
+  const loginCookie = cookieFrom(response, "update_control_login");
+  const loginPage = await controller.fetch(new Request(new URL("/user", BASE_URL), {
+    headers: { cookie: loginCookie },
+  }));
+  expect(loginPage.status).toBe(200);
+  return { state: hiddenState(await loginPage.text()), verifier, loginCookie };
 }
 
 async function form(
@@ -107,9 +113,8 @@ async function enroll(
   expect(page.status).toBe(200);
   const html = await page.text();
   const state = hiddenState(html);
-  const provisioning = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]?.replaceAll("&amp;", "&");
-  expect(provisioning).toContain("otpauth://totp/");
-  const secret = new URL(provisioning!).searchParams.get("secret")!;
+  const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
+  expect(secret).toMatch(/^[A-Z2-7]{32}$/u);
   const response = await form(controller, "/enroll", {
     state,
     email,
@@ -130,23 +135,28 @@ async function createFirstAdmin(controller: UpdateControlAuthController) {
   return enroll(controller, new URL("/enroll", BASE_URL).href, "rafael@example.com", "Rafael");
 }
 
+async function humanLogin(
+  controller: UpdateControlAuthController,
+  email: string,
+  code: string,
+): Promise<Response> {
+  const begin = await controller.fetch(new Request(new URL("/user", BASE_URL)));
+  expect(begin.status).toBe(200);
+  const state = hiddenState(await begin.text());
+  const loginCookie = cookieFrom(begin, "update_control_login");
+  return form(controller, "/user", { state, email, code }, loginCookie);
+}
+
 async function adminLogin(
   controller: UpdateControlAuthController,
   code: string,
 ): Promise<Response> {
-  const begin = await controller.fetch(new Request(new URL("/admin/login", BASE_URL)));
-  expect(begin.status).toBe(200);
-  const state = hiddenState(await begin.text());
-  return form(controller, "/admin/login", {
-    state,
-    email: "rafael@example.com",
-    code,
-  });
+  return humanLogin(controller, "rafael@example.com", code);
 }
 
-function cookieFrom(response: Response): string {
+function cookieFrom(response: Response, name = "update_control_session"): string {
   const pair = (response.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
-  expect(pair).toMatch(/^update_control_admin_session=/u);
+  expect(pair).toMatch(new RegExp("^" + name + "="));
   return pair;
 }
 
@@ -168,8 +178,8 @@ describe("Update Control multi-user local admin surface", () => {
     expect(adminEnrollment.recoveryCodes).toHaveLength(8);
 
     const login = await adminLogin(controller, adminEnrollment.recoveryCodes[0]!);
-    expect(login.status).toBe(302);
-    expect(login.headers.get("location")).toBe(new URL("/admin", BASE_URL).href);
+    expect(login.status).toBe(303);
+    expect(login.headers.get("location")).toBe("/user");
     const cookie = cookieFrom(login);
 
     const firstPage = await adminPage(controller, cookie);
@@ -184,8 +194,14 @@ describe("Update Control multi-user local admin surface", () => {
 
     const invite = await form(controller, "/admin/invites", {
       csrf: firstPage.csrf,
+      role: "user",
+    }, cookie);
+    const rejectedLegacyInvite = await form(controller, "/admin/invites", {
+      csrf: firstPage.csrf,
       role: "viewer",
     }, cookie);
+    expect(rejectedLegacyInvite.status).toBe(400);
+    expect(await rejectedLegacyInvite.json()).toEqual({ error: "invalid_role" });
     expect(invite.status).toBe(200);
     const inviteHtml = await invite.text();
     const joinUrl = /href="(https:[^"]+\/join\?invite=[^"]+)"/u.exec(inviteHtml)?.[1];
@@ -198,15 +214,26 @@ describe("Update Control multi-user local admin surface", () => {
     expect(replay.status).toBe(400);
     expect(await replay.json()).toEqual({ error: "invalid_invite" });
 
-    const viewerLoginBegin = await controller.fetch(new Request(new URL("/admin/login", BASE_URL)));
-    const viewerState = hiddenState(await viewerLoginBegin.text());
-    const viewerLogin = await form(controller, "/admin/login", {
-      state: viewerState,
-      email: "felipe@example.com",
-      code: viewerEnrollment.recoveryCodes[0]!,
-    });
-    expect(viewerLogin.status).toBe(403);
-    expect(await viewerLogin.json()).toEqual({ error: "admin_required" });
+    const viewerLogin = await humanLogin(
+      controller,
+      "felipe@example.com",
+      viewerEnrollment.recoveryCodes[0]!,
+    );
+    expect(viewerLogin.status).toBe(303);
+    const viewerCookie = cookieFrom(viewerLogin);
+    const deniedAdmin = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie: viewerCookie },
+    }));
+    expect(deniedAdmin.status).toBe(403);
+    const cookieOnlyMcp = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
+      method: "POST",
+      headers: {
+        cookie: viewerCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(cookieOnlyMcp.status).toBe(401);
 
     const viewer = [...storage.values.values()].find((value) =>
       typeof value === "object" && value !== null &&
@@ -219,12 +246,256 @@ describe("Update Control multi-user local admin surface", () => {
     const roleChanged = await form(
       controller,
       "/admin/users/" + viewer!.id + "/role",
-      { csrf: refreshedPage.csrf, role: "operator" },
+      { csrf: refreshedPage.csrf, role: "admin" },
       cookie,
     );
-    expect(roleChanged.status).toBe(303);
-    expect((storage.values.get("update-control:identity:user:" + viewer!.id) as { role: string }).role)
-      .toBe("operator");
+    expect(roleChanged.status).toBe(400);
+    expect(await roleChanged.json()).toEqual({ error: "invalid_role" });
+    const viewerKey = "update-control:identity:user:" + viewer!.id;
+    expect((storage.values.get(viewerKey) as { role: string }).role).toBe("user");
+
+    storage.values.set(viewerKey, {
+      ...(storage.values.get(viewerKey) as object),
+      role: "admin",
+    });
+    const staleAdminSession = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie: viewerCookie },
+    }));
+    expect(staleAdminSession.status).toBe(403);
+    expect((storage.values.get(viewerKey) as { role: string }).role).toBe("user");
+  });
+
+  it("stores human session tokens only by hash and requires CSRF to log out", async () => {
+    const { controller, storage } = makeController();
+    const enrollment = await createFirstAdmin(controller);
+    const login = await adminLogin(controller, enrollment.recoveryCodes[0]!);
+    expect(login.status).toBe(303);
+    const cookie = cookieFrom(login);
+    const token = cookie.slice("update_control_session=".length);
+    expect(login.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(login.headers.get("set-cookie")).toContain("Secure");
+    expect(login.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(login.headers.get("set-cookie")).toContain("Path=/");
+
+    const sessionKey = "update-control:identity:session:" + await sha256Base64Url(token);
+    expect(storage.values.has(sessionKey)).toBe(true);
+    expect([...storage.values.keys()].some((key) => key.includes(token))).toBe(false);
+    expect(JSON.stringify([...storage.values.values()])).not.toContain(token);
+
+    const userPage = await controller.fetch(new Request(new URL("/user", BASE_URL), {
+      headers: { cookie },
+    }));
+    expect(userPage.status).toBe(200);
+    const csrf = /name="csrf" value="([^"]+)"/u.exec(await userPage.text())?.[1];
+    expect(csrf).toBeTruthy();
+
+    const rejected = await form(controller, "/user/logout", { csrf: "x".repeat(43) }, cookie);
+    expect(rejected.status).toBe(403);
+    const logout = await form(controller, "/user/logout", { csrf: csrf! }, cookie);
+    expect(logout.status).toBe(303);
+    expect(logout.headers.get("location")).toBe("/user");
+    expect(storage.values.has(sessionKey)).toBe(false);
+
+    const adminAfterLogout = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie },
+    }));
+    expect(adminAfterLogout.status).toBe(302);
+    expect(adminAfterLogout.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
+  });
+
+  it("maps known legacy roles to user and fails closed for unknown roles", async () => {
+    const { controller, storage } = makeController();
+    const adminEnrollment = await createFirstAdmin(controller);
+    const adminCookie = cookieFrom(await adminLogin(controller, adminEnrollment.recoveryCodes[0]!));
+    const page = await adminPage(controller, adminCookie);
+    const invite = await form(controller, "/admin/invites", {
+      csrf: page.csrf,
+      role: "user",
+    }, adminCookie);
+    const joinUrl = /href="(https:[^"]+\/join\?invite=[^"]+)"/u.exec(await invite.text())?.[1]!;
+    const enrolled = await enroll(controller, joinUrl, "felipe@example.com", "Felipe");
+    const user = [...storage.values.values()].find((value) =>
+      typeof value === "object" && value !== null &&
+      "email" in value && value.email === "felipe@example.com" &&
+      "provider" in value && value.provider === "local-totp"
+    ) as { id: string; role: string } | undefined;
+    expect(user?.id).toMatch(/^usr_/u);
+
+    const userKey = "update-control:identity:user:" + user!.id;
+    storage.values.set(userKey, { ...user, role: "operator" });
+    const userLogin = await humanLogin(controller, "felipe@example.com", enrolled.recoveryCodes[0]!);
+    expect(userLogin.status).toBe(303);
+    expect((storage.values.get(userKey) as { role: string }).role).toBe("user");
+    const userCookie = cookieFrom(userLogin);
+    const deniedAdmin = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie: userCookie },
+    }));
+    expect(deniedAdmin.status).toBe(403);
+
+    storage.values.set(userKey, { ...storage.values.get(userKey) as object, role: "unknown" });
+    const unknownRoleAdmin = await controller.fetch(new Request(new URL("/admin", BASE_URL), {
+      headers: { cookie: userCookie },
+    }));
+    expect(unknownRoleAdmin.status).toBe(302);
+    expect(unknownRoleAdmin.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
+  });
+
+  it("reuses the human session at /oauth and keeps the OAuth callback state", async () => {
+    const { controller } = makeController();
+    const enrollment = await createFirstAdmin(controller);
+    const cookie = cookieFrom(await adminLogin(controller, enrollment.recoveryCodes[0]!));
+    const clientId = await registerClient(controller);
+    const url = new URL("/oauth", BASE_URL);
+    url.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: "https://chatgpt.com/connector/oauth/admin-test",
+      code_challenge: "A".repeat(43),
+      code_challenge_method: "S256",
+      scope: "update:read",
+      resource: new URL("/mcp", BASE_URL).href,
+      state: "chatgpt-state",
+    }).toString();
+
+    const response = await controller.fetch(new Request(url, { headers: { cookie } }));
+    expect(response.status).toBe(302);
+    const callback = new URL(response.headers.get("location")!);
+    expect(callback.pathname).toBe("/connector/oauth/admin-test");
+    expect(callback.searchParams.get("state")).toBe("chatgpt-state");
+    expect(callback.searchParams.get("code")).toMatch(/^code-/u);
+  });
+
+  it("accepts only an exact legacy /authorize form for a live MCP transaction", async () => {
+    const { controller, storage } = makeController();
+    const enrollment = await createFirstAdmin(controller);
+    const clientId = await registerClient(controller);
+    const verifier = "v".repeat(64);
+    const redirectUri = "https://chatgpt.com/connector/oauth/admin-test";
+    const resource = new URL("/mcp", BASE_URL).href;
+    const pendingKey = "update-control:oauth:login-pending:";
+    const pendingState = "L".repeat(43);
+    const pending = {
+      version: 1,
+      state: pendingState,
+      kind: "mcp",
+      clientId,
+      redirectUri,
+      codeChallenge: await sha256Base64Url(verifier),
+      scopes: ["update:read"],
+      resource,
+      clientState: "legacy-client-state",
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    const extraFieldState = "E".repeat(43);
+    storage.values.set(pendingKey + extraFieldState, { ...pending, state: extraFieldState });
+    const extraField = await form(controller, "/authorize", {
+      state: extraFieldState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+      extra: "not-legacy",
+    });
+    expect(extraField.status).toBe(400);
+    expect(await extraField.json()).toEqual({ error: "invalid_request" });
+    expect(storage.values.has(pendingKey + extraFieldState)).toBe(true);
+
+    storage.values.set(pendingKey + pendingState, pending);
+    const completed = await form(controller, "/authorize", {
+      state: pendingState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+    });
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("set-cookie")).toContain("update_control_session=");
+    const callback = new URL(completed.headers.get("location")!);
+    expect(callback.origin + callback.pathname).toBe(redirectUri);
+    expect(callback.searchParams.get("state")).toBe("legacy-client-state");
+    expect(callback.searchParams.get("code")).toMatch(/^code-/u);
+    expect(storage.values.has(pendingKey + pendingState)).toBe(false);
+
+    const replay = await form(controller, "/authorize", {
+      state: pendingState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[0]!,
+    });
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toEqual({ error: "invalid_request" });
+    expect([...storage.values.keys()].filter((key) => key.startsWith("update-control:oauth:code:")))
+      .toHaveLength(1);
+
+    const nonMcpState = "N".repeat(43);
+    storage.values.set(pendingKey + nonMcpState, {
+      ...pending,
+      state: nonMcpState,
+      kind: "oauth",
+    });
+    const nonMcp = await form(controller, "/authorize", {
+      state: nonMcpState,
+      email: "rafael@example.com",
+      code: enrollment.recoveryCodes[1]!,
+    });
+    expect(nonMcp.status).toBe(400);
+    expect(await nonMcp.json()).toEqual({ error: "invalid_request" });
+    expect(storage.values.has(pendingKey + nonMcpState)).toBe(true);
+
+    const ordinaryLogin = await humanLogin(
+      controller,
+      "rafael@example.com",
+      enrollment.recoveryCodes[1]!,
+    );
+    expect(ordinaryLogin.status).toBe(303);
+  });
+
+  it("converts legacy admin invitations and pending enrollments to user", async () => {
+    const { controller, storage } = makeController();
+    await createFirstAdmin(controller);
+    const admin = [...storage.values.values()].find((value) =>
+      typeof value === "object" && value !== null &&
+      "email" in value && value.email === "rafael@example.com" &&
+      "provider" in value && value.provider === "local-totp"
+    ) as { id: string; role: string } | undefined;
+    expect(admin?.id).toMatch(/^usr_/u);
+
+    const inviteToken = "I".repeat(43);
+    const inviteKey = "update-control:identity:invite:" + await sha256Base64Url(inviteToken);
+    storage.values.set(inviteKey, {
+      version: 1,
+      role: "admin",
+      createdByUserId: admin!.id,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const joinUrl = new URL("/join", BASE_URL);
+    joinUrl.searchParams.set("invite", inviteToken);
+    const page = await controller.fetch(new Request(joinUrl));
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const state = hiddenState(html);
+    const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
+    expect(secret).toMatch(/^[A-Z2-7]{32}$/u);
+    expect((storage.values.get(inviteKey) as { role: string }).role).toBe("user");
+
+    const pendingKey = "update-control:identity:enrollment:" + state;
+    const pending = storage.values.get(pendingKey) as object;
+    expect((pending as { role: string }).role).toBe("user");
+    storage.values.set(pendingKey, { ...pending, role: "admin" });
+
+    const completed = await form(controller, "/enroll", {
+      state,
+      email: "felipe@example.com",
+      display_name: "Felipe",
+      code: await totp(secret, Date.now()),
+    });
+    expect(completed.status).toBe(200);
+    const invitedUser = [...storage.values.values()].find((value) =>
+      typeof value === "object" && value !== null &&
+      "email" in value && value.email === "felipe@example.com" &&
+      "provider" in value && value.provider === "local-totp"
+    ) as { role: string } | undefined;
+    expect(invitedUser?.role).toBe("user");
+    expect((storage.values.get("update-control:identity:user:" + admin!.id) as { role: string }).role)
+      .toBe("admin");
   });
 
   it("cannot demote or revoke the final admin", async () => {
@@ -242,7 +513,7 @@ describe("Update Control multi-user local admin surface", () => {
     const demote = await form(
       controller,
       "/admin/users/" + admin!.id + "/role",
-      { csrf: page.csrf, role: "viewer" },
+      { csrf: page.csrf, role: "user" },
       cookie,
     );
     expect(demote.status).toBe(409);
@@ -267,20 +538,29 @@ describe("Update Control multi-user local admin surface", () => {
 
     const invite = await form(controller, "/admin/invites", {
       csrf: page.csrf,
-      role: "viewer",
+      role: "user",
     }, cookie);
     const joinUrl = /href="(https:[^"]+\/join\?invite=[^"]+)"/u.exec(await invite.text())?.[1]!;
     const viewerEnrollment = await enroll(controller, joinUrl, "felipe@example.com", "Felipe");
 
     const clientId = await registerClient(controller);
     const started = await beginMcpAuthorization(controller, clientId);
-    const authorized = await form(controller, "/authorize", {
+    const authorized = await form(controller, "/user", {
       state: started.state,
       email: "felipe@example.com",
       code: viewerEnrollment.recoveryCodes[0]!,
-    });
+    }, started.loginCookie);
     expect(authorized.status).toBe(302);
-    const code = new URL(authorized.headers.get("location")!).searchParams.get("code")!;
+    const callback = new URL(authorized.headers.get("location")!);
+    expect(callback.searchParams.get("state")).toBe("chatgpt-state");
+    const replay = await form(controller, "/user", {
+      state: started.state,
+      email: "felipe@example.com",
+      code: viewerEnrollment.recoveryCodes[0]!,
+    }, started.loginCookie);
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toEqual({ error: "authorization_expired" });
+    const code = callback.searchParams.get("code")!;
 
     const tokenResponse = await controller.fetch(new Request(new URL("/token", BASE_URL), {
       method: "POST",

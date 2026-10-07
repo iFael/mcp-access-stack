@@ -39,7 +39,8 @@
     "jest.preset.ts",
     "packages/*/jest.config.ts",
     "services/*/jest.config.ts",
-    "services/update-control-worker/src/**/*.ts"
+    "services/update-control-worker/src/**/*.ts",
+    "services/update-control-worker/src/**/*.tsx"
   ],
   "exclude": [
     "services/browser-worker/dist/**"

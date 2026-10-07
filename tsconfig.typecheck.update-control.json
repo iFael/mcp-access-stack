@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": [
@@ -11,6 +12,7 @@
   "include": [
     "packages/update-control-contract/src/**/*.ts",
     "packages/mcp-owner-auth/src/**/*.ts",
-    "services/update-control-worker/src/**/*.ts"
+    "services/update-control-worker/src/**/*.ts",
+    "services/update-control-worker/src/**/*.tsx"
   ]
 }

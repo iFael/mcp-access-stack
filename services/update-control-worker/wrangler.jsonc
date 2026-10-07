@@ -5,6 +5,9 @@
   "compatibility_date": "2026-08-17",
   "workers_dev": true,
   "preview_urls": false,
+  "assets": {
+    "directory": "./.wrangler/ui-assets"
+  },
   "observability": {
     "logs": {
       "enabled": true,

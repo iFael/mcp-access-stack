@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import type { OwnerOAuthStorage } from "@mcp-access-stack/mcp-owner-auth";
 import { UpdateControlAuthController } from "../../src/auth-state.js";
 
@@ -72,6 +72,7 @@ describe("Update Control authorization boundary", () => {
     expect(metadata.status).toBe(200);
     const body = await metadata.json() as Record<string, unknown>;
     expect(body.scopes_supported).toEqual(["update:read"]);
+    expect(body.authorization_endpoint).toBe(new URL("/oauth", BASE_URL).href);
     expect(JSON.stringify(body)).not.toContain("microsoft");
 
     const mcp = await controller.fetch(new Request(new URL("/mcp", BASE_URL), {
@@ -87,6 +88,58 @@ describe("Update Control authorization boundary", () => {
 
     const persisted = JSON.stringify([...new MemoryStorage().values.entries()]);
     expect(persisted).not.toContain("owner_password");
+  });
+
+  it("emits OAuth stage logs with only allowlisted fields", async () => {
+    const { controller } = makeController();
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await controller.fetch(new Request(new URL(
+        "/token?query_secret=must-not-log",
+        BASE_URL,
+      ), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: "authorization-code-secret",
+          code_verifier: "pkce-verifier-secret",
+          refresh_token: "refresh-token-secret",
+          state: "oauth-state-secret",
+          email: "person@example.com",
+          code_field: "123456",
+        }),
+      }));
+      const eventArgs = log.mock.calls.find(([event]) => event === "update_control_auth_stage");
+      expect(eventArgs).toBeTruthy();
+      const event = JSON.parse(String(eventArgs?.[1])) as Record<string, unknown>;
+      expect(Object.keys(event).sort()).toEqual([
+        "durationMs",
+        "flowId",
+        "method",
+        "pathname",
+        "result",
+        "stage",
+        "status",
+      ]);
+      expect(event.pathname).toBe("/token");
+      expect(event.method).toBe("POST");
+      const serialized = JSON.stringify(eventArgs);
+      for (const secret of [
+        "query_secret",
+        "must-not-log",
+        "authorization-code-secret",
+        "pkce-verifier-secret",
+        "refresh-token-secret",
+        "oauth-state-secret",
+        "person@example.com",
+        "123456",
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("blocks normal traffic fail-closed while a reprovision operation is unresolved", async () => {
@@ -117,7 +170,7 @@ describe("Update Control authorization boundary", () => {
     }));
     expect(registration.status).toBe(201);
     const clientId = (await registration.json() as { client_id: string }).client_id;
-    const authorize = new URL("/authorize", BASE_URL);
+    const authorize = new URL("/oauth", BASE_URL);
     authorize.search = new URLSearchParams({
       response_type: "code",
       client_id: clientId,
@@ -129,10 +182,31 @@ describe("Update Control authorization boundary", () => {
       owner_password: "legacy-owner-token-with-more-than-thirty-two-characters",
     }).toString();
     const response = await controller.fetch(new Request(authorize));
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Verification code");
-    expect(html).not.toContain("owner_password");
-    expect(html).not.toContain("login.microsoftonline.com");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
+    expect(response.headers.get("location")).not.toContain("owner_password");
+
+    const aliasGet = new URL("/authorize", BASE_URL);
+    aliasGet.search = authorize.search;
+    const aliasGetResponse = await controller.fetch(new Request(aliasGet));
+    expect(aliasGetResponse.status).toBe(302);
+    expect(aliasGetResponse.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
+
+    const aliasPost = await controller.fetch(new Request(new URL("/authorize", BASE_URL), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        response_type: "code",
+        client_id: clientId,
+        redirect_uri: "https://chatgpt.com/connector/oauth/test",
+        scope: "update:read",
+        code_challenge: "A".repeat(43),
+        code_challenge_method: "S256",
+        resource: new URL("/mcp", BASE_URL).href,
+        state: "alias-client-state",
+      }),
+    }));
+    expect(aliasPost.status).toBe(302);
+    expect(aliasPost.headers.get("location")).toBe(new URL("/user", BASE_URL).href);
   });
 });

@@ -67,7 +67,7 @@ async function registerClient(controller: UpdateControlAuthController): Promise<
 async function beginAuthorization(controller: UpdateControlAuthController, clientId: string) {
   const verifier = "v".repeat(64);
   const challenge = await sha256Base64Url(verifier);
-  const url = new URL("/authorize", BASE_URL);
+  const url = new URL("/oauth", BASE_URL);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -89,10 +89,7 @@ function hiddenState(html: string): string {
 }
 
 function provisioningSecret(html: string): string {
-  const encoded = /data-provisioning-uri="([^"]+)"/u.exec(html)?.[1]
-    ?.replaceAll("&amp;", "&");
-  expect(encoded).toContain("otpauth://totp/");
-  const secret = new URL(encoded!).searchParams.get("secret");
+  const secret = /data-manual-totp-secret="([A-Z2-7]+)"/u.exec(html)?.[1];
   expect(secret).toMatch(/^[A-Z2-7]{32}$/u);
   return secret!;
 }
@@ -101,10 +98,37 @@ function recoveryCodes(html: string): string[] {
   return [...html.matchAll(/data-recovery-code="([A-Z0-9-]+)"/gu)].map((match) => match[1]!);
 }
 
-async function form(controller: UpdateControlAuthController, path: string, fields: Record<string, string>) {
+function responseCookie(response: Response): string {
+  const cookie = (response.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+  expect(cookie).toMatch(/^update_control_login=/u);
+  return cookie;
+}
+
+async function beginAuthorizationLogin(controller: UpdateControlAuthController, clientId: string) {
+  const started = await beginAuthorization(controller, clientId);
+  expect(started.response.status).toBe(302);
+  expect(new URL(started.response.headers.get("location")!).pathname).toBe("/user");
+  const cookie = responseCookie(started.response);
+  const login = await controller.fetch(new Request(new URL("/user", BASE_URL), {
+    headers: { cookie },
+  }));
+  expect(login.status).toBe(200);
+  const html = await login.text();
+  return { ...started, cookie, html, state: hiddenState(html) };
+}
+
+async function form(
+  controller: UpdateControlAuthController,
+  path: string,
+  fields: Record<string, string>,
+  cookie?: string,
+) {
   return controller.fetch(new Request(new URL(path, BASE_URL), {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      ...(cookie ? { cookie } : {}),
+    },
     body: new URLSearchParams(fields),
   }));
 }
@@ -120,14 +144,14 @@ describe("Update Control local TOTP identity", () => {
       const enrollment = await controller.fetch(new Request(new URL("/enroll", BASE_URL)));
       expect(enrollment.status).toBe(200);
       const enrollmentHtml = await enrollment.text();
-      expect(enrollmentHtml).toContain("<svg");
-      expect(enrollmentHtml).toContain("Authenticator QR code");
-      expect(enrollmentHtml).toContain('width="240" height="240"');
-      expect(enrollmentHtml).toContain('style="display:block;max-width:100%;height:auto"');
-      expect(enrollmentHtml).toContain('class="card"');
-      expect(enrollmentHtml).toContain("MCP V3 Update Center");
-      expect(enrollmentHtml).toContain("--background:#09090b");
-      expect(enrollmentHtml).toContain("Enable secure access");
+      expect(enrollmentHtml).toContain("data:image/svg+xml;charset=utf-8,");
+      expect(enrollmentHtml).toContain("Authenticator enrollment QR code");
+      expect(enrollmentHtml).toContain('data-slot="card"');
+      expect(enrollmentHtml).toContain("MCP Access Stack");
+      expect(enrollmentHtml).toContain('href="/assets/update-control.css"');
+      expect(enrollmentHtml).not.toContain("<style");
+      expect(enrollmentHtml).not.toContain(" style=");
+      expect(enrollmentHtml).toContain("Continue enrollment");
       expect(enrollmentHtml).not.toContain("login.microsoftonline.com");
       expect(enrollmentHtml).not.toContain("graph.microsoft.com");
 
@@ -145,8 +169,8 @@ describe("Update Control local TOTP identity", () => {
       const enrolledHtml = await enrolled.text();
       const recoveries = recoveryCodes(enrolledHtml);
       expect(recoveries).toHaveLength(8);
-      expect(enrolledHtml).toContain('class="codes"');
-      expect(enrolledHtml).toContain("Save these recovery codes now.");
+      expect(enrolledHtml).toContain('data-recovery-code="');
+      expect(enrolledHtml).toContain("Save your recovery codes");
 
       const persisted = JSON.stringify([...storage.values.entries()]);
       expect(persisted).not.toContain(secret);
@@ -154,49 +178,43 @@ describe("Update Control local TOTP identity", () => {
       expect(persisted).toContain('"provider":"local-totp"');
 
       const clientId = await registerClient(controller);
-      const started = await beginAuthorization(controller, clientId);
-      expect(started.response.status).toBe(200);
-      const loginHtml = await started.response.text();
-      expect(loginHtml).toContain("Verification code");
-      expect(loginHtml).not.toContain("Microsoft");
-      const loginState = hiddenState(loginHtml);
+      const started = await beginAuthorizationLogin(controller, clientId);
+      expect(started.html).toContain("Authenticator or recovery code");
+      expect(started.html).not.toContain("Microsoft");
 
-      const replay = await form(controller, "/authorize", {
-        state: loginState,
+      const replay = await form(controller, "/user", {
+        state: started.state,
         email: "rafael@example.com",
         code: firstCode,
-      });
+      }, started.cookie);
       expect(replay.status).toBe(401);
       expect(await replay.json()).toEqual({ error: "invalid_credentials" });
 
       jest.advanceTimersByTime(30_000);
-      const secondStarted = await beginAuthorization(controller, clientId);
-      const secondState = hiddenState(await secondStarted.response.text());
+      const secondStarted = await beginAuthorizationLogin(controller, clientId);
       const secondCode = await totp(secret, Date.now());
-      const authorized = await form(controller, "/authorize", {
-        state: secondState,
+      const authorized = await form(controller, "/user", {
+        state: secondStarted.state,
         email: "rafael@example.com",
         code: secondCode,
-      });
+      }, secondStarted.cookie);
       expect(authorized.status).toBe(302);
       expect(new URL(authorized.headers.get("location")!).searchParams.get("code")).toMatch(/^code-/u);
 
-      const recoveryStarted = await beginAuthorization(controller, clientId);
-      const recoveryState = hiddenState(await recoveryStarted.response.text());
-      const recovered = await form(controller, "/authorize", {
-        state: recoveryState,
+      const recoveryStarted = await beginAuthorizationLogin(controller, clientId);
+      const recovered = await form(controller, "/user", {
+        state: recoveryStarted.state,
         email: "rafael@example.com",
         code: recoveries[0]!,
-      });
+      }, recoveryStarted.cookie);
       expect(recovered.status).toBe(302);
 
-      const recoveryReplayStarted = await beginAuthorization(controller, clientId);
-      const recoveryReplayState = hiddenState(await recoveryReplayStarted.response.text());
-      const recoveryReplay = await form(controller, "/authorize", {
-        state: recoveryReplayState,
+      const recoveryReplayStarted = await beginAuthorizationLogin(controller, clientId);
+      const recoveryReplay = await form(controller, "/user", {
+        state: recoveryReplayStarted.state,
         email: "rafael@example.com",
         code: recoveries[0]!,
-      });
+      }, recoveryReplayStarted.cookie);
       expect(recoveryReplay.status).toBe(401);
       expect(await recoveryReplay.json()).toEqual({ error: "invalid_credentials" });
     } finally {
