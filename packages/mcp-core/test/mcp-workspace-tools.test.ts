@@ -1666,6 +1666,16 @@ class MockSourceControlExecutor {
       }],
     };
   }
+  async materializeActionsArtifact(input: any, _workspaceRoot: string, context?: unknown) {
+    this.record("materializeActionsArtifact", input, context);
+    return {
+      status: "materialized" as const, runId: input.runId,
+      commitSha: input.expectedCommitSha, artifactName: input.artifactName,
+      archivePath: "/workspace/.runtime-tools/github-actions-artifacts/test.zip",
+      archiveSha256: input.expectedArtifactSha256, sizeBytes: 128,
+      validation: "actions_archive_sha256_verified" as const,
+    };
+  }
   async startCommitChecksWatch(input: any, context?: unknown) {
     this.record("startCommitChecksWatch", input, context);
     return {
@@ -1741,6 +1751,11 @@ const sourceControlCases = [
   ["git_publish_tag", "publishTag", { workspaceId: "ws", tag: "v1.1.0-beta.83", expectedCommitSha: sourceControlShaA }],
   ["github_get_repository", "getRepository", { workspaceId: "ws", owner: "octo", repository: "repo" }],
   ["github_get_commit_checks", "getCommitChecks", { workspaceId: "ws", owner: "octo", repository: "repo", commitSha: sourceControlShaA }],
+  ["github_materialize_actions_artifact", "materializeActionsArtifact", {
+    workspaceId: "ws", owner: "octo", repository: "repo", runId: 37777047603,
+    artifactName: "windows-companion-1.1.0-companion.37776640817-" + sourceControlShaA,
+    expectedCommitSha: sourceControlShaA, expectedArtifactSha256: "d".repeat(64),
+  }],
   ["github_start_commit_checks_watch", "startCommitChecksWatch", { workspaceId: "ws", owner: "octo", repository: "repo", commitSha: sourceControlShaA }],
   ["github_get_commit_checks_watches", "getCommitChecksWatches", { workspaceId: "ws" }],
   ["github_wait_commit_checks_watch", "waitCommitChecksWatch", { workspaceId: "ws", id: "11111111-1111-4111-8111-111111111111" }],
@@ -1763,6 +1778,7 @@ const expectedSourceControlAnnotations = {
   git_publish_tag: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_wait_commit_checks_watch: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1774,7 +1790,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes nineteen source-control tools inside the 50-tool workspace surface", () => {
+  it("publishes twenty source-control tools inside the 51-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1787,6 +1803,7 @@ describe("registerSourceControlTools", () => {
       "git_publish_tag",
       "github_get_repository",
       "github_get_commit_checks",
+      "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
       "github_wait_commit_checks_watch",
@@ -1796,9 +1813,9 @@ describe("registerSourceControlTools", () => {
       "github_close_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(19);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(50);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(50);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(51);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(51);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

@@ -29,6 +29,7 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubMaterializeActionsArtifactInputSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -51,7 +52,7 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly eleven source-control capabilities", () => {
+  test("publishes exactly twelve source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
       "git.index.write",
@@ -59,6 +60,7 @@ describe("source-control contracts", () => {
       "git.merge.write",
       "git.remote.push",
       "github.repository.read",
+      "github.artifact.materialize",
       "github.repository.create",
       "github.pull_request.read",
       "github.pull_request.create",
@@ -86,7 +88,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes eighteen operation names and six confirmable operations", () => {
+  test("publishes nineteen operation names and six confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -98,6 +100,7 @@ describe("source-control contracts", () => {
       "git_publish_tag",
       "github_get_repository",
       "github_get_commit_checks",
+      "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
       "github_wait_commit_checks_watch",
@@ -642,6 +645,11 @@ describe("source-control contracts", () => {
       ["git_publish_tag", gitPublishTagInputSchema, { workspaceId: "repo", tag: "v1.1.0-beta.83", expectedCommitSha: shaA }],
       ["github_get_repository", githubGetRepositoryInputSchema, { workspaceId: "repo", owner: "acme", repository: "app" }],
       ["github_get_commit_checks", githubGetCommitChecksInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", commitSha: shaA }],
+      ["github_materialize_actions_artifact", githubMaterializeActionsArtifactInputSchema, {
+        workspaceId: "repo", owner: "acme", repository: "app", runId: 37777047603,
+        artifactName: "windows-companion-1.1.0-companion.37776640817-" + shaA,
+        expectedCommitSha: shaA, expectedArtifactSha256: "b".repeat(64),
+      }],
       ["github_create_repository", githubCreateRepositoryInputSchema, { workspaceId: "repo", owner: "acme", name: "app", visibility: "private" }],
       ["github_get_pull_request", githubGetPullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 }],
       ["github_create_pull_request", githubCreatePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", title: "Ship", head: "feature/x", base: "main" }],

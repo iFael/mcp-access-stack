@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import {
   InMemoryMutationReceiptStore,
@@ -740,7 +740,9 @@ describe("LocalAgent Actions artifact materialization authorization", () => {
     const first = await agent.githubMaterializeActionsArtifact(input, { invocationId: "pinned-artifact" });
     expect(first).toMatchObject({ status: "materialized", commitSha: SHA_A });
     expect(githubExecutor.materializeActionsArtifact).toHaveBeenCalledTimes(1);
-    expect((githubExecutor.materializeActionsArtifact as jest.Mock).mock.calls[0]?.[1]).toBe(fixture?.workspacePath);
+    // Windows CI may supply an 8.3 short path; the workspace executor must use its canonical root.
+    expect((githubExecutor.materializeActionsArtifact as jest.Mock).mock.calls[0]?.[1])
+      .toBe(await realpath(fixture!.workspacePath));
     await expect(agent.githubMaterializeActionsArtifact(input, { invocationId: "pinned-artifact" }))
       .resolves.toEqual(first);
     expect(githubExecutor.materializeActionsArtifact).toHaveBeenCalledTimes(1);

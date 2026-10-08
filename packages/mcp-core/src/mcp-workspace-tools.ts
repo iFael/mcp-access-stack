@@ -3111,29 +3111,6 @@ export function registerSourceControlTools(
     );
   }
 
-  if (shouldInclude("github_materialize_actions_artifact", include)) {
-    server.registerTool("github_materialize_actions_artifact", {
-      title: "Materialize pinned GitHub Actions artifact",
-      description: "Downloads one successful main companion Actions archive to a controlled workspace directory with verified SHA-256. It does not install or extract the inner signed ZIP.",
-      inputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.input,
-      outputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.output,
-      annotations: sourceControlAnnotations.github_materialize_actions_artifact,
-      _meta: meta,
-    }, async (input, extra) => {
-      const authError = validateAuthentication(options, extra.authInfo);
-      if (authError) return authError;
-      try {
-        const parsed = githubMaterializeActionsArtifactInputSchema.parse(input);
-        const structuredContent = githubMaterializeActionsArtifactResultSchema.parse(
-          await withToolOperationContext(options.operationContextFactory, extra,
-            MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
-            context => executor.materializeActionsArtifact(parsed, ".", context)),
-        );
-        return sourceControlSuccess("Pinned Actions artifact materialization reconciled.", structuredContent);
-      } catch (error) { return toolError(error); }
-    });
-  }
-
   if (shouldInclude("github_get_commit_checks", include)) {
     server.registerTool(
       "github_get_commit_checks",
@@ -3168,6 +3145,29 @@ export function registerSourceControlTools(
         }
       },
     );
+  }
+
+  if (shouldInclude("github_materialize_actions_artifact", include)) {
+    server.registerTool("github_materialize_actions_artifact", {
+      title: "Materialize pinned GitHub Actions artifact",
+      description: "Downloads one successful main companion Actions archive to a controlled workspace directory with verified SHA-256. It does not install or extract the inner signed ZIP.",
+      inputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.input,
+      outputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.output,
+      annotations: sourceControlAnnotations.github_materialize_actions_artifact,
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        const parsed = githubMaterializeActionsArtifactInputSchema.parse(input);
+        const structuredContent = githubMaterializeActionsArtifactResultSchema.parse(
+          await withToolOperationContext(options.operationContextFactory, extra,
+            MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+            context => executor.materializeActionsArtifact(parsed, ".", context)),
+        );
+        return sourceControlSuccess("Pinned Actions artifact materialization reconciled.", structuredContent);
+      } catch (error) { return toolError(error); }
+    });
   }
 
   if (shouldInclude("github_start_commit_checks_watch", include)) {
