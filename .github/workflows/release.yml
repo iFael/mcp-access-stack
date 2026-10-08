@@ -488,6 +488,7 @@ jobs:
           echo "revision=$expected" >> "$GITHUB_OUTPUT"
 
       - name: Preflight contract rollout compatibility
+        id: edge-preflight
         env:
           EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}
           EDGE_BASE_URL: ${{ needs.metadata.outputs.edge-base-url }}
@@ -515,7 +516,19 @@ jobs:
               exit 1
             fi
           fi
+          test -n "$active_revision"
+          echo "active-revision=$active_revision" >> "$GITHUB_OUTPUT"
           echo "Edge rollout preflight passed: current=$current_expected active=$active_revision next=$EXPECTED_CONTRACT_REVISION"
+
+      - name: Preflight protected Edge contract preparation credential
+        env:
+          MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MCP_CONTRACT_PREPARE_TOKEN" ]]; then
+            echo "Protected release environment lacks MCP_CONTRACT_PREPARE_TOKEN; refusing deploy." >&2
+            exit 1
+          fi
 
       - name: Prepare exact Edge contract in production
         env:
@@ -551,6 +564,54 @@ jobs:
             if [[ "$attempt" -lt 15 ]]; then sleep 2; fi
           done
           echo "Edge break-glass verification failed after propagation retries: HTTP $status / $error" >&2
+          exit 1
+
+      - name: Explicitly prepare exact Edge contract with CAS
+        env:
+          MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
+          EXPECTED_ACTIVE_REVISION: ${{ steps.edge-preflight.outputs.active-revision }}
+          EXPECTED_CONTRACT_REVISION: ${{ steps.edge-contract.outputs.revision }}
+          EDGE_BASE_URL: ${{ needs.metadata.outputs.edge-base-url }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MCP_CONTRACT_PREPARE_TOKEN" ]]; then
+            echo "Protected release environment lacks MCP_CONTRACT_PREPARE_TOKEN; contract preparation refused." >&2
+            exit 1
+          fi
+          test -n "$EXPECTED_ACTIVE_REVISION"
+          payload="$(jq -nc --arg active "$EXPECTED_ACTIVE_REVISION" --arg candidate "$EXPECTED_CONTRACT_REVISION" '{expectedActiveContractRevision:$active,expectedCandidateContractRevision:$candidate}')"
+          endpoint="${EDGE_BASE_URL%/}/_internal/contract-rollout/prepare"
+          for attempt in $(seq 1 12); do
+            if ! status="$(curl --silent --show-error --output "$RUNNER_TEMP/edge-contract-prepare.json" --write-out '%{http_code}' \
+                -X POST -H "Authorization: Bearer $MCP_CONTRACT_PREPARE_TOKEN" \
+                -H "Content-Type: application/json" --data "$payload" "$endpoint")"; then
+              echo "Edge contract prepare transport result unknown; refusing retry." >&2
+              exit 1
+            fi
+            if [[ "$status" == "404" && "$attempt" -lt 12 ]]; then
+              sleep 5
+              continue
+            fi
+            if [[ "$status" != "200" ]]; then
+              error="$(jq -r '.error // "unknown"' "$RUNNER_TEMP/edge-contract-prepare.json" 2>/dev/null || echo unknown)"
+              echo "Edge contract prepare refused: HTTP $status / $error" >&2
+              exit 1
+            fi
+            actual_active="$(jq -r '.activeContractRevision // empty' "$RUNNER_TEMP/edge-contract-prepare.json")"
+            actual_candidate="$(jq -r '.candidateContractRevision // empty' "$RUNNER_TEMP/edge-contract-prepare.json")"
+            result="$(jq -r '.status // empty' "$RUNNER_TEMP/edge-contract-prepare.json")"
+            if [[ "$actual_active" != "$EXPECTED_ACTIVE_REVISION" ]]; then
+              echo "Prepared Edge active revision did not match the preflight CAS." >&2
+              exit 1
+            fi
+            if [[ ( "$actual_candidate" == "$EXPECTED_CONTRACT_REVISION" && ( "$result" == "prepared" || "$result" == "already-prepared" ) ) ||
+                  ( "$actual_active" == "$EXPECTED_CONTRACT_REVISION" && -z "$actual_candidate" && "$result" == "already-active" ) ]]; then
+              echo "Explicit Edge contract preparation verified under expected revisions."
+              exit 0
+            fi
+            echo "Prepared Edge contract response did not match expected rollout state." >&2
+            exit 1
+          done
           exit 1
 
       - name: Verify prepared Edge contract before publication

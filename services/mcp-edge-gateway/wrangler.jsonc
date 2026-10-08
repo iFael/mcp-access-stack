@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-17",
   "workers_dev": true,
+  "secrets": {
+    "required": ["MCP_CONTRACT_PREPARE_TOKEN"]
+  },
   "vars": {
     "MCP_EDGE_ENABLED": "true",
     "MCP_PUBLIC_BASE_URL": "https://mcp-access-stack.rafaeldamasio77.workers.dev/",

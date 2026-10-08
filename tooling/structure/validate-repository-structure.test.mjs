@@ -339,6 +339,32 @@ test("keeps canonical CI free of Docker image lanes", async () => {
   assert.doesNotMatch(workflow, /dockerGateway|dockerBrowser|dockerProxy|release-image-|docker\/build-push-action|deploy\/docker|deploy\/remote/u);
 });
 
+test("requires dedicated Edge contract preparation before the public release gate", async () => {
+  const workflow = (await readFile(
+    new URL("../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  )).replaceAll("\r\n", "\n");
+  const edgeStart = workflow.indexOf("\n  edge:\n");
+  const publishStart = workflow.indexOf("\n  publish:\n");
+  assert.ok(edgeStart >= 0 && publishStart > edgeStart);
+  const edge = workflow.slice(edgeStart, publishStart);
+  const ordered = [
+    "Preflight contract rollout compatibility",
+    "Preflight protected Edge contract preparation credential",
+    "npm run deploy --workspace @mcp-access-stack/edge-gateway",
+    "Explicitly prepare exact Edge contract with CAS",
+    "Verify prepared Edge contract before publication",
+  ];
+  const positions = ordered.map((item) => edge.indexOf(item));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.match(edge, /MCP_CONTRACT_PREPARE_TOKEN: \$\{\{ secrets\.MCP_CONTRACT_PREPARE_TOKEN \}\}/u);
+  assert.doesNotMatch(edge, /secrets\.MCP_CONNECTOR_TOKEN|secrets\.MCP_OWNER_TOKEN[^\s]*.*CONTRACT_PREPARE_TOKEN/u);
+  assert.match(edge, /expectedActiveContractRevision:\$active,expectedCandidateContractRevision:\$candidate/u);
+  assert.match(edge, /refusing deploy/u);
+  assert.match(edge, /transport result unknown; refusing retry/u);
+});
+
 test("keeps public release workflow free of Docker and GHCR image publication", async () => {
   const workflow = await readFile(
     new URL("../../.github/workflows/release.yml", import.meta.url),

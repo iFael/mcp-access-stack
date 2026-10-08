@@ -28,6 +28,10 @@ class MemoryStorage {
     }
   }
 
+  async transaction<T>(callback: (transaction: MemoryStorage) => Promise<T>): Promise<T> {
+    return callback(this);
+  }
+
   async delete(key: string): Promise<boolean> {
     return this.values.delete(key);
   }
@@ -109,6 +113,74 @@ const DEVICE_ID = "dev_22222222-2222-4222-8222-222222222222";
 const RUNTIME_ID = "rt_33333333-3333-4333-8333-333333333333";
 const OLD_EPOCH = "44444444-4444-4444-8444-444444444444";
 const NEW_EPOCH = "55555555-5555-4555-8555-555555555555";
+
+describe("McpSession explicit contract preparation persistence", () => {
+  it("persists an exact candidate and returns an idempotent replay without changing preparedAt", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION, MCP_CONTRACT_ROLLOUT_STORAGE_KEY } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const active = "1".repeat(64);
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, {
+      version: 1, activeContractRevision: active,
+    });
+    const session = await createSession(storage);
+    const input = {
+      expectedActiveContractRevision: active,
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    };
+    const first = JSON.parse(await session.prepareContractRollout(input)) as {
+      status: number; body: { status: string; candidateConnectorReady: boolean };
+    };
+    expect(first.status).toBe(200);
+    expect(first.body.status).toBe("prepared");
+    expect(first.body.candidateConnectorReady).toBe(false);
+
+    const persisted = await storage.get<{
+      activeContractRevision: string;
+      candidateContractRevision: string;
+      preparedAt: string;
+    }>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+    expect(persisted).toMatchObject({
+      activeContractRevision: active,
+      candidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    });
+    expect(persisted?.preparedAt).toBeDefined();
+
+    const again = JSON.parse(await session.prepareContractRollout(input)) as {
+      status: number; body: { status: string };
+    };
+    expect(again).toMatchObject({ status: 200, body: { status: "already-prepared" } });
+    expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(persisted);
+  });
+
+  it("refuses competing candidates, incorrect CAS and malformed inputs without persistence", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION, MCP_CONTRACT_ROLLOUT_STORAGE_KEY } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const current = {
+      version: 1 as const,
+      activeContractRevision: "1".repeat(64),
+      candidateContractRevision: "2".repeat(64),
+    };
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, current);
+    const session = await createSession(storage);
+    const invalid = await session.prepareContractRollout({
+      expectedActiveContractRevision: current.activeContractRevision,
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+      unexpected: true,
+    });
+    expect(JSON.parse(invalid)).toMatchObject({ status: 400 });
+    const conflict = await session.prepareContractRollout({
+      expectedActiveContractRevision: current.activeContractRevision,
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    });
+    expect(JSON.parse(conflict)).toMatchObject({
+      status: 409,
+      body: { error: "candidate_contract_mismatch" },
+    });
+    expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(current);
+  });
+});
 
 describe("McpSession Browser runtime routing", () => {
   it("does not fall back to the remote runtime when a companion-owned task is offline", async () => {

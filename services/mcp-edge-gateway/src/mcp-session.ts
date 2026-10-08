@@ -34,6 +34,8 @@ import {
   isConnectorContractCompatible,
   isMcpContractRevision,
   promoteMcpContractRolloutState,
+  prepareMcpContractRolloutState,
+  isMcpContractRolloutState,
   reconcileMcpContractRolloutState,
   rollbackMcpContractRolloutState,
   type McpContractRolloutStateV1,
@@ -99,6 +101,7 @@ export type EdgeGatewayEnv = EdgeControlPlaneEnv & {
   MCP_SESSION: DurableObjectNamespace<McpSession>;
   MCP_EDGE_ENABLED?: string;
   MCP_CONNECTOR_TOKEN?: string;
+  MCP_CONTRACT_PREPARE_TOKEN?: string;
 };
 
 type ConnectorAttachment = {
@@ -240,6 +243,70 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
   async getRuntimeTelemetry(): Promise<EdgeRuntimeTelemetryV1> {
     return this.connectorTelemetry.read();
+  }
+
+  async prepareContractRollout(input: unknown): Promise<string> {
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedCandidateContractRevision" ||
+        !isMcpContractRevision(input.expectedActiveContractRevision) ||
+        !isMcpContractRevision(input.expectedCandidateContractRevision)) {
+      return JSON.stringify({ status: 400, body: { error: "invalid_contract_preparation" } });
+    }
+    const expectedActive = input.expectedActiveContractRevision;
+    const expectedCandidate = input.expectedCandidateContractRevision;
+    const outcome = await this.ctx.storage.transaction(async (txn) => {
+      const stored = await txn.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+      if (!isMcpContractRolloutState(stored)) {
+        return { status: 503, body: { error: "contract_rollout_state_unavailable" } } as const;
+      }
+      const prepared = prepareMcpContractRolloutState(
+        stored, expectedActive, expectedCandidate, new Date().toISOString(),
+      );
+      if (!prepared.ok) {
+        return {
+          status: 409,
+          body: {
+            error: prepared.code,
+            activeContractRevision: stored.activeContractRevision,
+            ...(stored.candidateContractRevision === undefined
+              ? {} : { candidateContractRevision: stored.candidateContractRevision }),
+          },
+        } as const;
+      }
+      if (!prepared.alreadyPrepared) {
+        await txn.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, prepared.state);
+      }
+      return {
+        status: 200,
+        state: prepared.state,
+        changed: !prepared.alreadyPrepared,
+      } as const;
+    });
+    if (outcome.status !== 200) {
+      return JSON.stringify(outcome);
+    }
+    this.contractRolloutState = outcome.state;
+    if (outcome.changed) {
+      this.refreshOpenConnectorContractCompatibility();
+      console.log(JSON.stringify({
+        event: "edge_contract_rollout_prepared",
+        activeContractRevision: outcome.state.activeContractRevision,
+        candidateContractRevision: outcome.state.candidateContractRevision,
+        preparedAt: outcome.state.preparedAt,
+      }));
+    }
+    const candidate = outcome.state.candidateContractRevision;
+    return JSON.stringify({
+      status: 200,
+      body: {
+        status: outcome.changed ? "prepared" :
+          candidate === undefined ? "already-active" : "already-prepared",
+        activeContractRevision: outcome.state.activeContractRevision,
+        ...(candidate === undefined ? {} : { candidateContractRevision: candidate }),
+        candidateConnectorReady: candidate !== undefined &&
+          this.getReadyConnectorForContractRevision(candidate) !== null,
+      },
+    });
   }
 
   async promoteContractRollout(input: unknown): Promise<string> {
