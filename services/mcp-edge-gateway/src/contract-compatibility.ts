@@ -87,6 +87,41 @@ export function isExpectedContractPrepared(state: McpContractRolloutStateV1): bo
     state.candidateContractRevision === EXPECTED_MCP_CONTRACT_REVISION;
 }
 
+export type ContractPreparationResult =
+  | { ok: true; state: McpContractRolloutStateV1; alreadyPrepared: boolean }
+  | { ok: false; code: "build_contract_mismatch" | "active_contract_mismatch" | "candidate_contract_mismatch" };
+
+export function prepareMcpContractRolloutState(
+  state: McpContractRolloutStateV1,
+  expectedActiveContractRevision: string,
+  expectedCandidateContractRevision: string,
+  now: string,
+): ContractPreparationResult {
+  if (expectedCandidateContractRevision !== EXPECTED_MCP_CONTRACT_REVISION) {
+    return { ok: false, code: "build_contract_mismatch" };
+  }
+  if (state.activeContractRevision !== expectedActiveContractRevision) {
+    return { ok: false, code: "active_contract_mismatch" };
+  }
+  if (state.candidateContractRevision !== undefined &&
+      state.candidateContractRevision !== expectedCandidateContractRevision) {
+    return { ok: false, code: "candidate_contract_mismatch" };
+  }
+  if (state.activeContractRevision === expectedCandidateContractRevision ||
+      state.candidateContractRevision === expectedCandidateContractRevision) {
+    return { ok: true, state, alreadyPrepared: true };
+  }
+  return {
+    ok: true,
+    alreadyPrepared: false,
+    state: {
+      ...state,
+      candidateContractRevision: expectedCandidateContractRevision,
+      preparedAt: now,
+    },
+  };
+}
+
 export function isConnectorContractCompatible(
   runtime: Pick<ConnectorRuntimeIdentity, "catalogContractRevision"> | undefined,
   state: McpContractRolloutStateV1 = {

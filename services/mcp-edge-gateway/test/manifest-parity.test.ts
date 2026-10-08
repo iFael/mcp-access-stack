@@ -17,6 +17,19 @@ import {
 } from "../src/generated/mcp-tool-manifest.js";
 
 describe("Edge MCP generated manifest parity", () => {
+  it("requires the dedicated contract preparation secret without exposing it as a plaintext variable", () => {
+    const config = JSON.parse(
+      readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
+    ) as {
+      secrets?: { required?: string[] };
+      vars?: Record<string, string>;
+    };
+    expect(config.secrets?.required).toEqual(["MCP_CONTRACT_PREPARE_TOKEN"]);
+    expect(config.vars).not.toHaveProperty("MCP_CONTRACT_PREPARE_TOKEN");
+    expect(config.secrets?.required).not.toContain("MCP_CONNECTOR_TOKEN");
+    expect(config.secrets?.required).not.toContain("MCP_OWNER_TOKEN");
+  });
+
   it("matches the canonical createMcpServer workspace catalog and auth scope exactly", async () => {
     const wranglerConfig = readFileSync(
       new URL("../wrangler.jsonc", import.meta.url),

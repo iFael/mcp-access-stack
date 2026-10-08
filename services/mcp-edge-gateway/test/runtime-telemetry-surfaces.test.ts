@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import { createEdgeHealthStatus } from "../src/health.js";
+import { EXPECTED_MCP_CONTRACT_REVISION } from "../src/contract-compatibility.js";
 import type { EdgeRuntimeTelemetryV1 } from "../src/connector-telemetry.js";
 
 jest.unstable_mockModule("cloudflare:workers", () => ({
@@ -217,5 +218,206 @@ describe("runtime telemetry surfaces", () => {
       candidateContractRevision: activeRevision,
     });
     expect(received).toEqual(body);
+  });
+
+  it("rejects unauthenticated explicit contract preparation before touching the session", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    let calls = 0;
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_CONTRACT_PREPARE_TOKEN: "prepare-token-fixture",
+      MCP_SESSION: {
+        idFromName: () => ({ toString: () => "session-id" }),
+        get: () => ({
+          prepareContractRollout: async () => {
+            calls += 1;
+            return JSON.stringify({ status: 200, body: { status: "prepared" } });
+          },
+        }),
+      },
+    } as never;
+
+    const response = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/prepare", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedActiveContractRevision: "a".repeat(64),
+          expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(401);
+    expect(calls).toBe(0);
+  });
+
+  it("forwards authenticated exact-revision CAS preparation to the Durable Object", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    const body = {
+      expectedActiveContractRevision: "a".repeat(64),
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    };
+    let received: unknown;
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_CONTRACT_PREPARE_TOKEN: "prepare-token-fixture",
+      MCP_SESSION: {
+        idFromName: () => ({ toString: () => "session-id" }),
+        get: () => ({
+          prepareContractRollout: async (input: unknown) => {
+            received = input;
+            return JSON.stringify({
+              status: 200,
+              body: {
+                status: "prepared",
+                activeContractRevision: body.expectedActiveContractRevision,
+                candidateContractRevision: body.expectedCandidateContractRevision,
+                candidateConnectorReady: false,
+              },
+            });
+          },
+        }),
+      },
+    } as never;
+
+    const response = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/prepare", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer prepare-token-fixture",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "prepared",
+      activeContractRevision: body.expectedActiveContractRevision,
+      candidateContractRevision: body.expectedCandidateContractRevision,
+      candidateConnectorReady: false,
+    });
+    expect(received).toEqual(body);
+  });
+
+  it("preserves the expected-active CAS conflict instead of claiming preparation succeeded", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    let received: unknown;
+    const body = {
+      expectedActiveContractRevision: "f".repeat(64),
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    };
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_CONTRACT_PREPARE_TOKEN: "prepare-token-fixture",
+      MCP_SESSION: {
+        idFromName: () => ({ toString: () => "session-id" }),
+        get: () => ({
+          prepareContractRollout: async (input: unknown) => {
+            received = input;
+            return JSON.stringify({
+              status: 409,
+              body: { error: "active_contract_mismatch" },
+            });
+          },
+        }),
+      },
+    } as never;
+
+    const response = await edgeWorker.fetch(
+      new Request("https://edge.example/_internal/contract-rollout/prepare", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer prepare-token-fixture",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "active_contract_mismatch" });
+    expect(received).toEqual(body);
+  });
+
+  it("does not accept connector identity for contract preparation and fails closed without dedicated credential", async () => {
+    const { default: edgeWorker } = await import("../src/index.js");
+    let calls = 0;
+    const session = {
+      prepareContractRollout: async () => {
+        calls += 1;
+        return JSON.stringify({ status: 200, body: { status: "prepared" } });
+      },
+    };
+    const sessionNamespace = {
+      idFromName: () => ({ toString: () => "session-id" }),
+      get: () => session,
+    };
+    const request = () => new Request("https://edge.example/_internal/contract-rollout/prepare", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer connector-token-fixture",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        expectedActiveContractRevision: "a".repeat(64),
+        expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+      }),
+    });
+    const forbidden = await edgeWorker.fetch(request(), {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_CONTRACT_PREPARE_TOKEN: "prepare-token-fixture",
+      MCP_SESSION: sessionNamespace,
+    } as never, {} as ExecutionContext);
+    expect(forbidden.status).toBe(401);
+
+    const unconfigured = await edgeWorker.fetch(request(), {
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_SESSION: sessionNamespace,
+    } as never, {} as ExecutionContext);
+    expect(unconfigured.status).toBe(503);
+    expect(await unconfigured.json()).toEqual({ error: "contract_preparation_auth_not_configured" });
+
+    for (const reusedSecret of [
+      { MCP_CONNECTOR_TOKEN: "connector-token-fixture", MCP_CONTRACT_PREPARE_TOKEN: "connector-token-fixture" },
+      { MCP_OWNER_TOKEN: "owner-token-fixture", MCP_CONTRACT_PREPARE_TOKEN: "owner-token-fixture" },
+    ]) {
+      const notIsolated = await edgeWorker.fetch(request(), {
+        ...reusedSecret, MCP_SESSION: sessionNamespace,
+      } as never, {} as ExecutionContext);
+      expect(notIsolated.status).toBe(503);
+      expect(await notIsolated.json()).toEqual({ error: "contract_preparation_auth_not_isolated" });
+    }
+    expect(calls).toBe(0);
+  });
+
+  it("reports candidate prepared independently of candidate connector readiness", () => {
+    const activeRevision = "a".repeat(64);
+    const candidateRevision = "c".repeat(64);
+    const response = createEdgeHealthStatus(true, {
+      controlPlaneReady: true,
+      executionPlaneReady: true,
+      connectorReady: true,
+      contractCompatible: true,
+      activeContractRevision: activeRevision,
+      candidateContractRevision: candidateRevision,
+      candidateConnectorReady: false,
+      runtimeTelemetry,
+    });
+    expect(response.body).toMatchObject({
+      activeContractRevision: activeRevision,
+      candidateContractRevision: candidateRevision,
+      candidateConnectorReady: false,
+      executionPlaneReady: true,
+    });
+    expect(response.body.candidateRuntime).toBeUndefined();
   });
 });

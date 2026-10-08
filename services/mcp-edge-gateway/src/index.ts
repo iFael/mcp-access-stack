@@ -35,6 +35,32 @@ export default {
       const runtimeTelemetry = await session.getRuntimeTelemetry();
       return jsonResponse({ ...result, runtimeTelemetry });
     }
+    if (url.pathname === "/_internal/contract-rollout/prepare" && request.method === "POST") {
+      const expectedToken = env.MCP_CONTRACT_PREPARE_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "contract_preparation_auth_not_configured" }, 503);
+      if (expectedToken === env.MCP_CONNECTOR_TOKEN || expectedToken === env.MCP_OWNER_TOKEN) {
+        return jsonResponse({ error: "contract_preparation_auth_not_isolated" }, 503);
+      }
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" } });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return jsonResponse({ error: "invalid_contract_preparation_content_type" }, 415);
+      }
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return jsonResponse({ error: "contract_preparation_too_large" }, 413);
+      }
+      let input: unknown;
+      try { input = JSON.parse(body) as unknown; } catch {
+        return jsonResponse({ error: "invalid_contract_preparation" }, 400);
+      }
+      const result = JSON.parse(await session.prepareContractRollout(input)) as {
+        status: number;
+        body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
     if (url.pathname === "/_internal/contract-rollout/promote" && request.method === "POST") {
       const expectedToken = env.MCP_CONNECTOR_TOKEN;
       if (!expectedToken) return jsonResponse({ error: "connector_auth_not_configured" }, 503);
