@@ -1,0 +1,225 @@
+name: Windows companion-only signed distribution
+
+run-name: companion CI-${{ github.event.workflow_run.id }} @ ${{ github.event.workflow_run.head_sha }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: companion-only-ci-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+      release-id: ${{ steps.verify.outputs.release-id }}
+      canonical-ci-run: ${{ steps.verify.outputs.canonical-ci-run }}
+    steps:
+      - name: Checkout the exact successful main CI commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify successful upstream CI, main CAS and immutable identity
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          ci_evidence="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID" \
+            --jq '{head_sha,head_branch,event,status,conclusion,repository: .repository.full_name}')"
+          jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success" and .repository == $repo' \
+            <<< "$ci_evidence" > /dev/null
+          remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$remote_main" == "$EXPECTED_SHA" ]]
+
+          # Latest reachable public tag, never root private package.json.
+          reachable_tags="$(git tag --merged "$EXPECTED_SHA" --list 'v[0-9]*' --sort=-version:refname)"
+          base_tag="${reachable_tags%%$'\n'*}"
+          [[ "$base_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-.][0-9A-Za-z.-]+)?$ ]]
+          release_id="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-companion.$CI_RUN_ID"
+
+          # Re-delivery of the same CI cannot silently publish a duplicate artifact.
+          prior_runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow companion-only-distribution.yml --event workflow_run \
+            --limit 100 \
+            --json databaseId,displayTitle,headSha)"
+          [[ "$(jq 'length' <<< "$prior_runs")" -lt 100 ]] || {
+            echo "Distribution history exceeds bounded duplicate precheck." >&2
+            exit 1
+          }
+          duplicates="$(jq -r --arg title "companion CI-$CI_RUN_ID @ $EXPECTED_SHA" \
+            --argjson current "$GITHUB_RUN_ID" \
+            '[.[] | select(.displayTitle == $title and .databaseId != $current)] | length' <<< "$prior_runs")"
+          [[ "$duplicates" == "0" ]] || {
+            echo "A companion distribution already exists for this CI run." >&2
+            exit 1
+          }
+          echo "commit=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "release-id=$release_id" >> "$GITHUB_OUTPUT"
+          echo "canonical-ci-run=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  windows-companion:
+    needs: preflight
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: public-release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout exactly verified commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin repository identity again before package build
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+        run: |
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) {
+            throw 'Package checkout does not match preflight commit.'
+          }
+
+      - name: Set up Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Build immutable Windows runtime
+        run: npm run build
+
+      - name: Build immutable release without any install or cutover
+        env:
+          RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
+          CI_RUN_ID: ${{ needs.preflight.outputs.canonical-ci-run }}
+        run: |
+          & ./deploy/windows/New-McpRelease.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -BuildRunId ([long]$env:CI_RUN_ID) `
+            -OutputDirectory (Join-Path $PWD "releases/$env:RELEASE_ID")
+
+      - name: Build native Windows execution-node artifacts
+        env:
+          RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          & ./deploy/windows/New-McpWindowsExecutionNodeArtifacts.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'companion-native')
+
+      - name: Assemble signed local Windows distribution only
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          if (-not $env:WINDOWS_SIGNING_PFX_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_PASSWORD) {
+            throw 'Pinned Windows signing credentials are required.'
+          }
+          $edgeMatch = [regex]::Match(
+            (Get-Content services/mcp-edge-gateway/wrangler.jsonc -Raw),
+            '"MCP_PUBLIC_BASE_URL"\s*:\s*"([^"]+)"'
+          )
+          if (-not $edgeMatch.Success) { throw 'Pinned Edge origin is absent.' }
+          $edgeBase = $edgeMatch.Groups[1].Value
+          if ($edgeBase -notmatch '^https://[^/?#]+/$') { throw 'Invalid credential-free Edge origin.' }
+          & ./deploy/windows/New-McpPublicDistribution.ps1 `
+            -ReleaseId $env:RELEASE_ID `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -ReleaseTag "v$env:RELEASE_ID" `
+            -BuildRunId ([long]$env:GITHUB_RUN_ID) `
+            -WorkflowName 'Companion-only distribution' `
+            -ExecutionNodeNativeDirectory (Join-Path $env:RUNNER_TEMP 'companion-native') `
+            -EdgeBaseUrl $edgeBase `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'companion-distribution')
+
+      - name: Verify pinned signatures and execution-node runtime smoke
+        env:
+          RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
+        run: |
+          & ./deploy/windows/Test-McpWindowsExecutionNodePackage.ps1 `
+            -ReleaseRoot (Join-Path $env:RUNNER_TEMP "companion-distribution/stage/releases/$env:RELEASE_ID") `
+            -OfflinePinnedAuthenticode
+
+      - name: Verify companion artifact checksum before publishing build artifact
+        env:
+          RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'companion-distribution'
+          $name = "v$env:RELEASE_ID-windows-x64.zip"
+          $zip = Join-Path $dir $name
+          $sum = Join-Path $dir "$name.sha256"
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $sum -PathType Leaf)) { throw 'Signed artifact or SHA-256 is missing.' }
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = (Get-Content -LiteralPath $sum -Raw).Trim() -split '\s+'
+          if ($expected.Length -ne 2 -or $expected[0] -cne $actual -or $expected[1] -cne "*$name") {
+            throw 'Companion distribution checksum mismatch.'
+          }
+
+      - name: Attest signed ZIP build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/companion-distribution/v${{ needs.preflight.outputs.release-id }}-windows-x64.zip
+
+      - name: Recheck main CAS before making the signed artifact available
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+        run: |
+          $remoteMain = (& gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha').Trim()
+          if ($LASTEXITCODE -ne 0 -or $remoteMain -cne $env:EXPECTED_SHA) {
+            throw 'main advanced while packaging; refuse to publish a stale distribution.'
+          }
+
+      - name: Upload signed companion distribution without publishing a GitHub Release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-companion-${{ needs.preflight.outputs.release-id }}-${{ needs.preflight.outputs.commit }}
+          path: |
+            ${{ runner.temp }}/companion-distribution/v${{ needs.preflight.outputs.release-id }}-windows-x64.zip
+            ${{ runner.temp }}/companion-distribution/v${{ needs.preflight.outputs.release-id }}-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
