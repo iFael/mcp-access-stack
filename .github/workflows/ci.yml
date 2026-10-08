@@ -94,6 +94,9 @@ jobs:
       - name: Validate impact resolver
         run: node tooling/ci/resolve-impact.test.mjs
 
+      - name: Test exact release tag bootstrap (no network or GitHub mutation)
+        run: node --test tooling/release/bootstrap-release-tag.test.mjs
+
       - name: Validate repository structure
         run: node tooling/structure/validate-repository-structure.test.mjs
 
