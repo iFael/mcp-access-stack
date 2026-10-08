@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -34,13 +35,9 @@ import {
   readTextFile,
 } from "./text-file.js";
 
-interface DeletionFileOperations {
-  rename: typeof rename;
-  unlink: typeof unlink;
-}
-
 export class FileService {
-  constructor(private readonly deletionFileOperations: DeletionFileOperations = { rename, unlink }) {}
+  constructor(private readonly openReadHandle: (target: string) => Promise<FileHandle> =
+    (target) => open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))) {}
 
   async listFiles(
     workspace: ResolvedWorkspace,
@@ -181,9 +178,28 @@ export class FileService {
     const security = new PathSecurity(workspace);
     const logicalPath = security.authorizeWriteLogical(input.path);
     const authorized = await security.authorizeExisting(input.path, "file");
-    // Symlinked ancestors must not redirect a permitted logical path to a non-writable file.
     security.authorizeWriteLogical(authorized.canonicalRelativePath);
-    // Existing regular files only. Never follow symlinks, including those within the workspace.
+
+    // Path-based rename/unlink cannot bind the mutation to the object validated
+    // above: a directory ancestor may be replaced between checks and rename.
+    // Until a handle-relative, cross-platform deletion primitive is available,
+    // no destructive operation or staging write is permitted.
+    if (input.dryRun !== true) {
+      throw new AppError(
+        "PERMISSION_DENIED",
+        "Destructive delete_file is unavailable until handle-bound deletion is supported.",
+      );
+    }
+
+    // Advisory, read-only validation: re-resolve after authorization and check
+    // identity around the read. This is not a lock on the directory tree.
+    const observed = await realpath(authorized.absolutePath);
+    const samePath = process.platform === "win32"
+      ? observed.toLowerCase() === authorized.canonicalPath.toLowerCase()
+      : observed === authorized.canonicalPath;
+    if (!samePath) {
+      throw new AppError("INVALID_ARGUMENT", "File path changed after authorization.");
+    }
     const initial = await lstat(authorized.absolutePath);
     if (!initial.isFile() || initial.isSymbolicLink()) {
       throw new AppError("NOT_A_FILE", "Deletion requires an existing regular file.");
@@ -191,79 +207,38 @@ export class FileService {
     if (initial.size > workspace.limits.maxFileBytes) {
       throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
     }
-    const bytes = await readFile(authorized.absolutePath);
-    const currentHash = hashBuffer(bytes);
-    if (currentHash !== input.expectedSha256.toLowerCase()) {
-      throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
-    }
-    const latest = await lstat(authorized.absolutePath);
-    if (!latest.isFile() || latest.isSymbolicLink() ||
-        latest.dev !== initial.dev || latest.ino !== initial.ino ||
-        latest.size !== initial.size || latest.mtimeMs !== initial.mtimeMs) {
-      throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion preflight.");
-    }
-    const dryRun = input.dryRun ?? false;
-    if (dryRun) return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun };
-
-    // A rename atomically detaches one directory entry. Revalidate that exact
-    // entry in an owner-private staging directory before it can be unlinked.
-    // The private directory assumes no hostile process shares the agent's OS identity.
-    const stagingDirectory = await mkdtemp(path.join(
-      path.dirname(authorized.canonicalPath),
-      `.mcp-delete-${randomBytes(16).toString("hex")}-`,
-    ));
-    const stagedPath = path.join(stagingDirectory, "target");
-    let staged = false;
+    // Read through the opened descriptor, not by reopening the pathname.
+    // This does not authorize destructive deletion; it only narrows the
+    // read-only race between SHA validation and a concurrent name swap.
+    const handle = await this.openReadHandle(authorized.absolutePath);
     try {
-      await this.deletionFileOperations.rename(authorized.canonicalPath, stagedPath);
-      staged = true;
-      const moved = await lstat(stagedPath);
-      if (!moved.isFile() || moved.isSymbolicLink() ||
-          moved.dev !== latest.dev || moved.ino !== latest.ino ||
-          moved.size !== latest.size || moved.mtimeMs !== latest.mtimeMs ||
-          hashBuffer(await readFile(stagedPath)) !== currentHash) {
-        throw new AppError("INVALID_ARGUMENT", "File changed during deletion; no unverified file was deleted.");
+      const opened = await handle.stat();
+      const sameIdentity = (other: typeof initial): boolean =>
+        other.isFile() && !other.isSymbolicLink() &&
+        other.dev === opened.dev && other.ino === opened.ino &&
+        other.size === opened.size && other.mtimeMs === opened.mtimeMs;
+      if (!sameIdentity(initial) || opened.size > workspace.limits.maxFileBytes) {
+        throw new AppError("INVALID_ARGUMENT", "Opened file identity changed during deletion dry-run.");
       }
-      await this.deletionFileOperations.unlink(stagedPath);
-      staged = false;
-    } catch (error) {
-      if (staged) {
-        // link() is no-clobber: a concurrent new entry at the source must
-        // remain untouched. If restoration is impossible, keep the staged
-        // object for explicit reconciliation rather than deleting it.
-        try {
-          await link(stagedPath, authorized.canonicalPath);
-          await this.deletionFileOperations.unlink(stagedPath);
-          staged = false;
-        } catch {
-          throw new AppError(
-            "EXECUTION_OUTCOME_UNKNOWN",
-            "Deletion was interrupted with a staged file; reconcile the file before any retry.",
-            { cause: error, details: {
-              path: path.relative(workspace.canonicalRootPath, stagedPath).split(path.sep).join("/"),
-              operation: "delete_file", outcome: "unknown", retryable: false,
-            } },
-          );
-        }
+      const openedPath = await realpath(authorized.absolutePath);
+      const stillAuthorized = process.platform === "win32"
+        ? openedPath.toLowerCase() === authorized.canonicalPath.toLowerCase()
+        : openedPath === authorized.canonicalPath;
+      if (!stillAuthorized || !sameIdentity(await lstat(authorized.absolutePath))) {
+        throw new AppError("INVALID_ARGUMENT", "Deletion dry-run target was redirected.");
       }
-      throw error;
+      const currentHash = hashBuffer(await handle.readFile());
+      const latest = await handle.stat();
+      if (!sameIdentity(latest) || !sameIdentity(await lstat(authorized.absolutePath))) {
+        throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion dry-run.");
+      }
+      if (currentHash !== input.expectedSha256.toLowerCase()) {
+        throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
+      }
+      return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun: true };
     } finally {
-      if (!staged) {
-        try {
-          await rmdir(stagingDirectory);
-        } catch (error) {
-          throw new AppError(
-            "EXECUTION_OUTCOME_UNKNOWN",
-            "Deletion staging cleanup was incomplete; reconcile the target before any retry.",
-            { cause: error, details: {
-              path: path.relative(workspace.canonicalRootPath, stagingDirectory).split(path.sep).join("/"),
-              operation: "delete_file", outcome: "unknown", retryable: false,
-            } },
-          );
-        }
-      }
+      await handle.close();
     }
-    return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun };
   }
 
   async patchFile(

@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, open, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "@jest/globals";
+import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
 import { FileService } from "../../../src/filesystem/service.js";
 import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
+import { PathSecurity } from "../../../src/path-security.js";
 import {
   createFixture,
   makeWorkspacePolicy,
@@ -39,34 +41,37 @@ async function setup(options: { readonly?: boolean; blocked?: string[]; allowWri
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const input = { workspaceId: "test", path: "remove.txt", expectedSha256: sha("expected") };
+const noStaging = async (root: string) => {
+  expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+};
 
-describe("typed file deletion", () => {
-  test("dry-run validates without deleting and the exact file is deleted once", async () => {
+describe("typed file deletion (destructive mode fail-closed)", () => {
+  test("dry-run validates SHA but destructive deletion is disabled without file mutation", async () => {
     const { agent, root } = await setup();
     await expect(agent.deleteFile({ ...input, dryRun: true })).resolves.toEqual({
       path: "remove.txt", sha256Before: input.expectedSha256, deleted: false, dryRun: true,
     });
+    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(agent.deleteFile({ ...input, dryRun: false }))
+      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
-    await expect(agent.deleteFile(input)).resolves.toEqual({
-      path: "remove.txt", sha256Before: input.expectedSha256, deleted: true, dryRun: false,
-    });
-    await expect(readFile(path.join(root, "remove.txt"))).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+    await noStaging(root);
   });
 
-  test("never deletes when SHA is stale or content changed", async () => {
+  test("dry-run refuses stale SHA and changed content without modifying bytes", async () => {
     const { agent, root } = await setup();
-    await expect(agent.deleteFile({ ...input, expectedSha256: "0".repeat(64) }))
+    await expect(agent.deleteFile({ ...input, dryRun: true, expectedSha256: "0".repeat(64) }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     await writeWorkspaceFile(root, "remove.txt", "changed");
-    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(agent.deleteFile({ ...input, dryRun: true }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("changed");
   });
 
-  test("rejects directories, path traversal and symlinks to files inside the workspace", async () => {
+  test("rejects directories, traversal and symlink targets", async () => {
     const { agent, root } = await setup();
     await symlink(path.join(root, "remove.txt"), path.join(root, "link.txt"));
-    await expect(agent.deleteFile({ ...input, path: "link.txt" }))
+    await expect(agent.deleteFile({ ...input, dryRun: true, path: "link.txt" }))
       .rejects.toMatchObject({ code: "NOT_A_FILE" });
     await expect(agent.deleteFile({ ...input, path: "." }))
       .rejects.toMatchObject({ code: "INVALID_PATH" });
@@ -76,19 +81,20 @@ describe("typed file deletion", () => {
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
   });
 
-  test("denies write when workspace policy is read-only", async () => {
+  test("retains workspace read-only policy", async () => {
     const { agent, root } = await setup({ readonly: true });
     await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
   });
 
-  test("denies blocked paths even if SHA is valid", async () => {
+  test("retains blocked-glob policy even for dry-run", async () => {
     const { agent, root } = await setup({ blocked: ["remove.txt"] });
-    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    await expect(agent.deleteFile({ ...input, dryRun: true }))
+      .rejects.toMatchObject({ code: "BLOCKED_PATH" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
   });
 
-  test("does not bypass allowWrites through a parent symlink inside workspace", async () => {
+  test("does not bypass allowWrites via a parent symlink", async () => {
     const { agent, root } = await setup({ allowWrites: ["alias"] });
     await writeWorkspaceFile(root, "protected.txt", "expected");
     await symlink(root, path.join(root, "alias"), "dir");
@@ -96,97 +102,127 @@ describe("typed file deletion", () => {
       .rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
     await expect(readFile(path.join(root, "protected.txt"), "utf8"))
       .resolves.toBe("expected");
+    await noStaging(root);
   });
 
-  test("preserves a replacement made immediately before quarantining", async () => {
+  test("restricted allowWrites never creates staging at workspace root", async () => {
+    const { agent, root } = await setup({ allowWrites: ["nested"] });
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await expect(agent.deleteFile({ ...input, path: "nested/remove.txt", dryRun: true }))
+      .resolves.toMatchObject({ deleted: false, dryRun: true });
+    await expect(agent.deleteFile({ ...input, path: "nested/remove.txt" }))
+      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await noStaging(root);
+  });
+
+  test("ancestor redirect after authorization never moves or removes outside file", async () => {
     const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
     const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    const service = new FileService({
-      rename: async (source, destination) => {
-        await writeFile(source, "replacement");
-        await rename(source, destination);
-      },
-      unlink,
+    const original = PathSecurity.prototype.authorizeExisting;
+    const spy = jest.spyOn(PathSecurity.prototype, "authorizeExisting")
+      .mockImplementation(async function (this: PathSecurity, requested, kind, allowDot, operation) {
+        const authorized = await original.call(this, requested, kind, allowDot, operation);
+        if (requested === "nested/remove.txt") {
+          await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+          await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+        }
+        return authorized;
+      });
+    try {
+      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+        .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+      await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+      await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+      await noStaging(root);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("dry-run rejects redirected ancestor after authorization", async () => {
+    const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const original = PathSecurity.prototype.authorizeExisting;
+    const spy = jest.spyOn(PathSecurity.prototype, "authorizeExisting")
+      .mockImplementation(async function (this: PathSecurity, requested, kind, allowDot, operation) {
+        const authorized = await original.call(this, requested, kind, allowDot, operation);
+        if (requested === "nested/remove.txt") {
+          await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+          await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+        }
+        return authorized;
+      });
+    try {
+      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt", dryRun: true }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+      await noStaging(root);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("cannot move an external object at the former pre-rename injection point", async () => {
+    const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await noStaging(root);
+  });
+
+  test("dry-run binds SHA inspection to the opened file when its name is replaced", async () => {
+    const { root } = await setup();
+    const original = path.join(root, "remove.txt");
+    const parked = path.join(root, "parked.txt");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(async (target) => {
+      const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      await rename(original, parked);
+      await writeFile(original, "replacement");
+      return handle;
     });
-    await expect(service.deleteFile(workspace, input))
+    await expect(service.deleteFile(workspace, { ...input, dryRun: true }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("replacement");
-    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+    await expect(readFile(parked, "utf8")).resolves.toBe("expected");
+    await expect(readFile(original, "utf8")).resolves.toBe("replacement");
+    await noStaging(root);
   });
 
-  test("deletes only the captured object if the source path is recreated after relocation", async () => {
+  test("dry-run rejects an ancestor redirected during the handle-open boundary", async () => {
     const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
     const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    const service = new FileService({
-      rename: async (source, destination) => {
-        await rename(source, destination);
-        await writeFile(source, "new occupant");
-      },
-      unlink,
+    const service = new FileService(async (target) => {
+      await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+      await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+      return open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     });
-    await expect(service.deleteFile(workspace, input)).resolves.toMatchObject({
-      deleted: true, sha256Before: input.expectedSha256,
-    });
-    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("new occupant");
-    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
-  });
-
-  test("retains staged bytes for reconciliation rather than clobbering a concurrent occupant", async () => {
-    const { root } = await setup();
-    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    const service = new FileService({
-      rename: async (source, destination) => {
-        await writeFile(source, "replacement");
-        await rename(source, destination);
-        await writeFile(source, "new occupant");
-      },
-      unlink,
-    });
-    await expect(service.deleteFile(workspace, input))
-      .rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN", details: { operation: "delete_file", outcome: "unknown", retryable: false } });
-    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("new occupant");
-    const stagedDirectories = (await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"));
-    expect(stagedDirectories).toHaveLength(1);
-    await expect(readFile(path.join(root, stagedDirectories[0]!, "target"), "utf8"))
-      .resolves.toBe("replacement");
-  });
-
-  test("rejects a changed staged object and restores it without deleting its contents", async () => {
-    const { root } = await setup();
-    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    const service = new FileService({
-      rename: async (source, destination) => {
-        await rename(source, destination);
-        await writeFile(destination, "changed after isolation");
-      },
-      unlink,
-    });
-    await expect(service.deleteFile(workspace, input))
+    await expect(service.deleteFile(workspace, { ...input, path: "nested/remove.txt", dryRun: true }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-    await expect(readFile(path.join(root, "remove.txt"), "utf8"))
-      .resolves.toBe("changed after isolation");
-    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await noStaging(root);
   });
 
-  test("reports an uncertain outcome when staging cleanup cannot finish", async () => {
-    const { root } = await setup();
-    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    const service = new FileService({
-      rename: async (source, destination) => {
-        await rename(source, destination);
-        await writeFile(path.join(path.dirname(String(destination)), "concurrent-entry"), "keep");
-      },
-      unlink,
-    });
-    await expect(service.deleteFile(workspace, input))
-      .rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN", details: { outcome: "unknown", retryable: false } });
-    await expect(readFile(path.join(root, "remove.txt"))).rejects.toMatchObject({ code: "ENOENT" });
-    const stage = (await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"));
-    expect(stage).toHaveLength(1);
-    await expect(readFile(path.join(root, stage[0]!, "concurrent-entry"), "utf8")).resolves.toBe("keep");
-  });
-
-  test("denies deletion through symlinked parent outside workspace", async () => {
+  test("rejects existing symlink ancestor pointing outside workspace", async () => {
     const { agent, root } = await setup();
     await symlink(fixture!.basePath, path.join(root, "outside"));
     await writeWorkspaceFile(fixture!.basePath, "external.txt", "expected");
