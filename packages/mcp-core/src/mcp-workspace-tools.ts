@@ -111,6 +111,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubMaterializeActionsArtifactInputSchema,
+  githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubGetCommitChecksWatchesResultSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -198,6 +200,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
+  "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
   "github_wait_commit_checks_watch",
@@ -259,7 +262,7 @@ export interface RegisterWorkspaceToolsOptions {
   /** Subset of tools to expose (default: all six). */
   includeTools?: readonly WorkspaceToolName[];
   operationContextFactory?: ToolOperationContextFactory;
-  sourceControlExecutor?: Pick<GitHubExecutor, "getRepository" | "getCommitChecks" | "getPullRequest">;
+  sourceControlExecutor?: Pick<GitHubExecutor, "getRepository" | "getCommitChecks" | "getPullRequest" | "materializeActionsArtifact">;
   auth?: {
     requiredScope: string;
     resourceMetadataUrl: URL;
@@ -2601,6 +2604,28 @@ const sourceControlMcpSchemas = {
     }).strict(),
     output: mcpGitHubCommitChecksResult,
   },
+  github_materialize_actions_artifact: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner,
+      repository: mcpGitHubRepositoryName,
+      runId: z.number().int().positive(),
+      artifactName: z.string().regex(/^windows-companion-[0-9]+\.[0-9]+\.[0-9]+-companion\.[0-9]+-[a-f0-9]{40}$/u),
+      expectedCommitSha: mcpSourceControlSha,
+      expectedArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["materialized", "already_materialized"]),
+      runId: z.number().int().positive(),
+      commitSha: mcpSourceControlSha,
+      artifactName: z.string().min(1),
+      archivePath: z.string().min(1),
+      archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      sizeBytes: z.number().int().nonnegative().max(300_000_000),
+      validation: z.literal("actions_archive_sha256_verified"),
+    }).strict(),
+  },
   github_start_commit_checks_watch: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -2721,6 +2746,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   git_publish_tag: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
@@ -3121,6 +3147,29 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_materialize_actions_artifact", include)) {
+    server.registerTool("github_materialize_actions_artifact", {
+      title: "Materialize pinned GitHub Actions artifact",
+      description: "Downloads one successful main companion Actions archive to a controlled workspace directory with verified SHA-256. It does not install or extract the inner signed ZIP.",
+      inputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.input,
+      outputSchema: sourceControlMcpSchemas.github_materialize_actions_artifact.output,
+      annotations: sourceControlAnnotations.github_materialize_actions_artifact,
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        const parsed = githubMaterializeActionsArtifactInputSchema.parse(input);
+        const structuredContent = githubMaterializeActionsArtifactResultSchema.parse(
+          await withToolOperationContext(options.operationContextFactory, extra,
+            MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+            context => executor.materializeActionsArtifact(parsed, ".", context)),
+        );
+        return sourceControlSuccess("Pinned Actions artifact materialization reconciled.", structuredContent);
+      } catch (error) { return toolError(error); }
+    });
+  }
+
   if (shouldInclude("github_start_commit_checks_watch", include)) {
     server.registerTool(
       "github_start_commit_checks_watch",
@@ -3390,6 +3439,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitPublishTag: "git_publish_tag",
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
+  githubMaterializeActionsArtifact: "github_materialize_actions_artifact",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
   githubGetCommitChecksWatches: "github_get_commit_checks_watches",
   githubWaitCommitChecksWatch: "github_wait_commit_checks_watch",

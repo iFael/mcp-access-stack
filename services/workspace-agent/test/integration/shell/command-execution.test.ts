@@ -222,7 +222,7 @@ describe("run command", () => {
       cwd: ".",
       exitCode: 0,
     });
-  });
+  }, 45_000); // The bounded 30s command timeout also needs shell startup and fixture time.
 
   test("requires and consumes confirmation for risky commands", async () => {
     fixture = await createWritableShellFixture();

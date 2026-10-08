@@ -23,7 +23,10 @@ param(
     [string]$EdgeBaseUrl,
 
     [ValidateRange(0, 9223372036854775807)]
-    [long]$BuildRunId = 0
+    [long]$BuildRunId = 0,
+
+    [ValidateSet('Public release', 'Companion-only distribution')]
+    [string]$WorkflowName = 'Public release'
 )
 
 Set-StrictMode -Version Latest
@@ -244,7 +247,7 @@ if ($LASTEXITCODE -ne 0 -or $observedNodeVersion.Count -ne 1 -or [string]$observ
 if ($BuildRunId -gt 0) {
     $publicBuild = [ordered]@{
         provider = 'github-actions'
-        workflowName = 'Public release'
+        workflowName = $WorkflowName
         runId = $BuildRunId
         commit = $SourceCommit
         assembledAt = [DateTimeOffset]::UtcNow.ToString('O')

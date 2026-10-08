@@ -14,6 +14,8 @@ import type {
   GitHubGetCommitChecksWatchesInput,
   GitHubGetCommitChecksWatchesResult,
   GitHubGetCommitChecksInput,
+  GitHubMaterializeActionsArtifactInput,
+  GitHubMaterializeActionsArtifactResult,
   GitHubGetPullRequestInput,
   GitHubGetRepositoryInput,
   GitHubMergePullRequestInput,
@@ -97,6 +99,11 @@ export interface GitHubExecutor {
     input: GitHubGetCommitChecksInput,
     context?: OperationContext,
   ): Promise<GitHubCommitChecksResult>;
+  materializeActionsArtifact(
+    input: GitHubMaterializeActionsArtifactInput,
+    workspaceRoot: string,
+    context?: OperationContext,
+  ): Promise<GitHubMaterializeActionsArtifactResult>;
   createRepository(
     input: GitHubCreateRepositoryInput,
     context?: OperationContext,

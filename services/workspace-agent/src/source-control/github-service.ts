@@ -8,6 +8,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubMaterializeActionsArtifactInputSchema,
+  githubMaterializeActionsArtifactResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
@@ -23,6 +25,8 @@ import {
   type GitHubCommitChecksResult,
   type GitHubExecutor,
   type GitHubGetCommitChecksInput,
+  type GitHubMaterializeActionsArtifactInput,
+  type GitHubMaterializeActionsArtifactResult,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
   type GitHubMergePullRequestInput,
@@ -37,9 +41,17 @@ import type {
   GitHubCreateRepositoryRequest,
   GitHubMergePullRequestRequest,
 } from "./github-http-client.js";
+import { GitHubActionsArtifactIngestor } from "./github-actions-artifact-ingestor.js";
 
 export class GitHubService implements GitHubExecutor {
-  constructor(private readonly client: GitHubApiClient) {}
+  constructor(private readonly client: GitHubApiClient, private readonly artifactIngestor?: GitHubActionsArtifactIngestor) {}
+
+  async materializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, workspaceRoot: string, context?: OperationContext): Promise<GitHubMaterializeActionsArtifactResult> {
+    const parsed = githubMaterializeActionsArtifactInputSchema.parse(input);
+    if (!this.artifactIngestor) throw new AppError("CAPABILITY_UNSUPPORTED", "Native GitHub Actions artifact materialization is not configured.");
+    const result = await this.artifactIngestor.materialize(parsed, workspaceRoot, context);
+    return githubMaterializeActionsArtifactResultSchema.parse(result);
+  }
 
   async getRepository(
     input: GitHubGetRepositoryInput,

@@ -125,6 +125,12 @@ describe("PersonalBrowserBridge", () => {
     ]));
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(() => new Script(workerSource)).not.toThrow();
+    const popupHtml = await readFile(path.join(root, "browser", "personal-extension", "secret-provision.html"), "utf8");
+    const popupJs = await readFile(path.join(root, "browser", "personal-extension", "secret-provision.js"), "utf8");
+    expect(popupHtml).toContain("MCP_CONTRACT_PREPARE_TOKEN");
+    expect(popupHtml).toContain("secret-provision.js");
+    expect(() => new Script(popupJs)).not.toThrow();
+    expect(workerSource).toContain("chrome.storage.session");
 
     const rejected = new WebSocket(
       `ws://127.0.0.1:${port}/?token=invalid`,

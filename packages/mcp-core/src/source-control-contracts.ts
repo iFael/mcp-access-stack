@@ -166,6 +166,7 @@ export const sourceControlCapabilities = [
   "git.merge.write",
   "git.remote.push",
   "github.repository.read",
+  "github.artifact.materialize",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -187,6 +188,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
+  "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
   "github_wait_commit_checks_watch",
@@ -490,6 +492,37 @@ export const githubRepositoryResultSchema = z
   })
   .strict();
 export type GitHubRepositoryResult = z.infer<typeof githubRepositoryResultSchema>;
+
+const actionsArtifactNameSchema = z.string().regex(/^windows-companion-[0-9]+\.[0-9]+\.[0-9]+-companion\.[0-9]+-[a-f0-9]{40}$/u);
+const sha256DigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+export const githubMaterializeActionsArtifactInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  owner: githubOwnerSchema,
+  repository: githubRepositoryNameSchema,
+  runId: z.number().int().positive().safe(),
+  artifactName: actionsArtifactNameSchema,
+  expectedCommitSha: gitShaSchema,
+  expectedArtifactSha256: sha256DigestSchema,
+}).strict().refine(value => value.artifactName.endsWith("-" + value.expectedCommitSha), {
+  message: "Artifact name must bind to the expected exact commit SHA.",
+});
+
+export type GitHubMaterializeActionsArtifactInput = z.infer<typeof githubMaterializeActionsArtifactInputSchema>;
+
+export const githubMaterializeActionsArtifactResultSchema = z.object({
+  status: z.enum(["materialized", "already_materialized"]),
+  runId: z.number().int().positive(),
+  commitSha: gitShaSchema,
+  artifactName: actionsArtifactNameSchema,
+  archivePath: z.string().min(1).max(4096),
+  archiveSha256: sha256DigestSchema,
+  sizeBytes: z.number().int().nonnegative().max(300_000_000),
+  validation: z.literal("actions_archive_sha256_verified"),
+}).strict();
+
+export type GitHubMaterializeActionsArtifactResult = z.infer<typeof githubMaterializeActionsArtifactResultSchema>;
 
 export const githubGetCommitChecksInputSchema = z
   .object({
