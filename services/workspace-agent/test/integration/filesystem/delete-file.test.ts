@@ -17,7 +17,7 @@ afterEach(async () => {
   fixture = undefined;
 }, 30_000);
 
-async function setup(options: { readonly?: boolean; blocked?: string[] } = {}) {
+async function setup(options: { readonly?: boolean; blocked?: string[]; allowWrites?: string[] } = {}) {
   fixture = await createFixture({
     profile: options.readonly ? "planning-readonly" : "full-repo-write",
     allowedRoots: ["."],
@@ -29,7 +29,7 @@ async function setup(options: { readonly?: boolean; blocked?: string[] } = {}) {
       allowedRoots: ["."],
       blockedGlobs: options.blocked ?? [],
     }),
-    allowWrites: options.readonly ? [] : ["."],
+    allowWrites: options.readonly ? [] : (options.allowWrites ?? ["."]),
   }]);
   await writeWorkspaceFile(fixture.workspacePath, "remove.txt", "expected");
   return { agent: await LocalAgent.create(fixture.policyPath), root: fixture.workspacePath };
@@ -84,6 +84,16 @@ describe("typed file deletion", () => {
     const { agent, root } = await setup({ blocked: ["remove.txt"] });
     await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "BLOCKED_PATH" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
+  });
+
+  test("does not bypass allowWrites through a parent symlink inside workspace", async () => {
+    const { agent, root } = await setup({ allowWrites: ["alias"] });
+    await writeWorkspaceFile(root, "protected.txt", "expected");
+    await symlink(root, path.join(root, "alias"), "dir");
+    await expect(agent.deleteFile({ ...input, path: "alias/protected.txt" }))
+      .rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
+    await expect(readFile(path.join(root, "protected.txt"), "utf8"))
+      .resolves.toBe("expected");
   });
 
   test("denies deletion through symlinked parent outside workspace", async () => {

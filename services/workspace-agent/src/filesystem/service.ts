@@ -174,6 +174,8 @@ export class FileService {
     const security = new PathSecurity(workspace);
     const logicalPath = security.authorizeWriteLogical(input.path);
     const authorized = await security.authorizeExisting(input.path, "file");
+    // Symlinked ancestors must not redirect a permitted logical path to a non-writable file.
+    security.authorizeWriteLogical(authorized.canonicalRelativePath);
     // Existing regular files only. Never follow symlinks, including those within the workspace.
     const initial = await lstat(authorized.absolutePath);
     if (!initial.isFile() || initial.isSymbolicLink()) {
