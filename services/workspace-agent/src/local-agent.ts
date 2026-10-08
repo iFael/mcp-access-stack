@@ -108,6 +108,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubMaterializeActionsArtifactInputSchema,
+  githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubGetCommitChecksWatchesResultSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -134,6 +136,8 @@ import {
   type GitHubCommitChecksResult,
   type GitHubExecutor,
   type GitHubGetCommitChecksInput,
+  type GitHubMaterializeActionsArtifactInput,
+  type GitHubMaterializeActionsArtifactResult,
   type GitHubGetCommitChecksWatchesInput,
   type GitHubGetCommitChecksWatchesResult,
   type GitHubStartCommitChecksWatchInput,
@@ -183,6 +187,7 @@ import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-creden
 import { GitHubHttpClient } from "./source-control/github-http-client.js";
 import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
+import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
 import { GitRepositoryService } from "./source-control/git-repository-service.js";
 
 interface AuditMetadata {
@@ -1172,6 +1177,37 @@ export class LocalAgent {
     );
   }
 
+  async githubMaterializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, context: OperationContext = {}): Promise<GitHubMaterializeActionsArtifactResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubMaterializeActionsArtifact",
+      githubMaterializeActionsArtifactInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        const targetResource = "github:" + repository + ":actions-run/" + parsed.runId + ":artifact/" + parsed.artifactName;
+        metadata.sourceControlCapability = "github.artifact.materialize";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedCommitSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace, "github.artifact.materialize", repository,
+          parsed.root ?? ".", true, activeContext.signal,
+        );
+        return this.executeSourceControlMutation({
+          workspace, operation: "github_materialize_actions_artifact",
+          capability: "github.artifact.materialize", repository,
+          canonicalRepositoryAlreadyAuthorized: true, targetResource,
+          input: parsed, context: activeContext, metadata,
+          resultSchema: githubMaterializeActionsArtifactResultSchema,
+          backend: async () => (await this.getGitHubExecutor()).materializeActionsArtifact(
+            parsed, workspace.canonicalRootPath, activeContext,
+          ),
+          resultSha: result => result.archiveSha256,
+        });
+      },
+    );
+  }
+
   async githubGetCommitChecks(
     input: GitHubGetCommitChecksInput,
     context: OperationContext = {},
@@ -1725,7 +1761,7 @@ export class LocalAgent {
     if (this.injectedGitHubExecutor !== undefined) return this.injectedGitHubExecutor;
     this.gitHubExecutorPromise ??= (async () => {
       const credentialProvider = await GhCliUserCredentialProvider.create();
-      return new GitHubService(new GitHubHttpClient({ credentialProvider }));
+      return new GitHubService(new GitHubHttpClient({ credentialProvider }), new GitHubActionsArtifactIngestor({ credentialProvider }));
     })();
     return this.gitHubExecutorPromise;
   }
