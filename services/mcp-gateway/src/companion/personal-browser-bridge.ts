@@ -355,6 +355,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         assets.serviceWorker,
         { encoding: "utf8", mode: 0o600 },
       ),
+      writeFile(
+        path.join(this.extensionDirectory, "secret-provision.html"),
+        assets.popupHtml,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "secret-provision.js"),
+        assets.popupScript,
+        { encoding: "utf8", mode: 0o600 },
+      ),
     ]);
 
     const server = new WebSocketServer({

@@ -1,10 +1,14 @@
+import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
+
 export interface PersonalBrowserExtensionAssets {
   manifest: string;
   serviceWorker: string;
+  popupHtml: string;
+  popupScript: string;
 }
 
 export const PERSONAL_BROWSER_PROTOCOL_VERSION = 1;
-export const PERSONAL_BROWSER_EXTENSION_VERSION = "0.3.0";
+export const PERSONAL_BROWSER_EXTENSION_VERSION = HANDOFF_EXTENSION_VERSION;
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
   "open",
@@ -36,7 +40,8 @@ export function buildPersonalBrowserExtensionAssets(
     permissions: ["tabs", "scripting", "storage", "debugger", "tabGroups"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
-    action: { default_title: "MCP V3 Personal Browser" },
+    action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
+    commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
     content_security_policy: {
       extension_pages:
         "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:" + port,
@@ -53,7 +58,7 @@ const EXTENSION_VERSION = ${JSON.stringify(PERSONAL_BROWSER_EXTENSION_VERSION)};
 const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
 const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
-const OWNED_TABS_KEY = "mcpV3OwnedTabs";
+const OWNED_TABS_KEY = "mcpV3OwnedTabs"; // gitleaks:allow -- public storage slot identifier, not a credential
 const MAX_SCREENSHOT_BASE64_CHARS = 3000000;
 const MAX_FULL_PAGE_PIXELS = 40000000;
 const MUTATING_OPERATIONS = new Set([
@@ -1056,6 +1061,8 @@ function delay(ms, signal) {
   });
 }
 
+${HANDOFF_WORKER_SOURCE}
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   void removeOwnedTab(tabId);
 });
@@ -1069,5 +1076,5 @@ chrome.runtime.onInstalled.addListener(connect);
 connect();
 `;
 
-  return { manifest, serviceWorker };
+  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT };
 }
