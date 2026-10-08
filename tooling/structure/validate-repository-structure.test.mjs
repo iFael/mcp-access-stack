@@ -340,10 +340,10 @@ test("keeps canonical CI free of Docker image lanes", async () => {
 });
 
 test("requires dedicated Edge contract preparation before the public release gate", async () => {
-  const workflow = await readFile(
+  const workflow = (await readFile(
     new URL("../../.github/workflows/release.yml", import.meta.url),
     "utf8",
-  );
+  )).replaceAll("\r\n", "\n");
   const edgeStart = workflow.indexOf("\n  edge:\n");
   const publishStart = workflow.indexOf("\n  publish:\n");
   assert.ok(edgeStart >= 0 && publishStart > edgeStart);
