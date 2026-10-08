@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -35,6 +36,8 @@ import {
 } from "./text-file.js";
 
 export class FileService {
+  constructor(private readonly openReadHandle: (target: string) => Promise<FileHandle> =
+    (target) => open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))) {}
 
   async listFiles(
     workspace: ResolvedWorkspace,
@@ -204,17 +207,38 @@ export class FileService {
     if (initial.size > workspace.limits.maxFileBytes) {
       throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
     }
-    const currentHash = hashBuffer(await readFile(authorized.absolutePath));
-    if (currentHash !== input.expectedSha256.toLowerCase()) {
-      throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
+    // Read through the opened descriptor, not by reopening the pathname.
+    // This does not authorize destructive deletion; it only narrows the
+    // read-only race between SHA validation and a concurrent name swap.
+    const handle = await this.openReadHandle(authorized.absolutePath);
+    try {
+      const opened = await handle.stat();
+      const sameIdentity = (other: typeof initial): boolean =>
+        other.isFile() && !other.isSymbolicLink() &&
+        other.dev === opened.dev && other.ino === opened.ino &&
+        other.size === opened.size && other.mtimeMs === opened.mtimeMs;
+      if (!sameIdentity(initial) || opened.size > workspace.limits.maxFileBytes) {
+        throw new AppError("INVALID_ARGUMENT", "Opened file identity changed during deletion dry-run.");
+      }
+      const openedPath = await realpath(authorized.absolutePath);
+      const stillAuthorized = process.platform === "win32"
+        ? openedPath.toLowerCase() === authorized.canonicalPath.toLowerCase()
+        : openedPath === authorized.canonicalPath;
+      if (!stillAuthorized || !sameIdentity(await lstat(authorized.absolutePath))) {
+        throw new AppError("INVALID_ARGUMENT", "Deletion dry-run target was redirected.");
+      }
+      const currentHash = hashBuffer(await handle.readFile());
+      const latest = await handle.stat();
+      if (!sameIdentity(latest) || !sameIdentity(await lstat(authorized.absolutePath))) {
+        throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion dry-run.");
+      }
+      if (currentHash !== input.expectedSha256.toLowerCase()) {
+        throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
+      }
+      return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun: true };
+    } finally {
+      await handle.close();
     }
-    const latest = await lstat(authorized.absolutePath);
-    if (!latest.isFile() || latest.isSymbolicLink() ||
-        latest.dev !== initial.dev || latest.ino !== initial.ino ||
-        latest.size !== initial.size || latest.mtimeMs !== initial.mtimeMs) {
-      throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion preflight.");
-    }
-    return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun: true };
   }
 
   async patchFile(

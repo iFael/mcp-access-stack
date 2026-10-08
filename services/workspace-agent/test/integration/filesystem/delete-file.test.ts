@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, rename, symlink } from "node:fs/promises";
+import { lstat, open, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
@@ -180,6 +181,43 @@ describe("typed file deletion (destructive mode fail-closed)", () => {
     await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
       .resolves.toBe("expected");
     await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await noStaging(root);
+  });
+
+  test("dry-run binds SHA inspection to the opened file when its name is replaced", async () => {
+    const { root } = await setup();
+    const original = path.join(root, "remove.txt");
+    const parked = path.join(root, "parked.txt");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(async (target) => {
+      const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      await rename(original, parked);
+      await writeFile(original, "replacement");
+      return handle;
+    });
+    await expect(service.deleteFile(workspace, { ...input, dryRun: true }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(parked, "utf8")).resolves.toBe("expected");
+    await expect(readFile(original, "utf8")).resolves.toBe("replacement");
+    await noStaging(root);
+  });
+
+  test("dry-run rejects an ancestor redirected during the handle-open boundary", async () => {
+    const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(async (target) => {
+      await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+      await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+      return open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    });
+    await expect(service.deleteFile(workspace, { ...input, path: "nested/remove.txt", dryRun: true }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
       .resolves.toBe("expected");
     await noStaging(root);
   });
