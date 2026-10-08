@@ -88,7 +88,7 @@ function harness() {
       url: "chrome-extension://trusted-extension-id/secret-provision.html",
     }, (value) => { response = value as Reply; });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    return { allowed, response };
+    return response === undefined ? { allowed } : { allowed, response };
   }
   return {
     storage,
