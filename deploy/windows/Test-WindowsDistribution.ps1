@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$CompanionOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -78,6 +78,59 @@ Assert-ContainsNone -Label 'Public release workflow' -Source $releaseWorkflow -T
     'ghcr.io/',
     'deploy/release/'
 )
+
+$companionWorkflow = Read-ProjectFile '.github\workflows\companion-only-distribution.yml'
+Assert-ContainsAll -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
+    'workflow_run:',
+    'workflows: [CI]',
+    'types: [completed]',
+    'branches: [main]',
+    "github.event.workflow_run.conclusion == 'success'",
+    "github.event.workflow_run.event == 'push'",
+    'github.event.workflow_run.head_repository.full_name == github.repository',
+    'github.event.workflow_run.head_sha',
+    'github.event.workflow_run.id',
+    'concurrency:',
+    'cancel-in-progress: false',
+    'git/ref/heads/main',
+    'actions/runs/$CI_RUN_ID',
+    'git tag --merged',
+    'companion-only-distribution.yml',
+    'environment: public-release',
+    'WINDOWS_SIGNING_PFX_BASE64',
+    'WINDOWS_SIGNING_PFX_PASSWORD',
+    'New-McpRelease.ps1',
+    'New-McpWindowsExecutionNodeArtifacts.ps1',
+    'New-McpPublicDistribution.ps1',
+    "-WorkflowName 'Companion-only distribution'",
+    'Test-McpWindowsExecutionNodePackage.ps1',
+    '-OfflinePinnedAuthenticode',
+    'Get-FileHash',
+    'actions/attest@',
+    'actions/upload-artifact@',
+    'retention-days: 30'
+)
+Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
+    'workflow_dispatch:',
+    'inputs.expected_sha',
+    'inputs.release_id',
+    'npm run deploy',
+    'wrangler deploy',
+    'wrangler secret',
+    'npx wrangler',
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_ACCOUNT_ID',
+    'MCP_OWNER_TOKEN',
+    'gh release create',
+    'contents: write',
+    'git push',
+    '  push:',
+    'edge:'
+)
+if ($CompanionOnly) {
+    Write-Output 'Companion-only distribution workflow structural contract PASS.'
+    return
+}
 
 $artifactBuilder = Read-ProjectFile 'deploy\windows\New-McpWindowsExecutionNodeArtifacts.ps1'
 Assert-ContainsAll -Label 'Native artifact builder' -Source $artifactBuilder -Tokens @(
