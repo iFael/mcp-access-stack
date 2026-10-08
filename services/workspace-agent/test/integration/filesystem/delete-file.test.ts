@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, symlink } from "node:fs/promises";
+import { lstat, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
+import { FileService } from "../../../src/filesystem/service.js";
+import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
 import {
   createFixture,
   makeWorkspacePolicy,
@@ -94,6 +96,94 @@ describe("typed file deletion", () => {
       .rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
     await expect(readFile(path.join(root, "protected.txt"), "utf8"))
       .resolves.toBe("expected");
+  });
+
+  test("preserves a replacement made immediately before quarantining", async () => {
+    const { root } = await setup();
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename: async (source, destination) => {
+        await writeFile(source, "replacement");
+        await rename(source, destination);
+      },
+      unlink,
+    });
+    await expect(service.deleteFile(workspace, input))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("replacement");
+    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+  });
+
+  test("deletes only the captured object if the source path is recreated after relocation", async () => {
+    const { root } = await setup();
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename: async (source, destination) => {
+        await rename(source, destination);
+        await writeFile(source, "new occupant");
+      },
+      unlink,
+    });
+    await expect(service.deleteFile(workspace, input)).resolves.toMatchObject({
+      deleted: true, sha256Before: input.expectedSha256,
+    });
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("new occupant");
+    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+  });
+
+  test("retains staged bytes for reconciliation rather than clobbering a concurrent occupant", async () => {
+    const { root } = await setup();
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename: async (source, destination) => {
+        await writeFile(source, "replacement");
+        await rename(source, destination);
+        await writeFile(source, "new occupant");
+      },
+      unlink,
+    });
+    await expect(service.deleteFile(workspace, input))
+      .rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN", details: { operation: "delete_file", outcome: "unknown", retryable: false } });
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("new occupant");
+    const stagedDirectories = (await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"));
+    expect(stagedDirectories).toHaveLength(1);
+    await expect(readFile(path.join(root, stagedDirectories[0]!, "target"), "utf8"))
+      .resolves.toBe("replacement");
+  });
+
+  test("rejects a changed staged object and restores it without deleting its contents", async () => {
+    const { root } = await setup();
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename: async (source, destination) => {
+        await rename(source, destination);
+        await writeFile(destination, "changed after isolation");
+      },
+      unlink,
+    });
+    await expect(service.deleteFile(workspace, input))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(path.join(root, "remove.txt"), "utf8"))
+      .resolves.toBe("changed after isolation");
+    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
+  });
+
+  test("reports an uncertain outcome when staging cleanup cannot finish", async () => {
+    const { root } = await setup();
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename: async (source, destination) => {
+        await rename(source, destination);
+        await writeFile(path.join(path.dirname(String(destination)), "concurrent-entry"), "keep");
+      },
+      unlink,
+    });
+    await expect(service.deleteFile(workspace, input))
+      .rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN", details: { outcome: "unknown", retryable: false } });
+    await expect(readFile(path.join(root, "remove.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    const stage = (await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"));
+    expect(stage).toHaveLength(1);
+    await expect(readFile(path.join(root, stage[0]!, "concurrent-entry"), "utf8")).resolves.toBe("keep");
   });
 
   test("denies deletion through symlinked parent outside workspace", async () => {

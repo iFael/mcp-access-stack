@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -34,7 +34,14 @@ import {
   readTextFile,
 } from "./text-file.js";
 
+interface DeletionFileOperations {
+  rename: typeof rename;
+  unlink: typeof unlink;
+}
+
 export class FileService {
+  constructor(private readonly deletionFileOperations: DeletionFileOperations = { rename, unlink }) {}
+
   async listFiles(
     workspace: ResolvedWorkspace,
     input: ListFilesInput,
@@ -196,8 +203,67 @@ export class FileService {
       throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion preflight.");
     }
     const dryRun = input.dryRun ?? false;
-    if (!dryRun) await unlink(authorized.absolutePath);
-    return { path: logicalPath, sha256Before: currentHash, deleted: !dryRun, dryRun };
+    if (dryRun) return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun };
+
+    // A rename atomically detaches one directory entry. Revalidate that exact
+    // entry in an owner-private staging directory before it can be unlinked.
+    // The private directory assumes no hostile process shares the agent's OS identity.
+    const stagingDirectory = await mkdtemp(path.join(
+      path.dirname(authorized.canonicalPath),
+      `.mcp-delete-${randomBytes(16).toString("hex")}-`,
+    ));
+    const stagedPath = path.join(stagingDirectory, "target");
+    let staged = false;
+    try {
+      await this.deletionFileOperations.rename(authorized.canonicalPath, stagedPath);
+      staged = true;
+      const moved = await lstat(stagedPath);
+      if (!moved.isFile() || moved.isSymbolicLink() ||
+          moved.dev !== latest.dev || moved.ino !== latest.ino ||
+          moved.size !== latest.size || moved.mtimeMs !== latest.mtimeMs ||
+          hashBuffer(await readFile(stagedPath)) !== currentHash) {
+        throw new AppError("INVALID_ARGUMENT", "File changed during deletion; no unverified file was deleted.");
+      }
+      await this.deletionFileOperations.unlink(stagedPath);
+      staged = false;
+    } catch (error) {
+      if (staged) {
+        // link() is no-clobber: a concurrent new entry at the source must
+        // remain untouched. If restoration is impossible, keep the staged
+        // object for explicit reconciliation rather than deleting it.
+        try {
+          await link(stagedPath, authorized.canonicalPath);
+          await this.deletionFileOperations.unlink(stagedPath);
+          staged = false;
+        } catch {
+          throw new AppError(
+            "EXECUTION_OUTCOME_UNKNOWN",
+            "Deletion was interrupted with a staged file; reconcile the file before any retry.",
+            { cause: error, details: {
+              path: path.relative(workspace.canonicalRootPath, stagedPath).split(path.sep).join("/"),
+              operation: "delete_file", outcome: "unknown", retryable: false,
+            } },
+          );
+        }
+      }
+      throw error;
+    } finally {
+      if (!staged) {
+        try {
+          await rmdir(stagingDirectory);
+        } catch (error) {
+          throw new AppError(
+            "EXECUTION_OUTCOME_UNKNOWN",
+            "Deletion staging cleanup was incomplete; reconcile the target before any retry.",
+            { cause: error, details: {
+              path: path.relative(workspace.canonicalRootPath, stagingDirectory).split(path.sep).join("/"),
+              operation: "delete_file", outcome: "unknown", retryable: false,
+            } },
+          );
+        }
+      }
+    }
+    return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun };
   }
 
   async patchFile(
