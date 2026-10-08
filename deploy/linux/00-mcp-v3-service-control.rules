@@ -1,0 +1,18 @@
+// MCP V3 managed service start via systemd/Polkit.
+// No generic unit management, arbitrary commands, stop, restart or reload.
+polkit.addRule(function (action, subject) {
+  if (subject.user !== "mcp-access-stack" ||
+      action.id !== "org.freedesktop.systemd1.manage-units") {
+    return;
+  }
+
+  var unit = action.lookup("unit");
+  var verb = action.lookup("verb");
+  if (verb === "start" &&
+      (unit === "mcp-v3-oracle-read-api.service" ||
+       unit === "mcp-v3-update-control-oracle-channel.service")) {
+    return polkit.Result.YES;
+  }
+
+  return polkit.Result.NO;
+});
