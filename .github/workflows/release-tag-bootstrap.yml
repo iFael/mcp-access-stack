@@ -1,0 +1,48 @@
+name: Release tag bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact new SemVer release tag (for example v1.1.0-beta.84)
+        required: true
+        type: string
+      expected_sha:
+        description: Exact 40-character commit SHA already validated by main CI
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tag-bootstrap-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-tag:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: public-release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout the exact workflow commit (no persisted credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Validate exact tag, main SHA and canonical CI; publish one Git ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: node tooling/release/bootstrap-release-tag.mjs
