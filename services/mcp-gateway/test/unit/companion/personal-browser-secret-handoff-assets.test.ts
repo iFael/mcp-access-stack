@@ -14,6 +14,10 @@ type Reply = Record<string, unknown>;
 
 function harness() {
   const storage = new Map<string, unknown>();
+  let ownedTabs: unknown = undefined;
+  let ownershipReadFails = false;
+  let beforeTabsQuery: (() => void) | undefined;
+  let ownershipTail = Promise.resolve();
   let handler: MessageHandler | undefined;
   let activeUrl = "https://github.com/iFael/mcp-access-stack/settings/environments/22362070741/edit";
   let injectedUrl: string | undefined;
@@ -61,9 +65,17 @@ function harness() {
         for (const [key, value] of Object.entries(entries)) storage.set(key, value);
       },
       remove: async (name: string) => { storage.delete(name); },
+    }, local: {
+      get: async (_name: string) => {
+        if (ownershipReadFails) throw Error("ownership-unavailable");
+        return { mcpV3OwnedTabs: ownedTabs };
+      },
     } },
     commands: { onCommand: { addListener: (_fn: unknown) => undefined } },
-    tabs: { query: async () => [{ id: 42, url: activeUrl }] },
+    tabs: { query: async () => {
+      beforeTabsQuery?.();
+      return [{ id: 42, url: activeUrl }];
+    } },
     scripting: { executeScript: async (input: {
       target: { tabId: number };
       func: (...args: unknown[]) => string;
@@ -74,6 +86,12 @@ function harness() {
     } },
   };
   const context = vm.createContext({
+    withOwnershipLock: async (work: () => Promise<unknown>) => {
+      const task = ownershipTail.then(work);
+      ownershipTail = task.then(() => undefined, () => undefined);
+      return task;
+    },
+    OWNED_TABS_KEY: "mcpV3OwnedTabs", // gitleaks:allow -- fixed ownership registry slot, not a credential
     chrome, crypto: webcrypto, URL, Date, Array, Number, Math, Uint8Array,
     document: fakeDocument, location: { get href() { return injectedUrl ?? activeUrl; } },
     HTMLInputElement: MockInput, HTMLTextAreaElement: class {},
@@ -96,6 +114,9 @@ function harness() {
     send,
     setUrl: (value: string) => { activeUrl = value; },
     setInjectedUrl: (value: string) => { injectedUrl = value; },
+    setOwnedTabs: (value: unknown) => { ownedTabs = value; },
+    failOwnershipRead: (value: boolean) => { ownershipReadFails = value; },
+    onTabsQuery: (callback: (() => void) | undefined) => { beforeTabsQuery = callback; },
     getFocused: () => focusedField!,
     focus: (field: MockInput) => { focusedField = field; },
     createInput: (value: string) => new MockInput(value),
@@ -115,6 +136,9 @@ describe("native MCP V3 browser secret handoff", () => {
     expect(assets.popupScript).toBe(HANDOFF_POPUP_SCRIPT);
     expect(assets.popupScript).not.toContain("BRIDGE_TOKEN");
     expect(assets.serviceWorker).toContain("chrome.storage.session");
+    expect(assets.serviceWorker).toContain("function withOwnershipLock(work)");
+    expect(assets.serviceWorker).toContain("return withOwnershipLock(async () => {");
+    expect(assets.serviceWorker).toContain("chrome.storage.local.get(OWNED_TABS_KEY)");
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.local.set");
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.sync.set");
     expect(assets.popupHtml).toContain("Salvar no Cloudflare realiza um deploy");
@@ -197,6 +221,49 @@ describe("native MCP V3 browser secret handoff", () => {
     h.focus(field);
     expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
     expect(field.value).toBe("");
+  });
+
+  it("allows an ordinary human tab even when other tabs belong to MCP", async () => {
+    const h = harness();
+    await h.send("mcp-secret-generate");
+    h.setOwnedTabs({ "41": { ownership: "mcp" } });
+    expect((await h.send("mcp-secret-fill")).response).toEqual({
+      ok: true, destination: "github",
+    });
+    expect(h.scriptCalls).toHaveLength(1);
+  });
+
+  it("rejects MCP-owned tabs before any secret is injected or returned", async () => {
+    const h = harness();
+    await h.send("mcp-secret-generate");
+    h.setOwnedTabs({ "42": { ownership: "mcp" } });
+    const response = await h.send("mcp-secret-fill");
+    expect(response.response).toEqual({ ok: false, code: "refused" });
+    expect(h.scriptCalls).toHaveLength(0);
+    expect(h.getFocused().value).toBe("");
+  });
+
+  it("fails closed when the ownership registry cannot be read or is malformed", async () => {
+    const h = harness();
+    await h.send("mcp-secret-generate");
+    h.failOwnershipRead(true);
+    expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
+    h.failOwnershipRead(false);
+    for (const malformed of [null, [], "invalid", 42]) {
+      h.setOwnedTabs(malformed);
+      expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
+    }
+    expect(h.scriptCalls).toHaveLength(0);
+    expect(h.getFocused().value).toBe("");
+  });
+
+  it("rejects a tab that becomes MCP-owned during tab lookup", async () => {
+    const h = harness();
+    await h.send("mcp-secret-generate");
+    h.onTabsQuery(() => h.setOwnedTabs({ "42": { ownership: "mcp" } }));
+    expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
+    expect(h.scriptCalls).toHaveLength(0);
+    expect(h.getFocused().value).toBe("");
   });
 
   it("rejects a navigation to a different port between initial URL check and script injection", async () => {

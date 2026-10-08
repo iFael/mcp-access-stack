@@ -134,12 +134,25 @@ async function mcpSecretStatus() {
 }
 
 async function mcpSecretFill() {
+  // Share the same ownership lock used to register and release MCP-owned tabs.
+  // Holding it through injection prevents a tab being claimed mid-fill.
+  return withOwnershipLock(async () => {
   const record = await mcpSecretRead();
   if (!record) throw Error("expired");
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tabs.length !== 1 || !Number.isSafeInteger(tabs[0].id)) throw Error("no-tab");
   const destination = mcpSecretDestination(tabs[0].url);
   if (!destination) throw Error("destination-not-allowed");
+  // A failed or malformed ownership read must never be treated as an empty set.
+  const registry = await chrome.storage.local.get(OWNED_TABS_KEY);
+  if (!registry || typeof registry !== "object") throw Error("ownership-unavailable");
+  const owned = registry[OWNED_TABS_KEY];
+  if (owned !== undefined && (!owned || typeof owned !== "object" || Array.isArray(owned))) {
+    throw Error("ownership-invalid");
+  }
+  if (owned && Object.prototype.hasOwnProperty.call(owned, String(tabs[0].id))) {
+    throw Error("mcp-owned-tab");
+  }
   const result = await chrome.scripting.executeScript({
     target: { tabId: tabs[0].id },
     func: function mcpFillOnlyFocusedSecretValue(value, target, name) {
@@ -176,6 +189,7 @@ async function mcpSecretFill() {
   });
   if (result?.length !== 1 || result[0]?.result !== "filled") throw Error("field-not-allowed");
   return { ok: true, destination };
+  });
 }
 
 async function mcpSecretDispatch(message) {
