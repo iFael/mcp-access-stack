@@ -102,19 +102,29 @@ async function mcpSecretRead() {
   return record;
 }
 
-async function mcpSecretGenerate() {
-  // Repeated clicks or uncertain popup outcomes must not silently rotate the value.
-  if (await mcpSecretRead()) return { ok: true, ready: true, alreadyExisting: true };
-  const bytes = new Uint8Array(48);
-  crypto.getRandomValues(bytes);
-  const value = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
-  bytes.fill(0);
-  // Explicitly deny content-script access, including if Chrome defaults change.
-  await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-  await chrome.storage.session.set({
-    [MCP_SECRET_STORAGE_KEY]: { createdAt: Date.now(), value }
+let mcpSecretMutationTail = Promise.resolve();
+function mcpSecretMutation(work) {
+  // Serialize generation and discard; concurrent popup requests cannot overwrite each other.
+  const current = mcpSecretMutationTail.then(work);
+  mcpSecretMutationTail = current.then(() => undefined, () => undefined);
+  return current;
+}
+
+function mcpSecretGenerate() {
+  return mcpSecretMutation(async () => {
+    // Repeated clicks or uncertain popup outcomes must not silently rotate the value.
+    if (await mcpSecretRead()) return { ok: true, ready: true, alreadyExisting: true };
+    const bytes = new Uint8Array(48);
+    crypto.getRandomValues(bytes);
+    const value = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+    bytes.fill(0);
+    // Explicitly deny content-script access, including if Chrome defaults change.
+    await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+    await chrome.storage.session.set({
+      [MCP_SECRET_STORAGE_KEY]: { createdAt: Date.now(), value }
+    });
+    return { ok: true, ready: true };
   });
-  return { ok: true, ready: true };
 }
 
 async function mcpSecretStatus() {
@@ -135,6 +145,7 @@ async function mcpSecretFill() {
     func: function mcpFillOnlyFocusedSecretValue(value, target, name) {
       // The second origin check protects against navigation between tab query and injection.
       const url = new URL(location.href);
+      if (url.port || url.username || url.password) return "refused";
       const gh = target === "github" && url.protocol === "https:" && url.hostname === "github.com" &&
         /^\\/iFael\\/mcp-access-stack\\/settings\\/environments\\/22362070741(?:\\/|$)/u.test(url.pathname);
       const cf = target === "cloudflare" && url.protocol === "https:" && url.hostname === "dash.cloudflare.com" &&
@@ -172,10 +183,10 @@ async function mcpSecretDispatch(message) {
   if (message.type === "mcp-secret-status") return mcpSecretStatus();
   if (message.type === "mcp-secret-generate") return mcpSecretGenerate();
   if (message.type === "mcp-secret-fill") return mcpSecretFill();
-  if (message.type === "mcp-secret-clear") {
+  if (message.type === "mcp-secret-clear") return mcpSecretMutation(async () => {
     await chrome.storage.session.remove(MCP_SECRET_STORAGE_KEY);
     return { ok: true, ready: false };
-  }
+  });
   throw Error("unsupported");
 }
 

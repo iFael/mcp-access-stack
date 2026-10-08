@@ -16,6 +16,7 @@ function harness() {
   const storage = new Map<string, unknown>();
   let handler: MessageHandler | undefined;
   let activeUrl = "https://github.com/iFael/mcp-access-stack/settings/environments/22362070741/edit";
+  let injectedUrl: string | undefined;
   let focusedField: MockInput | undefined;
   const scriptCalls: Array<{ args: unknown[]; tabId: number }> = [];
   class MockInput {
@@ -74,7 +75,7 @@ function harness() {
   };
   const context = vm.createContext({
     chrome, crypto: webcrypto, URL, Date, Array, Number, Math, Uint8Array,
-    document: fakeDocument, location: { get href() { return activeUrl; } },
+    document: fakeDocument, location: { get href() { return injectedUrl ?? activeUrl; } },
     HTMLInputElement: MockInput, HTMLTextAreaElement: class {},
     Event: FakeEvent,
   });
@@ -94,6 +95,7 @@ function harness() {
     scriptCalls,
     send,
     setUrl: (value: string) => { activeUrl = value; },
+    setInjectedUrl: (value: string) => { injectedUrl = value; },
     getFocused: () => focusedField!,
     focus: (field: MockInput) => { focusedField = field; },
     createInput: (value: string) => new MockInput(value),
@@ -137,6 +139,18 @@ describe("native MCP V3 browser secret handoff", () => {
     await h.send("mcp-secret-generate");
     const rotated = [...h.storage.values()][0] as { value: string };
     expect(rotated.value).not.toBe(state.value);
+  });
+
+  it("coalesces simultaneous generate requests instead of silently rotating the session secret", async () => {
+    const h = harness();
+    const results = await Promise.all([
+      h.send("mcp-secret-generate"),
+      h.send("mcp-secret-generate"),
+      h.send("mcp-secret-generate"),
+    ]);
+    expect(results.every(r => r.response?.ok === true)).toBe(true);
+    expect(results.filter(r => r.response?.alreadyExisting === true)).toHaveLength(2);
+    expect([...h.storage.values()]).toHaveLength(1);
   });
 
   it("fills the exact same value on only two pinned first-party forms without submitting", async () => {
@@ -183,6 +197,14 @@ describe("native MCP V3 browser secret handoff", () => {
     h.focus(field);
     expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
     expect(field.value).toBe("");
+  });
+
+  it("rejects a navigation to a different port between initial URL check and script injection", async () => {
+    const h = harness();
+    await h.send("mcp-secret-generate");
+    h.setInjectedUrl("https://github.com:8443/iFael/mcp-access-stack/settings/environments/22362070741/edit");
+    expect((await h.send("mcp-secret-fill")).response).toEqual({ ok: false, code: "refused" });
+    expect(h.getFocused().value).toBe("");
   });
 
   it("blocks untrusted runtime senders and expires and clears session secrets", async () => {
