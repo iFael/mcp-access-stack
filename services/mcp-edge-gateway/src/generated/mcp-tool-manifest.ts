@@ -10998,6 +10998,136 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Downloads one successful main companion Actions archive to a controlled workspace directory with verified SHA-256. It does not install or extract the inner signed ZIP.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "artifactName": {
+          "pattern": "^windows-companion-[0-9]+\\.[0-9]+\\.[0-9]+-companion\\.[0-9]+-[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "expectedArtifactSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "expectedCommitSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "runId",
+        "artifactName",
+        "expectedCommitSha",
+        "expectedArtifactSha256"
+      ],
+      "type": "object"
+    },
+    "name": "github_materialize_actions_artifact",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archivePath": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "archiveSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifactName": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "commitSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "sizeBytes": {
+          "maximum": 300000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "materialized",
+            "already_materialized"
+          ],
+          "type": "string"
+        },
+        "validation": {
+          "const": "actions_archive_sha256_verified",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "runId",
+        "commitSha",
+        "artifactName",
+        "archivePath",
+        "archiveSha256",
+        "sizeBytes",
+        "validation"
+      ],
+      "type": "object"
+    },
+    "title": "Materialize pinned GitHub Actions artifact"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Starts or reuses a persistent owner-scoped watch for GitHub check-runs on an exact commit SHA. The watch polls GitHub without shell commands and survives agent restart.",
     "execution": {
       "taskSupport": "forbidden"
@@ -21127,13 +21257,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59",
-  "serverVersion": "0.4.0-catalog.ca35a966fee83.sc8b8b70607cc",
-  "toolCount": 94,
-  "toolSetRevision": "c8b8b70607cc0e55d5b80ac5259cf12aec6db628dab4b315b6eefd216f32ab8f"
+  "contractRevision": "dc639d9e2df5886d2910913d83869e4fc4093a8a64bab23ea30da0c557e87ff2",
+  "serverVersion": "0.4.0-catalog.cdc639d9e2df5.s7df7445498fe",
+  "toolCount": 95,
+  "toolSetRevision": "7df7445498fe8cc5f523eedaa22088fc48a62a44141a60ed20ca19c2928f0b1d"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ca35a966fee83.sc8b8b70607cc"
+  "version": "0.4.0-catalog.cdc639d9e2df5.s7df7445498fe"
 } as const;
