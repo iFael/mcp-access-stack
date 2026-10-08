@@ -17,6 +17,7 @@ import {
   githubClosePullRequestInputSchema,
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
+  githubMaterializeActionsArtifactInputSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubStartCommitChecksWatchInputSchema,
   githubWaitCommitChecksWatchInputSchema,
@@ -44,6 +45,7 @@ const expectedPublicSourceControlNames = [
   "github_create_pull_request",
   "github_create_repository",
   "github_get_commit_checks",
+  "github_materialize_actions_artifact",
   "github_get_commit_checks_watches",
   "github_start_commit_checks_watch",
   "github_wait_commit_checks_watch",
@@ -63,6 +65,7 @@ const expectedSourceControlCapabilities = [
   "git.merge.write",
   "git.remote.push",
   "github.repository.read",
+  "github.artifact.materialize",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -176,6 +179,15 @@ const inputCases = [
     },
   },
   {
+    name: "github_materialize_actions_artifact",
+    schema: githubMaterializeActionsArtifactInputSchema,
+    input: {
+      workspaceId: "repo", owner: "octo", repository: "app",
+      runId: 123, artifactName: "windows-companion-1.1.0-companion.123-" + shaA,
+      expectedCommitSha: shaA, expectedArtifactSha256: "a".repeat(64),
+    },
+  },
+  {
     name: "github_start_commit_checks_watch",
     schema: githubStartCommitChecksWatchInputSchema,
     input: {
@@ -274,7 +286,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes nineteen public tools, eighteen relay operations and eleven capabilities", () => {
+  it("exposes twenty public tools, nineteen relay operations and twelve capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -284,8 +296,8 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(19);
-    expect(sourceControlCapabilities).toHaveLength(11);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
+    expect(sourceControlCapabilities).toHaveLength(12);
 
     for (const forbiddenName of [
       "source_control",

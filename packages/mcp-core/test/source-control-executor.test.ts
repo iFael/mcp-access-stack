@@ -4,6 +4,7 @@ import type {
   GitHubClosePullRequestInput,
   GitHubCreateRepositoryInput,
   GitHubGetCommitChecksInput,
+  GitHubMaterializeActionsArtifactInput,
   GitHubGetPullRequestInput,
   GitHubGetRepositoryInput,
   GitHubMergePullRequestInput,
@@ -133,7 +134,7 @@ describe("source-control executor ports", () => {
     ]);
   });
 
-  test("keeps GitHubExecutor limited to exactly seven typed methods", async () => {
+  test("keeps GitHubExecutor limited to exactly eight typed methods", async () => {
     const calls: string[] = [];
     const executor: GitHubExecutor = {
       async getRepository(input: GitHubGetRepositoryInput) {
@@ -170,6 +171,19 @@ describe("source-control executor ports", () => {
             startedAt: null,
             completedAt: null,
           }],
+        };
+      },
+      async materializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, workspaceRoot: string) {
+        calls.push("materializeActionsArtifact");
+        return {
+          status: "materialized",
+          runId: input.runId,
+          commitSha: input.expectedCommitSha,
+          artifactName: input.artifactName,
+          archivePath: workspaceRoot + "/.runtime-tools/github-actions-artifacts/sample.zip",
+          archiveSha256: input.expectedArtifactSha256,
+          sizeBytes: 128,
+          validation: "actions_archive_sha256_verified",
         };
       },
       async createRepository(input: GitHubCreateRepositoryInput) {
@@ -240,11 +254,17 @@ describe("source-control executor ports", () => {
       "getCommitChecks",
       "getPullRequest",
       "getRepository",
+      "materializeActionsArtifact",
       "mergePullRequest",
     ]);
 
     await executor.getRepository({ workspaceId: "repo", owner: "acme", repository: "app" });
     await executor.getCommitChecks({ workspaceId: "repo", owner: "acme", repository: "app", commitSha: shaA });
+    await executor.materializeActionsArtifact({
+      workspaceId: "repo", owner: "acme", repository: "app", runId: 37777047603,
+      artifactName: "windows-companion-1.1.0-companion.37776640817-" + shaA,
+      expectedCommitSha: shaA, expectedArtifactSha256: "d".repeat(64),
+    }, ".");
     await executor.createRepository({ workspaceId: "repo", owner: "acme", name: "app-2", visibility: "private" });
     await executor.getPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 });
     await executor.createPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", title: "Feature", head: "feature/x", base: "main" });
@@ -254,6 +274,7 @@ describe("source-control executor ports", () => {
     expect(calls).toEqual([
       "getRepository",
       "getCommitChecks",
+      "materializeActionsArtifact",
       "createRepository",
       "getPullRequest",
       "createPullRequest",

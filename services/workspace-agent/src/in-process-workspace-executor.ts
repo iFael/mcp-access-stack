@@ -234,6 +234,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
     return this.agent.githubGetCommitChecks(...args);
   }
+  materializeActionsArtifact(...args: Parameters<GitHubExecutor["materializeActionsArtifact"]>) {
+    const [input, _workspaceRoot, context] = args;
+    return this.agent.githubMaterializeActionsArtifact(input, context);
+  }
   startCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["startCommitChecksWatch"]>) {
     return this.agent.githubStartCommitChecksWatch(...args);
   }

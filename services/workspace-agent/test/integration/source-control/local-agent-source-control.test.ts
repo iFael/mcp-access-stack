@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import {
   InMemoryMutationReceiptStore,
@@ -166,6 +166,13 @@ function fakeGitHubExecutor(): GitHubExecutor {
       defaultBranch: "main",
       visibility: "private" as const,
       url: `https://github.com/${input.owner}/${input.repository}`,
+    })),
+    materializeActionsArtifact: jest.fn<GitHubExecutor["materializeActionsArtifact"]>(async (input, workspaceRoot) => ({
+      status: "materialized", runId: input.runId,
+      commitSha: input.expectedCommitSha, artifactName: input.artifactName,
+      archivePath: workspaceRoot + "/.runtime-tools/artifact.zip",
+      archiveSha256: input.expectedArtifactSha256, sizeBytes: 64,
+      validation: "actions_archive_sha256_verified",
     })),
     getCommitChecks: jest.fn<GitHubExecutor["getCommitChecks"]>(async (input) => ({
       owner: input.owner,
@@ -708,6 +715,40 @@ describe("LocalAgent direct authorization and receipt completeness", () => {
     expect(gitExecutor.stagePaths).not.toHaveBeenCalled();
   });
 });
+describe("LocalAgent Actions artifact materialization authorization", () => {
+  const input = {
+    workspaceId: "test", owner: "octo", repository: "repo", runId: 37777047603,
+    artifactName: "windows-companion-1.1.0-companion.37776640817-" + SHA_A,
+    expectedCommitSha: SHA_A, expectedArtifactSha256: "e".repeat(64),
+  };
+
+  it("fails closed without the distinct artifact capability", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.repository.read"],
+      origin: "https://github.com/octo/repo.git",
+    });
+    await expect(agent.githubMaterializeActionsArtifact(input, { invocationId: "deny-artifact" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(githubExecutor.materializeActionsArtifact).not.toHaveBeenCalled();
+  });
+
+  it("uses the trusted local workspace root and replays the same invocation", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.artifact.materialize"],
+      origin: "https://github.com/octo/repo.git",
+    });
+    const first = await agent.githubMaterializeActionsArtifact(input, { invocationId: "pinned-artifact" });
+    expect(first).toMatchObject({ status: "materialized", commitSha: SHA_A });
+    expect(githubExecutor.materializeActionsArtifact).toHaveBeenCalledTimes(1);
+    // Windows CI may supply an 8.3 short path; the workspace executor must use its canonical root.
+    expect((githubExecutor.materializeActionsArtifact as jest.Mock).mock.calls[0]?.[1])
+      .toBe(await realpath(fixture!.workspacePath));
+    await expect(agent.githubMaterializeActionsArtifact(input, { invocationId: "pinned-artifact" }))
+      .resolves.toEqual(first);
+    expect(githubExecutor.materializeActionsArtifact).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("LocalAgent GitHub commit-check watch authorization", () => {
   it("denies watch creation before any GitHub poll when repository read is not authorized", async () => {
     const { agent, githubExecutor } = await setupAgent({

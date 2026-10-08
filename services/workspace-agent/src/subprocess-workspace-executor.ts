@@ -187,6 +187,9 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
     return this.fallback?.getCommitChecks?.(...args) ?? Promise.reject(this.notImplemented("getCommitChecks"));
   }
+  materializeActionsArtifact(...args: Parameters<GitHubExecutor["materializeActionsArtifact"]>) {
+    return this.fallback?.materializeActionsArtifact?.(...args) ?? Promise.reject(this.notImplemented("materializeActionsArtifact"));
+  }
   startCommitChecksWatch(...args: Parameters<GitHubChecksWatchExecutor["startCommitChecksWatch"]>) {
     return this.fallback?.startCommitChecksWatch?.(...args) ?? Promise.reject(this.notImplemented("startCommitChecksWatch"));
   }
