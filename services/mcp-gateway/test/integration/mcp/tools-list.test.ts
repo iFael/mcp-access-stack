@@ -136,6 +136,7 @@ describe("advanced browser tools list", () => {
         "read_background_task_output",
         "git_create_branch",
         "git_push_branch",
+        "git_publish_tag",
         "github_get_repository",
         "github_get_commit_checks",
         "github_start_commit_checks_watch",

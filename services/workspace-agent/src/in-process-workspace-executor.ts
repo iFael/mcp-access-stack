@@ -225,6 +225,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   pushBranch(...args: Parameters<GitRepositoryExecutor["pushBranch"]>) {
     return this.agent.gitPushBranch(...args);
   }
+  publishTag(...args: Parameters<GitRepositoryExecutor["publishTag"]>) {
+    return this.agent.gitPublishTag(...args);
+  }
   getRepository(...args: Parameters<GitHubExecutor["getRepository"]>) {
     return this.agent.githubGetRepository(...args);
   }

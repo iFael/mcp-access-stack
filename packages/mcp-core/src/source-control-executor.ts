@@ -30,6 +30,8 @@ import type {
   GitSyncBranchResult,
   GitPushBranchInput,
   GitPushBranchResult,
+  GitPublishTagInput,
+  GitPublishTagResult,
   GitStagePathsInput,
   GitStagePathsResult,
   GitUnstagePathsInput,
@@ -65,6 +67,10 @@ export interface GitRepositoryExecutor {
     input: GitPushBranchInput,
     context?: OperationContext,
   ): Promise<GitPushBranchResult>;
+  publishTag(
+    input: GitPublishTagInput,
+    context?: OperationContext,
+  ): Promise<GitPublishTagResult>;
 }
 
 export interface GitHubChecksWatchExecutor {

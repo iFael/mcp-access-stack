@@ -8,6 +8,7 @@ import {
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
+  gitPublishTagInputSchema,
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
   type GitCommitInput,
@@ -20,6 +21,8 @@ import {
   type GitSyncBranchResult,
   type GitPushBranchInput,
   type GitPushBranchResult,
+  type GitPublishTagInput,
+  type GitPublishTagResult,
   type GitRepositoryExecutor,
   type GitStagePathsInput,
   type GitStagePathsResult,
@@ -434,6 +437,87 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       return this.reconcilePush(repository, parsed.remote, parsed.branch, localSha, context?.signal);
     }
     return this.reconcilePush(repository, parsed.remote, parsed.branch, localSha, context?.signal);
+  }
+
+  async publishTag(
+    input: GitPublishTagInput,
+    context?: OperationContext,
+  ): Promise<GitPublishTagResult> {
+    const parsed = gitPublishTagInputSchema.parse(input);
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", context?.signal);
+    const localTagSha = await this.runner.localTagSha(repository.repositoryRoot, parsed.tag, context?.signal);
+    if (localTagSha !== parsed.expectedCommitSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "Local lightweight release tag does not match the expected commit SHA.");
+    }
+
+    const remoteTagSha = await this.runner.remoteTagSha(
+      repository.repositoryRoot, parsed.remote, parsed.tag, context?.signal,
+    );
+    if (remoteTagSha !== undefined) {
+      if (remoteTagSha !== parsed.expectedCommitSha) {
+        throw new AppError("GIT_REMOTE_CHANGED", "Remote tag already exists at a different object.");
+      }
+      return this.completedTagPublication(repository, parsed, true);
+    }
+
+    const remoteMainSha = await this.runner.remoteBranchSha(
+      repository.repositoryRoot, parsed.remote, "main", context?.signal,
+    );
+    if (remoteMainSha !== parsed.expectedCommitSha) {
+      throw new AppError("GIT_REMOTE_CHANGED", "Remote main does not match the expected release commit.");
+    }
+    try {
+      await this.runner.pushTag(
+        repository.repositoryRoot, parsed.remote, parsed.tag, parsed.expectedCommitSha, context?.signal,
+      );
+    } catch (error) {
+      if (!isAmbiguousGitMutation(error)) throw error;
+      return this.reconcileTagPublication(repository, parsed, false, context?.signal);
+    }
+    return this.reconcileTagPublication(repository, parsed, false, context?.signal);
+  }
+
+  private completedTagPublication(
+    repository: MutationRepositoryContext,
+    parsed: ReturnType<typeof gitPublishTagInputSchema.parse>,
+    alreadyPublished: boolean,
+  ): GitPublishTagResult {
+    return {
+      status: "completed",
+      root: repository.logicalRoot,
+      remote: parsed.remote,
+      tag: parsed.tag,
+      commitSha: parsed.expectedCommitSha,
+      remoteSha: parsed.expectedCommitSha,
+      alreadyPublished,
+    };
+  }
+
+  private async reconcileTagPublication(
+    repository: MutationRepositoryContext,
+    parsed: ReturnType<typeof gitPublishTagInputSchema.parse>,
+    alreadyPublished: boolean,
+    signal?: AbortSignal,
+  ): Promise<GitPublishTagResult> {
+    let remoteSha: string | undefined;
+    try {
+      remoteSha = await this.runner.remoteTagSha(repository.repositoryRoot, parsed.remote, parsed.tag, signal);
+    } catch {
+      throw new AppError(
+        "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Remote release tag could not be verified after a publish attempt.",
+      );
+    }
+    if (remoteSha === undefined) {
+      throw new AppError(
+        "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Release tag publishing outcome is unresolved; do not retry without reconciliation.",
+      );
+    }
+    if (remoteSha !== parsed.expectedCommitSha) {
+      throw new AppError("GIT_REMOTE_CHANGED", "Remote release tag differs from expected commit after publishing.");
+    }
+    return this.completedTagPublication(repository, parsed, alreadyPublished);
   }
 
   async canonicalOriginUrl(

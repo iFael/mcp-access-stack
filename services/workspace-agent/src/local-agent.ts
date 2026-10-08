@@ -94,6 +94,8 @@ import {
   gitSyncBranchResultSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
+  gitPublishTagInputSchema,
+  gitPublishTagResultSchema,
   gitStagePathsInputSchema,
   gitStagePathsResultSchema,
   gitUnstagePathsInputSchema,
@@ -150,6 +152,8 @@ import {
   type GitSyncBranchResult,
   type GitPushBranchInput,
   type GitPushBranchResult,
+  type GitPublishTagInput,
+  type GitPublishTagResult,
   type GitRepositoryExecutor,
   type GitStagePathsInput,
   type GitStagePathsResult,
@@ -1104,6 +1108,41 @@ export class LocalAgent {
     );
   }
 
+  async gitPublishTag(
+    input: GitPublishTagInput,
+    context: OperationContext = {},
+  ): Promise<GitPublishTagResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitPublishTag",
+      gitPublishTagInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const remote = parsed.remote ?? "origin";
+        const targetResource =
+          `${localGitRepositoryTarget(workspace.id, root)}:${remote}:refs/tags/${parsed.tag}`;
+        metadata.sourceControlCapability = "git.remote.push";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedCommitSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_publish_tag",
+          confirmableOperation: "git_publish_tag",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
+          capability: "git.remote.push",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: gitPublishTagResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).publishTag(parsed, activeContext),
+          resultSha: (result) => result.status === "completed" ? result.remoteSha : undefined,
+        });
+      },
+    );
+  }
+
   async githubGetRepository(
     input: GitHubGetRepositoryInput,
     context: OperationContext = {},
@@ -1493,6 +1532,7 @@ export class LocalAgent {
       operation: SourceControlOperationName;
       confirmableOperation?:
         | "git_push_branch"
+        | "git_publish_tag"
         | "github_create_repository"
         | "github_create_pull_request"
         | "github_close_pull_request"

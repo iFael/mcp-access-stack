@@ -145,6 +145,15 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       localSha: input.expectedLocalSha.toLowerCase(),
       remoteSha: input.expectedLocalSha.toLowerCase(),
     })),
+    publishTag: jest.fn<GitRepositoryExecutor["publishTag"]>(async (input) => ({
+      status: "completed" as const,
+      root: input.root ?? ".",
+      remote: input.remote ?? "origin",
+      tag: input.tag,
+      commitSha: input.expectedCommitSha.toLowerCase(),
+      remoteSha: input.expectedCommitSha.toLowerCase(),
+      alreadyPublished: false,
+    })),
   };
 }
 
@@ -417,6 +426,38 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
       ),
     ).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
     expect(gitExecutor.stagePaths).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LocalAgent release tag receipts and authorization", () => {
+  const tagInput = { workspaceId: "test", tag: "v1.1.0-beta.83", expectedCommitSha: SHA_A };
+
+  it("rejects publication without remote push policy and never invokes the backend", async () => {
+    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.commit.write"], confirmationMode: "trusted-workspace" });
+    await expect((agent as any).gitPublishTag(tagInput, { idempotencyKey: "tag-denied" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(gitExecutor.publishTag).not.toHaveBeenCalled();
+  });
+
+  it("requires typed confirmation outside trusted workspaces", async () => {
+    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
+    await expect((agent as any).gitPublishTag(tagInput, { invocationId: "tag-standard" }))
+      .resolves.toMatchObject({ status: "confirmation_required", operation: "git_publish_tag" });
+    expect(gitExecutor.publishTag).not.toHaveBeenCalled();
+  });
+
+  it("publishes once and replays the same result for the same invocation identity", async () => {
+    const { agent, gitExecutor } = await setupAgent({
+      capabilities: ["git.remote.push"], confirmationMode: "trusted-workspace",
+    });
+    const first = await (agent as any).gitPublishTag(tagInput, { invocationId: "tag-publication-1" });
+    expect(first).toMatchObject({ status: "completed", remoteSha: SHA_A });
+    const repeated = await (agent as any).gitPublishTag(tagInput, { invocationId: "tag-publication-1" });
+    expect(repeated).toEqual(first);
+    expect(gitExecutor.publishTag).toHaveBeenCalledTimes(1);
+    await expect((agent as any).gitPublishTag(
+      { ...tagInput, expectedCommitSha: SHA_B }, { invocationId: "tag-publication-1" },
+    )).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
   });
 });
 

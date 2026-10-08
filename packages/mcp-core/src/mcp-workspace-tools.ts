@@ -96,6 +96,9 @@ import {
   gitSyncBranchResultSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
+  gitPublishTagInputSchema,
+  gitPublishTagResultSchema,
+  gitReleaseTagSchema,
   gitStagePathsInputSchema,
   gitStagePathsResultSchema,
   gitUnstagePathsInputSchema,
@@ -192,6 +195,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_merge_branch",
   "git_sync_branch",
   "git_push_branch",
+  "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
   "github_start_commit_checks_watch",
@@ -2560,6 +2564,29 @@ const sourceControlMcpSchemas = {
       message: "Invalid git_push_branch MCP result.",
     }),
   },
+  git_publish_tag: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      tag: gitReleaseTagSchema,
+      expectedCommitSha: mcpSourceControlSha,
+      remote: z.literal("origin").optional(),
+      confirmationId: mcpSourceControlConfirmationId.optional(),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("git_publish_tag").optional(),
+      root: mcpSourceControlRoot.optional(),
+      remote: z.string().min(1).max(255).optional(),
+      tag: gitReleaseTagSchema.optional(),
+      commitSha: mcpSourceControlSha.optional(),
+      remoteSha: mcpSourceControlSha.optional(),
+      alreadyPublished: z.boolean().optional(),
+    }).strict().refine((value) => gitPublishTagResultSchema.safeParse(value).success, {
+      message: "Invalid git_publish_tag MCP result.",
+    }),
+  },
   github_get_repository: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName }).strict(),
     output: mcpGitHubRepositoryResult,
@@ -2692,6 +2719,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_merge_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_sync_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_push_branch: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+  git_publish_tag: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
@@ -2999,6 +3027,34 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.pushBranch(parsed, context)),
           );
           return sourceControlSuccess("Git push processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_publish_tag", include)) {
+    server.registerTool(
+      "git_publish_tag",
+      {
+        title: "Publish exact Git release tag",
+        description: "Publishes one existing, exact SemVer tag at the expected commit after matching remote main; fails closed on conflicts and reconciles uncertain outcomes. Never forces or rewrites tags.",
+        inputSchema: sourceControlMcpSchemas.git_publish_tag.input,
+        outputSchema: sourceControlMcpSchemas.git_publish_tag.output,
+        annotations: sourceControlAnnotations.git_publish_tag,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitPublishTagInputSchema.parse(input);
+          const structuredContent = gitPublishTagResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.publishTag(parsed, context),
+            ),
+          );
+          return sourceControlSuccess("Git release tag publication reconciled.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -3331,6 +3387,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitMergeBranch: "git_merge_branch",
   gitSyncBranch: "git_sync_branch",
   gitPushBranch: "git_push_branch",
+  gitPublishTag: "git_publish_tag",
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
