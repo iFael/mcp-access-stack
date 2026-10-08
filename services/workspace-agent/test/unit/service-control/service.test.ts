@@ -87,7 +87,7 @@ describe("LinuxServiceControlService", () => {
     ]);
   });
 
-  it("starts only the allowlisted unit through the exact non-shell sudo command", async () => {
+  it("starts only the allowlisted unit through noninteractive systemctl without sudo", async () => {
     const runner = new FakeRunner([
       commandResult(statusOutput("inactive", 0)),
       commandResult(),
@@ -105,12 +105,12 @@ describe("LinuxServiceControlService", () => {
       },
     });
     expect(runner.calls[1]).toEqual({
-      executable: "/usr/bin/sudo",
-      args: ["-n", "/usr/bin/systemctl", "start", CHANNEL],
+      executable: "/usr/bin/systemctl",
+      args: ["--no-ask-password", "start", CHANNEL],
     });
   });
 
-  it("fails closed on expected-state mismatch without attempting privileged execution", async () => {
+  it("fails closed on expected-state mismatch without invoking a start command", async () => {
     const runner = new FakeRunner([
       commandResult(statusOutput("active", 4242)),
     ]);
@@ -140,8 +140,8 @@ describe("LinuxServiceControlService", () => {
       },
     });
     expect(runner.calls[1]).toEqual({
-      executable: "/usr/bin/sudo",
-      args: ["-n", "/usr/bin/systemctl", "start", CHANNEL],
+      executable: "/usr/bin/systemctl",
+      args: ["--no-ask-password", "start", CHANNEL],
     });
   });
 

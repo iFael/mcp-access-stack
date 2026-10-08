@@ -10,7 +10,6 @@ import {
 } from "@vs-code-gpt/shared";
 
 const SYSTEMCTL = "/usr/bin/systemctl";
-const SUDO = "/usr/bin/sudo";
 const COMMAND_TIMEOUT_MS = 15_000;
 const STATUS_POLL_ATTEMPTS = 20;
 const STATUS_POLL_DELAY_MS = 250;
@@ -118,8 +117,8 @@ export class LinuxServiceControlService {
     }
 
     const command = await this.runner.run(
-      SUDO,
-      ["-n", SYSTEMCTL, "start", serviceName],
+      SYSTEMCTL,
+      ["--no-ask-password", "start", serviceName],
       COMMAND_TIMEOUT_MS,
       signal,
     );
