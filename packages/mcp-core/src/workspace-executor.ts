@@ -35,6 +35,8 @@ import type {
   OperationContext,
   PatchFileInput,
   PatchFileResult,
+  DeleteFileInput,
+  DeleteFileResult,
   ReadFileInput,
   ReadBinaryFileInput,
   ReadBinaryFileResult,
@@ -83,6 +85,7 @@ export interface WorkspaceExecutor {
   ): Promise<ReadBinaryFileResult>;
   writeFile(input: WriteFileInput, context?: OperationContext): Promise<WriteFileResult>;
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult>;
+  deleteFile(input: DeleteFileInput, context?: OperationContext): Promise<DeleteFileResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

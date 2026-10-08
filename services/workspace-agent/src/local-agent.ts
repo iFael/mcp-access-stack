@@ -16,6 +16,7 @@ import {
   listFilesInputSchema,
   listWorkspaceRootsInputSchema,
   patchFileInputSchema,
+  deleteFileInputSchema,
   getReleaseStateInputSchema,
   prepareReleaseInputSchema,
   promoteReleaseInputSchema,
@@ -55,6 +56,8 @@ import {
   type OperationContext,
   type PatchFileInput,
   type PatchFileResult,
+  type DeleteFileInput,
+  type DeleteFileResult,
   type GetReleaseStateInput,
   type GetReleaseStateResult,
   type PrepareReleaseInput,
@@ -448,6 +451,21 @@ export class LocalAgent {
       context,
       (parsed) => ({ path: parsed.path }),
       (workspace, parsed) => this.fileService.patchFile(workspace, parsed),
+    );
+  }
+
+  async deleteFile(
+    input: DeleteFileInput,
+    context: OperationContext = {},
+  ): Promise<DeleteFileResult> {
+    return this.runValidatedAudited(
+      "deleteFile",
+      "write",
+      deleteFileInputSchema,
+      input,
+      context,
+      (parsed) => ({ path: parsed.path }),
+      (workspace, parsed) => this.fileService.deleteFile(workspace, parsed),
     );
   }
 

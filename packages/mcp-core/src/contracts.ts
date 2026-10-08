@@ -162,6 +162,23 @@ export const writeFileResultSchema = z
 
 export type WriteFileResult = z.infer<typeof writeFileResultSchema>;
 
+/** Delete one existing regular file only after matching its exact bytes. */
+export const deleteFileInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  path: relativePathSchema,
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  dryRun: z.boolean().default(false),
+}).strict();
+export type DeleteFileInput = z.input<typeof deleteFileInputSchema>;
+
+export const deleteFileResultSchema = z.object({
+  path: relativePathSchema,
+  sha256Before: z.string().regex(/^[a-f0-9]{64}$/),
+  deleted: z.boolean(),
+  dryRun: z.boolean(),
+}).strict();
+export type DeleteFileResult = z.infer<typeof deleteFileResultSchema>;
+
 export const textEncodingSchema = z.enum([
   "utf-8",
   "utf-16le",
@@ -870,6 +887,7 @@ export const relayOperations = [
   "readBinaryFile",
   "writeFile",
   "patchFile",
+  "deleteFile",
   "getReleaseState",
   "prepareRelease",
   "promoteRelease",
@@ -936,6 +954,11 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     ...relayRequestBase,
     operation: z.literal("patchFile"),
     input: patchFileInputSchema,
+  }).strict(),
+  z.object({
+    ...relayRequestBase,
+    operation: z.literal("deleteFile"),
+    input: deleteFileInputSchema,
   }).strict(),
   z.object({
     ...relayRequestBase,
@@ -1108,6 +1131,7 @@ export const relayResultSchemas = {
   readBinaryFile: readBinaryFileResultSchema,
   writeFile: writeFileResultSchema,
   patchFile: patchFileResultSchema,
+  deleteFile: deleteFileResultSchema,
   getReleaseState: getReleaseStateResultSchema,
   prepareRelease: prepareReleaseResultSchema,
   promoteRelease: promoteReleaseResultSchema,

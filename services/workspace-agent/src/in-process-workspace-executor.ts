@@ -20,6 +20,8 @@ import type {
   OperationContext,
   PatchFileInput,
   PatchFileResult,
+  DeleteFileInput,
+  DeleteFileResult,
   GetReleaseStateInput,
   GetReleaseStateResult,
   PrepareReleaseInput,
@@ -87,6 +89,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
 
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult> {
     return this.agent.patchFile(input, context);
+  }
+
+  deleteFile(input: DeleteFileInput, context?: OperationContext): Promise<DeleteFileResult> {
+    return this.agent.deleteFile(input, context);
   }
 
   getReleaseState(
