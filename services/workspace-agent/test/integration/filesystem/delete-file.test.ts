@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "@jest/globals";
+import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import { LocalAgent } from "../../../src/index.js";
 import { FileService } from "../../../src/filesystem/service.js";
 import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
+import { PathSecurity } from "../../../src/path-security.js";
 import {
   createFixture,
   makeWorkspacePolicy,
@@ -184,6 +185,57 @@ describe("typed file deletion", () => {
     const stage = (await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"));
     expect(stage).toHaveLength(1);
     await expect(readFile(path.join(root, stage[0]!, "concurrent-entry"), "utf8")).resolves.toBe("keep");
+  });
+
+  test("rejects ancestor redirect to an outside file immediately after authorization", async () => {
+    const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const original = PathSecurity.prototype.authorizeExisting;
+    const intercepted = jest.spyOn(PathSecurity.prototype, "authorizeExisting")
+      .mockImplementation(async function (this: PathSecurity, requested, kind, allowDot, operation) {
+        const authorized = await original.call(this, requested, kind, allowDot, operation);
+        if (requested === "nested/remove.txt") {
+          await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+          await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+        }
+        return authorized;
+      });
+    try {
+      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+      await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+    } finally {
+      intercepted.mockRestore();
+    }
+  });
+
+  test("rejects ancestor redirect after staging without moving any external file", async () => {
+    const { root } = await setup();
+    await writeWorkspaceFile(root, "nested/remove.txt", "expected");
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService({
+      rename,
+      unlink,
+      mkdtemp: async (prefix) => {
+        const staging = await mkdtemp(prefix);
+        await rename(path.join(root, "nested"), path.join(root, "nested-original"));
+        await symlink(fixture!.basePath, path.join(root, "nested"), "dir");
+        return staging;
+      },
+    });
+    await expect(service.deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
+      .resolves.toBe("expected");
+    expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
   });
 
   test("denies deletion through symlinked parent outside workspace", async () => {

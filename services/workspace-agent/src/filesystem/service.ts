@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -37,6 +37,7 @@ import {
 interface DeletionFileOperations {
   rename: typeof rename;
   unlink: typeof unlink;
+  mkdtemp?: (prefix: string) => Promise<string>;
 }
 
 export class FileService {
@@ -183,6 +184,53 @@ export class FileService {
     const authorized = await security.authorizeExisting(input.path, "file");
     // Symlinked ancestors must not redirect a permitted logical path to a non-writable file.
     security.authorizeWriteLogical(authorized.canonicalRelativePath);
+
+    // The authorization holds a path, not an OS directory handle. Fail closed
+    // if an ancestor is replaced after resolution, including before staging.
+    const canonicalParent = path.dirname(authorized.canonicalPath);
+    const [rootIdentity, parentIdentity] = await Promise.all([
+      lstat(workspace.canonicalRootPath),
+      lstat(canonicalParent),
+    ]);
+    const samePath = (left: string, right: string): boolean =>
+      process.platform === "win32"
+        ? left.toLowerCase() === right.toLowerCase()
+        : left === right;
+    const assertAnchorsStable = async (expectSource: boolean): Promise<void> => {
+      try {
+        const [root, parent, canonicalRoot, canonicalParentNow] = await Promise.all([
+          lstat(workspace.canonicalRootPath),
+          lstat(canonicalParent),
+          realpath(workspace.canonicalRootPath),
+          realpath(canonicalParent),
+        ]);
+        if (!root.isDirectory() || root.isSymbolicLink() ||
+            !parent.isDirectory() || parent.isSymbolicLink() ||
+            root.dev !== rootIdentity.dev || root.ino !== rootIdentity.ino ||
+            parent.dev !== parentIdentity.dev || parent.ino !== parentIdentity.ino ||
+            !samePath(canonicalRoot, workspace.canonicalRootPath) ||
+            !samePath(canonicalParentNow, canonicalParent)) {
+          throw new Error("Ancestor identity changed.");
+        }
+        if (expectSource) {
+          const [actualLogical, actualCanonical] = await Promise.all([
+            realpath(authorized.absolutePath),
+            realpath(authorized.canonicalPath),
+          ]);
+          if (!samePath(actualLogical, authorized.canonicalPath) ||
+              !samePath(actualCanonical, authorized.canonicalPath)) {
+            throw new Error("Deletion target was redirected after authorization.");
+          }
+        }
+      } catch (error) {
+        throw new AppError(
+          "INVALID_ARGUMENT",
+          "Deletion path or an ancestor changed; reauthorize before deleting.",
+          { cause: error },
+        );
+      }
+    };
+    await assertAnchorsStable(true);
     // Existing regular files only. Never follow symlinks, including those within the workspace.
     const initial = await lstat(authorized.absolutePath);
     if (!initial.isFile() || initial.isSymbolicLink()) {
@@ -190,6 +238,9 @@ export class FileService {
     }
     if (initial.size > workspace.limits.maxFileBytes) {
       throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
+    }
+    if (initial.dev !== rootIdentity.dev) {
+      throw new AppError("INVALID_ARGUMENT", "Safe deletion requires the source and workspace root on one filesystem.");
     }
     const bytes = await readFile(authorized.absolutePath);
     const currentHash = hashBuffer(bytes);
@@ -202,19 +253,39 @@ export class FileService {
         latest.size !== initial.size || latest.mtimeMs !== initial.mtimeMs) {
       throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion preflight.");
     }
+    await assertAnchorsStable(true);
     const dryRun = input.dryRun ?? false;
     if (dryRun) return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun };
 
-    // A rename atomically detaches one directory entry. Revalidate that exact
-    // entry in an owner-private staging directory before it can be unlinked.
+    // Anchor staging to the trusted workspace root rather than the mutable
+    // source parent. This prevents a parent redirect from creating a staging
+    // directory outside the workspace. The source and root must share a device.
     // The private directory assumes no hostile process shares the agent's OS identity.
-    const stagingDirectory = await mkdtemp(path.join(
-      path.dirname(authorized.canonicalPath),
+    const stagingDirectory = await (this.deletionFileOperations.mkdtemp ?? mkdtemp)(path.join(
+      workspace.canonicalRootPath,
       `.mcp-delete-${randomBytes(16).toString("hex")}-`,
     ));
     const stagedPath = path.join(stagingDirectory, "target");
+    const stagingIdentity = await lstat(stagingDirectory);
+    const assertStagingStable = async (): Promise<void> => {
+      try {
+        const [identity, canonical] = await Promise.all([
+          lstat(stagingDirectory),
+          realpath(stagingDirectory),
+        ]);
+        if (!identity.isDirectory() || identity.isSymbolicLink() ||
+            identity.dev !== stagingIdentity.dev || identity.ino !== stagingIdentity.ino ||
+            !samePath(canonical, stagingDirectory)) {
+          throw new Error("Staging directory identity changed.");
+        }
+      } catch (error) {
+        throw new AppError("INVALID_ARGUMENT", "Deletion staging directory changed.", { cause: error });
+      }
+    };
     let staged = false;
     try {
+      await assertStagingStable();
+      await assertAnchorsStable(true);
       await this.deletionFileOperations.rename(authorized.canonicalPath, stagedPath);
       staged = true;
       const moved = await lstat(stagedPath);
@@ -224,6 +295,7 @@ export class FileService {
           hashBuffer(await readFile(stagedPath)) !== currentHash) {
         throw new AppError("INVALID_ARGUMENT", "File changed during deletion; no unverified file was deleted.");
       }
+      await assertStagingStable();
       await this.deletionFileOperations.unlink(stagedPath);
       staged = false;
     } catch (error) {
@@ -232,6 +304,8 @@ export class FileService {
         // remain untouched. If restoration is impossible, keep the staged
         // object for explicit reconciliation rather than deleting it.
         try {
+          await assertStagingStable();
+          await assertAnchorsStable(false);
           await link(stagedPath, authorized.canonicalPath);
           await this.deletionFileOperations.unlink(stagedPath);
           staged = false;
@@ -250,6 +324,7 @@ export class FileService {
     } finally {
       if (!staged) {
         try {
+          await assertStagingStable();
           await rmdir(stagingDirectory);
         } catch (error) {
           throw new AppError(
