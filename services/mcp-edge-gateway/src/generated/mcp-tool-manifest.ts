@@ -883,6 +883,85 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Deletes one existing regular workspace file after validating the exact SHA-256 from read_file. Requires workspace write permission, denies blocked paths and symbolic links, never removes directories. Use dryRun to validate without deleting. A missing file is not silently treated as success.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "expectedSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "expectedSha256"
+      ],
+      "type": "object"
+    },
+    "name": "delete_file",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256Before": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256Before",
+        "deleted",
+        "dryRun"
+      ],
+      "type": "object"
+    },
+    "title": "Delete one file with SHA-256 precondition"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
@@ -21257,13 +21336,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "dc639d9e2df5886d2910913d83869e4fc4093a8a64bab23ea30da0c557e87ff2",
-  "serverVersion": "0.4.0-catalog.cdc639d9e2df5.s7df7445498fe",
-  "toolCount": 95,
-  "toolSetRevision": "7df7445498fe8cc5f523eedaa22088fc48a62a44141a60ed20ca19c2928f0b1d"
+  "contractRevision": "c73274d7f1d3d7b9b35a9172eeb1d19b17cd998b564ff05026f3e3b5d26c4949",
+  "serverVersion": "0.4.0-catalog.cc73274d7f1d3.s18486ee28d2b",
+  "toolCount": 96,
+  "toolSetRevision": "18486ee28d2baa817925116178acf64439c139bdc824cc7fb76d3986ccafd1e6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cdc639d9e2df5.s7df7445498fe"
+  "version": "0.4.0-catalog.cc73274d7f1d3.s18486ee28d2b"
 } as const;

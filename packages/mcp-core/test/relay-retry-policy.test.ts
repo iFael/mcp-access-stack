@@ -29,6 +29,7 @@ const retryable: RelayOperation[] = [
 const mutatingOrAmbiguous: RelayOperation[] = [
   "writeFile",
   "patchFile",
+  "deleteFile",
   "runCommand",
   "startBackgroundTask",
   "cancelBackgroundTask",

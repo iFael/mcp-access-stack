@@ -131,6 +131,11 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     return { path: "a.txt", sizeBytes: 1, created: true };
   }
 
+  async deleteFile(input: import("@vs-code-gpt/shared").DeleteFileInput) {
+    this.calls.push("deleteFile");
+    return { path: input.path, sha256Before: input.expectedSha256, deleted: !(input.dryRun ?? false), dryRun: input.dryRun ?? false };
+  }
+
   async patchFile(
     input: import("@vs-code-gpt/shared").PatchFileInput,
   ): Promise<import("@vs-code-gpt/shared").PatchFileResult> {
@@ -823,6 +828,21 @@ describe("registerWorkspaceTools", () => {
     expect(executor.backgroundContexts[0]).toMatchObject({
       ownerScope: "openai-session:auto-route-owner",
     });
+  });
+
+  it("exposes delete_file with SHA precondition and destructive annotations", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerWorkspaceTools(server, executor, { includeTools: ["delete_file"], securitySchemes: [{ type: "noauth" }] });
+    expect(WORKSPACE_TOOL_NAMES as readonly string[]).toContain("delete_file");
+    const tool = registeredTools(server)["delete_file"]!;
+    const result = await tool.handler({
+      workspaceId: "ws", path: "old.txt", expectedSha256: "a".repeat(64), dryRun: true,
+    }, { signal: new AbortController().signal });
+    expect(result.structuredContent).toEqual({
+      path: "old.txt", sha256Before: "a".repeat(64), deleted: false, dryRun: true,
+    });
+    expect(executor.calls).toEqual(["deleteFile"]);
   });
 
   it("preserves confirmationId when a long run_command routes to background", async () => {
@@ -1790,7 +1810,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty source-control tools inside the 51-tool workspace surface", () => {
+  it("publishes twenty source-control tools inside the 52-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1814,8 +1834,8 @@ describe("registerSourceControlTools", () => {
       "github_merge_pull_request",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(51);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(51);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(52);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(52);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

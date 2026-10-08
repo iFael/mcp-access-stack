@@ -51,6 +51,11 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("patchFile"));
   }
 
+  deleteFile(...args: Parameters<WorkspaceExecutor["deleteFile"]>) {
+    return this.fallback?.deleteFile(...args) ??
+      Promise.reject(this.notImplemented("deleteFile"));
+  }
+
   getReleaseState(...args: Parameters<WorkspaceExecutor["getReleaseState"]>) {
     return this.fallback?.getReleaseState(...args) ??
       Promise.reject(this.notImplemented("getReleaseState"));

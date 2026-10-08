@@ -41,6 +41,8 @@ import {
   readFilesResultSchema,
   patchFileInputSchema,
   patchFileResultSchema,
+  deleteFileInputSchema,
+  deleteFileResultSchema,
   patchFilesInputSchema,
   patchFilesItemResultSchema,
   patchFilesResultSchema,
@@ -221,6 +223,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "write_file",
   "patch_file",
   "patch_files",
+  "delete_file",
   "get_release_state",
   "prepare_release",
   "promote_release",
@@ -693,6 +696,53 @@ export function registerWorkspaceTools(
                   : `Patched ${structuredContent.path}; replacements=${structuredContent.replacementsApplied}; changed=${structuredContent.changed}.`,
               },
             ],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("delete_file", include)) {
+    server.registerTool(
+      "delete_file",
+      {
+        title: "Delete one file with SHA-256 precondition",
+        description:
+          "Deletes one existing regular workspace file after validating the exact SHA-256 from read_file. " +
+          "Requires workspace write permission, denies blocked paths and symbolic links, never removes directories. " +
+          "Use dryRun to validate without deleting. A missing file is not silently treated as success.",
+        inputSchema: deleteFileInputSchema,
+        outputSchema: deleteFileResultSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+          idempotentHint: false,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = deleteFileResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.deleteFile(input, context),
+            ),
+          );
+          return {
+            content: [{
+              type: "text",
+              text: structuredContent.dryRun
+                ? `Validated deletion for ${structuredContent.path}; SHA-256 unchanged.`
+                : `Deleted ${structuredContent.path}.`,
+            }],
             structuredContent,
           };
         } catch (error) {
@@ -3413,6 +3463,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   readBinaryFile: "read_file",
   writeFile: "write_file",
   patchFile: "patch_file",
+  deleteFile: "delete_file",
   getReleaseState: "get_release_state",
   prepareRelease: "prepare_release",
   promoteRelease: "promote_release",

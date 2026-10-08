@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -17,6 +17,8 @@ import {
   type SearchFilesResult,
   type WriteFileInput,
   type WriteFileResult,
+  type DeleteFileInput,
+  type DeleteFileResult,
 } from "@vs-code-gpt/shared";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import { collectAuthorizedFiles, listAuthorizedWorkspaceRoots } from "./discovery.js";
@@ -166,6 +168,36 @@ export class FileService {
       sizeBytes: contentBytes,
       created: authorized.created,
     };
+  }
+
+  async deleteFile(workspace: ResolvedWorkspace, input: DeleteFileInput): Promise<DeleteFileResult> {
+    const security = new PathSecurity(workspace);
+    const logicalPath = security.authorizeWriteLogical(input.path);
+    const authorized = await security.authorizeExisting(input.path, "file");
+    // Symlinked ancestors must not redirect a permitted logical path to a non-writable file.
+    security.authorizeWriteLogical(authorized.canonicalRelativePath);
+    // Existing regular files only. Never follow symlinks, including those within the workspace.
+    const initial = await lstat(authorized.absolutePath);
+    if (!initial.isFile() || initial.isSymbolicLink()) {
+      throw new AppError("NOT_A_FILE", "Deletion requires an existing regular file.");
+    }
+    if (initial.size > workspace.limits.maxFileBytes) {
+      throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
+    }
+    const bytes = await readFile(authorized.absolutePath);
+    const currentHash = hashBuffer(bytes);
+    if (currentHash !== input.expectedSha256.toLowerCase()) {
+      throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
+    }
+    const latest = await lstat(authorized.absolutePath);
+    if (!latest.isFile() || latest.isSymbolicLink() ||
+        latest.dev !== initial.dev || latest.ino !== initial.ino ||
+        latest.size !== initial.size || latest.mtimeMs !== initial.mtimeMs) {
+      throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion preflight.");
+    }
+    const dryRun = input.dryRun ?? false;
+    if (!dryRun) await unlink(authorized.absolutePath);
+    return { path: logicalPath, sha256Before: currentHash, deleted: !dryRun, dryRun };
   }
 
   async patchFile(
