@@ -131,10 +131,12 @@ describe("HardenedGitProcessRunner", () => {
     await runner.unstagePaths(process.cwd(), ["src/a.ts", "src/b.ts"]);
     await runner.mergeFastForward(process.cwd(), sha);
     await runner.pushBranch(process.cwd(), "origin", "feature/task4", sha);
+    await runner.pushTag(process.cwd(), "origin", "v1.1.0-beta.83", sha);
 
     expect(calls[0]!.slice(-5)).toEqual(["restore", "--staged", "--", "src/a.ts", "src/b.ts"]);
     expect(calls[1]!.slice(-3)).toEqual(["merge", "--ff-only", sha]);
     expect(calls[2]!.slice(-3)).toEqual(["push", "origin", `${sha}:refs/heads/feature/task4`]);
+    expect(calls[3]!.slice(-3)).toEqual(["push", "origin", `${sha}:refs/tags/v1.1.0-beta.83`]);
     for (const call of calls) {
       expect(call.some((argument) => argument.startsWith("core.hooksPath="))).toBe(true);
       expect(call).toContain("commit.gpgSign=false");

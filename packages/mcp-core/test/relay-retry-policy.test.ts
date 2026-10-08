@@ -38,6 +38,7 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "gitCommit",
   "gitMergeBranch",
   "gitPushBranch",
+  "gitPublishTag",
   "githubStartCommitChecksWatch",
   "githubCreateRepository",
   "githubCreatePullRequest",

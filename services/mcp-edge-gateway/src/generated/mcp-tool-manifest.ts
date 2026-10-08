@@ -10540,6 +10540,133 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Publishes one existing, exact SemVer tag at the expected commit after matching remote main; fails closed on conflicts and reconciles uncertain outcomes. Never forces or rewrites tags.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedCommitSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "remote": {
+          "const": "origin",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "tag",
+        "expectedCommitSha"
+      ],
+      "type": "object"
+    },
+    "name": "git_publish_tag",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "alreadyPublished": {
+          "type": "boolean"
+        },
+        "commitSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "operation": {
+          "const": "git_publish_tag",
+          "type": "string"
+        },
+        "remote": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "remoteSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "tag": {
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$",
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Publish exact Git release tag"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": true,
@@ -21000,13 +21127,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c",
-  "serverVersion": "0.4.0-catalog.c39889807df9c.sefcdb2a168d5",
-  "toolCount": 93,
-  "toolSetRevision": "efcdb2a168d51787247066da367661d86c42072893b6452a0fcd0b4c29eec4f1"
+  "contractRevision": "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59",
+  "serverVersion": "0.4.0-catalog.ca35a966fee83.sc8b8b70607cc",
+  "toolCount": 94,
+  "toolSetRevision": "c8b8b70607cc0e55d5b80ac5259cf12aec6db628dab4b315b6eefd216f32ab8f"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c39889807df9c.sefcdb2a168d5"
+  "version": "0.4.0-catalog.ca35a966fee83.sc8b8b70607cc"
 } as const;

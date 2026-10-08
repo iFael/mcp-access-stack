@@ -54,6 +54,9 @@ export interface GitProcessExecutor {
   mergeBaseIsAncestor(cwd: string, ancestorSha: string, descendantSha: string, signal?: AbortSignal): Promise<boolean>;
   mergeFastForward(cwd: string, sourceSha: string, signal?: AbortSignal): Promise<void>;
   remoteBranchSha(cwd: string, remote: string, branch: string, signal?: AbortSignal): Promise<string | undefined>;
+  localTagSha(cwd: string, tag: string, signal?: AbortSignal): Promise<string | undefined>;
+  remoteTagSha(cwd: string, remote: string, tag: string, signal?: AbortSignal): Promise<string | undefined>;
+  pushTag(cwd: string, remote: string, tag: string, commitSha: string, signal?: AbortSignal): Promise<void>;
   pushBranch(cwd: string, remote: string, branch: string, localSha: string, signal?: AbortSignal): Promise<void>;
   remoteUrl(cwd: string, signal?: AbortSignal): Promise<string>;
 }
@@ -208,6 +211,42 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
     if (output.length === 0) return undefined;
     const [sha] = output.split(/\s+/u);
     return sha === undefined ? undefined : parseSha(sha);
+  }
+
+  async localTagSha(cwd: string, tag: string, signal?: AbortSignal): Promise<string | undefined> {
+    const result = await this.invoke(
+      cwd, ["rev-parse", "--verify", `refs/tags/${tag}`], signal, [0, 128],
+    );
+    return result.code === 0 ? parseSha(result.stdout.trim()) : undefined;
+  }
+
+  async remoteTagSha(
+    cwd: string, remote: string, tag: string, signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const output = (await this.invokeSuccess(
+      cwd, ["ls-remote", "--refs", remote, `refs/tags/${tag}`], signal,
+    )).trim();
+    if (!output) return undefined;
+    const lines = output.split(/\r?\n/u);
+    if (lines.length !== 1) throw new AppError("GIT_ERROR", "Remote Git tag response is ambiguous.");
+    const fields = lines[0]!.split(/\s+/u);
+    if (fields.length !== 2 || fields[1] !== `refs/tags/${tag}`) {
+      throw new AppError("GIT_ERROR", "Remote Git tag identity does not match the requested ref.");
+    }
+    return parseSha(fields[0]!);
+  }
+
+  async pushTag(
+    cwd: string, remote: string, tag: string, commitSha: string, signal?: AbortSignal,
+  ): Promise<void> {
+    const result = await this.invoke(
+      cwd,
+      this.mutationArgs(["push", remote, `${commitSha}:refs/tags/${tag}`]),
+      signal,
+      undefined,
+      true,
+    );
+    if (result.code !== 0) throw ambiguousMutationError();
   }
 
   async pushBranch(

@@ -12,6 +12,7 @@ import type {
   GitMergeBranchInput,
   GitSyncBranchInput,
   GitPushBranchInput,
+  GitPublishTagInput,
   GitStagePathsInput,
   GitUnstagePathsInput,
 } from "../src/source-control-contracts.js";
@@ -29,7 +30,7 @@ describe("source-control executor ports", () => {
     expect(sourceControlExecutorModule).toBeDefined();
   });
 
-  test("keeps GitRepositoryExecutor limited to exactly seven typed methods", async () => {
+  test("keeps GitRepositoryExecutor limited to exactly eight typed methods", async () => {
     const calls: string[] = [];
     const executor: GitRepositoryExecutor = {
       async createBranch(input: GitCreateBranchInput) {
@@ -86,12 +87,25 @@ describe("source-control executor ports", () => {
           remoteSha: input.expectedLocalSha,
         };
       },
+      async publishTag(input: GitPublishTagInput) {
+        calls.push("publishTag");
+        return {
+          status: "completed",
+          root: input.root ?? ".",
+          remote: input.remote ?? "origin",
+          tag: input.tag,
+          commitSha: input.expectedCommitSha,
+          remoteSha: input.expectedCommitSha,
+          alreadyPublished: false,
+        };
+      },
     };
 
     expect(Object.keys(executor).sort()).toEqual([
       "commit",
       "createBranch",
       "mergeBranch",
+      "publishTag",
       "pushBranch",
       "stagePaths",
       "syncBranch",
@@ -105,6 +119,7 @@ describe("source-control executor ports", () => {
     await executor.mergeBranch({ workspaceId: "repo", sourceBranch: "feature/x", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB });
     await executor.syncBranch({ workspaceId: "repo", branch: "main", remote: "origin", expectedRemoteSha: shaB });
     await executor.pushBranch({ workspaceId: "repo", branch: "feature/x", expectedLocalSha: shaB });
+    await executor.publishTag({ workspaceId: "repo", tag: "v1.1.0-beta.83", expectedCommitSha: shaB });
 
     expect(calls).toEqual([
       "createBranch",
@@ -114,6 +129,7 @@ describe("source-control executor ports", () => {
       "mergeBranch",
       "syncBranch",
       "pushBranch",
+      "publishTag",
     ]);
   });
 

@@ -15,6 +15,8 @@ import {
   gitPathSchema,
   gitPushBranchInputSchema,
   gitPushBranchResultSchema,
+  gitPublishTagInputSchema,
+  gitPublishTagResultSchema,
   gitShaSchema,
   gitStagePathsInputSchema,
   gitUnstagePathsInputSchema,
@@ -84,7 +86,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes exactly seventeen operation names and five confirmable operations", () => {
+  test("publishes eighteen operation names and six confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -93,6 +95,7 @@ describe("source-control contracts", () => {
       "git_merge_branch",
       "git_sync_branch",
       "git_push_branch",
+      "git_publish_tag",
       "github_get_repository",
       "github_get_commit_checks",
       "github_start_commit_checks_watch",
@@ -106,11 +109,35 @@ describe("source-control contracts", () => {
     ]);
     expect(confirmableSourceControlOperationNameSchema.options).toEqual([
       "git_push_branch",
+      "git_publish_tag",
       "github_create_repository",
       "github_create_pull_request",
       "github_close_pull_request",
       "github_merge_pull_request",
     ]);
+  });
+
+  test("restricts published release tags to safe SemVer refs and exact commit hashes", () => {
+    expect(gitPublishTagInputSchema.parse({
+      workspaceId: "repo", tag: "v1.1.0-beta.83", expectedCommitSha: shaA,
+    })).toMatchObject({ tag: "v1.1.0-beta.83", remote: "origin", expectedCommitSha: shaA });
+    for (const tag of ["main", "-bad", "v1.2.3..bad", "v1.2.3/evil", "v1.2.3@{1}",
+      "v1.2.3.lock", "v1.2.3 ", "v1.2.3;sh", "v1.2.3\\evil"]) {
+      expect(gitPublishTagInputSchema.safeParse({
+        workspaceId: "repo", tag, expectedCommitSha: shaA,
+      }).success).toBe(false);
+    }
+    expect(gitPublishTagInputSchema.safeParse({
+      workspaceId: "repo", tag: "v1.1.0-beta.83", expectedCommitSha: shaA, remote: "untrusted",
+    }).success).toBe(false);
+    expect(gitPublishTagResultSchema.safeParse({
+      status: "completed", root: ".", remote: "origin", tag: "v1.1.0-beta.83",
+      commitSha: shaA, remoteSha: shaA, alreadyPublished: false,
+    }).success).toBe(true);
+    expect(gitPublishTagResultSchema.safeParse({
+      status: "completed", root: ".", remote: "origin", tag: "v1.1.0-beta.83",
+      commitSha: shaA, remoteSha: shaB, alreadyPublished: false,
+    }).success).toBe(false);
   });
 
   test("normalizes Git SHA and rejects invalid branch/path primitives", () => {
@@ -612,6 +639,7 @@ describe("source-control contracts", () => {
       ["git_merge_branch", gitMergeBranchInputSchema, { workspaceId: "repo", sourceBranch: "feature/x", expectedTargetHeadSha: shaA, expectedSourceHeadSha: shaB }],
       ["git_sync_branch", gitSyncBranchInputSchema, { workspaceId: "repo", branch: "main", remote: "origin", expectedRemoteSha: shaB }],
       ["git_push_branch", gitPushBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedLocalSha: shaA }],
+      ["git_publish_tag", gitPublishTagInputSchema, { workspaceId: "repo", tag: "v1.1.0-beta.83", expectedCommitSha: shaA }],
       ["github_get_repository", githubGetRepositoryInputSchema, { workspaceId: "repo", owner: "acme", repository: "app" }],
       ["github_get_commit_checks", githubGetCommitChecksInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", commitSha: shaA }],
       ["github_create_repository", githubCreateRepositoryInputSchema, { workspaceId: "repo", owner: "acme", name: "app", visibility: "private" }],

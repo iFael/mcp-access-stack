@@ -447,6 +447,86 @@ describe("GitRepositoryService sync", () => {
   }, 30_000);
 });
 
+describe("GitRepositoryService exact release tag publication", () => {
+  async function prepareBareMain() {
+    const setup = await setupRepository();
+    const remoteRoot = path.join(fixture!.basePath, "tag-remote.git");
+    await mkdir(remoteRoot, { recursive: true });
+    git(remoteRoot, ["init", "--bare"]);
+    git(fixture!.workspacePath, ["remote", "add", "origin", remoteRoot]);
+    git(fixture!.workspacePath, ["push", "origin", "main:refs/heads/main"]);
+    return { ...setup, remoteRoot };
+  }
+
+  const tag = "v1.1.0-beta.83";
+
+  it("publishes exact local tag to matching remote main, and treats an identical remote tag as idempotent", async () => {
+    const { service, headSha, remoteRoot } = await prepareBareMain();
+    git(fixture!.workspacePath, ["tag", tag, headSha]);
+    const input = { workspaceId: "test", tag, expectedCommitSha: headSha };
+    const first = await service.publishTag(input);
+    expect(first).toEqual({ status: "completed", root: ".", remote: "origin", tag,
+      commitSha: headSha, remoteSha: headSha, alreadyPublished: false });
+    expect(git(remoteRoot, ["rev-parse", `refs/tags/${tag}`]).trim()).toBe(headSha);
+    const again = await service.publishTag(input);
+    expect(again).toMatchObject({ status: "completed", alreadyPublished: true, remoteSha: headSha });
+  }, 30_000);
+
+  it("rejects incorrect local SHA and does not create a remote tag", async () => {
+    const { service, headSha, remoteRoot } = await prepareBareMain();
+    git(fixture!.workspacePath, ["tag", tag, headSha]);
+    await expect(service.publishTag({
+      workspaceId: "test", tag, expectedCommitSha: "a".repeat(40),
+    })).rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    expect(git(remoteRoot, ["tag", "--list", tag]).trim()).toBe("");
+  });
+
+  it("blocks stale remote main even if the local tag points to the expected SHA", async () => {
+    const { service, headSha, remoteRoot } = await prepareBareMain();
+    git(fixture!.workspacePath, ["tag", tag, headSha]);
+    await writeWorkspaceFile(fixture!.workspacePath, "later.txt", "later\n");
+    git(fixture!.workspacePath, ["add", "later.txt"]);
+    git(fixture!.workspacePath, ["commit", "-m", "advance main"]);
+    git(fixture!.workspacePath, ["push", "origin", "main:refs/heads/main"]);
+    await expect(service.publishTag({
+      workspaceId: "test", tag, expectedCommitSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_REMOTE_CHANGED" });
+    expect(git(remoteRoot, ["tag", "--list", tag]).trim()).toBe("");
+  }, 30_000);
+
+  it("never overwrites a conflicting remote tag", async () => {
+    const { service, headSha, remoteRoot } = await prepareBareMain();
+    git(fixture!.workspacePath, ["tag", tag, headSha]);
+    await writeWorkspaceFile(fixture!.workspacePath, "new.txt", "new\n");
+    git(fixture!.workspacePath, ["add", "new.txt"]);
+    git(fixture!.workspacePath, ["commit", "-m", "other commit"]);
+    const otherSha = head();
+    git(fixture!.workspacePath, ["push", "origin", `${otherSha}:refs/tags/${tag}`]);
+    await expect(service.publishTag({
+      workspaceId: "test", tag, expectedCommitSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_REMOTE_CHANGED" });
+    expect(git(remoteRoot, ["rev-parse", `refs/tags/${tag}`]).trim()).toBe(otherSha);
+  }, 30_000);
+
+  it("does not retry when push outcome is unknown and remote tag is absent", async () => {
+    const { registry, headSha } = await prepareBareMain();
+    const runner = {
+      isInsideWorkTree: async () => true,
+      showTopLevel: async () => fixture!.workspacePath,
+      localTagSha: async () => headSha,
+      remoteTagSha: async () => undefined,
+      remoteBranchSha: async () => headSha,
+      pushTag: async () => {
+        throw new AppError("GIT_ERROR", "Git command outcome unknown.", { details: { outcome: "unknown" } });
+      },
+    } as unknown as GitProcessExecutor;
+    const service = new GitRepositoryService(registry, runner);
+    await expect(service.publishTag({
+      workspaceId: "test", tag, expectedCommitSha: headSha,
+    })).rejects.toMatchObject({ code: "SOURCE_CONTROL_RECONCILIATION_REQUIRED" });
+  });
+});
+
 describe("GitRepositoryService push", () => {
   async function addBareOrigin(): Promise<string> {
     const remoteRoot = path.join(fixture!.basePath, "remote.git");

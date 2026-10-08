@@ -92,6 +92,12 @@ class RecordingSourceControlExecutor {
     });
   }
 
+  async publishTag(input: any, context?: OperationContext) {
+    this.record("publishTag", input, context);
+    return this.result({ status: "completed" as const, root: input.root ?? ".", remote: input.remote ?? "origin",
+      tag: input.tag, commitSha: input.expectedCommitSha, remoteSha: input.expectedCommitSha, alreadyPublished: false });
+  }
+
   async getRepository(input: any, context?: OperationContext) {
     this.record("getRepository", input, context);
     return this.result({
@@ -306,6 +312,13 @@ const cases = [
     expectedResult: { status: "completed", root: "project", remote: "origin", branch: "feature/task8", localSha: shaA, remoteSha: shaA },
   },
   {
+    name: "git_publish_tag",
+    method: "publishTag",
+    input: { workspaceId: "repo", root: "project", tag: "v1.1.0-beta.83", expectedCommitSha: shaA, confirmationId: opaqueConfirmationId },
+    expectedInput: { workspaceId: "repo", root: "project", tag: "v1.1.0-beta.83", expectedCommitSha: shaA, remote: "origin", confirmationId: opaqueConfirmationId },
+    expectedResult: { status: "completed", root: "project", tag: "v1.1.0-beta.83", remote: "origin", commitSha: shaA, remoteSha: shaA, alreadyPublished: false },
+  },
+  {
     name: "github_get_repository",
     method: "getRepository",
     input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app" },
@@ -452,6 +465,7 @@ const cases = [
 
 const confirmableNames = new Set([
   "git_push_branch",
+  "git_publish_tag",
   "github_create_repository",
   "github_create_pull_request",
   "github_close_pull_request",

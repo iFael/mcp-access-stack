@@ -5,6 +5,11 @@ const workspaceIdSchema = z.string().trim().min(1);
 const rootSchema = z.string().trim().min(1).max(4_096);
 const confirmationIdSchema = z.string().min(1).max(128);
 
+// Explicit, shell-safe SemVer release tag; arbitrary Git refs are not accepted.
+export const gitReleaseTagSchema = z.string().min(2).max(64)
+  .regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u);
+export type GitReleaseTag = z.infer<typeof gitReleaseTagSchema>;
+
 export const gitShaSchema = z
   .string()
   .regex(/^[a-f0-9]{40}$/iu)
@@ -179,6 +184,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_merge_branch",
   "git_sync_branch",
   "git_push_branch",
+  "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
   "github_start_commit_checks_watch",
@@ -194,6 +200,7 @@ export type SourceControlOperationName = z.infer<typeof sourceControlOperationNa
 
 export const confirmableSourceControlOperationNameSchema = z.enum([
   "git_push_branch",
+  "git_publish_tag",
   "github_create_repository",
   "github_create_pull_request",
   "github_close_pull_request",
@@ -431,6 +438,36 @@ export const gitPushBranchResultSchema = z.discriminatedUnion("status", [
   gitPushBranchCompletedResultSchema,
 ]);
 export type GitPushBranchResult = z.infer<typeof gitPushBranchResultSchema>;
+
+export const gitPublishTagInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  tag: gitReleaseTagSchema,
+  expectedCommitSha: gitShaSchema,
+  remote: z.literal("origin").default("origin"),
+  confirmationId: confirmationIdSchema.optional(),
+}).strict();
+export type GitPublishTagInput = z.input<typeof gitPublishTagInputSchema>;
+
+const gitPublishTagConfirmationRequiredSchema = sourceControlConfirmationRequiredSchema.extend({
+  operation: z.literal("git_publish_tag"),
+});
+export const gitPublishTagCompletedResultSchema = z.object({
+  status: z.literal("completed"),
+  root: rootSchema,
+  remote: gitRemoteSchema,
+  tag: gitReleaseTagSchema,
+  commitSha: gitShaSchema,
+  remoteSha: gitShaSchema,
+  alreadyPublished: z.boolean(),
+}).strict().refine((value) => value.commitSha === value.remoteSha, {
+  message: "Published tag must match the expected commit SHA.",
+});
+export const gitPublishTagResultSchema = z.discriminatedUnion("status", [
+  gitPublishTagConfirmationRequiredSchema,
+  gitPublishTagCompletedResultSchema,
+]);
+export type GitPublishTagResult = z.infer<typeof gitPublishTagResultSchema>;
 
 export const githubGetRepositoryInputSchema = z
   .object({
