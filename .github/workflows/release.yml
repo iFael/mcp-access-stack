@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+      # Companion bootstrap releases must not trigger full Edge release.
+      - "!v*-companion.*"
   workflow_dispatch:
     inputs:
       tag:
@@ -20,6 +22,7 @@ concurrency:
 
 jobs:
   signing-preflight:
+    if: ${{ !contains(inputs.tag || github.ref_name, '-companion.') }}
     runs-on: ubuntu-latest
     environment: public-release
     steps:
