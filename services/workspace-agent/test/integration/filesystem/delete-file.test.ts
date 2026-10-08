@@ -174,7 +174,7 @@ describe("typed file deletion", () => {
     const service = new FileService({
       rename: async (source, destination) => {
         await rename(source, destination);
-        await writeFile(path.join(path.dirname(destination), "concurrent-entry"), "keep");
+        await writeFile(path.join(path.dirname(String(destination)), "concurrent-entry"), "keep");
       },
       unlink,
     });
