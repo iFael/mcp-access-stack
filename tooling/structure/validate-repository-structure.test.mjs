@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 import { validateServiceBoundaries } from "./validate-repository-structure.mjs";
@@ -337,6 +338,65 @@ test("keeps canonical CI free of Docker image lanes", async () => {
     "utf8",
   );
   assert.doesNotMatch(workflow, /dockerGateway|dockerBrowser|dockerProxy|release-image-|docker\/build-push-action|deploy\/docker|deploy\/remote/u);
+});
+
+test("serializes all public release tags and dispatches for the shared Edge", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.match(workflow, /^  group: public-release-edge$/mu);
+  assert.doesNotMatch(workflow, /group: public-release-\$\{\{ inputs\.tag \|\| github\.ref_name \}\}/u);
+  assert.match(workflow, /cancel-in-progress: false/u);
+});
+
+test("requires real passing Edge preparation security and CAS tests before deployment", async () => {
+  const workflow = (await readFile(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
+  const edge = workflow.slice(workflow.indexOf("\n  edge:\n"), workflow.indexOf("\n  publish:\n"));
+  const guardStart = edge.indexOf("Reject release tags without authenticated Edge contract preparation");
+  const deployStart = edge.indexOf("npm run deploy --workspace @mcp-access-stack/edge-gateway");
+  assert.ok(guardStart >= 0 && guardStart < deployStart, "Edge security tests must run before Worker deploy");
+  const guard = edge.slice(guardStart, edge.indexOf("\n      - name:", guardStart));
+  assert.match(guard, /npm test --workspace @mcp-access-stack\/edge-gateway/u);
+  assert.match(guard, /--runTestsByPath test\/runtime-telemetry-surfaces\.test\.ts test\/browser-runtime-routing\.test\.ts/u);
+  const match = guard.match(/node --input-type=module <<'NODE'\n([\s\S]*?)\n          NODE/u);
+  assert.ok(match, "a failing security test or missing evidence must refuse deployment");
+  const code = match[1].replace(/^          /gmu, "");
+  const required = [
+    "rejects unauthenticated explicit contract preparation before touching the session",
+    "forwards authenticated exact-revision CAS preparation to the Durable Object",
+    "preserves the expected-active CAS conflict instead of claiming preparation succeeded",
+    "does not accept connector identity for contract preparation and fails closed without dedicated credential",
+    "persists an exact candidate and returns an idempotent replay without changing preparedAt",
+    "refuses competing candidates, incorrect CAS and malformed inputs without persistence",
+  ];
+  for (const title of required) assert.ok(guard.includes(title), "missing mandatory assertion: " + title);
+  const root = await mkdtemp(path.join(os.tmpdir(), "mcp-edge-release-guard-"));
+  const configPath = path.join(root, "services/mcp-edge-gateway/wrangler.jsonc");
+  const reportPath = path.join(root, "edge-contract-preparation-tests.json");
+  const verify = (expectedExit) => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
+      cwd: root, env: { ...process.env, RUNNER_TEMP: root },
+      encoding: "utf8", timeout: 5000,
+    });
+    assert.equal(result.status, expectedExit, result.stderr);
+    assert.equal(result.signal, null);
+  };
+  const report = (titles, success = true) => ({
+    success, testResults: [{ assertionResults: titles.map((title) => ({ title, status: "passed" })) }],
+  });
+  try {
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, JSON.stringify({ secrets: { required: ["MCP_CONTRACT_PREPARE_TOKEN"] } }), "utf8");
+    await writeFile(reportPath, JSON.stringify(report(required)), "utf8");
+    verify(0);
+    await writeFile(reportPath, JSON.stringify(report(required.slice(1))), "utf8");
+    verify(1);
+    await writeFile(reportPath, JSON.stringify(report(required, false)), "utf8");
+    verify(1);
+    await writeFile(reportPath, JSON.stringify(report(required)), "utf8");
+    await writeFile(configPath, JSON.stringify({ secrets: { required: [] } }), "utf8");
+    verify(1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("requires dedicated Edge contract preparation before the public release gate", async () => {
