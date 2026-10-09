@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: public-release-${{ github.ref }}-${{ inputs.tag }}
+  group: public-release-edge
   cancel-in-progress: false
 
 jobs:
@@ -486,6 +486,42 @@ jobs:
           expected="$(node -e 'const fs=require("node:fs"); const source=fs.readFileSync("services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts","utf8"); const match=source.match(/"contractRevision": "([0-9a-f]{64})"/); if(!match) process.exit(1); process.stdout.write(match[1]);')"
           test -n "$expected"
           echo "revision=$expected" >> "$GITHUB_OUTPUT"
+
+      - name: Reject release tags without authenticated Edge contract preparation
+        run: |
+          set -euo pipefail
+          npm test --workspace @mcp-access-stack/edge-gateway -- \
+            --runTestsByPath test/runtime-telemetry-surfaces.test.ts test/browser-runtime-routing.test.ts \
+            --json --outputFile "$RUNNER_TEMP/edge-contract-preparation-tests.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          let config;
+          let report;
+          try {
+            config = JSON.parse(readFileSync("services/mcp-edge-gateway/wrangler.jsonc", "utf8"));
+            report = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/edge-contract-preparation-tests.json", "utf8"));
+          } catch {
+            console.error("Release tag Edge contract evidence cannot be verified; refusing deploy.");
+            process.exit(1);
+          }
+          const required = [
+            "rejects unauthenticated explicit contract preparation before touching the session",
+            "forwards authenticated exact-revision CAS preparation to the Durable Object",
+            "preserves the expected-active CAS conflict instead of claiming preparation succeeded",
+            "does not accept connector identity for contract preparation and fails closed without dedicated credential",
+            "persists an exact candidate and returns an idempotent replay without changing preparedAt",
+            "refuses competing candidates, incorrect CAS and malformed inputs without persistence",
+          ];
+          const passed = new Set(report.testResults?.flatMap(test =>
+            test.assertionResults?.filter(result => result.status === "passed").map(result => result.title) ?? []) ?? []);
+          if (!Array.isArray(config.secrets?.required) ||
+              !config.secrets.required.includes("MCP_CONTRACT_PREPARE_TOKEN") ||
+              report.success !== true ||
+              required.some(name => !passed.has(name))) {
+            console.error("Release tag lacks verified authenticated Edge CAS preparation; refusing deploy.");
+            process.exit(1);
+          }
+          NODE
 
       - name: Preflight contract rollout compatibility
         id: edge-preflight
