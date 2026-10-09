@@ -45,7 +45,7 @@ function git(overrides: Partial<InspectGitResult> = {}): InspectGitResult {
 function ciPort(fetch: () => Promise<GitHubCommitChecksResult>) {
   return bindGitHubCommitChecks({
     githubGetCommitChecks: async (input, ctx) => {
-      expect(ctx.ownerScope).toBe("owner:trusted-session");
+      expect(ctx?.ownerScope).toBe("owner:trusted-session");
       expect(input.workspaceId).toBe(workspaceId);
       expect(input.owner).toBe("iFael");
       expect(input.repository).toBe("mcp-access-stack");
@@ -58,7 +58,7 @@ function ciPort(fetch: () => Promise<GitHubCommitChecksResult>) {
 function gitPort(fetch: () => Promise<InspectGitResult>) {
   return bindGitCleanInspection({
     inspectGit: async (input, ctx) => {
-      expect(ctx.ownerScope).toBe("owner:trusted-session");
+      expect(ctx?.ownerScope).toBe("owner:trusted-session");
       expect(input.workspaceId).toBe(workspaceId);
       expect(input.diffMode).toBe("none");
       expect(input.root).toBe(".");

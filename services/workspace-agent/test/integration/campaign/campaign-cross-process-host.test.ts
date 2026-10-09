@@ -37,7 +37,6 @@ function worker(stateDirectory:string,root:string):Worker {
   const child=fork(script,[stateDirectory,root],{
     execArgv:["--import","tsx"],
     stdio:["ignore","pipe","pipe","ipc"],
-    windowsHide:true,
   });
   spawned.push(child);
   const messages:Message[]=[];

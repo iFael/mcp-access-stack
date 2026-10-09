@@ -14,7 +14,8 @@ import {
 const ids=["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
 const ownerScope="fixture:trusted-full-host";
 const script=fileURLToPath(new URL("./campaign-local-agent-host-child.ts",import.meta.url));
-const resolver=fileURLToPath(new URL("./campaign-local-shared-resolver.mjs",import.meta.url));
+// Node --import requires a URL on Windows; D:\\ paths are not valid ESM URL schemes.
+const resolver=new URL("./campaign-local-shared-resolver.mjs",import.meta.url).href;
 let fixture:Fixture|undefined;
 const children:ChildProcess[]=[];
 afterEach(async()=>{
@@ -27,7 +28,7 @@ type ChildMsg={kind:"ready"|"executing"|"result"|"error";pid:number;status?:stri
 function host(policyPath:string,stateDirectory:string,campaignId:string,native?:{head:string;index:string}){
   const child=fork(script,[policyPath,stateDirectory,campaignId,...(native?[native.head,native.index]:[])],{
     execArgv:["--import","tsx","--import",resolver],
-    stdio:["ignore","pipe","pipe","ipc"],windowsHide:true,
+    stdio:["ignore","pipe","pipe","ipc"],
   });
   children.push(child);
   const backlog:ChildMsg[]=[];
@@ -65,6 +66,9 @@ function host(policyPath:string,stateDirectory:string,campaignId:string,native?:
   return {child,next,send:(action:"start"|"release"|"shutdown")=>child.send({action})};
 }
 describe("two isolated LocalAgent processes with the worktree-only shared build",()=>{
+  it("passes a file URL to Node preload on every platform",()=>{
+    expect(new URL(resolver).protocol).toBe("file:");
+  });
   it("blocks the second complete host before dispatch and admits it only after verified release",async()=>{
     fixture=await createFixture({profile:"full-repo-readonly"});
     const ledger=new DelegatedCampaignLedger(fixture.basePath,ownerScope);

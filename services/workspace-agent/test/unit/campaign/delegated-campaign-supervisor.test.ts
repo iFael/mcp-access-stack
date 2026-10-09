@@ -129,7 +129,7 @@ describe("DelegatedCampaignSupervisor",()=>{
     const second=await supervisor([recovered],{maxStepsPerWake:3})
       .serve(new AbortController().signal,3);
     expect(second.stop).toBe("all_completed");
-    expect(second.executed).toBeUndefined();
+    expect(Object.hasOwn(second,"executed")).toBe(false);
     expect(second.campaigns[0]?.reconciled).toBeGreaterThan(0);
     expect((await resume.get(workspaceId,ids[0]!))?.tasks[0]?.operationId).toBe(originalId);
   });
