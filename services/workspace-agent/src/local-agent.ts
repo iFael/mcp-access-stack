@@ -185,6 +185,15 @@ import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js"
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
+import {
+  TrustedCampaignAgentLifecycle,
+  type TrustedCampaignEnrollment,
+  type TrustedCampaignHostOptions,
+} from "./campaign/trusted-campaign-agent-lifecycle.js";
+import {
+  TrustedCampaignEnrollmentCatalog,
+  type TrustedCampaignBindingFactories,
+} from "./campaign/trusted-campaign-enrollment-catalog.js";
 import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt-store.js";
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
 import { GitHubHttpClient } from "./source-control/github-http-client.js";
@@ -316,6 +325,35 @@ export class LocalAgent {
     const agent = new LocalAgent(registry, audit, options);
     await agent.githubChecksWatchManager.recover();
     return agent;
+  }
+
+  /**
+   * Opt-in lifecycle integration for a trusted local service only.
+   * Creating LocalAgent never autostarts a campaign or broadens MCP tools.
+   * The caller must provide code-owned typed bindings and explicit state root.
+   */
+  createTrustedCampaignHost(
+    enrollments: readonly TrustedCampaignEnrollment[],
+    options: TrustedCampaignHostOptions,
+  ): TrustedCampaignAgentLifecycle {
+    return new TrustedCampaignAgentLifecycle(this, enrollments, options);
+  }
+
+  /**
+   * Trusted-process startup hook. The on-disk catalog holds only enrollment
+   * identity/digests, never executable commands or credentials. Fresh code
+   * factories are mandatory on every restart. No execution until serve().
+   */
+  async createTrustedCampaignHostFromCatalog(
+    catalog: TrustedCampaignEnrollmentCatalog,
+    factories: TrustedCampaignBindingFactories,
+    options: TrustedCampaignHostOptions,
+  ): Promise<TrustedCampaignAgentLifecycle> {
+    const enrollments = await catalog.load(this, factories);
+    if (enrollments.length === 0) {
+      throw new Error("CAMPAIGN_CATALOG_EMPTY: no authorized enrollments");
+    }
+    return this.createTrustedCampaignHost(enrollments, options);
   }
 
   resolveWorkspaceConcurrencyKey(workspaceId: string): string {
