@@ -87,6 +87,18 @@ test("rejects duplicate entries and mismatched manifest schema", async t => {
   );
 });
 
+test("excludes first-party compiler-only files even when individually hashed", async t => {
+  const f = await fixture(t);
+  const extra = path.join(f.root, "node_modules/@vs-code-gpt/shared/dist/index.d.ts");
+  await writeFile(extra, "type Internal = number;\\n");
+  f.manifest.files = await hashTree(f.root);
+  await writeFile(f.manifestPath, JSON.stringify(f.manifest));
+  await assert.rejects(
+    () => verifyCampaignRunnerDirectory(f.root, SHA),
+    /CAMPAIGN_ARTIFACT_COMPILE_ONLY_INCLUDED/u,
+  );
+});
+
 test("fails when manifest silently omits critical bootstrap", async t => {
   const f = await fixture(t);
   f.manifest.files = f.manifest.files.filter(e => !e.path.endsWith("campaign-service-cli.js"));

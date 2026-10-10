@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile, chmod } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { MANIFEST_NAME, hashTree, sha256File, verifyCampaignRunnerDirectory } from "./Verify-CampaignRunnerLinux.mjs";
+import { MANIFEST_NAME, hashTree, isCompilerOnly, sha256File, verifyCampaignRunnerDirectory } from "./Verify-CampaignRunnerLinux.mjs";
 
 const VERSION = "v26.10.0";
 const ARCHIVE = "node-v26.10.0-linux-x64.tar.xz";
@@ -44,6 +44,16 @@ async function assertMissing(file) {
     if (error?.code !== "ENOENT") throw error;
   }
 }
+async function stripCompilerOnlyFiles(dist) {
+  for (const entry of await readdir(dist, { withFileTypes: true })) {
+    const full = path.join(dist, entry.name);
+    const info = await lstat(full);
+    if (info.isSymbolicLink()) throw new Error("CAMPAIGN_ARTIFACT_COMPILED_SYMLINK");
+    if (info.isDirectory()) await stripCompilerOnlyFiles(full);
+    else if (info.isFile() && isCompilerOnly(entry.name)) await rm(full);
+    else if (!info.isFile()) throw new Error("CAMPAIGN_ARTIFACT_COMPILED_FILE_INVALID");
+  }
+}
 async function addWorkspace(stage, root, workspace) {
   const dir = path.join(root, workspace);
   for (const relative of ["package.json", "dist"]) {
@@ -55,6 +65,7 @@ async function addWorkspace(stage, root, workspace) {
     const target = path.join(stage, workspace, relative);
     await mkdir(path.dirname(target), { recursive: true });
     await cp(source, target, relative === "dist" ? { recursive: true } : {});
+    if (relative === "dist") await stripCompilerOnlyFiles(target);
   }
 }
 async function materialize(stage) {

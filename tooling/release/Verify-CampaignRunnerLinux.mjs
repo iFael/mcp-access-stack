@@ -9,6 +9,13 @@ export const MANIFEST_NAME = "mcp-v3-campaign-runner-manifest.json";
 const SHA = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const OFFICIAL_NODE_SHA256 = "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022";
+export function isCompilerOnly(name) {
+  return /(?:\.d\.(?:ts|cts|mts)(?:\.map)?|\.tsbuildinfo|\.(?:js|mjs|cjs)\.map)$/u.test(name);
+}
+const FIRST_PARTY_DIST = [
+  "node_modules/@vs-code-gpt/local-agent/dist/",
+  "node_modules/@vs-code-gpt/shared/dist/",
+];
 const EXACT_FILES = [
   "runtime/node",
   "runtime/LICENSE",
@@ -79,6 +86,10 @@ export async function verifyCampaignRunnerDirectory(directory, expectedCommit) {
         !SHA.test(record.sha256)) throw new Error("CAMPAIGN_ARTIFACT_INVALID_FILE_RECORD");
     const rel = validRelative(record.path);
     if (rel === MANIFEST_NAME || expected.has(rel)) throw new Error("CAMPAIGN_ARTIFACT_DUPLICATE_RECORD");
+    if (FIRST_PARTY_DIST.some(prefix => rel.startsWith(prefix)) &&
+        isCompilerOnly(path.posix.basename(rel))) {
+      throw new Error("CAMPAIGN_ARTIFACT_COMPILE_ONLY_INCLUDED");
+    }
     expected.set(rel, record.sha256);
   }
   if (EXACT_FILES.some(fileName => !expected.has(fileName))) {
