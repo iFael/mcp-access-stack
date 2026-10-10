@@ -116,7 +116,7 @@ describe("runtime telemetry surfaces", () => {
       MCP_CONNECTOR_TOKEN: "connector-test",
       MCP_OWNER_TOKEN: "owner-test",
       MCP_CONTRACT_PREPARE_TOKEN: "isolated-preparation-test",
-      MCP_SESSION: { idFromName: () => ({}), get: () => session },
+      MCP_SESSION: { idFromName: jest.fn(() => ({})), get: jest.fn(() => session) },
     } as never;
     const url = "https://edge.example/_internal/contract-rollout/status";
     for (const authorization of [undefined, "Bearer wrong", "Bearer connector-test", "Bearer owner-test"]) {
@@ -126,6 +126,8 @@ describe("runtime telemetry surfaces", () => {
       expect(response.status).toBe(401);
     }
     expect(reads).toBe(0);
+    expect(env.MCP_SESSION.get).not.toHaveBeenCalled();
+    expect(env.MCP_SESSION.idFromName).not.toHaveBeenCalled();
     const allowed = await worker.fetch(new Request(url, {
       headers: { authorization: "Bearer isolated-preparation-test" },
     }), env, {} as ExecutionContext);
@@ -134,6 +136,8 @@ describe("runtime telemetry surfaces", () => {
       activeContractRevision: "a".repeat(64), candidateConnectorReady: false,
     });
     expect(reads).toBe(1);
+    expect(env.MCP_SESSION.idFromName).toHaveBeenCalledTimes(1);
+    expect(env.MCP_SESSION.get).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when inspection credential is absent or shared", async () => {

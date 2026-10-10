@@ -144,6 +144,70 @@ describe("McpSession read-only contract inspection", () => {
     expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(state);
   });
 
+  it("preserves a beta.84 candidate, historic active catalog, and unrelated KV across cold-start inspection", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key, EXPECTED_MCP_CONTRACT_REVISION: next } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const active = "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c";
+    const candidate = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59";
+    expect(next).not.toBe(candidate);
+    const state = {
+      version: 1 as const, activeContractRevision: active, candidateContractRevision: candidate,
+      preparedAt: "2026-10-08T03:27:40.414Z", previousContractRevision: "f".repeat(64),
+    };
+    const storage = new MemoryStorage();
+    storage.set(key, state);
+    storage.set(`edge:mcp-catalog:v1:${active}:header`, {
+      version: 1, contractRevision: active, chunkCount: 1, toolCount: 1,
+      catalogMetadata: { contractRevision: active, toolCount: 1 },
+      serverIdentity: { name: "legacy-catalog", version: "beta" },
+    });
+    storage.set(`edge:mcp-catalog:v1:${active}:chunk:0`, [{ name: "legacy_tool" }]);
+    storage.set("edge:account-store:legacy", { privateData: "not-for-inspection" });
+    const originalCatalog = await readMcpCatalogSnapshot(storage, active);
+    const session = await createSession(storage);
+    const inspection = JSON.parse(await session.inspectContractRollout()) as {
+      status: number; body: Record<string, unknown>;
+    };
+    expect(inspection).toEqual({
+      status: 200,
+      body: {
+        activeContractRevision: active, candidateContractRevision: candidate,
+        candidateConnectorReady: false, preparedAt: state.preparedAt,
+      },
+    });
+    expect(JSON.stringify(inspection)).not.toContain("not-for-inspection");
+    expect(JSON.stringify(inspection)).not.toContain("legacy_tool");
+    expect((await session.getStatus()).activeContractRevision).toBe(active);
+    expect(JSON.parse(await session.prepareContractRollout({
+      expectedActiveContractRevision: active, expectedCandidateContractRevision: next,
+    }))).toMatchObject({ status: 409, body: { error: "candidate_contract_mismatch" } });
+    expect(JSON.parse(await session.bootstrapContractRollout({
+      expectedState: "absent", expectedActiveContractRevision: next,
+    }))).toMatchObject({ status: 409 });
+    expect(await storage.get(key)).toEqual(state);
+    expect(await readMcpCatalogSnapshot(storage, active)).toEqual(originalCatalog);
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("re-reads a legacy rollout after an external change without repairing it", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const active = "1".repeat(64);
+    storage.set(key, { version: 1, activeContractRevision: active });
+    const session = await createSession(storage);
+    const candidate = "2".repeat(64);
+    storage.set(key, { version: 1, activeContractRevision: active, candidateContractRevision: candidate });
+    expect(JSON.parse(await session.inspectContractRollout())).toEqual({
+      status: 200, body: {
+        activeContractRevision: active, candidateContractRevision: candidate,
+        candidateConnectorReady: false,
+      },
+    });
+    expect(storage.writes).toEqual([]);
+  });
+
   it("fails closed on absent and malformed persisted state without any writes", async () => {
     const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
     for (const invalid of [undefined, { version: 1, activeContractRevision: "not-a-revision" }]) {
