@@ -35,6 +35,10 @@ class MemoryStorage {
     return callback(this);
   }
 
+  async list({ limit }: { limit?: number } = {}): Promise<Map<string, unknown>> {
+    return new Map(Array.from(this.values.entries()).slice(0, limit));
+  }
+
   async delete(key: string): Promise<boolean> {
     return this.values.delete(key);
   }
@@ -231,6 +235,107 @@ describe("McpSession read-only contract inspection", () => {
     expect(response).not.toContain("sensitive");
     expect(storage.writes).toEqual([]);
   });
+
+describe("McpSession explicit first-install bootstrap", () => {
+  const invoke = async (session: object, input: unknown) =>
+    JSON.parse(await (session as { bootstrapContractRollout(input: unknown): Promise<string> })
+      .bootstrapContractRollout(input)) as { status: number; body: Record<string, unknown> };
+
+  it("initializes only an empty store with the exact build revision; replay is write-free", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const storage = new MemoryStorage();
+    const session = await createSession(storage);
+    expect(storage.writes).toEqual([]);
+    const input = { expectedState: "absent", expectedActiveContractRevision: revision };
+    expect(await invoke(session, input)).toEqual({
+      status: 200, body: { status: "bootstrapped", activeContractRevision: revision },
+    });
+    expect(await storage.get(key)).toEqual({ version: 1, activeContractRevision: revision });
+    expect((await readMcpCatalogSnapshot(storage, revision))?.catalogMetadata.contractRevision).toBe(revision);
+    const writes = storage.writes.slice();
+    expect(writes).toContain(key);
+    expect(await invoke(session, input)).toEqual({
+      status: 200, body: { status: "already-bootstrapped", activeContractRevision: revision },
+    });
+    expect(storage.writes).toEqual(writes);
+    const restarted = await createSession(storage);
+    expect((await invoke(restarted, input)).body.status).toBe("already-bootstrapped");
+    expect(storage.writes).toEqual(writes);
+  });
+
+  it("rejects malformed input, mismatched CAS and a nonempty or malformed store without writing", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const base = { expectedState: "absent", expectedActiveContractRevision: revision };
+    for (const [existing, input, status] of [
+      [undefined, { ...base, unexpected: true }, 400],
+      [undefined, { ...base, expectedState: "present" }, 400],
+      [undefined, { ...base, expectedActiveContractRevision: "b".repeat(64) }, 409],
+      [{ version: 1, activeContractRevision: "a".repeat(64) }, base, 409],
+      [{ version: 1, activeContractRevision: revision, candidateContractRevision: "a".repeat(64) }, base, 409],
+      [{ version: 1, activeContractRevision: "broken" }, base, 409],
+    ] as const) {
+      const storage = new MemoryStorage();
+      if (existing) storage.set(key, existing);
+      const session = await createSession(storage);
+      const result = await invoke(session, input);
+      expect(result.status).toBe(status);
+      expect(storage.writes).toEqual([]);
+      expect(await storage.get(key)).toEqual(existing);
+    }
+  });
+
+  it("rejects an empty rollout with existing runtime evidence rather than claiming a fresh installation", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { CONNECTOR_TELEMETRY_STORAGE_KEY } = await import("../src/connector-telemetry.js");
+    const storage = new MemoryStorage();
+    storage.set(CONNECTOR_TELEMETRY_STORAGE_KEY, { version: 1, readyCount: 1 });
+    const session = await createSession(storage);
+    const result = await invoke(session, {
+      expectedState: "absent", expectedActiveContractRevision: revision,
+    });
+    expect(result).toEqual({ status: 409, body: { error: "bootstrap_storage_not_empty" } });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+  });
+  it("refuses an empty store if a connector or companion is already attached", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const session = await createSession(storage, [{ readyState: WebSocket.OPEN }]);
+    expect(await invoke(session, {
+      expectedState: "absent", expectedActiveContractRevision: revision,
+    })).toEqual({ status: 409, body: { error: "bootstrap_connections_present" } });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("refuses unrelated historical storage and sanitizes storage inspection failures", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const args = { expectedState: "absent", expectedActiveContractRevision: revision };
+    const storage = new MemoryStorage();
+    storage.set("edge:account-store:v1", { private: "do-not-reveal" });
+    const session = await createSession(storage);
+    expect(await invoke(session, args)).toEqual({
+      status: 409, body: { error: "bootstrap_storage_not_empty" },
+    });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+
+    const empty = new MemoryStorage();
+    const inaccessible = await createSession(empty);
+    empty.list = async () => { throw new Error("secret-read-failure"); };
+    const result = await invoke(inaccessible, args);
+    expect(result).toEqual({ status: 503, body: { error: "contract_bootstrap_unavailable" } });
+    expect(JSON.stringify(result)).not.toContain("secret-read-failure");
+    expect(empty.writes).toEqual([]);
+  });
+
+});
 
 describe("McpSession explicit contract preparation persistence", () => {
   it("persists an exact candidate and returns an idempotent replay without changing preparedAt", async () => {

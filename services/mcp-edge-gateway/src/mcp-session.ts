@@ -280,6 +280,68 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     return this.connectorTelemetry.read();
   }
 
+  async bootstrapContractRollout(input: unknown): Promise<string> {
+    // Fresh installation only. The caller must explicitly CAS against absence;
+    // an absent rollout key on an otherwise populated DO is NOT a fresh install.
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedState" ||
+        input.expectedState !== "absent" ||
+        !isMcpContractRevision(input.expectedActiveContractRevision)) {
+      return JSON.stringify({ status: 400, body: { error: "invalid_contract_bootstrap" } });
+    }
+    if (input.expectedActiveContractRevision !== EXPECTED_MCP_CONTRACT_REVISION) {
+      return JSON.stringify({ status: 409, body: { error: "build_contract_mismatch" } });
+    }
+    try {
+      const outcome = await this.ctx.storage.transaction(async (txn) => {
+        const current = await txn.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+        if (current !== undefined) {
+          // Idempotent replay is safe only for the exact initialized shape
+          // with its valid matching catalog; do not repair corrupted state.
+          if (isMcpContractRolloutState(current) &&
+              Object.keys(current).sort().join(",") === "activeContractRevision,version" &&
+              current.activeContractRevision === EXPECTED_MCP_CONTRACT_REVISION &&
+              await readMcpCatalogSnapshot(txn, EXPECTED_MCP_CONTRACT_REVISION)) {
+            return { status: 200, state: current, alreadyBootstrapped: true } as const;
+          }
+          return { status: 409, body: { error: "contract_rollout_already_initialized" } } as const;
+        }
+        // Even unrelated KV entries may represent a previous install. Never
+        // infer a fresh DO from an absent contract key alone.
+        if ((await txn.list({ limit: 1 })).size !== 0) {
+          return { status: 409, body: { error: "bootstrap_storage_not_empty" } } as const;
+        }
+        // An attached connector/companion may already serve traffic before
+        // the first KV write. Never seed the contract over a live connection.
+        if (this.ctx.getWebSockets("connector").length !== 0 ||
+            this.ctx.getWebSockets("companion").length !== 0) {
+          return { status: 409, body: { error: "bootstrap_connections_present" } } as const;
+        }
+        const state: McpContractRolloutStateV1 = {
+          version: 1,
+          activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        };
+        await persistMcpCatalogSnapshot(txn, EDGE_BUILD_MCP_CATALOG);
+        await txn.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, state);
+        return { status: 200, state, alreadyBootstrapped: false } as const;
+      });
+      if (outcome.status !== 200) return JSON.stringify(outcome);
+      this.contractRolloutState = outcome.state;
+      this.hasPersistedContractRolloutState = true;
+      this.activeMcpCatalog = EDGE_BUILD_MCP_CATALOG;
+      this.controlRuntime = undefined;
+      return JSON.stringify({
+        status: 200,
+        body: {
+          status: outcome.alreadyBootstrapped ? "already-bootstrapped" : "bootstrapped",
+          activeContractRevision: outcome.state.activeContractRevision,
+        },
+      });
+    } catch {
+      return JSON.stringify({ status: 503, body: { error: "contract_bootstrap_unavailable" } });
+    }
+  }
+
   async prepareContractRollout(input: unknown): Promise<string> {
     if (!isRecord(input) || Object.keys(input).sort().join(",") !==
         "expectedActiveContractRevision,expectedCandidateContractRevision" ||
