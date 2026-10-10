@@ -35,6 +35,24 @@ export default {
       const runtimeTelemetry = await session.getRuntimeTelemetry();
       return jsonResponse({ ...result, runtimeTelemetry });
     }
+    if (url.pathname === "/_internal/contract-rollout/status" && request.method === "GET") {
+      const expectedToken = env.MCP_CONTRACT_PREPARE_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "contract_preparation_auth_not_configured" }, 503);
+      if (expectedToken === env.MCP_CONNECTOR_TOKEN || expectedToken === env.MCP_OWNER_TOKEN) {
+        return jsonResponse({ error: "contract_preparation_auth_not_isolated" }, 503);
+      }
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, {
+          status: 401,
+          headers: { "www-authenticate": "Bearer", "cache-control": "no-store" },
+        });
+      }
+      const result = JSON.parse(await session.inspectContractRollout()) as {
+        status: number;
+        body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
     if (url.pathname === "/_internal/contract-rollout/prepare" && request.method === "POST") {
       const expectedToken = env.MCP_CONTRACT_PREPARE_TOKEN;
       if (!expectedToken) return jsonResponse({ error: "contract_preparation_auth_not_configured" }, 503);

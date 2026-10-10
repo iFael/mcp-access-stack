@@ -101,6 +101,61 @@ describe("runtime telemetry surfaces", () => {
     });
   });
 
+  it("requires isolated prepare credential for bounded read-only contract inspection", async () => {
+    const { default: worker } = await import("../src/index.js");
+    let reads = 0;
+    const session = {
+      inspectContractRollout: async () => {
+        reads++;
+        return JSON.stringify({ status: 200, body: {
+          activeContractRevision: "a".repeat(64), candidateConnectorReady: false,
+        } });
+      },
+    };
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-test",
+      MCP_OWNER_TOKEN: "owner-test",
+      MCP_CONTRACT_PREPARE_TOKEN: "isolated-preparation-test",
+      MCP_SESSION: { idFromName: () => ({}), get: () => session },
+    } as never;
+    const url = "https://edge.example/_internal/contract-rollout/status";
+    for (const authorization of [undefined, "Bearer wrong", "Bearer connector-test", "Bearer owner-test"]) {
+      const response = await worker.fetch(new Request(url, {
+        ...(authorization ? { headers: { authorization } } : {}),
+      }), env, {} as ExecutionContext);
+      expect(response.status).toBe(401);
+    }
+    expect(reads).toBe(0);
+    const allowed = await worker.fetch(new Request(url, {
+      headers: { authorization: "Bearer isolated-preparation-test" },
+    }), env, {} as ExecutionContext);
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toEqual({
+      activeContractRevision: "a".repeat(64), candidateConnectorReady: false,
+    });
+    expect(reads).toBe(1);
+  });
+
+  it("fails closed when inspection credential is absent or shared", async () => {
+    const { default: worker } = await import("../src/index.js");
+    const url = "https://edge.example/_internal/contract-rollout/status";
+    const session = { inspectContractRollout: jest.fn(async () => "secret") };
+    for (const fields of [
+      { MCP_CONNECTOR_TOKEN: "connector" },
+      { MCP_CONNECTOR_TOKEN: "connector", MCP_CONTRACT_PREPARE_TOKEN: "connector" },
+      { MCP_OWNER_TOKEN: "owner", MCP_CONTRACT_PREPARE_TOKEN: "owner" },
+    ]) {
+      const env = {
+        ...fields, MCP_SESSION: { idFromName: () => ({}), get: () => session },
+      } as never;
+      const response = await worker.fetch(new Request(url, {
+        headers: { authorization: "Bearer connector" },
+      }), env, {} as ExecutionContext);
+      expect(response.status).toBe(503);
+    }
+    expect(session.inspectContractRollout).not.toHaveBeenCalled();
+  });
+
   it("requires connector-token authentication for contract promotion", async () => {
     const { default: edgeWorker } = await import("../src/index.js");
     const candidateRevision = "c".repeat(64);
