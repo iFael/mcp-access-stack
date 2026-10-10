@@ -143,6 +143,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly accountStore: EdgeAccountStore;
   private readonly repositoryControlPlane: EdgeRepositoryControlPlane;
   private contractRolloutState!: McpContractRolloutStateV1;
+  private hasPersistedContractRolloutState = false;
   private activeMcpCatalog: EdgeMcpCatalog | null = null;
   private controlRuntime: EdgeControlPlaneRuntime | undefined;
   private primaryWorkspaceIds: Set<string> | null = null;
@@ -157,22 +158,23 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       disconnectDevice: (deviceId) => this.disconnectCompanionDevice(deviceId),
     });
     this.ctx.blockConcurrencyWhile(async () => {
-      await persistMcpCatalogSnapshot(this.ctx.storage, EDGE_BUILD_MCP_CATALOG);
+      // Cold starts (including GET /health) must never prepare a contract or
+      // rewrite a catalog. Persisted rollout state changes only in authorized
+      // CAS mutations, not as a side effect of observing a Durable Object.
       const current = await this.ctx.storage.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
-      const telemetry = await this.connectorTelemetry.read();
-      const reconciled = reconcileMcpContractRolloutState(
-        current,
-        telemetry.catalogContractRevision,
-        new Date().toISOString(),
-      );
-      this.contractRolloutState = reconciled.state;
-      if (reconciled.changed) {
-        await this.ctx.storage.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, reconciled.state);
-      }
+      this.hasPersistedContractRolloutState = isMcpContractRolloutState(current);
+      this.contractRolloutState = this.hasPersistedContractRolloutState
+        ? current as McpContractRolloutStateV1
+        : { version: 1, activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION };
       this.activeMcpCatalog = await readMcpCatalogSnapshot(
         this.ctx.storage,
-        reconciled.state.activeContractRevision,
+        this.contractRolloutState.activeContractRevision,
       );
+      if (!this.activeMcpCatalog &&
+          this.contractRolloutState.activeContractRevision === EXPECTED_MCP_CONTRACT_REVISION) {
+        // In-memory fallback for first boot; never claim it is persisted.
+        this.activeMcpCatalog = EDGE_BUILD_MCP_CATALOG;
+      }
     });
   }
 
@@ -200,6 +202,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const contractCompatible = attachment?.contractCompatible === true;
     let controlPlaneReady = false;
     try {
+      if (!this.hasPersistedContractRolloutState) {
+        throw new EdgeControlPlaneConfigurationError("Persisted contract rollout state is unavailable.");
+      }
       const runtime = this.getControlRuntime();
       controlPlaneReady = runtime.oauth instanceof EdgeOwnerOAuth
         ? await runtime.oauth.isConfigured()
@@ -237,12 +242,104 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     };
   }
 
+  async inspectContractRollout(): Promise<string> {
+    // Re-read the authority: an in-memory bootstrap fallback is never proof of
+    // persisted state. This endpoint is intentionally bounded and read-only.
+    try {
+      const current = await this.ctx.storage.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+      if (!isMcpContractRolloutState(current)) {
+        return JSON.stringify({ status: 503, body: { error: "contract_rollout_state_unavailable" } });
+      }
+      const candidate = current.candidateContractRevision;
+      const preparedAt = current.preparedAt;
+      return JSON.stringify({
+        status: 200,
+        body: {
+          activeContractRevision: current.activeContractRevision,
+          ...(candidate === undefined ? {} : {
+            candidateContractRevision: candidate,
+          }),
+          candidateConnectorReady: candidate !== undefined &&
+            this.getReadyConnectorForContractRevision(candidate) !== null,
+          ...(typeof preparedAt === "string" &&
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(preparedAt) &&
+            !Number.isNaN(Date.parse(preparedAt))
+            ? { preparedAt } : {}),
+        },
+      });
+    } catch {
+      return JSON.stringify({ status: 503, body: { error: "contract_rollout_state_unavailable" } });
+    }
+  }
+
   async getSessionDiagnostics(): Promise<string> {
     return JSON.stringify({ version: 1, events: await readSessionDiagnostics(this.ctx.storage) });
   }
 
   async getRuntimeTelemetry(): Promise<EdgeRuntimeTelemetryV1> {
     return this.connectorTelemetry.read();
+  }
+
+  async bootstrapContractRollout(input: unknown): Promise<string> {
+    // Fresh installation only. The caller must explicitly CAS against absence;
+    // an absent rollout key on an otherwise populated DO is NOT a fresh install.
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedState" ||
+        input.expectedState !== "absent" ||
+        !isMcpContractRevision(input.expectedActiveContractRevision)) {
+      return JSON.stringify({ status: 400, body: { error: "invalid_contract_bootstrap" } });
+    }
+    if (input.expectedActiveContractRevision !== EXPECTED_MCP_CONTRACT_REVISION) {
+      return JSON.stringify({ status: 409, body: { error: "build_contract_mismatch" } });
+    }
+    try {
+      const outcome = await this.ctx.storage.transaction(async (txn) => {
+        const current = await txn.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+        if (current !== undefined) {
+          // Idempotent replay is safe only for the exact initialized shape
+          // with its valid matching catalog; do not repair corrupted state.
+          if (isMcpContractRolloutState(current) &&
+              Object.keys(current).sort().join(",") === "activeContractRevision,version" &&
+              current.activeContractRevision === EXPECTED_MCP_CONTRACT_REVISION &&
+              await readMcpCatalogSnapshot(txn, EXPECTED_MCP_CONTRACT_REVISION)) {
+            return { status: 200, state: current, alreadyBootstrapped: true } as const;
+          }
+          return { status: 409, body: { error: "contract_rollout_already_initialized" } } as const;
+        }
+        // Even unrelated KV entries may represent a previous install. Never
+        // infer a fresh DO from an absent contract key alone.
+        if ((await txn.list({ limit: 1 })).size !== 0) {
+          return { status: 409, body: { error: "bootstrap_storage_not_empty" } } as const;
+        }
+        // An attached connector/companion may already serve traffic before
+        // the first KV write. Never seed the contract over a live connection.
+        if (this.ctx.getWebSockets("connector").length !== 0 ||
+            this.ctx.getWebSockets("companion").length !== 0) {
+          return { status: 409, body: { error: "bootstrap_connections_present" } } as const;
+        }
+        const state: McpContractRolloutStateV1 = {
+          version: 1,
+          activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+        };
+        await persistMcpCatalogSnapshot(txn, EDGE_BUILD_MCP_CATALOG);
+        await txn.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, state);
+        return { status: 200, state, alreadyBootstrapped: false } as const;
+      });
+      if (outcome.status !== 200) return JSON.stringify(outcome);
+      this.contractRolloutState = outcome.state;
+      this.hasPersistedContractRolloutState = true;
+      this.activeMcpCatalog = EDGE_BUILD_MCP_CATALOG;
+      this.controlRuntime = undefined;
+      return JSON.stringify({
+        status: 200,
+        body: {
+          status: outcome.alreadyBootstrapped ? "already-bootstrapped" : "bootstrapped",
+          activeContractRevision: outcome.state.activeContractRevision,
+        },
+      });
+    } catch {
+      return JSON.stringify({ status: 503, body: { error: "contract_bootstrap_unavailable" } });
+    }
   }
 
   async prepareContractRollout(input: unknown): Promise<string> {
@@ -273,6 +370,11 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           },
         } as const;
       }
+      // Explicit authenticated preparation owns candidate catalog persistence.
+      // Keep snapshot + CAS rollout state atomic, including idempotent replays.
+      if (!await readMcpCatalogSnapshot(txn, EXPECTED_MCP_CONTRACT_REVISION)) {
+        await persistMcpCatalogSnapshot(txn, EDGE_BUILD_MCP_CATALOG);
+      }
       if (!prepared.alreadyPrepared) {
         await txn.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, prepared.state);
       }
@@ -286,6 +388,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return JSON.stringify(outcome);
     }
     this.contractRolloutState = outcome.state;
+    this.hasPersistedContractRolloutState = true;
     if (outcome.changed) {
       this.refreshOpenConnectorContractCompatibility();
       console.log(JSON.stringify({
@@ -865,6 +968,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
   }
   private getControlRuntime(): EdgeControlPlaneRuntime {
+    if (!this.hasPersistedContractRolloutState) {
+      throw new EdgeControlPlaneConfigurationError("Persisted contract rollout state is unavailable.");
+    }
     if (!this.activeMcpCatalog) {
       throw new EdgeControlPlaneConfigurationError("Active MCP catalog snapshot is unavailable.");
     }

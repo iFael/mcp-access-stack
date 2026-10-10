@@ -101,6 +101,123 @@ describe("runtime telemetry surfaces", () => {
     });
   });
 
+  it("requires isolated prepare credential for bounded read-only contract inspection", async () => {
+    const { default: worker } = await import("../src/index.js");
+    let reads = 0;
+    const session = {
+      inspectContractRollout: async () => {
+        reads++;
+        return JSON.stringify({ status: 200, body: {
+          activeContractRevision: "a".repeat(64), candidateConnectorReady: false,
+        } });
+      },
+    };
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-test",
+      MCP_OWNER_TOKEN: "owner-test",
+      MCP_CONTRACT_PREPARE_TOKEN: "isolated-preparation-test",
+      MCP_SESSION: { idFromName: () => ({}), get: () => session },
+    } as never;
+    const url = "https://edge.example/_internal/contract-rollout/status";
+    for (const authorization of [undefined, "Bearer wrong", "Bearer connector-test", "Bearer owner-test"]) {
+      const response = await worker.fetch(new Request(url, {
+        ...(authorization ? { headers: { authorization } } : {}),
+      }), env, {} as ExecutionContext);
+      expect(response.status).toBe(401);
+    }
+    expect(reads).toBe(0);
+    const allowed = await worker.fetch(new Request(url, {
+      headers: { authorization: "Bearer isolated-preparation-test" },
+    }), env, {} as ExecutionContext);
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toEqual({
+      activeContractRevision: "a".repeat(64), candidateConnectorReady: false,
+    });
+    expect(reads).toBe(1);
+  });
+
+  it("fails closed when inspection credential is absent or shared", async () => {
+    const { default: worker } = await import("../src/index.js");
+    const url = "https://edge.example/_internal/contract-rollout/status";
+    const session = { inspectContractRollout: jest.fn(async () => "secret") };
+    for (const fields of [
+      { MCP_CONNECTOR_TOKEN: "connector" },
+      { MCP_CONNECTOR_TOKEN: "connector", MCP_CONTRACT_PREPARE_TOKEN: "connector" },
+      { MCP_OWNER_TOKEN: "owner", MCP_CONTRACT_PREPARE_TOKEN: "owner" },
+    ]) {
+      const env = {
+        ...fields, MCP_SESSION: { idFromName: () => ({}), get: () => session },
+      } as never;
+      const response = await worker.fetch(new Request(url, {
+        headers: { authorization: "Bearer connector" },
+      }), env, {} as ExecutionContext);
+      expect(response.status).toBe(503);
+    }
+    expect(session.inspectContractRollout).not.toHaveBeenCalled();
+  });
+
+  it("requires isolated preparation credentials and exact JSON for the first-install bootstrap", async () => {
+    const { default: worker } = await import("../src/index.js");
+    const url = "https://edge.example/_internal/contract-rollout/bootstrap";
+    const body = JSON.stringify({
+      expectedState: "absent", expectedActiveContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    });
+    const session = {
+      bootstrapContractRollout: jest.fn(async () => JSON.stringify({
+        status: 200, body: { status: "bootstrapped", activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION },
+      })),
+    };
+    const env = {
+      MCP_CONTRACT_PREPARE_TOKEN: "prepare-token-fixture",
+      MCP_CONNECTOR_TOKEN: "connector-token-fixture",
+      MCP_OWNER_TOKEN: "owner-token-fixture",
+      MCP_SESSION: { idFromName: () => ({}), get: () => session },
+    } as never;
+    const request = (authorization?: string, contentType = "application/json", requestBody = body) =>
+      new Request(url, { method: "POST", headers: {
+        "content-type": contentType, ...(authorization ? { authorization } : {}),
+      }, body: requestBody });
+    for (const token of [undefined, "Bearer connector-token-fixture", "Bearer owner-token-fixture", "Bearer wrong"]) {
+      const response = await worker.fetch(request(token), env, {} as ExecutionContext);
+      expect(response.status).toBe(401);
+    }
+    expect(session.bootstrapContractRollout).not.toHaveBeenCalled();
+    const wrongType = await worker.fetch(request("Bearer prepare-token-fixture", "text/plain"), env, {} as ExecutionContext);
+    expect(wrongType.status).toBe(415);
+    const invalidBody = await worker.fetch(request("Bearer prepare-token-fixture", "application/json", "{bad"), env, {} as ExecutionContext);
+    expect(invalidBody.status).toBe(400);
+    const tooLarge = await worker.fetch(request("Bearer prepare-token-fixture", "application/json",
+      JSON.stringify({ padding: "x".repeat(4100) })), env, {} as ExecutionContext);
+    expect(tooLarge.status).toBe(413);
+    expect(session.bootstrapContractRollout).not.toHaveBeenCalled();
+    const response = await worker.fetch(request("Bearer prepare-token-fixture"), env, {} as ExecutionContext);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "bootstrapped", activeContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    });
+    expect(session.bootstrapContractRollout).toHaveBeenCalledWith(JSON.parse(body));
+  });
+
+  it("rejects absent or shared bootstrap credentials without reaching the Durable Object", async () => {
+    const { default: worker } = await import("../src/index.js");
+    const url = "https://edge.example/_internal/contract-rollout/bootstrap";
+    const session = { bootstrapContractRollout: jest.fn(async () => "secret") };
+    for (const tokens of [
+      { MCP_CONNECTOR_TOKEN: "shared" },
+      { MCP_CONNECTOR_TOKEN: "shared", MCP_CONTRACT_PREPARE_TOKEN: "shared" },
+      { MCP_OWNER_TOKEN: "shared", MCP_CONTRACT_PREPARE_TOKEN: "shared" },
+    ]) {
+      const env = { ...tokens, MCP_SESSION: {
+        idFromName: () => ({}), get: () => session,
+      } } as never;
+      const response = await worker.fetch(new Request(url, { method: "POST", headers: {
+        authorization: "Bearer shared", "content-type": "application/json",
+      }, body: "{}" }), env, {} as ExecutionContext);
+      expect(response.status).toBe(503);
+    }
+    expect(session.bootstrapContractRollout).not.toHaveBeenCalled();
+  });
+
   it("requires connector-token authentication for contract promotion", async () => {
     const { default: edgeWorker } = await import("../src/index.js");
     const candidateRevision = "c".repeat(64);
