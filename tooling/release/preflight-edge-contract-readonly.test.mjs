@@ -93,14 +93,44 @@ test("never touches legacy beta.84 worker when active version differs from appro
   for (const change of [
     { activeVersionId: CHANGED_ID },
     { scriptEtagEqual: false, status: "different_script" },
-    { bindingMetadataParity: "unverified" },
+    { referenceVersionId: CHANGED_ID },
+    { bindingMetadataParity: "different" },
     { runtimeMetadataParity: "different" },
+    { runtimeMetadataParity: undefined },
+    { bindingMetadataParity: undefined },
     { status: "inconclusive", scriptEtagEqual: null },
   ]) {
     const f = fake({ deployments: [provenance(change)] });
     await fails("ACTIVE_SCRIPT_NOT_APPROVED_FOR_INSPECTION", input(), f);
     assert.equal(f.cfCalls.length, 1);
     assert.equal(f.requests.length, 0);
+  }
+});
+
+test("accepts unavailable optional metadata only for the exact pinned immutable version", async () => {
+  const f = fake({ deployments: [provenance({
+    runtimeMetadataParity: "unverified",
+    bindingMetadataParity: "unverified",
+  })] });
+  const result = await preflightEdgeContract(input(), f);
+  assert.deepEqual(result, { activeRevision: TRUSTED, candidateRevision: null });
+  assert.equal(f.cfCalls.length, 2);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].init.method, "GET");
+});
+
+test("rejects newly detected metadata drift after read-only inspection", async () => {
+  for (const override of [
+    { runtimeMetadataParity: "different" },
+    { bindingMetadataParity: "different" },
+    { referenceVersionId: CHANGED_ID },
+  ]) {
+    const f = fake({ deployments: [
+      provenance({ runtimeMetadataParity: "unverified", bindingMetadataParity: "unverified" }),
+      provenance(override),
+    ] });
+    await fails("ACTIVE_SCRIPT_NOT_APPROVED_FOR_INSPECTION", input(), f);
+    assert.equal(f.requests.length, 1);
   }
 });
 

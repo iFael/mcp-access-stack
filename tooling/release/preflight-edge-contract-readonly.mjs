@@ -40,8 +40,11 @@ function verifySafeVersion(provenance, trustedVersionId) {
       provenance.referenceVersionId !== trustedVersionId ||
       provenance.status !== "matching_script" ||
       provenance.scriptEtagEqual !== true ||
-      provenance.runtimeMetadataParity !== "matching" ||
-      provenance.bindingMetadataParity !== "matching") {
+      // Same immutable active/reference Version ID is the security boundary.
+      // Cloudflare may omit optional runtime/binding metadata even for that
+      // exact version. Absence is not a contradiction; explicit drift is.
+      !["matching", "unverified"].includes(provenance.runtimeMetadataParity) ||
+      !["matching", "unverified"].includes(provenance.bindingMetadataParity)) {
     deny("ACTIVE_SCRIPT_NOT_APPROVED_FOR_INSPECTION");
   }
 }
