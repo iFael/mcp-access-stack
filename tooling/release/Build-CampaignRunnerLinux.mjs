@@ -15,6 +15,11 @@ const SOURCE_PACKAGES = [
   ["services/workspace-agent", "@vs-code-gpt/local-agent"],
 ];
 const SHA = /^[a-f0-9]{40}$/u;
+// Normalize archive permissions across build-host umasks without changing source files.
+export const TAR_OPTIONS = Object.freeze([
+  "--sort=name", "--mtime=@0", "--owner=0", "--group=0",
+  "--mode=u=rwX,go=rX", "--numeric-owner",
+]);
 
 function command(bin, argv, cwd, { capture = false } = {}) {
   const r = spawnSync(bin, argv, {
@@ -168,8 +173,7 @@ async function createPackage(root, sourceCommit, output) {
       "--input-type=module", "-e",
       'const host = await import("./node_modules/@vs-code-gpt/local-agent/dist/campaign/trusted-campaign-service-entrypoint.js"); if(typeof host.runTrustedCampaignService !== "function")process.exit(1);',
     ], stage);
-    command("tar", ["--sort=name", "--mtime=@0", "--owner=0", "--group=0",
-      "--numeric-owner", "-czf", output, "-C", stage, "."], temporary);
+    command("tar", [...TAR_OPTIONS, "-czf", output, "-C", stage, "."], temporary);
     const artifactSha256 = await sha256File(output);
     await writeFile(output + ".sha256",
       artifactSha256 + "  " + path.basename(output) + "\n", { flag: "wx", mode: 0o600 });

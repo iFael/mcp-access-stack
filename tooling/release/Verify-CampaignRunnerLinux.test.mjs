@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { chmod, mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import test from "node:test";
-import { hashTree, verifyCampaignRunnerDirectory, MANIFEST_NAME } from "./Verify-CampaignRunnerLinux.mjs";
+import { hashTree, sha256File, verifyCampaignRunnerDirectory, MANIFEST_NAME } from "./Verify-CampaignRunnerLinux.mjs";
+import { TAR_OPTIONS } from "./Build-CampaignRunnerLinux.mjs";
 
 const SHA = "b36041e79cd79b2ea926f715407472706ce1a4d6";
 const FILES = [
@@ -97,6 +99,39 @@ test("excludes first-party compiler-only files even when individually hashed", a
     () => verifyCampaignRunnerDirectory(f.root, SHA),
     /CAMPAIGN_ARTIFACT_COMPILE_ONLY_INCLUDED/u,
   );
+});
+
+test("normalizes archive metadata across differing build-host umasks", async t => {
+  if (process.platform !== "linux") {
+    t.skip("GNU tar archive reproducibility is tested on Linux");
+    return;
+  }
+  const base = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-campaign-tar-modes-"));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const digests = [];
+  for (const [index, ordinaryMode, executableMode, directoryMode] of [
+    [0, 0o600, 0o700, 0o700],
+    [1, 0o644, 0o755, 0o755],
+  ]) {
+    const source = path.join(base, "source-" + index);
+    const bin = path.join(source, "bin");
+    await mkdir(bin, { recursive: true });
+    const regular = path.join(source, "payload.txt");
+    const executable = path.join(bin, "runner");
+    await writeFile(regular, "same bytes\\n");
+    await writeFile(executable, "#!/bin/sh\\nexit 0\\n");
+    await chmod(regular, ordinaryMode);
+    await chmod(executable, executableMode);
+    await chmod(bin, directoryMode);
+    await chmod(source, directoryMode);
+    const output = path.join(base, "output-" + index + ".tar.gz");
+    const result = spawnSync("tar", [...TAR_OPTIONS, "-czf", output, "-C", source, "."], {
+      encoding: "utf8", timeout: 15000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    digests.push(await sha256File(output));
+  }
+  assert.equal(digests[0], digests[1]);
 });
 
 test("fails when manifest silently omits critical bootstrap", async t => {
