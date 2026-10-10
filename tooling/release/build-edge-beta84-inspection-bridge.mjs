@@ -10,6 +10,30 @@ export const BETA84_REVISION = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6
 export const MAIN_AT_GATE_REVISION = "c73274d7f1d3d7b9b35a9172eeb1d19b17cd998b564ff05026f3e3b5d26c4949";
 const MANIFEST_PATH = "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts";
 const SOURCE_PATH = "services/mcp-edge-gateway/src/index.ts";
+const BRIDGE_ONLY_BLOCKED_ROUTES = [
+  "/_internal/contract-rollout/bootstrap",
+  "/_internal/contract-rollout/prepare",
+];
+
+export function bridgeEntrypointSource(canonicalEntry) {
+  const modulePath = resolve(canonicalEntry).replaceAll("\\", "/");
+  return [
+    `import canonicalWorker, { McpSession } from ${JSON.stringify(modulePath)};`,
+    "export { McpSession };",
+    "export default {",
+    "  async fetch(request, env, ctx) {",
+    "    const pathname = new URL(request.url).pathname;",
+    `    if (${JSON.stringify(BRIDGE_ONLY_BLOCKED_ROUTES)}.includes(pathname)) {`,
+    '      return new Response(JSON.stringify({ error: "bridge_operation_unavailable" }), {',
+    '        status: 404, headers: { "content-type": "application/json", "cache-control": "no-store" },',
+    "      });",
+    "    }",
+    "    return canonicalWorker.fetch(request, env, ctx);",
+    "  },",
+    "};",
+    "",
+  ].join("\n");
+}
 const RELATIVE_IMPORTS = [
   "./generated/mcp-tool-manifest.js",
   "../generated/mcp-tool-manifest.js",
@@ -43,7 +67,7 @@ export function makeBridgeConfig(canonical, root, manifestPath) {
   return {
     ...canonical,
     // Alias only in the isolated dry-run config, never in canonical wrangler.jsonc.
-    main: resolve(root, SOURCE_PATH),
+    main: join(root, "services/mcp-edge-gateway/.wrangler/inspection-bridge/index.ts"),
     alias: Object.fromEntries(
       RELATIVE_IMPORTS.map(key => [key, resolve(manifestPath)]),
     ),
@@ -64,6 +88,7 @@ export async function prepareBridge({ root, readHistorical, hashHistorical }) {
   const config = makeBridgeConfig(original, root, manifestPath);
   await mkdir(staging, { recursive: true });
   await writeFile(manifestPath, source, { flag: "w" });
+  await writeFile(join(staging, "index.ts"), bridgeEntrypointSource(resolve(root, SOURCE_PATH)), "utf8");
   await writeFile(join(staging, "wrangler.json"), JSON.stringify(config, null, 2) + "\n", "utf8");
   return { staging, configPath: join(staging, "wrangler.json"), revision: BETA84_REVISION };
 }

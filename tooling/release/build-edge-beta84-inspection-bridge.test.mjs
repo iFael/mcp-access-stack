@@ -8,6 +8,7 @@ import {
   BETA84_REVISION,
   MAIN_AT_GATE_REVISION,
   extractRevision,
+  bridgeEntrypointSource,
   makeBridgeConfig,
   prepareBridge,
   verifyFrozenManifest,
@@ -43,7 +44,12 @@ test("isolates both generated imports while leaving the canonical Worker config 
   const selected = makeBridgeConfig(base, root, file);
   assert.deepEqual(base, pristine);
   assert.equal(selected.name, "mcp-access-stack");
-  assert.equal(selected.main, join(root, "services/mcp-edge-gateway/src/index.ts"));
+  assert.equal(selected.main, join(root, "services/mcp-edge-gateway/.wrangler/inspection-bridge/index.ts"));
+  const entry = bridgeEntrypointSource(join(root, "services/mcp-edge-gateway/src/index.ts"));
+  assert.match(entry, /bridge_operation_unavailable/);
+  assert.match(entry, /contract-rollout\/bootstrap/);
+  assert.match(entry, /contract-rollout\/prepare/);
+  assert.doesNotMatch(entry, /contract-rollout\/promote/);
   assert.equal(selected.alias["./generated/mcp-tool-manifest.js"], file);
   assert.equal(selected.alias["../generated/mcp-tool-manifest.js"], file);
   assert.deepEqual(selected.durable_objects, base.durable_objects);
@@ -74,6 +80,8 @@ test("materializes only ignored bridge artifacts and preserves the committed man
     assert.equal(paths.revision, BETA84_REVISION);
     assert.equal(await readFile(join(generated, "mcp-tool-manifest.ts"), "utf8"), mainManifest);
     assert.equal(await readFile(join(paths.staging, "mcp-tool-manifest.ts"), "utf8"), historicalSource);
+    assert.equal(JSON.parse(await readFile(paths.configPath, "utf8")).main, join(paths.staging, "index.ts"));
+    assert.match(await readFile(join(paths.staging, "index.ts"), "utf8"), /bridge_operation_unavailable/);
     const bridge = JSON.parse(await readFile(paths.configPath, "utf8"));
     assert.equal(bridge.alias["./generated/mcp-tool-manifest.js"], join(paths.staging, "mcp-tool-manifest.ts"));
     await writeFile(join(generated, "mcp-tool-manifest.ts"), mainManifest.replace(MAIN_AT_GATE_REVISION, BETA84_REVISION));
