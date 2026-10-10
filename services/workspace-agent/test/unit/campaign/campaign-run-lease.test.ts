@@ -124,8 +124,14 @@ describe("CampaignRunLease: proven process death, not TTL alone",()=>{
     const initial=JSON.parse(await readFile(lock,"utf8")) as {renewedAt:number;expiresAt:number};
     now+=100;
     try{
-      await new Promise<void>(resolve=>setTimeout(resolve,430));
-      const renewed=JSON.parse(await readFile(lock,"utf8")) as {renewedAt:number;expiresAt:number};
+      // Wait for the durable heartbeat, not for one assumed timer/FS interval.
+      // CI scheduling and fsync can delay the first 300ms renewal.
+      const deadline=Date.now()+3000;
+      let renewed=initial;
+      while(renewed.renewedAt===initial.renewedAt && Date.now()<deadline){
+        await new Promise<void>(resolve=>setTimeout(resolve,50));
+        renewed=JSON.parse(await readFile(lock,"utf8")) as {renewedAt:number;expiresAt:number};
+      }
       expect(renewed.renewedAt).toBeGreaterThan(initial.renewedAt);
       expect(renewed.expiresAt).toBeGreaterThan(initial.expiresAt);
       const other=new DelegatedCampaignLedger(dir,"owner:session",fakeLease(()=>true));
