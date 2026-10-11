@@ -191,7 +191,7 @@ jobs:
             -OfflinePinnedAuthenticode
 
       - name: Upload signed release assets for publisher job
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: public-release-assets-${{ needs.metadata.outputs.version }}
           path: |
@@ -410,7 +410,7 @@ jobs:
 
       - name: Upload Linux native package
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-deb-${{ steps.deb.outputs.deb_arch }}
           path: |
@@ -421,7 +421,7 @@ jobs:
 
       - name: Upload macOS native package
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-pkg-${{ steps.macpkg.outputs.mac_arch }}
           path: |
@@ -431,7 +431,7 @@ jobs:
           retention-days: 1
 
       - name: Upload Unix release assets
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unix-local-${{ steps.asset.outputs.platform }}-${{ steps.asset.outputs.arch }}
           path: |
