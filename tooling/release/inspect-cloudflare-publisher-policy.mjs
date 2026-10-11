@@ -95,12 +95,14 @@ function policySummary(doc, accountId) {
   };
 }
 
-function settingsSummary(doc, vars) {
-  if (doc === null) return { visibility: "unverified", varsParity: "unverified", secretNameCollision: "unverified" };
+function settingsSummary(doc, vars, requiredSecrets) {
+  if (doc === null) return { visibility: "unverified", varsParity: "unverified",
+    secretNameCollision: "unverified", requiredSecretsPresence: "unverified" };
   const bindings = unwrap(doc).bindings;
   if (!Array.isArray(bindings) || !bindings.every(b => isObject(b) &&
       typeof b.name === "string" && typeof b.type === "string")) {
-    return { visibility: "unverified", varsParity: "unverified", secretNameCollision: "unverified" };
+    return { visibility: "unverified", varsParity: "unverified",
+      secretNameCollision: "unverified", requiredSecretsPresence: "unverified" };
   }
   const known = Object.entries(vars);
   const secretCollision = bindings.some(b => Object.hasOwn(vars, b.name) && b.type === "secret_text");
@@ -110,6 +112,9 @@ function settingsSummary(doc, vars) {
     visibility: "readable",
     varsParity: matching ? "matching" : "different",
     secretNameCollision: secretCollision ? "present" : "not_observed",
+    // Only metadata: names/types, never secret values. Non-observation is not proof of absence.
+    requiredSecretsPresence: requiredSecrets.every(name => bindings.some(b =>
+      b.name === name && b.type === "secret_text")) ? "present" : "not_observed",
   };
 }
 
@@ -121,6 +126,11 @@ export async function inspectPublisherReadOnly(input, fetchImpl = fetch) {
   if (typeof input.token !== "string" || input.token.length < 12) deny("TOKEN_UNAVAILABLE");
   if (!isObject(input.vars) || !Object.entries(input.vars).every(([k, v]) =>
       /^[A-Z][A-Z0-9_]{0,80}$/u.test(k) && typeof v === "string")) deny("VARS_INVALID");
+  if (!Array.isArray(input.requiredSecrets) || input.requiredSecrets.length < 1 ||
+      input.requiredSecrets.length > 32 ||
+      !input.requiredSecrets.every(name => typeof name === "string" &&
+        /^[A-Z][A-Z0-9_]{0,80}$/u.test(name)) ||
+      new Set(input.requiredSecrets).size !== input.requiredSecrets.length) deny("REQUIRED_SECRETS_INVALID");
 
   const get = (p, optional = false) => request(fetchImpl, input.token, p, optional);
   const before = active(await get("/accounts/" + accountId + "/workers/scripts/" + WORKER + "/deployments"));
@@ -145,7 +155,7 @@ export async function inspectPublisherReadOnly(input, fetchImpl = fetch) {
   }
   const settings = settingsSummary(
     await get("/accounts/" + accountId + "/workers/scripts/" + WORKER + "/settings", true),
-    input.vars);
+    input.vars, input.requiredSecrets);
   const after = active(await get("/accounts/" + accountId + "/workers/scripts/" + WORKER + "/deployments"));
   if (after.deploymentId !== before.deploymentId || after.versionId !== before.versionId) {
     deny("ACTIVE_DEPLOYMENT_CHANGED");
@@ -160,6 +170,7 @@ export async function inspectPublisherReadOnly(input, fetchImpl = fetch) {
     remoteSettingsReadability: settings.visibility,
     remotePlainVarsParity: settings.varsParity,
     remoteSecretNameCollision: settings.secretNameCollision,
+    remoteRequiredSecretsPresence: settings.requiredSecretsPresence,
     inspection: "get_only",
   };
 }
@@ -168,13 +179,15 @@ async function main() {
   const root = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
   const config = JSON.parse(await readFile(path.join(root, "services/mcp-edge-gateway/wrangler.jsonc"), "utf8"));
   if (config.name !== WORKER || config.migrations?.length !== 1 ||
-      config.migrations[0].tag !== "v1") deny("CANONICAL_CONFIG_INVALID");
+      config.migrations[0].tag !== "v1" || !Array.isArray(config.secrets?.required))
+    deny("CANONICAL_CONFIG_INVALID");
   const report = await inspectPublisherReadOnly({
     accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
     token: process.env.CLOUDFLARE_API_TOKEN,
     deploymentId: process.env.EXPECTED_ACTIVE_DEPLOYMENT_ID,
     versionId: process.env.EXPECTED_ACTIVE_VERSION_ID,
     vars: config.vars,
+    requiredSecrets: config.secrets.required,
   });
   console.log(JSON.stringify(report));
 }

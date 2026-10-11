@@ -13,7 +13,8 @@ const DEPLOY = "10535ed8-c51b-418e-a387-3cf9ba8fde82";
 const VERSION = "7b536d5f-8afb-4da0-927e-44cf6e23b6d6";
 const OTHER = "21535ed8-c51b-418e-a387-3cf9ba8fde82";
 const input = { accountId: ACCOUNT, token: SECRET, deploymentId: DEPLOY,
-  versionId: VERSION, vars: { MCP_EDGE_ENABLED: "true" } };
+  versionId: VERSION, vars: { MCP_EDGE_ENABLED: "true" },
+  requiredSecrets: ["MCP_CONTRACT_PREPARE_TOKEN"] };
 
 function fixture(options = {}) {
   const calls = [];
@@ -61,7 +62,10 @@ function fixture(options = {}) {
         name: "MCP_EDGE_ENABLED",
         type: options.collision ? "secret_text" : "plain_text",
         text: options.mismatched ? "false" : "true",
-      }, { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text", text: "never-print" }] });
+      }, ...(options.missingRequiredSecret ? [] : [{
+        name: "MCP_CONTRACT_PREPARE_TOKEN",
+        type: options.wrongRequiredType ? "plain_text" : "secret_text", text: "never-print",
+      }])] });
     }
     throw Error("UNEXPECTED_ROUTE");
   };
@@ -83,6 +87,7 @@ test("audits account token policy and current settings using GET only with CAS",
   assert.equal(actual.writePolicyAccountScope, "target_account_included");
   assert.equal(actual.remotePlainVarsParity, "matching");
   assert.equal(actual.remoteSecretNameCollision, "not_observed");
+  assert.equal(actual.remoteRequiredSecretsPresence, "present");
   assert.equal(actual.serviceMigrationTagParity, "matching");
   assert.equal(actual.publisherWriteScope, "unverified");
   assert.equal(actual.inspection, "get_only");
@@ -104,6 +109,7 @@ test("unreadable policy is not mistaken for missing Workers Write permission", a
   assert.equal(result.tokenPolicyReadability, "unverified");
   assert.equal(result.writePolicyGroup, "unverified");
   assert.equal(result.remotePlainVarsParity, "unverified");
+  assert.equal(result.remoteRequiredSecretsPresence, "unverified");
 });
 
 test("policy visibility and presence of a permission do not prove effective Editor access", async () => {
@@ -123,6 +129,21 @@ test("detects secret/plain text name conflicts without exposing names or values"
   assert.ok(!JSON.stringify(result).includes(SECRET));
 });
 
+test("required Worker secret existence is checked by name and type only", async () => {
+  for (const [options, state] of [
+    [{}, "present"], [{ missingRequiredSecret: true }, "not_observed"],
+    [{ wrongRequiredType: true }, "not_observed"],
+    [{ settingsDenied: true }, "unverified"],
+  ]) {
+    const result = await inspectPublisherReadOnly(input, fixture(options).fetchImpl);
+    assert.equal(result.remoteRequiredSecretsPresence, state);
+    const printed = JSON.stringify(result);
+    for (const sensitive of [SECRET, "never-print", "MCP_CONTRACT_PREPARE_TOKEN"]) {
+      assert.ok(!printed.includes(sensitive));
+    }
+  }
+});
+
 test("rejects split traffic, CAS drift, and oversized responses without data leakage", async () => {
   for (const [opts, code] of [
     [{ split: true }, "ACTIVE_DEPLOYMENT_INVALID"],
@@ -137,7 +158,9 @@ test("rejects split traffic, CAS drift, and oversized responses without data lea
 test("rejects bad inputs before networking", async () => {
   const f = fixture();
   for (const bad of [{ accountId: "../" }, { deploymentId: "invalid" },
-    { versionId: "invalid" }, { token: "short" }, { vars: { KEY: 4 } }]) {
+    { versionId: "invalid" }, { token: "short" }, { vars: { KEY: 4 } },
+    { requiredSecrets: [] }, { requiredSecrets: ["../"] },
+    { requiredSecrets: ["DUP", "DUP"] }]) {
     await assert.rejects(() => inspectPublisherReadOnly({ ...input, ...bad }, f.fetchImpl),
       e => e instanceof PublisherAuditError);
   }
