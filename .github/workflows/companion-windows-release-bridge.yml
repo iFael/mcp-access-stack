@@ -1,0 +1,77 @@
+name: Publish signed Windows companion GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: Exact successful main commit SHA
+        required: true
+        type: string
+      ci_run_id:
+        description: Successful main CI run ID
+        required: true
+        type: string
+      distribution_run_id:
+        description: Successful Windows companion-only distribution run ID
+        required: true
+        type: string
+      expected_artifact_sha256:
+        description: Exact SHA-256 of the outer GitHub Actions artifact ZIP
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: companion-release-bridge-${{ inputs.ci_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows-only:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: windows-latest
+    environment: public-release
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout exact authorized source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_source_sha }}
+          persist-credentials: false
+
+      - name: Install Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Verify CI provenance and download SHA-256 pinned Actions artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          DISTRIBUTION_RUN_ID: ${{ inputs.distribution_run_id }}
+          EXPECTED_ARTIFACT_SHA256: ${{ inputs.expected_artifact_sha256 }}
+          ARTIFACT_OUTPUT_DIR: ${{ runner.temp }}/companion-release-bridge
+        run: |
+          if ((& git rev-parse HEAD).Trim() -cne $env:EXPECTED_SOURCE_SHA) {
+            throw 'Checkout does not match exact main source commit.'
+          }
+          node tooling/release/verify-companion-artifact.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Actions artifact verification failed.' }
+
+      - name: Verify signed Windows ZIP and publish companion-only prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          & ./tooling/release/Publish-McpCompanionWindowsOnly.ps1 -ExpectedSourceSha $env:EXPECTED_SOURCE_SHA -CiRunId $env:CI_RUN_ID -ArtifactsDirectory (Join-Path $env:RUNNER_TEMP 'companion-release-bridge') -Publish
+          if ($LASTEXITCODE -ne 0) { throw 'Windows signed companion release verification or publication failed.' }
