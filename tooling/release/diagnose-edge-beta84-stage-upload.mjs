@@ -49,23 +49,31 @@ export function classifyUploadFailure(log) {
   if (/\b(?:worker\s+)?version\s+id:\s*[a-f0-9-]{36}\b/iu.test(log)) {
     return "receipt_marker_outcome_unknown";
   }
-  if (/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|invalid token|insufficient permissions|permission denied)\b/iu.test(log)) {
-    return "authorization_or_scope";
-  }
-  if (/\b(?:429|rate limit|too many requests)\b/iu.test(log)) return "rate_limited";
-  if (/(?:--strict|strict mode|configuration (?:mismatch|differs)|remote configuration|binding.+conflict)/iu.test(log)) {
-    return "remote_configuration_conflict";
-  }
-  if (/(?:durable objects?|migration|sqlite class|class migration)/iu.test(log)) {
+  // Wrangler prints informational binding/migration banners even when the
+  // failure has another cause. Only classify explicit error lines; do not
+  // infer causality from arbitrary words elsewhere in its full output.
+  const failures = log.split(/\r?\n/u).filter(line =>
+    /^\s*(?:✘\s*)?(?:\[ERROR\]\s*)?(?:Error(?:\s+\d+)?\s*:|✘\s*\[ERROR\]|##\[error\]|HTTP\s+(?:401|403|429)\b|Authentication error\s*:|--strict\s*:|Invalid configuration|Could not resolve|Cannot find module|connect\s+(?:ETIMEDOUT|ECONNRESET|ENOTFOUND))/iu.test(line)
+  ).join("\n");
+  if (/\b10211\b/u.test(failures) ||
+      /(?:durable objects?|migration|sqlite class)[^\n]*(?:not supported|cannot|can't|failed|prohibited|requires? deploy)/iu.test(failures) ||
+      /(?:not supported|cannot|can't|failed|prohibited)[^\n]*(?:durable objects?|migration|sqlite class)/iu.test(failures)) {
     return "durable_object_migration";
   }
-  if (/(?:invalid configuration|config(?:uration)? file|parse config)/iu.test(log)) {
+  if (/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|invalid token|insufficient permissions|permission denied)\b/iu.test(failures)) {
+    return "authorization_or_scope";
+  }
+  if (/\b(?:429|rate limit|too many requests)\b/iu.test(failures)) return "rate_limited";
+  if (/(?:--strict|strict mode|configuration (?:mismatch|differs)|remote configuration|binding.+conflict)/iu.test(failures)) {
+    return "remote_configuration_conflict";
+  }
+  if (/(?:invalid configuration|config(?:uration)? file|parse config)/iu.test(failures)) {
     return "configuration_invalid";
   }
-  if (/(?:could not resolve|cannot find module|missing dependency|ERR_MODULE_NOT_FOUND)/iu.test(log)) {
+  if (/(?:could not resolve|cannot find module|missing dependency|ERR_MODULE_NOT_FOUND)/iu.test(failures)) {
     return "missing_dependency";
   }
-  if (/(?:ETIMEDOUT|ECONNRESET|ENOTFOUND|network error|socket hang up|fetch failed)/iu.test(log)) {
+  if (/(?:ETIMEDOUT|ECONNRESET|ENOTFOUND|network error|socket hang up|fetch failed)/iu.test(failures)) {
     return "network_or_timeout";
   }
   return "unknown";
