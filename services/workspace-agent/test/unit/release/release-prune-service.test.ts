@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, realpath, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { beforeEach, afterEach, describe, expect, it } from "@jest/globals";
 import { pruneReleasesInputSchema } from "@vs-code-gpt/shared";
 import { ReleasePruneService } from "../../../src/release/release-prune-service.js";
@@ -35,7 +35,7 @@ describe("ReleasePruneService (isolated physical fixture)", () => {
     writeFile(stateFile(),JSON.stringify(v));
 
   beforeEach(async()=>{
-    root=await mkdtemp(path.join(os.tmpdir(),"oracle-prune-"));
+    root=await realpath(await mkdtemp(path.join(os.tmpdir(),"oracle-prune-")));
     for(const dir of ["releases","staging","state"]) await mkdir(path.join(root,dir));
     for(const name of [active,previous,candidate,old]) await mkdir(path.join(root,"releases",name));
     await mkdir(path.join(root,"staging",stage));
