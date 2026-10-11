@@ -102,8 +102,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test tooling/release/build-edge-beta84-inspection-bridge.test.mjs tooling/release/stage-edge-beta84-bridge-guard.test.mjs
+          node --test tooling/release/build-edge-beta84-inspection-bridge.test.mjs tooling/release/stage-edge-beta84-bridge-guard.test.mjs tooling/release/diagnose-edge-beta84-stage-upload.test.mjs
           node tooling/release/build-edge-beta84-inspection-bridge.mjs --dry-run
+          node tooling/release/diagnose-edge-beta84-stage-upload.mjs preflight
 
   campaign-runner-linux-artifact:
     needs: impact
