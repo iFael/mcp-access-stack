@@ -88,6 +88,14 @@ test("workflow is one-shot, Environment-gated, CAS-bound and upload-only", async
     "expected_main_sha","expected_active_deployment_id","expected_active_version_id",
   ]);
   assert.equal(config.jobs.stage.environment,"public-release");
+  // The frozen bridge builder uses git show on a historical commit. The
+  // checkout default (depth 1) cannot resolve that pinned manifest blob.
+  const checkout = config.jobs.stage.steps.filter(step =>
+    step.uses?.startsWith("actions/checkout@"));
+  assert.equal(checkout.length, 1);
+  assert.equal(checkout[0].with.ref, "${{ inputs.expected_main_sha }}");
+  assert.equal(checkout[0].with["fetch-depth"], 0);
+  assert.equal(checkout[0].with["persist-credentials"], false);
   assert.equal(config.concurrency.group,"public-release-edge");
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /environment: public-release/u);

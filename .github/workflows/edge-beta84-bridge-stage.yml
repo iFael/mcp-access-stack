@@ -69,6 +69,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.expected_main_sha }}
+          # The frozen beta.84 manifest is read with git show at a historical SHA.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node 26
