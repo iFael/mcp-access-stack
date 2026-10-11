@@ -1360,7 +1360,7 @@ export function registerWorkspaceTools(
       {
         title: "Get managed Linux service status",
         description:
-          "Reads bounded status for one allowlisted MCP V3 Linux service. " +
+          "Reads bounded status for one allowlisted MCP V3 Linux service. An optional two-hour diagnostic window inspects only sanitized journal event categories and fixed Polkit metadata; unavailable permissions are explicit, never bypassed. " +
           "Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
         inputSchema: serviceGetStatusInputSchema,
         outputSchema: managedServiceSnapshotSchema,

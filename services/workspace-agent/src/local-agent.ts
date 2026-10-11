@@ -615,7 +615,7 @@ export class LocalAgent {
       context,
       (parsed) => ({ targetResource: parsed.serviceName }),
       (_workspace, parsed, activeContext) =>
-        this.serviceControlService.getStatus(parsed.serviceName, activeContext.signal),
+        this.serviceControlService.getStatus(parsed.serviceName, activeContext.signal, parsed.diagnostics),
     );
   }
 
