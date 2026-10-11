@@ -20,7 +20,9 @@ const input = {
 
 function fixture({ migrationTag = "v1", drift = false, split = false,
   missingScript = false, wrongVersion = false, http = 200,
-  oversized = false, emptyDeployments = false, unsafeTag = false, omitTag = false } = {}) {
+  oversized = false, emptyDeployments = false, unsafeTag = false,
+  omitTag = false, omitRuntime = false, invalidRuntime = false,
+  legacyOnlyTag = false } = {}) {
   const calls = [];
   let deployments = 0;
   const fetchImpl = async (url, options) => {
@@ -47,9 +49,15 @@ function fixture({ migrationTag = "v1", drift = false, split = false,
       result: {
         id: wrongVersion ? NEXT_DEPLOY : VERSION,
         resources: missingScript ? {} : {
-          script: unsafeTag
-            ? { migration_tag: { leak: "secret-private-value" } }
-            : omitTag ? {} : { migration_tag: migrationTag },
+          script: {
+            etag: "0123456789abcdef",
+            ...(legacyOnlyTag ? { migration_tag: "v1" } : {}),
+          },
+          ...(!omitRuntime ? {
+            script_runtime: invalidRuntime ? [] : unsafeTag
+              ? { migration_tag: { leak: "secret-private-value" } }
+              : omitTag || legacyOnlyTag ? {} : { migration_tag: migrationTag },
+          } : {}),
         },
       },
     };
@@ -82,7 +90,10 @@ test("GET-only, CAS-pinned matching migration_tag returns only safe summary", as
   }
 });
 test("missing or null remote migration tag stays unverified, never matching", async () => {
-  for (const options of [{ omitTag: true }, { migrationTag: null }]) {
+  for (const options of [
+    { omitTag: true }, { migrationTag: null },
+    { omitRuntime: true }, { legacyOnlyTag: true },
+  ]) {
     const r = await inspectWorkerDoMigration(input, fixture(options).fetchImpl);
     assert.equal(r.migrationTagParity, "unverified");
     assert.equal(r.status, "unverified");
@@ -95,6 +106,7 @@ test("different remote migration tag is reported without printing actual tag", a
 });
 test("invalid remote metadata, HTTP failure and oversized response fail closed", async () => {
   await fails({ unsafeTag: true }, "MIGRATION_TAG_INVALID");
+  await fails({ invalidRuntime: true }, "VERSION_SHAPE_INVALID");
   await fails({ missingScript: true }, "VERSION_SHAPE_INVALID");
   await fails({ wrongVersion: true }, "VERSION_ID_MISMATCH");
   await fails({ http: 403 }, "CLOUDFLARE_READ_FAILED");
