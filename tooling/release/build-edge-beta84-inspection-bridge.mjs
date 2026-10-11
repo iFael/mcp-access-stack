@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 export const BETA84_COMMIT = "d60ff2f4a8f2b17f2425945aedc9e76ba1c17cb0";
 export const BETA84_MANIFEST_BLOB = "cc5fb34afe6d0e9dc1864d3c830eb35340ae6be1";
 export const BETA84_REVISION = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59";
-export const MAIN_AT_GATE_REVISION = "c73274d7f1d3d7b9b35a9172eeb1d19b17cd998b564ff05026f3e3b5d26c4949";
+export const MAIN_AT_GATE_REVISION = "1616749976afcd6af91e30ab1c92bfc3adb45b2650f8444bec64a86ad9a25145";
 const MANIFEST_PATH = "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts";
 const SOURCE_PATH = "services/mcp-edge-gateway/src/index.ts";
 const BRIDGE_ONLY_BLOCKED_ROUTES = [
