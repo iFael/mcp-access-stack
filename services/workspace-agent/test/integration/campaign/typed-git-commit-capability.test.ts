@@ -180,6 +180,8 @@ describe("delegated Git commit through real LocalAgent and native receipt",()=>{
     expect(git(fixture!.workspacePath,["rev-parse","HEAD"]).trim()).toBe(beforeHead);
   },30000);
 
+  // Real LocalAgent and temporary Git setup can exceed Jest's default 5s
+  // under loaded Windows CI. Preserve the native denial and HEAD assertions.
   it("native policy denies commit before changing the temporary Git HEAD",async()=>{
     const {bound,ledger,oldHead}=await prepare([]);
     const result=await new DelegatedCampaignCoordinator(
@@ -187,7 +189,7 @@ describe("delegated Git commit through real LocalAgent and native receipt",()=>{
     ).run("test",campaignId);
     expect(result.campaign.tasks[0]?.state).toBe("outcome_unknown");
     expect(git(fixture!.workspacePath,["rev-parse","HEAD"]).trim()).toBe(oldHead);
-  });
+  },30000);
 
   it("native CAS rejects changed index and leaves HEAD untouched",async()=>{
     const {bound,ledger,oldHead}=await prepare(["git.commit.write"]);
