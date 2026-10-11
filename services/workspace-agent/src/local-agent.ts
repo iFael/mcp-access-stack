@@ -20,6 +20,7 @@ import {
   getReleaseStateInputSchema,
   prepareReleaseInputSchema,
   promoteReleaseInputSchema,
+  pruneReleasesInputSchema,
   readFileInputSchema,
   readBinaryFileInputSchema,
   runWorkspaceValidationInputSchema,
@@ -64,6 +65,8 @@ import {
   type PrepareReleaseResult,
   type PromoteReleaseInput,
   type PromoteReleaseResult,
+  type PruneReleasesInput,
+  type PruneReleasesResult,
   type ReadFileInput,
   type ReadFileResult,
   type ReadBinaryFileInput,
@@ -568,6 +571,14 @@ export class LocalAgent {
       (parsed) => ({ query: parsed.releaseId }),
       (workspace, parsed, activeContext) =>
         this.releaseLifecycleService.promote(workspace, parsed, activeContext),
+    );
+  }
+
+  async pruneReleases(input: PruneReleasesInput, context: OperationContext = {}): Promise<PruneReleasesResult> {
+    return this.runValidatedAudited(
+      "pruneReleases", "shell", pruneReleasesInputSchema, input, context,
+      (parsed) => ({ query: parsed.operationId, targetResource: "oracle-release-retention" }),
+      (workspace, parsed, activeContext) => this.releaseLifecycleService.prune(workspace, parsed, activeContext.signal),
     );
   }
 

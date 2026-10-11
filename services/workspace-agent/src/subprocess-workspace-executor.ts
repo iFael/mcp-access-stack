@@ -71,6 +71,10 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("promoteRelease"));
   }
 
+  pruneReleases(...args: Parameters<WorkspaceExecutor["pruneReleases"]>) {
+    return this.fallback?.pruneReleases(...args) ?? Promise.reject(this.notImplemented("pruneReleases"));
+  }
+
   runValidation(...args: Parameters<WorkspaceExecutor["runValidation"]>) {
     return this.fallback?.runValidation(...args) ??
       Promise.reject(this.notImplemented("runValidation"));
