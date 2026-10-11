@@ -83,8 +83,14 @@ function versionTag(payload, id) {
   if (!record(result.resources) || !record(result.resources.script)) {
     fail("VERSION_SHAPE_INVALID");
   }
-  // Optional API metadata is NOT evidence of a pending migration.
-  const tag = result.resources.script.migration_tag;
+  // The Cloudflare Get Worker Script Version schema puts migration_tag in
+  // resources.script_runtime, not resources.script. An absent optional runtime
+  // or tag cannot establish that a migration is pending.
+  const runtime = result.resources.script_runtime;
+  if (runtime !== undefined && runtime !== null && !record(runtime)) {
+    fail("VERSION_SHAPE_INVALID");
+  }
+  const tag = runtime?.migration_tag;
   if (tag === undefined || tag === null) return null;
   return valid(tag, TAG, "MIGRATION_TAG_INVALID");
 }
