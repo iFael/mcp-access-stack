@@ -79,6 +79,7 @@ import {
   promoteReleaseInputSchema,
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
+import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import {
   managedServiceSnapshotSchema,
   serviceGetStatusInputSchema,
@@ -227,6 +228,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "get_release_state",
   "prepare_release",
   "promote_release",
+  "prune_releases",
   "service_get_status",
   "service_start",
   "run_workspace_validation",
@@ -1345,6 +1347,45 @@ export function registerWorkspaceTools(
           );
           return {
             content: [{ type: "text", text: structuredContent.status === "confirmation_required" ? "Release promotion requires confirmation." : `Release cutover started with request ${structuredContent.requestId}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("prune_releases", include)) {
+    server.registerTool(
+      "prune_releases",
+      {
+        title: "Prune obsolete Oracle release artifacts",
+        description:
+          "Plans or performs a bounded deletion of explicit generated release or staging directories. " +
+          "Requires operationId, dry-run plan lifecycle SHA, active/previous/candidate protections, process and task checks. " +
+          "Never accepts arbitrary paths or shell commands. Execution is destructive and leaves an unreconciled lock if interrupted.",
+        inputSchema: pruneReleasesInputSchema,
+        outputSchema: pruneReleasesResultSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = pruneReleasesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.pruneReleases(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "planned"
+              ? "Prune plan validated without filesystem mutation."
+              : "Requested obsolete release artifacts removed and receipt persisted." }],
             structuredContent,
           };
         } catch (error) {
@@ -3467,6 +3508,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   getReleaseState: "get_release_state",
   prepareRelease: "prepare_release",
   promoteRelease: "promote_release",
+  pruneReleases: "prune_releases",
   runValidation: "run_workspace_validation",
   runCommand: "run_command",
   searchFiles: "search_files",

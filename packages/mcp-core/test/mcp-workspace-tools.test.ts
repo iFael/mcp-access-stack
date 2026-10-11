@@ -212,6 +212,16 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async pruneReleases(input: import("@vs-code-gpt/shared").PruneReleasesInput): Promise<import("@vs-code-gpt/shared").PruneReleasesResult> {
+    this.calls.push("pruneReleases");
+    return {
+      operationId: input.operationId,
+      status: input.dryRun ? "planned" : "completed",
+      stateSha256: "1".repeat(64),
+      items: input.targets.map(target => ({...target, status: input.dryRun ? "eligible" as const : "deleted" as const})),
+    };
+  }
+
   async runValidation(
     input: RunWorkspaceValidationInput,
   ): Promise<RunWorkspaceValidationResult> {
@@ -1386,6 +1396,21 @@ describe("registerWorkspaceTools", () => {
     ]);
   });
 
+  it("publishes prune_releases as a destructive, typed CAS operation", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({ name:"test",version:"0.0.0" },{capabilities:{tools:{}}});
+    registerWorkspaceTools(server, executor, {includeTools:["prune_releases"],securitySchemes:[{type:"noauth"}]});
+    const tool = registeredTools(server)["prune_releases"]!;
+    expect(tool.annotations).toMatchObject({destructiveHint:true,openWorldHint:false,idempotentHint:true});
+    const reply = await tool.handler({
+      workspaceId:"ws",operationId:"123e4567-e89b-42d3-a456-426614174001",
+      dryRun:true,targets:[{kind:"staging",name:"1.1.0-beta.69.abcdefgh"}],
+    },{signal:new AbortController().signal});
+    expect(reply.isError).not.toBe(true);
+    expect(reply.structuredContent).toMatchObject({status:"planned",items:[{status:"eligible"}]});
+    expect(executor.calls).toContain("pruneReleases");
+  });
+
   it("gets multiple background tasks in one tool call and preserves order", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -1810,7 +1835,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty source-control tools inside the 52-tool workspace surface", () => {
+  it("publishes twenty source-control tools inside the 53-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1834,8 +1859,8 @@ describe("registerSourceControlTools", () => {
       "github_merge_pull_request",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(52);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(52);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(53);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(53);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

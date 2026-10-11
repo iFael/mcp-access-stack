@@ -210,6 +210,18 @@ export class BackgroundTaskManager {
       .map(toPublicRecord);
   }
 
+  /** Internal safety predicate: checks all owner scopes without exposing records. */
+  async hasActiveTasksForWorkspace(workspaceId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    await Promise.all(this.writes.values());
+    for (const task of this.records.values()) {
+      if (task.workspaceId !== workspaceId) continue;
+      const refreshed = await this.refreshRecoveredTask(task);
+      if (refreshed.state === "starting" || refreshed.state === "running") return true;
+    }
+    return false;
+  }
+
   async cancel_background_task(
     id: string,
     access: BackgroundTaskAccessContext = {},
