@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   signing-preflight:
+    # Reserved Oracle-only tags must not enter the public Edge release path.
+    if: ${{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') }}
     runs-on: ubuntu-latest
     environment: public-release
     steps:
