@@ -61,6 +61,7 @@ test("isolates both generated imports while leaving the canonical Worker config 
   assert.equal(selected.main, join(root, "services/mcp-edge-gateway/.wrangler/inspection-bridge/index.ts"));
   const entry = bridgeEntrypointSource(join(root, "services/mcp-edge-gateway/src/index.ts"));
   assert.match(entry, /bridge_operation_unavailable/);
+  assert.ok(entry.includes('/_internal/contract-rollout/replace-candidate'));
   assert.match(entry, /contract-rollout\/bootstrap/);
   assert.match(entry, /contract-rollout\/prepare/);
   assert.doesNotMatch(entry, /contract-rollout\/promote/);

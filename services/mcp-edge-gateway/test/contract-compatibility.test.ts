@@ -6,6 +6,7 @@ import {
   isExpectedContractPrepared,
   promoteMcpContractRolloutState,
   prepareMcpContractRolloutState,
+  replaceMcpContractCandidateState,
   reconcileMcpContractRolloutState,
   rollbackMcpContractRolloutState,
 } from "../src/contract-compatibility.js";
@@ -199,6 +200,42 @@ describe("Edge/connector MCP contract compatibility", () => {
 
     expect(reconciled).toEqual({ state, changed: false });
     expect(isExpectedContractPrepared(reconciled.state)).toBe(false);
+  });
+
+
+  it("replaces an exact legacy candidate only under full active/old/new CAS", () => {
+    const active = "1".repeat(64);
+    const previous = "2".repeat(64);
+    const legacy = "3".repeat(64);
+    const state = {
+      version: 1 as const, activeContractRevision: active,
+      previousContractRevision: previous, candidateContractRevision: legacy,
+      preparedAt: "2026-10-08T03:27:40.414Z",
+    };
+    const now = "2026-10-11T22:40:00.000Z";
+    const result = replaceMcpContractCandidateState(
+      state, active, legacy, EXPECTED_MCP_CONTRACT_REVISION, now,
+    );
+    expect(result).toEqual({
+      ok: true,
+      state: {
+        ...state, candidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION, preparedAt: now,
+      },
+    });
+    expect(state.candidateContractRevision).toBe(legacy);
+    for (const [givenActive, givenLegacy, givenNext, error] of [
+      ["4".repeat(64), legacy, EXPECTED_MCP_CONTRACT_REVISION, "active_contract_mismatch"],
+      [active, "4".repeat(64), EXPECTED_MCP_CONTRACT_REVISION, "candidate_contract_mismatch"],
+      [active, legacy, "4".repeat(64), "build_contract_mismatch"],
+      [active, legacy, active, "build_contract_mismatch"],
+    ] as const) {
+      expect(replaceMcpContractCandidateState(state, givenActive, givenLegacy, givenNext, now))
+        .toEqual({ ok: false, code: error });
+    }
+    expect(replaceMcpContractCandidateState(
+      { ...state, candidateContractRevision: undefined },
+      active, legacy, EXPECTED_MCP_CONTRACT_REVISION, now,
+    )).toEqual({ ok: false, code: "candidate_contract_mismatch" });
   });
 
   it("promotes only when the prepared candidate is the selected runtime", () => {
