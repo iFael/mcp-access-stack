@@ -60,11 +60,16 @@ test("classifies upload stderr without returning raw logs or credentials", () =>
     ["HTTP 403 forbidden", "authorization_or_scope"],
     ["Error 429: rate limit exceeded", "rate_limited"],
     ["--strict: existing remote configuration differs", "remote_configuration_conflict"],
-    ["Durable Objects migrations are not supported during version upload", "durable_object_migration"],
+    ["Error 10211: Durable Object migration needs deployment", "durable_object_migration"],
+    ["✘ [ERROR] Durable Objects migrations are not supported during version upload", "durable_object_migration"],
     ["Invalid configuration file", "configuration_invalid"],
     ["Could not resolve package foo", "missing_dependency"],
     ["connect ETIMEDOUT", "network_or_timeout"],
     ["Something unrecognized happened", "unknown"],
+    ["Your worker has access to the following bindings:\\nDurable Objects: MCP_SESSION", "unknown"],
+    ["Error: Unexpected server response\\nDurable Objects: MCP_SESSION", "unknown"],
+    ["Error 10021: Unknown remote issue\\nDurable Objects: MCP_SESSION", "unknown"],
+    ["Warning: migrations v1 configured", "unknown"],
   ];
   for (const [msg, expected] of scenarios) {
     const v = classifyUploadFailure(msg + "\n" + secret);

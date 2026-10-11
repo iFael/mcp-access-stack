@@ -1,0 +1,91 @@
+name: Cloudflare Worker DO migration tag evidence (GET only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact main SHA approved for immutable evidence read
+        required: true
+        type: string
+      expected_active_deployment_id:
+        description: Pinned active deployment UUID from trusted provenance
+        required: true
+        type: string
+      expected_active_version_id:
+        description: Pinned 100 percent active Worker version UUID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-do-migration-tag-inspection
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate one-shot dispatch and immutable main without credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+          [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+
+  inspect:
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-observability
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact SHA without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+
+      - name: Setup Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Reconcile main after Environment protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+
+      - name: Inspect pinned active version migration metadata using GET only
+        shell: bash
+        env:
+          CF_PROVENANCE_READ_TOKEN: ${{ secrets.CF_PROVENANCE_READ_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+        run: |
+          set -euo pipefail
+          node tooling/release/inspect-cloudflare-do-migration.mjs
