@@ -1,0 +1,77 @@
+name: Cloudflare Worker versions inventory (GET only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact approved main SHA for a read-only inventory
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-worker-versions-inventory
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check main SHA and one-shot dispatch without Cloudflare access
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+
+  inventory:
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-observability
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact SHA without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Reconcile exact main again after Environment protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+
+      - name: Inventory up to 100 immutable Worker versions with GET only
+        shell: bash
+        env:
+          CF_PROVENANCE_READ_TOKEN: ${{ secrets.CF_PROVENANCE_READ_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          node tooling/release/list-cloudflare-worker-versions.mjs
