@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   BETA84_MANIFEST_BLOB,
+  classifyWranglerDryRunFailure,
   BETA84_REVISION,
   MAIN_AT_GATE_REVISION,
   extractRevision,
@@ -27,6 +28,19 @@ function canonical() {
     vars: { MCP_EDGE_ENABLED: "true" },
   };
 }
+
+test("Wrangler dry-run failures use sanitized fixed categories, never raw diagnostics", () => {
+  const secret = "private-secret-should-not-be-disclosed";
+  assert.equal(classifyWranglerDryRunFailure({ status: 1, stderr: `Could not resolve @mcp-access-stack/edge-protocol ${secret}` }), "missing_module_or_import");
+  assert.equal(classifyWranglerDryRunFailure({ status: 1, stderr: `Invalid configuration ${secret}` }), "configuration_error");
+  assert.equal(classifyWranglerDryRunFailure({ status: null, error: { code: "ETIMEDOUT", message: secret } }), "timeout");
+  assert.equal(classifyWranglerDryRunFailure({ status: null, error: { code: "ENOBUFS", message: secret } }), "output_limit");
+  assert.equal(classifyWranglerDryRunFailure({ status: 1, stderr: secret }), "unknown");
+  for (const result of [
+    { status: 1, stderr: `Could not resolve ${secret}` },
+    { status: 1, stderr: secret },
+  ]) assert.ok(!classifyWranglerDryRunFailure(result).includes(secret));
+});
 
 test("rejects missing, malformed or drifted historical revisions", () => {
   assert.equal(extractRevision(historicalSource), BETA84_REVISION);

@@ -94,6 +94,13 @@ jobs:
       - name: Install pinned dependencies
         run: npm ci
 
+      - name: Build Edge bundle dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @mcp-access-stack/mcp-owner-auth
+
       - name: Read-only Cloudflare baseline with exact deployment and version CAS
         shell: bash
         env:

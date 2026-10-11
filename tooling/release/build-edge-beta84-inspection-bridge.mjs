@@ -100,6 +100,22 @@ function runGit(root, args, input) {
   });
 }
 
+// Emit only fixed diagnostic categories: Wrangler stdout/stderr can contain
+// environment details and must never be surfaced verbatim in public CI logs.
+export function classifyWranglerDryRunFailure(result) {
+  if (result.error?.code === "ETIMEDOUT") return "timeout";
+  if (result.error?.code === "ENOBUFS") return "output_limit";
+  const output = String(result.stderr ?? "") + "\n" + String(result.stdout ?? "");
+  if (/Could not resolve|Cannot find module|ERR_MODULE_NOT_FOUND/u.test(output)) {
+    return "missing_module_or_import";
+  }
+  if (/Invalid configuration|Configuration file|config\.json/u.test(output)) {
+    return "configuration_error";
+  }
+  if (result.error) return "process_error";
+  return "unknown";
+}
+
 async function dryRunBridge(root, paths) {
   const outdir = join(paths.staging, "bundle");
   const result = spawnSync(process.execPath, [
@@ -107,7 +123,7 @@ async function dryRunBridge(root, paths) {
     "--cwd", root, "--config", paths.configPath, "--dry-run", "--outdir", outdir,
   ], { cwd: root, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
-    throw new Error("Bridge Wrangler dry-run failed; no deploy was attempted.");
+    throw new Error("Bridge Wrangler dry-run failed (" + classifyWranglerDryRunFailure(result) + "); no deploy was attempted.");
   }
   const jsFiles = (await readdir(outdir)).filter(file => file.endsWith(".js"));
   if (jsFiles.length === 0) throw new Error("Bridge dry-run produced no JavaScript bundle.");
