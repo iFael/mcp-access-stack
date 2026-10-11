@@ -56,7 +56,7 @@ test("fails closed on malformed identity and manifest", () => {
 });
 
 test("Oracle-only workflow enforces existing tag, main CAS and successful CI", () => {
-  const workflow = readFileSync(".github/workflows/oracle-linux-only-distribution.yml", "utf8");
+  const workflow = readFileSync(".github/workflows/oracle-linux-only-distribution.yml", "utf8").replace(/\r\n/g, "\n");
   assert.match(workflow, /^on:\n  workflow_dispatch:/m);
   assert.doesNotMatch(workflow, /^\s+(?:push|workflow_run|schedule):/m);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
@@ -88,7 +88,7 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
 });
 
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
-  const release = readFileSync(".github/workflows/release.yml", "utf8");
+  const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
   const guard = "if: " + "$" +
     "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') }}";
   assert.ok(release.includes(guard), "public release must fail closed for oracle-only tags");
