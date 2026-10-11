@@ -341,6 +341,59 @@ describe("runtime telemetry surfaces", () => {
     expect(received).toEqual(body);
   });
 
+
+  it("authenticates candidate replacement before DO lookup and forwards exact CAS", async () => {
+    const { default: worker } = await import("../src/index.js");
+    const input = {
+      operationId: "11111111-1111-4111-8111-111111111111",
+      expectedActiveContractRevision: "a".repeat(64),
+      expectedPreviousCandidateContractRevision: "b".repeat(64),
+      expectedCandidateContractRevision: EXPECTED_MCP_CONTRACT_REVISION,
+    };
+    let received: unknown;
+    const get = jest.fn(() => ({
+      replaceContractCandidate: async (payload: unknown) => {
+        received = payload;
+        return JSON.stringify({ status: 200, body: { status: "replaced" } });
+      },
+    }));
+    const env = {
+      MCP_CONNECTOR_TOKEN: "connector-only",
+      MCP_OWNER_TOKEN: "owner-only",
+      MCP_CONTRACT_PREPARE_TOKEN: "isolated-preparation",
+      MCP_SESSION: { idFromName: () => ({ toString: () => "session-id" }), get },
+    } as never;
+    const endpoint = "https://edge.example/_internal/contract-rollout/replace-candidate";
+    const req = (token?: string, body = JSON.stringify(input)) => new Request(endpoint, {
+      method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) },
+      body,
+    });
+    for (const token of [undefined, "connector-only", "owner-only"]) {
+      expect((await worker.fetch(req(token), env, {} as ExecutionContext)).status).toBe(401);
+    }
+    expect(get).not.toHaveBeenCalled();
+    for (const badEnv of [
+      { ...env, MCP_CONTRACT_PREPARE_TOKEN: undefined },
+      { ...env, MCP_CONTRACT_PREPARE_TOKEN: "connector-only" },
+      { ...env, MCP_CONTRACT_PREPARE_TOKEN: "owner-only" },
+    ]) {
+      expect((await worker.fetch(req("isolated-preparation"), badEnv as never, {} as ExecutionContext)).status).toBe(503);
+    }
+    expect((await worker.fetch(new Request(endpoint, {
+      method: "POST", headers: { authorization: "Bearer isolated-preparation", "content-type": "text/plain" },
+      body: "not-json",
+    }), env, {} as ExecutionContext)).status).toBe(415);
+    expect((await worker.fetch(req("isolated-preparation", "x".repeat(4097)), env, {} as ExecutionContext)).status).toBe(413);
+    expect(get).not.toHaveBeenCalled();
+    const accepted = await worker.fetch(req("isolated-preparation"), env, {} as ExecutionContext);
+    expect(accepted.status).toBe(200);
+    expect(received).toEqual(input);
+    expect(get).toHaveBeenCalledTimes(1);
+    const invalid = await worker.fetch(req("isolated-preparation", "not json"), env, {} as ExecutionContext);
+    expect(invalid.status).toBe(400);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects unauthenticated explicit contract preparation before touching the session", async () => {
     const { default: edgeWorker } = await import("../src/index.js");
     let calls = 0;

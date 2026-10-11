@@ -13,6 +13,7 @@ const SOURCE_PATH = "services/mcp-edge-gateway/src/index.ts";
 const BRIDGE_ONLY_BLOCKED_ROUTES = [
   "/_internal/contract-rollout/bootstrap",
   "/_internal/contract-rollout/prepare",
+  "/_internal/contract-rollout/replace-candidate",
 ];
 
 export function bridgeEntrypointSource(canonicalEntry) {

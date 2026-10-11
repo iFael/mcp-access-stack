@@ -35,6 +35,7 @@ import {
   isMcpContractRevision,
   promoteMcpContractRolloutState,
   prepareMcpContractRolloutState,
+  replaceMcpContractCandidateState,
   isMcpContractRolloutState,
   reconcileMcpContractRolloutState,
   rollbackMcpContractRolloutState,
@@ -410,6 +411,101 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           this.getReadyConnectorForContractRevision(candidate) !== null,
       },
     });
+  }
+
+
+  async replaceContractCandidate(input: unknown): Promise<string> {
+    if (!isRecord(input) || Object.keys(input).sort().join(",") !==
+        "expectedActiveContractRevision,expectedCandidateContractRevision,expectedPreviousCandidateContractRevision,operationId" ||
+        typeof input.operationId !== "string" ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(input.operationId) ||
+        !isMcpContractRevision(input.expectedActiveContractRevision) ||
+        !isMcpContractRevision(input.expectedPreviousCandidateContractRevision) ||
+        !isMcpContractRevision(input.expectedCandidateContractRevision)) {
+      return JSON.stringify({ status: 400, body: { error: "invalid_candidate_replacement" } });
+    }
+    const operationId = input.operationId;
+    const expectedActive = input.expectedActiveContractRevision;
+    const previousCandidate = input.expectedPreviousCandidateContractRevision;
+    const nextCandidate = input.expectedCandidateContractRevision;
+    if (nextCandidate !== EXPECTED_MCP_CONTRACT_REVISION) {
+      return JSON.stringify({ status: 409, body: { error: "build_contract_mismatch" } });
+    }
+    const receiptKey = `edge:mcp-contract-candidate-replacement:v1:${operationId}`;
+    try {
+      const outcome = await this.ctx.storage.transaction(async (txn) => {
+        const stored = await txn.get<unknown>(MCP_CONTRACT_ROLLOUT_STORAGE_KEY);
+        if (!isMcpContractRolloutState(stored)) {
+          return { status: 503, error: "contract_rollout_state_unavailable" } as const;
+        }
+        const receipt = await txn.get<unknown>(receiptKey);
+        if (receipt !== undefined) {
+          if (!isRecord(receipt) || receipt.version !== 1 ||
+              receipt.operationId !== operationId ||
+              receipt.expectedActiveContractRevision !== expectedActive ||
+              receipt.expectedPreviousCandidateContractRevision !== previousCandidate ||
+              receipt.expectedCandidateContractRevision !== nextCandidate ||
+              typeof receipt.replacedAt !== "string") {
+            return { status: 409, error: "operation_id_conflict" } as const;
+          }
+          if (stored.activeContractRevision !== expectedActive ||
+              stored.candidateContractRevision !== nextCandidate ||
+              stored.preparedAt !== receipt.replacedAt ||
+              !await readMcpCatalogSnapshot(txn, nextCandidate)) {
+            return { status: 409, error: "replacement_state_changed" } as const;
+          }
+          return { status: 200, state: stored, replayed: true } as const;
+        }
+        const replaced = replaceMcpContractCandidateState(
+          stored, expectedActive, previousCandidate, nextCandidate, new Date().toISOString(),
+        );
+        if (!replaced.ok) return { status: 409, error: replaced.code } as const;
+        if (this.getReadyConnectorForContractRevision(previousCandidate) !== null) {
+          return { status: 409, error: "previous_candidate_in_use" } as const;
+        }
+        // Never replace a candidate if the active catalog is missing or damaged.
+        if (!await readMcpCatalogSnapshot(txn, expectedActive)) {
+          return { status: 503, error: "active_catalog_unavailable" } as const;
+        }
+        if (!await readMcpCatalogSnapshot(txn, nextCandidate)) {
+          await persistMcpCatalogSnapshot(txn, EDGE_BUILD_MCP_CATALOG);
+        }
+        await txn.put(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, replaced.state);
+        await txn.put(receiptKey, {
+          version: 1, operationId,
+          expectedActiveContractRevision: expectedActive,
+          expectedPreviousCandidateContractRevision: previousCandidate,
+          expectedCandidateContractRevision: nextCandidate,
+          replacedAt: replaced.state.preparedAt,
+        });
+        return { status: 200, state: replaced.state, replayed: false } as const;
+      });
+      if (outcome.status !== 200) {
+        return JSON.stringify({ status: outcome.status, body: { error: outcome.error } });
+      }
+      this.contractRolloutState = outcome.state;
+      this.hasPersistedContractRolloutState = true;
+      if (!outcome.replayed) {
+        this.refreshOpenConnectorContractCompatibility();
+        console.log(JSON.stringify({
+          event: "edge_contract_candidate_replaced",
+          operationId, activeContractRevision: expectedActive,
+          previousCandidateContractRevision: previousCandidate,
+          candidateContractRevision: nextCandidate,
+        }));
+      }
+      return JSON.stringify({
+        status: 200,
+        body: {
+          status: outcome.replayed ? "already-replaced" : "replaced",
+          operationId, activeContractRevision: expectedActive,
+          candidateContractRevision: nextCandidate,
+          candidateConnectorReady: this.getReadyConnectorForContractRevision(nextCandidate) !== null,
+        },
+      });
+    } catch {
+      return JSON.stringify({ status: 503, body: { error: "candidate_replacement_unavailable" } });
+    }
   }
 
   async promoteContractRollout(input: unknown): Promise<string> {

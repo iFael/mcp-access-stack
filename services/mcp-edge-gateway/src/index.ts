@@ -35,6 +35,34 @@ export default {
       return jsonResponse(result.body, result.status);
     }
 
+    if (url.pathname === "/_internal/contract-rollout/replace-candidate" && request.method === "POST") {
+      const expectedToken = env.MCP_CONTRACT_PREPARE_TOKEN;
+      if (!expectedToken) return jsonResponse({ error: "contract_preparation_auth_not_configured" }, 503);
+      if (expectedToken === env.MCP_CONNECTOR_TOKEN || expectedToken === env.MCP_OWNER_TOKEN) {
+        return jsonResponse({ error: "contract_preparation_auth_not_isolated" }, 503);
+      }
+      if (!(await connectorTokenMatches(request.headers.get("authorization"), expectedToken))) {
+        return new Response(null, {
+          status: 401, headers: { "www-authenticate": "Bearer", "cache-control": "no-store" },
+        });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return jsonResponse({ error: "invalid_candidate_replacement_content_type" }, 415);
+      }
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return jsonResponse({ error: "candidate_replacement_too_large" }, 413);
+      }
+      let input: unknown;
+      try { input = JSON.parse(body) as unknown; } catch {
+        return jsonResponse({ error: "invalid_candidate_replacement" }, 400);
+      }
+      const result = JSON.parse(await env.MCP_SESSION.get(env.MCP_SESSION.idFromName(EDGE_SESSION_NAME)).replaceContractCandidate(input)) as {
+        status: number; body: Record<string, unknown>;
+      };
+      return jsonResponse(result.body, result.status);
+    }
+
     const sessionId = env.MCP_SESSION.idFromName(EDGE_SESSION_NAME);
     const session = env.MCP_SESSION.get(sessionId);
 

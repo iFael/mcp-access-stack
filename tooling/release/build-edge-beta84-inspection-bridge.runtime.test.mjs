@@ -113,7 +113,7 @@ test("Wrangler-frozen worker: rejects new mutation paths before DO resolution", 
   const { default: worker, McpSession } = await ready;
   const fixture = setup(McpSession);
   await Promise.all(fixture.completed);
-  for (const path of ["/_internal/contract-rollout/bootstrap", "/_internal/contract-rollout/prepare"]) {
+  for (const path of ["/_internal/contract-rollout/bootstrap", "/_internal/contract-rollout/prepare", "/_internal/contract-rollout/replace-candidate"]) {
     for (const method of ["GET", "POST"]) {
       const response = await worker.fetch(new Request("https://edge.example" + path, {
         method, headers: { authorization: "Bearer " + token },

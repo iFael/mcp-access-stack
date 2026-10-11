@@ -122,6 +122,40 @@ export function prepareMcpContractRolloutState(
   };
 }
 
+
+export type CandidateReplacementResult =
+  | { ok: true; state: McpContractRolloutStateV1 }
+  | { ok: false; code: "build_contract_mismatch" | "active_contract_mismatch" | "candidate_contract_mismatch" };
+
+export function replaceMcpContractCandidateState(
+  state: McpContractRolloutStateV1,
+  expectedActiveContractRevision: string,
+  expectedPreviousCandidateContractRevision: string,
+  expectedCandidateContractRevision: string,
+  now: string,
+): CandidateReplacementResult {
+  if (expectedCandidateContractRevision !== EXPECTED_MCP_CONTRACT_REVISION) {
+    return { ok: false, code: "build_contract_mismatch" };
+  }
+  if (state.activeContractRevision !== expectedActiveContractRevision) {
+    return { ok: false, code: "active_contract_mismatch" };
+  }
+  if (expectedPreviousCandidateContractRevision === expectedCandidateContractRevision ||
+      expectedPreviousCandidateContractRevision === expectedActiveContractRevision ||
+      expectedCandidateContractRevision === expectedActiveContractRevision ||
+      state.candidateContractRevision !== expectedPreviousCandidateContractRevision) {
+    return { ok: false, code: "candidate_contract_mismatch" };
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      candidateContractRevision: expectedCandidateContractRevision,
+      preparedAt: now,
+    },
+  };
+}
+
 export function isConnectorContractCompatible(
   runtime: Pick<ConnectorRuntimeIdentity, "catalogContractRevision"> | undefined,
   state: McpContractRolloutStateV1 = {
