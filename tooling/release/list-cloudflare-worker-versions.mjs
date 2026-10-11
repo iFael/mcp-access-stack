@@ -58,12 +58,24 @@ function parsePage(body, page) {
       !Array.isArray(body.result.items) || body.result.items.length > PER_PAGE) {
     fail("RESPONSE_SHAPE_INVALID");
   }
+  // Cloudflare's Versions endpoint documents result.items but does not
+  // guarantee the optional result_info fields. Validate each field *if*
+  // supplied, never trust missing metadata as evidence of completeness.
   const info = body.result_info;
-  if (info !== undefined &&
-      (!record(info) || info.page !== page || info.per_page !== PER_PAGE ||
-       !Number.isSafeInteger(info.total_pages) || info.total_pages < page ||
-       (info.total_pages > page && body.result.items.length === 0))) {
-    fail("PAGINATION_INVALID");
+  if (info !== undefined && !record(info)) fail("PAGINATION_SHAPE_INVALID");
+  if (info && "page" in info && info.page !== page) {
+    fail("PAGINATION_PAGE_MISMATCH");
+  }
+  if (info && "per_page" in info && info.per_page !== PER_PAGE) {
+    fail("PAGINATION_PER_PAGE_MISMATCH");
+  }
+  if (info && "total_pages" in info &&
+      (!Number.isSafeInteger(info.total_pages) || info.total_pages < page)) {
+    fail("PAGINATION_TOTAL_PAGES_INVALID");
+  }
+  if (info && Number.isSafeInteger(info.total_pages) &&
+      info.total_pages > page && body.result.items.length === 0) {
+    fail("PAGINATION_EMPTY_NONFINAL");
   }
   const items = body.result.items.map(item => {
     if (!record(item) || typeof item.id !== "string" || !UUID.test(item.id)) {
@@ -75,8 +87,12 @@ function parsePage(body, page) {
       source: SOURCES.has(item.metadata?.source) ? item.metadata.source : "unverified",
     };
   });
-  const hasMore = info ? page < info.total_pages : items.length === PER_PAGE;
-  return { items, hasMore, completenessVerified: info !== undefined };
+  const hasTotalPages = info && Number.isSafeInteger(info.total_pages);
+  const hasMore = hasTotalPages
+    ? page < info.total_pages : items.length === PER_PAGE;
+  const completenessVerified = Boolean(hasTotalPages &&
+    info.page === page && info.per_page === PER_PAGE);
+  return { items, hasMore, completenessVerified };
 }
 export async function inventoryWorkerVersions(input, fetchImpl = fetch) {
   if (typeof input?.accountId !== "string" || !ACCOUNT.test(input.accountId)) {
