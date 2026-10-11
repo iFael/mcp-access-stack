@@ -115,6 +115,9 @@ jobs:
       - name: Verify frozen beta.84 bridge bundle locally
         run: node tooling/release/build-edge-beta84-inspection-bridge.mjs --dry-run
 
+      - name: Validate isolated upload configuration without network
+        run: node tooling/release/diagnose-edge-beta84-stage-upload.mjs preflight
+
       - name: Upload immutable version without deploying or changing routes
         id: upload
         shell: bash
@@ -128,6 +131,8 @@ jobs:
           if ! npx wrangler versions upload --strict --keep-vars \
             --config services/mcp-edge-gateway/.wrangler/inspection-bridge/wrangler.json \
             > "$RUNNER_TEMP/edge-beta84-stage-upload.log" 2>&1; then
+            # Emit fixed diagnostic categories only; never reveal raw Wrangler output.
+            node tooling/release/diagnose-edge-beta84-stage-upload.mjs diagnose || true
             echo "::error::Stage upload outcome is uncertain; do NOT rerun. Reconcile Cloudflare versions first."
             exit 1
           fi
