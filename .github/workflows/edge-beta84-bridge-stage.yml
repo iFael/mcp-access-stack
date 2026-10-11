@@ -1,0 +1,143 @@
+name: Stage beta.84 inspection bridge (no traffic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact approved main SHA with successful CI
+        required: true
+        type: string
+      expected_active_deployment_id:
+        description: Active Cloudflare deployment UUID from fresh trusted provenance
+        required: true
+        type: string
+      expected_active_version_id:
+        description: Active Cloudflare immutable version UUID (100 percent traffic)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# Shares the public release mutex; upload must not race a release/deployment.
+concurrency:
+  group: public-release-edge
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate one-shot dispatch, immutable main and successful CI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          # Never rerun an ambiguous stage attempt. Reconcile Cloudflare instead.
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+          [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+          ci_count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
+            --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
+            --json headSha,status,conclusion,databaseId \
+            --jq '[.[] | select(.headSha == env.EXPECTED_MAIN_SHA and .status == "completed" and .conclusion == "success")] | length')"
+          [[ "$ci_count" =~ ^[1-9][0-9]*$ ]]
+          echo "Immutable main and required CI confirmed; no Cloudflare mutation."
+
+  stage:
+    name: Upload exactly one immutable Worker version
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: public-release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pinned source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+
+      - name: Setup Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Reconcile main after Environment approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Read-only Cloudflare baseline with exact deployment and version CAS
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+        run: |
+          set -euo pipefail
+          node tooling/release/stage-edge-beta84-bridge-guard.mjs before
+
+      - name: Verify frozen beta.84 bridge bundle locally
+        run: node tooling/release/build-edge-beta84-inspection-bridge.mjs --dry-run
+
+      - name: Upload immutable version without deploying or changing routes
+        id: upload
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Output is confined to ephemeral runner storage; never log credentials/bindings.
+          if ! npx wrangler versions upload --strict --keep-vars \
+            --config services/mcp-edge-gateway/.wrangler/inspection-bridge/wrangler.json \
+            > "$RUNNER_TEMP/edge-beta84-stage-upload.log" 2>&1; then
+            echo "::error::Stage upload outcome is uncertain; do NOT rerun. Reconcile Cloudflare versions first."
+            exit 1
+          fi
+
+      - name: Verify new immutable version and unchanged 100 percent active deployment
+        id: verify
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+        run: |
+          set -euo pipefail
+          node tooling/release/stage-edge-beta84-bridge-guard.mjs after
+
+      - name: Report staged version identifier (not a traffic deployment)
+        if: ${{ steps.verify.outcome == 'success' }}
+        env:
+          VERSION_ID: ${{ steps.verify.outputs.version_id }}
+        run: |
+          echo "Uploaded immutable version: $VERSION_ID; ACTIVE deployment unchanged. No traffic was moved."

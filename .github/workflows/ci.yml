@@ -173,6 +173,9 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
         run: npm ci
 
+      - name: Test isolated Edge bridge staging guards (never stage in CI)
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
+        run: node --test tooling/release/stage-edge-beta84-bridge-guard.test.mjs
 
       - name: Validate cheap syntax contracts
         if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
