@@ -66,6 +66,45 @@ jobs:
         shell: bash
         run: echo "Impact resolution failed; CI expanded to broad coverage."
 
+  pr-edge-beta84-bridge-dry-run:
+    needs: impact
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.impact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact PR commit with historical manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup same Node version as staging
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Prepare clean Linux dependency graph, no credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @mcp-access-stack/mcp-owner-auth
+
+      - name: Validate stage preconditions and frozen bundle (no Cloudflare)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tooling/release/build-edge-beta84-inspection-bridge.test.mjs tooling/release/stage-edge-beta84-bridge-guard.test.mjs
+          node tooling/release/build-edge-beta84-inspection-bridge.mjs --dry-run
+
   campaign-runner-linux-artifact:
     needs: impact
     if: >-
@@ -549,6 +588,7 @@ jobs:
   check:
     needs:
       - impact
+      - pr-edge-beta84-bridge-dry-run
       - pr-validation
       - pr-browser-worker
       - pr-workspace-agent
@@ -571,6 +611,7 @@ jobs:
           CAMPAIGN_ARTIFACT_REQUIRED: ${{ needs.impact.outputs.operationsTooling == 'true' || needs.impact.outputs.workspaceAgent == 'true' || needs.impact.outputs.shared == 'true' || needs.impact.outputs.rootBroad == 'true' }}
           CAMPAIGN_ARTIFACT_RESULT: ${{ needs.campaign-runner-linux-artifact.result }}
           VALIDATION_RESULT: ${{ needs.pr-validation.result }}
+          EDGE_BRIDGE_LINUX_RESULT: ${{ needs.pr-edge-beta84-bridge-dry-run.result }}
           BROWSER_WORKER_RESULT: ${{ needs.pr-browser-worker.result }}
           WORKSPACE_AGENT_RESULT: ${{ needs.pr-workspace-agent.result }}
           RUNTIME_ASSURANCE_RESULT: ${{ needs.pr-runtime-assurance.result }}
@@ -579,12 +620,16 @@ jobs:
           set -euo pipefail
           test "$IMPACT_RESULT" = "success"
           test "$VALIDATION_RESULT" = "success"
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            test "$EDGE_BRIDGE_LINUX_RESULT" = "skipped"
+          fi
           if [[ "$EVENT_NAME" != "workflow_dispatch" && "$CAMPAIGN_ARTIFACT_REQUIRED" == "true" ]]; then
             test "$CAMPAIGN_ARTIFACT_RESULT" = "success"
           else
             test "$CAMPAIGN_ARTIFACT_RESULT" = "skipped"
           fi
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            test "$EDGE_BRIDGE_LINUX_RESULT" = "success"
             if [[ "$BROWSER_WORKER_IMPACT" == "true" ]]; then
               test "$BROWSER_WORKER_RESULT" = "success"
             else

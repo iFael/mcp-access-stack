@@ -97,6 +97,14 @@ test("workflow is one-shot, Environment-gated, CAS-bound and upload-only", async
   assert.equal(checkout[0].with["fetch-depth"], 0);
   assert.equal(checkout[0].with["persist-credentials"], false);
   assert.equal(config.concurrency.group,"public-release-edge");
+  const stageSteps = config.jobs.stage.steps;
+  const installAt = stageSteps.findIndex(step => step.run === "npm ci");
+  const buildAt = stageSteps.findIndex(step => step.name === "Build Edge bundle dependencies");
+  const dryAt = stageSteps.findIndex(step => step.name === "Verify frozen beta.84 bridge bundle locally");
+  const uploadAt = stageSteps.findIndex(step => step.id === "upload");
+  assert.ok(installAt >= 0 && installAt < buildAt && buildAt < dryAt && dryAt < uploadAt);
+  assert.match(stageSteps[buildAt].run, /npm run build --workspace @mcp-access-stack\/edge-protocol/u);
+  assert.match(stageSteps[buildAt].run, /npm run build --workspace @mcp-access-stack\/mcp-owner-auth/u);
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /environment: public-release/u);
   assert.match(workflow, /group: public-release-edge/u);
