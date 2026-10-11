@@ -79,13 +79,77 @@ test("short page without API pagination metadata must not claim completeness", a
   assert.equal(result.status, "bounded_partial");
   assert.equal(result.versions.length, 1);
 });
+test("optional pagination fields do not cause rejection or assert exhaustive coverage", async () => {
+  const shapes = [
+    {},
+    { count: 1 },
+    { page: 1 },
+    { per_page: 20 },
+    { total_pages: 1 },
+    { page: 1, per_page: 20 },
+    { page: 1, total_pages: 1 },
+    { per_page: 20, total_pages: 1 },
+  ];
+  for (const resultInfo of shapes) {
+    const m = mockPages([], { badPayload: {
+      success: true,
+      result: { items: [createItem(1)] },
+      result_info: resultInfo,
+    } });
+    const result = await inventoryWorkerVersions({ accountId: ACCOUNT, token: TOKEN }, m.fetchImpl);
+    assert.equal(result.status, "bounded_partial");
+    assert.equal(result.versions.length, 1);
+    assert.equal(m.calls.length, 1);
+  }
+});
+test("incomplete metadata still fetches bounded full pages without claiming completeness", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    assert.equal(init.method, "GET");
+    const page = Number(new URL(url).searchParams.get("page"));
+    calls.push(page);
+    return new Response(JSON.stringify({
+      success: true,
+      result: { items: page === 1
+        ? Array.from({ length: 20 }, (_, i) => createItem(i + 1))
+        : [createItem(21)] },
+      result_info: { count: page === 1 ? 20 : 1 },
+    }), { status: 200 });
+  };
+  const result = await inventoryWorkerVersions({ accountId: ACCOUNT, token: TOKEN }, fetchImpl);
+  assert.equal(result.status, "bounded_partial");
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(result.versions.length, 21);
+});
+test("invalid or contradictory optional fields fail closed with fixed diagnostic categories", async () => {
+  const scenarios = [
+    [{ page: 2, per_page: 20, total_pages: 2 }, "PAGINATION_PAGE_MISMATCH"],
+    [{ page: 1, per_page: 21, total_pages: 1 }, "PAGINATION_PER_PAGE_MISMATCH"],
+    [{ page: 1, per_page: 20, total_pages: "1" }, "PAGINATION_TOTAL_PAGES_INVALID"],
+    [{ page: 1, per_page: 20, total_pages: 0 }, "PAGINATION_TOTAL_PAGES_INVALID"],
+    [{ page: 1, per_page: 20, total_pages: 1.5 }, "PAGINATION_TOTAL_PAGES_INVALID"],
+  ];
+  for (const [resultInfo, code] of scenarios) {
+    await fails(mockPages([], { badPayload: {
+      success: true, result: { items: [createItem(1)] }, result_info: resultInfo,
+    } }).fetchImpl, code);
+  }
+});
+test("empty non-final page and invalid pagination shape fail closed", async () => {
+  await fails(mockPages([], { badPayload: { success: true,
+    result: { items: [] }, result_info: { total_pages: 3, page: 1, per_page: 20 },
+  } }).fetchImpl, "PAGINATION_EMPTY_NONFINAL");
+  await fails(mockPages([], { badPayload: { success: true,
+    result: { items: [] }, result_info: ["unsafe"],
+  } }).fetchImpl, "PAGINATION_SHAPE_INVALID");
+});
 test("duplicate IDs and conflicting pagination fail closed", async () => {
   const list = Array.from({ length: 20 }, (_, i) => createItem(i + 1));
   await fails(mockPages([list, [createItem(1)]]).fetchImpl, "DUPLICATE_VERSION_ID");
   await fails(mockPages([[createItem(1)]], { badPayload: {
     success: true, result: { items: [createItem(1)] },
     result_info: { page: 2, per_page: 20, total_pages: 2 },
-  }}).fetchImpl, "PAGINATION_INVALID");
+  }}).fetchImpl, "PAGINATION_PAGE_MISMATCH");
 });
 test("negative API responses, shape errors, and network errors are sanitized", async () => {
   await fails(mockPages([], { httpStatus: 403 }).fetchImpl, "CLOUDFLARE_READ_FAILED");
