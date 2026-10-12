@@ -148,12 +148,24 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
       }),
       redirect: "error", signal: AbortSignal.timeout(20000),
     });
-  } catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
-  // Even a non-2xx response may follow a committed mutation.
-  if (![200,201].includes(response.status)) deny("DEPLOYMENT_OUTCOME_UNKNOWN");
+  } catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN_TRANSPORT"); }
+  // A non-2xx response may follow a committed mutation: never retry here.
+  // Only a bounded numeric status and Cloudflare numeric error code may reach logs.
+  if (![200,201].includes(response.status)) {
+    const status = Number.isInteger(response.status) &&
+      response.status >= 100 && response.status <= 599 ? response.status : 0;
+    let code = 0;
+    try {
+      const payload = await boundedJson(response, 8192);
+      const remoteCode = payload?.errors?.[0]?.code;
+      if (Number.isSafeInteger(remoteCode) && remoteCode >= 1 &&
+          remoteCode <= 99999999) code = remoteCode;
+    } catch { /* Response may be unreadable; HTTP status still bounded. */ }
+    deny("DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_" + status + "_CF_" + code);
+  }
   let receipt;
   try { receipt = verifyDeploymentReceipt(await boundedJson(response)); }
-  catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
+  catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN_RECEIPT"); }
   await waitForVersion(input, receipt, compare, sleep);
   verifyHealth(await getHealth(fetchImpl), "after");
   return receipt;
