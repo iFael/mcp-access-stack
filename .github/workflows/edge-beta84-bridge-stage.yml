@@ -124,11 +124,20 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
         run: |
           set -euo pipefail
           umask 077
+          trap 'rm -f "$RUNNER_TEMP/edge-cas-candidate-secrets.json"' EXIT
+          # Protected secret exists only in this upload step and ephemeral runner storage.
+          node --input-type=module -e '
+            import { writeStageSecretFile } from "./tooling/release/stage-edge-cas-candidate.mjs";
+            await writeStageSecretFile(process.env.MCP_CONTRACT_PREPARE_TOKEN, process.env.RUNNER_TEMP);
+          '
+          unset MCP_CONTRACT_PREPARE_TOKEN
           # Output is confined to ephemeral runner storage; never log credentials/bindings.
           if ! npx wrangler versions upload --strict --keep-vars \
+            --secrets-file "$RUNNER_TEMP/edge-cas-candidate-secrets.json" \
             --config services/mcp-edge-gateway/.wrangler/inspection-bridge/wrangler.json \
             > "$RUNNER_TEMP/edge-beta84-stage-upload.log" 2>&1; then
             # Emit fixed diagnostic categories only; never reveal raw Wrangler output.
