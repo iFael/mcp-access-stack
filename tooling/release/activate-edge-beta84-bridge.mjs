@@ -12,10 +12,51 @@ const ID = /^[1-9][0-9]{4,20}$/u;
 const API = "https://api.cloudflare.com/client/v4/accounts/";
 const SCRIPT = "mcp-access-stack";
 
-export class BridgeActivationError extends Error {
-  constructor(code) { super(code); this.name = "BridgeActivationError"; this.code = code; }
+const DIAGNOSTIC_CLASSES = new Set([
+  "TRANSPORT_FAILURE", "HTTP_FAILURE", "API_REJECTED",
+  "RESPONSE_UNREADABLE", "RESPONSE_TOO_LARGE", "RESPONSE_MALFORMED",
+  "UNVERIFIED_RECEIPT", "POST_EXECUTION_FAILURE", "POSTCONDITION_UNVERIFIED",
+]);
+const safeHttpStatus = value =>
+  Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
+const safeCfCode = value =>
+  Number.isInteger(value) && value > 0 && value <= 9999999 ? value : null;
+function apiErrorCode(payload) {
+  if (!Array.isArray(payload?.errors)) return null;
+  for (const item of payload.errors) {
+    const code = safeCfCode(item?.code);
+    if (code !== null) return code;
+  }
+  return null;
 }
-function fail(code) { throw new BridgeActivationError(code); }
+export class BridgeActivationError extends Error {
+  constructor(code, diagnostic = null) {
+    super(code);
+    this.name = "BridgeActivationError";
+    this.code = code;
+    // Only the fixed diagnostic class and bounded numbers may cross the log boundary.
+    this.diagnostic = code === "DEPLOYMENT_OUTCOME_UNKNOWN" &&
+      DIAGNOSTIC_CLASSES.has(diagnostic?.class)
+      ? {
+        class: diagnostic.class,
+        httpStatus: safeHttpStatus(diagnostic.httpStatus),
+        cfCode: safeCfCode(diagnostic.cfCode),
+      } : null;
+  }
+}
+function fail(code, diagnostic) { throw new BridgeActivationError(code, diagnostic); }
+function failUnknown(klass, status = null, cfCode = null) {
+  fail("DEPLOYMENT_OUTCOME_UNKNOWN", { class: klass, httpStatus: status, cfCode });
+}
+export function formatDeploymentDiagnostic(error) {
+  if (!(error instanceof BridgeActivationError) ||
+      error.code !== "DEPLOYMENT_OUTCOME_UNKNOWN" ||
+      !DIAGNOSTIC_CLASSES.has(error.diagnostic?.class)) return "";
+  const { class: klass, httpStatus, cfCode } = error.diagnostic;
+  return " CLASS=" + klass +
+    (safeHttpStatus(httpStatus) === null ? "" : " HTTP_STATUS=" + httpStatus) +
+    (safeCfCode(cfCode) === null ? "" : " CF_ERROR_CODE=" + cfCode);
+}
 function object(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
 
 export function parseActivationInput(env) {
@@ -111,18 +152,32 @@ export async function createDeployment(input, fetchImpl = fetch) {
       },
       body, redirect: "error", signal: AbortSignal.timeout(20_000),
     });
-  } catch { fail("DEPLOYMENT_OUTCOME_UNKNOWN"); }
-  // An HTTP error can occur after a server-side mutation. Never retry blindly.
-  if (response.status !== 200 && response.status !== 201) fail("DEPLOYMENT_OUTCOME_UNKNOWN");
+  } catch { failUnknown("TRANSPORT_FAILURE"); }
+  // HTTP failures may follow a server-side mutation: preserve outcome_unknown,
+  // classify only the HTTP status and a bounded numeric Cloudflare error code.
+  const status = safeHttpStatus(response?.status);
+  const httpOk = status === 200 || status === 201;
+  let responseBody;
+  try { responseBody = await response.text(); }
+  catch {
+    failUnknown(httpOk ? "RESPONSE_UNREADABLE" : "HTTP_FAILURE", status);
+  }
+  if (responseBody.length > 64 * 1024) {
+    failUnknown(httpOk ? "RESPONSE_TOO_LARGE" : "HTTP_FAILURE", status);
+  }
   let payload;
-  try {
-    const text = await response.text();
-    if (text.length > 64 * 1024) fail("DEPLOYMENT_OUTCOME_UNKNOWN");
-    payload = JSON.parse(text);
-  } catch { fail("DEPLOYMENT_OUTCOME_UNKNOWN"); }
+  try { payload = JSON.parse(responseBody); }
+  catch {
+    failUnknown(httpOk ? "RESPONSE_MALFORMED" : "HTTP_FAILURE", status);
+  }
+  const cfCode = apiErrorCode(payload);
+  if (!httpOk) failUnknown("HTTP_FAILURE", status, cfCode);
+  if (payload?.success === false) failUnknown("API_REJECTED", status, cfCode);
   try {
     return verifyActivationResult(payload, input.targetVersionId, input.expectedDeploymentId);
-  } catch { fail("DEPLOYMENT_OUTCOME_UNKNOWN"); }
+  } catch {
+    failUnknown("UNVERIFIED_RECEIPT", status, cfCode);
+  }
 }
 
 export async function inspectBridgeTransition(input, compare = compareWorkerVersions) {
@@ -142,7 +197,11 @@ export async function executeBridgeTransition(input, deps = {}) {
   await inspectBridgeTransition(input, compare);
   let receiptId;
   try { receiptId = await post(input); }
-  catch { fail("DEPLOYMENT_OUTCOME_UNKNOWN"); }
+  catch (error) {
+    if (error instanceof BridgeActivationError &&
+        error.code === "DEPLOYMENT_OUTCOME_UNKNOWN") throw error;
+    failUnknown("POST_EXECUTION_FAILURE");
+  }
   // No second POST, even when Cloudflare is eventually consistent or ambiguous.
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -155,7 +214,7 @@ export async function executeBridgeTransition(input, deps = {}) {
       if (attempt < 3) await sleep(1500);
     }
   }
-  fail("DEPLOYMENT_OUTCOME_UNKNOWN");
+  failUnknown("POSTCONDITION_UNVERIFIED");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
@@ -175,7 +234,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   } catch (error) {
     // Never print URLs, payloads, token values or Cloudflare raw responses.
     console.error("BRIDGE_DEPLOYMENT_REFUSED " +
-      (error instanceof BridgeActivationError ? error.code : "UNEXPECTED_ERROR"));
+      (error instanceof BridgeActivationError
+        ? error.code + formatDeploymentDiagnostic(error) : "UNEXPECTED_ERROR"));
     process.exitCode = 1;
   }
 }

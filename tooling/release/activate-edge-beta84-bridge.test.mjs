@@ -8,6 +8,7 @@ import {
   ORIGINAL_DEPLOYMENT, ORIGINAL_VERSION, BRIDGE_VERSION, BridgeActivationError,
   parseActivationInput, verifyDeploymentBaseline, verifyActivationResult,
   verifyDeploymentAfter, createDeployment, executeBridgeTransition,
+  formatDeploymentDiagnostic,
 } from "./activate-edge-beta84-bridge.mjs";
 const NEW_ID = "33333333-3333-4333-8333-333333333333";
 const TOKEN = "private-synthetic-never-log";
@@ -161,4 +162,88 @@ test("workflow uses protected Environment, shared mutex, pinned main and one-sho
   assert.match(steps[pre].run, /activate-edge-beta84-bridge.mjs preflight/u);
   assert.match(steps[deploy].run, /activate-edge-beta84-bridge.mjs execute/u);
   assert.doesNotMatch(raw, /--force|force:\s*true|wrangler deploy|secret put/u);
+});
+
+test("sanitizes Cloudflare HTTP error status and numeric API error code only", async () => {
+  const input = parseActivationInput(env());
+  let writes=0;
+  let diagnostic;
+  try {
+    await createDeployment(input, async () => {
+      writes++;
+      return new Response(JSON.stringify({
+        success: false,
+        errors: [{ code: 10000, message: "private-secret " + TOKEN, extra: "raw" }],
+      }), { status: 403 });
+    });
+  } catch (error) { diagnostic = error; }
+  assert.ok(diagnostic instanceof BridgeActivationError);
+  assert.equal(diagnostic.code, "DEPLOYMENT_OUTCOME_UNKNOWN");
+  assert.equal(formatDeploymentDiagnostic(diagnostic),
+    " CLASS=HTTP_FAILURE HTTP_STATUS=403 CF_ERROR_CODE=10000");
+  assert.ok(!JSON.stringify(diagnostic).includes(TOKEN));
+  assert.equal(writes, 1);
+});
+
+test("API 2xx rejection, malformed response and invalid receipt keep bounded diagnostics", async () => {
+  const input = parseActivationInput(env());
+  const cases = [
+    [new Response(JSON.stringify({
+      success: false, errors: [{ code: 10020, message: TOKEN }],
+    }), { status: 200 }), " CLASS=API_REJECTED HTTP_STATUS=200 CF_ERROR_CODE=10020"],
+    [new Response("untrusted: " + TOKEN, { status: 200 }),
+      " CLASS=RESPONSE_MALFORMED HTTP_STATUS=200"],
+    [new Response(JSON.stringify({ success: true, result: { id: TOKEN } }), { status: 200 }),
+      " CLASS=UNVERIFIED_RECEIPT HTTP_STATUS=200"],
+    [new Response("oversized", { status: 400 }),
+      " CLASS=HTTP_FAILURE HTTP_STATUS=400"],
+    [new Response(JSON.stringify({ errors: [{ code: TOKEN, message: TOKEN }] }), { status: 403 }),
+      " CLASS=HTTP_FAILURE HTTP_STATUS=403"],
+    [new Response(JSON.stringify({ errors: [{ code: -12, message: TOKEN }] }), { status: 404 }),
+      " CLASS=HTTP_FAILURE HTTP_STATUS=404"],
+  ];
+  for (const [response, expected] of cases) {
+    let caught;
+    try { await createDeployment(input, async () => response); }
+    catch (error) { caught = error; }
+    assert.equal(caught?.code, "DEPLOYMENT_OUTCOME_UNKNOWN");
+    assert.equal(formatDeploymentDiagnostic(caught), expected);
+    assert.ok(!formatDeploymentDiagnostic(caught).includes(TOKEN));
+  }
+});
+
+test("transport and unreadable responses emit sanitized class, never error details", async () => {
+  const input = parseActivationInput(env());
+  let caught;
+  try { await createDeployment(input, async () => { throw new Error(TOKEN); }); }
+  catch(error) { caught = error; }
+  assert.equal(formatDeploymentDiagnostic(caught), " CLASS=TRANSPORT_FAILURE");
+  try {
+    await createDeployment(input, async () => ({
+      status: 201, text: async () => { throw new Error(TOKEN); },
+    }));
+  } catch(error) { caught = error; }
+  assert.equal(formatDeploymentDiagnostic(caught),
+    " CLASS=RESPONSE_UNREADABLE HTTP_STATUS=201");
+});
+
+test("unknown result after POST keeps one write but distinguishes postcheck class", async () => {
+  let writes=0;
+  let caught;
+  try {
+    await executeBridgeTransition(parseActivationInput(env()), {
+      compare: async () => snapshot(),
+      post: async () => {writes++;return NEW_ID;},
+      sleep: async () => {},
+    });
+  } catch (error) {caught=error;}
+  assert.equal(writes,1);
+  assert.equal(caught.code, "DEPLOYMENT_OUTCOME_UNKNOWN");
+  assert.equal(formatDeploymentDiagnostic(caught), " CLASS=POSTCONDITION_UNVERIFIED");
+});
+
+test("untrusted or unexpected failures never print arbitrary error properties", () => {
+  assert.equal(formatDeploymentDiagnostic({code:"DEPLOYMENT_OUTCOME_UNKNOWN",
+    diagnostic:{class:"HTTP_FAILURE",status:403,cfCode:TOKEN}}), "");
+  assert.equal(formatDeploymentDiagnostic(new Error(TOKEN)), "");
 });
