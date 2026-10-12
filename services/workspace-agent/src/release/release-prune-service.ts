@@ -64,8 +64,10 @@ export class ReleasePruneService {
     );
     const receiptRoot = path.join(root, "state", "release-prune-receipts");
     const fingerprint = SHA(JSON.stringify({
+      ...(input.selection ? { selection: input.selection } : {}),
       targets: input.targets,
       expectedStateSha256: input.expectedStateSha256,
+      ...(input.expectedPlanSha256 ? { expectedPlanSha256: input.expectedPlanSha256 } : {}),
     }));
     const receiptFile = path.join(receiptRoot, input.operationId + ".json");
     if (!input.dryRun) {
@@ -94,9 +96,18 @@ export class ReleasePruneService {
     if (current !== path.join(root, "releases", active.releaseId)) {
       deny("Current symlink does not match the active release.");
     }
+    const selected = input.selection === "eligible"
+      ? await this.selectEligible(root, protectedIds)
+      : input.targets!;
+    const planSha256 = input.selection === "eligible"
+      ? SHA(JSON.stringify({ stateSha256, targets: selected })) : undefined;
+    if (!input.dryRun && input.selection === "eligible" &&
+        input.expectedPlanSha256 !== planSha256) {
+      conflict("Eligible release inventory changed since the dry-run plan.");
+    }
     const resultItems: PruneReleasesResult["items"] = [];
     const targets: string[] = [];
-    for (const target of input.targets) {
+    for (const target of selected) {
       const release = target.kind === "release";
       if (!(release ? RELEASE_ID : STAGE_ID).test(target.name) ||
           target.name.startsWith(".") || target.name.includes("..")) {
@@ -130,9 +141,13 @@ export class ReleasePruneService {
       targets.push(absolute);
     }
     const planned = pruneReleasesResultSchema.parse({
-      operationId: input.operationId, status: "planned", stateSha256, items: resultItems,
+      operationId: input.operationId, status: "planned", stateSha256,
+      ...(planSha256 ? { planSha256 } : {}), items: resultItems,
     });
     if (input.dryRun) return planned;
+    if (targets.length === 0) {
+      return pruneReleasesResultSchema.parse({ ...planned, status: "completed" });
+    }
 
     await mkdir(receiptRoot, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error;
@@ -180,7 +195,8 @@ export class ReleasePruneService {
         finished.push({ ...resultItems[i]!, status: "deleted" });
       }
       const completed = pruneReleasesResultSchema.parse({
-        operationId: input.operationId, status: "completed", stateSha256, items: finished,
+        operationId: input.operationId, status: "completed", stateSha256,
+        ...(planSha256 ? { planSha256 } : {}), items: finished,
       });
       const receiptTemp = path.join(receiptRoot, input.operationId + ".tmp");
       await writeFile(receiptTemp, JSON.stringify({ fingerprint, result: completed }), { flag: "wx", mode: 0o600 });
@@ -191,6 +207,26 @@ export class ReleasePruneService {
       await handle.close().catch(() => undefined);
       if (success) await rm(lockFile, { force: true });
     }
+  }
+
+  private async selectEligible(
+    root: string,
+    protectedIds: ReadonlySet<string>,
+  ): Promise<NonNullable<PruneReleasesInput["targets"]>> {
+    const eligible: NonNullable<PruneReleasesInput["targets"]> = [];
+    for (const kind of ["release", "staging"] as const) {
+      const parent = path.join(root, kind === "release" ? "releases" : "staging");
+      for (const entry of await readdir(parent, { withFileTypes: true })) {
+        const pattern = kind === "release" ? RELEASE_ID : STAGE_ID;
+        if (!pattern.test(entry.name) || entry.name.includes("..")) continue;
+        const releaseId = kind === "release" ? entry.name : entry.name.slice(0, -9);
+        if (protectedIds.has(releaseId)) continue;
+        // Let the existing physical-directory checks reject suspicious entries.
+        eligible.push({ kind, name: entry.name });
+      }
+    }
+    eligible.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+    return eligible.slice(0, 5);
   }
 
   private async requirePhysicalDirectory(directory: string, canonical: string): Promise<void> {

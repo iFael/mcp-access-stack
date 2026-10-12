@@ -172,6 +172,64 @@ describe("ReleasePruneService (isolated physical fixture)", () => {
     expect(await exists(path.join(root,"state","release-prune.lock"))).toBe(false);
   });
 
+  it("selects eligible releases automatically without changing existing explicit pruning",async()=>{
+    const preview=await service.prune({
+      workspaceId:"ws",operationId:randomUUID(),dryRun:true,selection:"eligible",
+    });
+    expect(preview.status).toBe("planned");
+    expect(preview.items.map(item=>item.name)).toEqual([old,candidate,stage]);
+    expect(preview.planSha256).toMatch(/^[a-f0-9]{64}$/);
+    const id=randomUUID();
+    const input={
+      workspaceId:"ws",operationId:id,dryRun:false,selection:"eligible" as const,
+      expectedStateSha256:preview.stateSha256,expectedPlanSha256:preview.planSha256!,
+    };
+    const result=await service.prune(input);
+    expect(result.items.every(item=>item.status==="deleted")).toBe(true);
+    expect(await service.prune(input)).toEqual(result);
+    expect(await exists(path.join(root,"releases",active))).toBe(true);
+    expect(await exists(path.join(root,"releases",previous))).toBe(true);
+  });
+
+  it("requires the exact automatic plan, protecting drift and candidate identities",async()=>{
+    await writeState(state(pointer(candidate)));
+    const preview=await service.prune({
+      workspaceId:"ws",operationId:randomUUID(),dryRun:true,selection:"eligible",
+    });
+    expect(preview.items.map(item=>item.name)).toEqual([old,stage]);
+    const base={
+      workspaceId:"ws",operationId:randomUUID(),dryRun:false,
+      selection:"eligible" as const,expectedStateSha256:preview.stateSha256,
+    };
+    expect(pruneReleasesInputSchema.safeParse(base).success).toBe(false);
+    await expect(service.prune({...base,expectedPlanSha256:"0".repeat(64)}))
+      .rejects.toMatchObject({code:"EXECUTION_STATE_INVALID"});
+    await mkdir(path.join(root,"releases","1.1.0-beta.70"));
+    await expect(service.prune({...base,expectedPlanSha256:preview.planSha256}))
+      .rejects.toMatchObject({code:"EXECUTION_STATE_INVALID"});
+    expect(await exists(path.join(root,"releases",old))).toBe(true);
+  });
+
+  it("automated selection has a five-target bound and accepts an empty safe plan",async()=>{
+    for(let n=60;n<67;n++) await mkdir(path.join(root,"releases",`1.1.0-beta.${n}`));
+    const input={workspaceId:"ws",operationId:randomUUID(),dryRun:true,selection:"eligible" as const};
+    const planned=await service.prune(input);
+    expect(planned.items).toHaveLength(5);
+    expect(planned.items.every(item=>item.status==="eligible")).toBe(true);
+    for(const dir of [old,candidate,...Array.from({length:7},(_,i)=>`1.1.0-beta.${i+60}`)]){
+      await rm(path.join(root,"releases",dir),{recursive:true});
+    }
+    await rm(path.join(root,"staging",stage),{recursive:true});
+    const empty=await service.prune(input);
+    expect(empty.items).toEqual([]);
+    const done=await service.prune({
+      ...input,dryRun:false,expectedStateSha256:empty.stateSha256,
+      expectedPlanSha256:empty.planSha256,
+    });
+    expect(done.status).toBe("completed");
+    expect(done.items).toEqual([]);
+  });
+
   it("never treats staged source as the active release",async()=>{
     const preview=await service.prune({...makeInput(true),targets:[{kind:"staging",name:stage}]});
     expect(preview.items).toHaveLength(1);
