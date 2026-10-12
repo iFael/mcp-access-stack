@@ -139,6 +139,7 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
+    'deploy\common\select-mcp-v3-release.mjs',
     'deploy\windows\Install-McpAccessStack.ps1',
     'deploy\windows\Install-McpV3Local.ps1',
     'deploy\windows\Install-McpV3LocalTask.ps1',
@@ -200,6 +201,9 @@ foreach ($name in $edgeRecoveryReleaseFiles) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     Copy-Item -LiteralPath $source -Destination $target -Force
 }
+$catalogSelectorTarget = Join-Path $releaseTarget 'deploy\common\select-mcp-v3-release.mjs'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $catalogSelectorTarget) | Out-Null
+Copy-Item -LiteralPath (Join-Path $stage 'deploy\common\select-mcp-v3-release.mjs') -Destination $catalogSelectorTarget
 $releaseManifestPath = Join-Path $releaseTarget 'manifest.json'
 $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
 if ([string]$releaseManifest.releaseId -ne $ReleaseId -or

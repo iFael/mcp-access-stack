@@ -34,7 +34,11 @@ mcp_v3_require_file "$config"
 current_release="$(mcp_v3_manifest_release_id "$node" "$manifest")"
 platform_id="$(mcp_v3_host_platform darwin)"
 asset_arch="${platform_id#darwin-}"
-tag="$(mcp_v3_resolve_release_tag "$node" "$repository" "$tag")"
+tag="$(mcp_v3_resolve_release_tag "$node" "$repository" "$tag" "$current_release" "-${platform_id}.tar.gz")"
+if [[ -z "$tag" ]]; then
+  printf '{"status":"up-to-date","releaseId":"%s"}\n' "$current_release"
+  exit 0
+fi
 target_release="${tag#v}"
 
 if [[ "$target_release" == "$current_release" ]]; then

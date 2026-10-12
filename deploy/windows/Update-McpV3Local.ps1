@@ -51,15 +51,27 @@ if ($null -eq $currentState -or $null -eq $currentState.active) {
 }
 $currentReleaseId = [string]$currentState.active.releaseId
 
-$headers = @{
-    Accept = 'application/vnd.github+json'
-    'User-Agent' = 'mcp-v3-local-updater'
-    'X-GitHub-Api-Version' = '2022-11-28'
-}
 $resolvedTag = $Tag
 if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
-    $latest = Invoke-RestMethod -Uri ("https://api.github.com/repos/{0}/releases/latest" -f $Repository) -Headers $headers
-    $resolvedTag = [string]$latest.tag_name
+    $activeReleaseRoot = Join-Path $installation ("releases\$currentReleaseId")
+    $null = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $activeReleaseRoot -ExpectedReleaseId $currentReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    $node = Join-Path $activeReleaseRoot 'runtime\node\node.exe'
+    $selector = Join-Path $activeReleaseRoot 'deploy\common\select-mcp-v3-release.mjs'
+    foreach ($required in @($node, $selector)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw 'The active signed release lacks the unified version selector.'
+        }
+    }
+    $channel = if ($currentReleaseId.Contains('-')) { 'prerelease' } else { 'stable' }
+    $selected = @(& $node $selector $Repository $channel '-windows-x64.zip' $currentReleaseId)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Release catalog selection failed; installation state was not changed.'
+    }
+    $resolvedTag = ($selected -join '').Trim()
+}
+if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
+    [pscustomobject]@{status='up-to-date';releaseId=$currentReleaseId;taskName=$TaskName} | ConvertTo-Json -Compress
+    return
 }
 if ($resolvedTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$') {
     throw "Resolved MCP V3 release tag is invalid: $resolvedTag"
