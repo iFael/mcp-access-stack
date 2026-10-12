@@ -5,7 +5,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
-import { LocalRepositoryManager } from "../../../src/companion/local-repository-manager.js";
+import { assertSourceControlCapability } from "@vs-code-gpt/shared";
+import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "../../../src/companion/local-repository-manager.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryRoots: string[] = [];
@@ -371,6 +372,100 @@ describe("LocalRepositoryManager binding lifecycle", () => {
       "github.repository.create",
     );
   }, 15_000);
+
+  it("validates the configured global owner allowlist and fails closed", () => {
+    expect(parseGitHubAccountOwners(undefined)).toEqual([]);
+    expect(parseGitHubAccountOwners("  iFael, example-org  ")).toEqual(["iFael", "example-org"]);
+    for (const invalid of ["*", "iFael,", "iFael,IFAEL", "iFael/other", "-owner"]) {
+      expect(() => parseGitHubAccountOwners(invalid)).toThrow();
+    }
+  });
+
+  it("applies the global owner to current and future imported repositories only when configured", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+      githubAccountOwners: ["iFael"],
+    });
+    const initial = repositoryBinding(fixture.repository);
+    await manager.bindRepositories([initial]);
+    const initialPolicy = await manager.buildPolicy();
+    expect(initialPolicy?.workspaces[0]?.sourceControl?.capabilities).toContain("github.repository.create");
+    expect(initialPolicy?.workspaces[0]?.sourceControl?.accountOwners).toEqual(["iFael"]);
+
+    const nextRepo = path.join(fixture.root, "future-project");
+    await mkdir(nextRepo);
+    await execFileAsync("git", ["init", nextRepo]);
+    await manager.bindRepositories([{
+      ...initial,
+      repositoryId: "repo_00000000-0000-4000-8000-000000000002",
+      name: "future-project",
+      workspaceId: "future-project",
+      path: nextRepo,
+    }]);
+    const updated = await manager.buildPolicy();
+    expect(updated?.workspaces).toHaveLength(2);
+    for (const workspace of updated!.workspaces) {
+      expect(workspace.sourceControl?.capabilities).toContain("github.repository.create");
+      expect(workspace.sourceControl?.accountOwners).toEqual(["iFael"]);
+      expect(workspace.sourceControl?.additionalRepositories).toEqual([]);
+      expect(() => assertSourceControlCapability({
+        policy: workspace,
+        capability: "github.repository.create",
+        accountOwner: "iFael",
+        mutation: true,
+      })).not.toThrow();
+      expect(() => assertSourceControlCapability({
+        policy: workspace,
+        capability: "github.repository.create",
+        accountOwner: "unapproved-org",
+        mutation: true,
+      })).toThrow();
+    }
+  }, 15_000);
+
+  it("grants create on primary/managed workspaces without changing other capabilities", () => {
+    const base = {
+      version: 1 as const,
+      workspaces: [{
+        id: "primary",
+        name: "primary",
+        rootPath: ".",
+        enabled: true,
+        permissionProfile: "full-repo-write" as const,
+        allowedRoots: ["."],
+        blockedGlobs: [],
+        limits: {
+          maxFileBytes: 1000, maxSearchResults: 10, maxSearchSnippetBytes: 100,
+          maxDiffBytes: 1000, maxListedFiles: 100,
+        },
+        allowWrites: ["."],
+        allowShell: ["."],
+        allowedShells: ["bash" as const],
+        sourceControl: {
+          capabilities: ["github.repository.read" as const],
+          accountOwners: ["ExistingOrg"],
+          additionalRepositories: ["ExistingOrg/other"],
+        },
+      }],
+    };
+    const updated = withGlobalGitHubRepositoryCreatePolicy(base as Parameters<typeof withGlobalGitHubRepositoryCreatePolicy>[0], ["iFael"]);
+    expect(updated.workspaces[0]?.sourceControl).toEqual({
+      capabilities: ["github.repository.read", "github.repository.create"],
+      accountOwners: ["ExistingOrg", "iFael"],
+      additionalRepositories: ["ExistingOrg/other"],
+    });
+    expect(withGlobalGitHubRepositoryCreatePolicy(updated, ["iFael"])).toEqual(updated);
+    expect(withGlobalGitHubRepositoryCreatePolicy(base as Parameters<typeof withGlobalGitHubRepositoryCreatePolicy>[0], [])).toEqual(base);
+    expect(() => assertSourceControlCapability({
+      policy: base.workspaces[0]!,
+      capability: "github.repository.create",
+      accountOwner: "iFael",
+      mutation: true,
+    })).toThrow();
+  });
 
   it("restores the previous persisted state when runtime reload fails", async () => {
     const fixture = await createGitFixture();
