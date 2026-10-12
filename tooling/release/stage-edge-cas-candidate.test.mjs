@@ -101,13 +101,21 @@ test("temporary secret file is private, exclusive, bounded and never a project a
     await assert.rejects(writeStageSecretFile("bad", dir), /EDGE_CAS_STAGE_SECRET_INVALID/u);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
-test("uploaded version must prove secret binding without exposing its value", () => {
+test("uploaded version validates Cloudflare version resources.bindings object metadata", () => {
   const payload = { success: true, result: { resources: {
-    bindings: [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" }],
+    bindings: {
+      MCP_SESSION: { type: "durable_object_namespace" },
+      MCP_CONTRACT_PREPARE_TOKEN: { type: "secret_text", text: "synthetic-not-for-output" },
+    },
   } } };
   assert.equal(verifyVersionSecretBinding(payload), true);
-  for (const bindings of [[], [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "plain_text" }],
-      [{ name: "MCP_OWNER_TOKEN", type: "secret_text" }], undefined]) {
+  for (const bindings of [
+    {}, { MCP_CONTRACT_PREPARE_TOKEN: { type: "plain_text" } },
+    { MCP_OWNER_TOKEN: { type: "secret_text" } },
+    { MCP_CONTRACT_PREPARE_TOKEN: { text: "missing-type" } },
+    [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" }],
+    undefined, null,
+  ]) {
     assert.throws(() => verifyVersionSecretBinding({
       ...payload, result: { resources: { bindings } },
     }), /EDGE_CAS_STAGE_VERSION_SECRET_UNVERIFIED/u);
