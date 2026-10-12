@@ -12,6 +12,7 @@ const REVISION = /^[a-f0-9]{64}$/u;
 const WORKER = "mcp-access-stack";
 const LOG = "edge-cas-candidate-upload.log";
 const BASELINE = "edge-cas-candidate-stage-baseline.json";
+const SECRET_FILE = "edge-cas-candidate-secrets.json";
 const ROOT = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 function deny(code) { throw new Error("EDGE_CAS_STAGE_" + code); }
@@ -34,7 +35,10 @@ export function verifyLocalCandidate(config, source, expectedRevision) {
       !/"toolCount":\s*97\b/u.test(source)) deny("BUILD_CONTRACT_MISMATCH");
   return expectedRevision;
 }
-export function requirePublisherPrerequisites(report, expectedDeployment, expectedVersion) {
+export function requirePublisherPrerequisites(report, expectedDeployment, expectedVersion, options = {}) {
+  const requiredPresence = report?.remoteRequiredSecretsPresence;
+  const secretAcceptable = requiredPresence === "present" ||
+    (options.bundledSecret === true && requiredPresence === "not_observed");
   if (report?.worker !== WORKER ||
       report?.activeDeploymentId !== expectedDeployment ||
       report?.activeVersionId !== expectedVersion ||
@@ -42,20 +46,45 @@ export function requirePublisherPrerequisites(report, expectedDeployment, expect
       report?.remoteSettingsReadability !== "readable" ||
       report?.remotePlainVarsParity !== "matching" ||
       report?.serviceMigrationTagParity !== "matching" ||
-      report?.remoteRequiredSecretsPresence !== "present" ||
+      !secretAcceptable ||
       report?.remoteSecretNameCollision !== "not_observed") {
     deny("PUBLISHER_PRECONDITION_UNVERIFIED");
   }
   // GET-only token introspection cannot prove effective WRITE access.
   return true;
 }
+export async function writeStageSecretFile(rawSecret, runnerTemp) {
+  // The GH environment secret is injected only into the upload step; no output
+  // includes the secret, and this path is outside the checkout/artifacts.
+  if (typeof rawSecret !== "string" ||
+      !/^[A-Za-z0-9+/_=-]{43,256}$/u.test(rawSecret) ||
+      typeof runnerTemp !== "string" || !path.isAbsolute(runnerTemp)) {
+    deny("SECRET_INVALID");
+  }
+  const filepath = path.join(runnerTemp, SECRET_FILE);
+  await writeFile(filepath, JSON.stringify({
+    MCP_CONTRACT_PREPARE_TOKEN: rawSecret,
+  }), { flag: "wx", mode: 0o600 });
+  return filepath;
+}
+
+export function verifyVersionSecretBinding(payload) {
+  const bindings = payload?.result?.resources?.bindings;
+  if (!Array.isArray(bindings) ||
+      !bindings.some(x => x?.name === "MCP_CONTRACT_PREPARE_TOKEN" &&
+                           x?.type === "secret_text")) {
+    deny("VERSION_SECRET_UNVERIFIED");
+  }
+  return true;
+}
+
 export function verifyNoTrafficChange(before, after) {
   if (before?.deploymentId !== after?.deploymentId ||
       before?.activeVersionId !== after?.activeVersionId) deny("ACTIVE_CAS_CHANGED");
   return true;
 }
 export function parseInput(mode, env) {
-  if (!["preflight", "before", "after", "diagnose"].includes(mode)) deny("MODE_INVALID");
+  if (!["preflight", "before", "after", "diagnose", "secret-file"].includes(mode)) deny("MODE_INVALID");
   if (!HEX32.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") ||
       !UUID.test(env.EXPECTED_ACTIVE_DEPLOYMENT_ID ?? "") ||
       !UUID.test(env.EXPECTED_ACTIVE_VERSION_ID ?? "") ||
@@ -98,7 +127,10 @@ async function immutableVersion(input, id) {
   if (response.status !== 200) deny("VERSION_LOOKUP_FAILED");
   const raw = await response.text();
   if (raw.length > 262144) deny("VERSION_RESPONSE_TOO_LARGE");
-  return verifyUploadedVersion(JSON.parse(raw), id);
+  const payload = JSON.parse(raw);
+  verifyUploadedVersion(payload, id);
+  verifyVersionSecretBinding(payload);
+  return id;
 }
 async function main() {
   const mode = process.argv[2];
@@ -110,6 +142,11 @@ async function main() {
     return;
   }
   const config = await validateLocal(input.expectedRevision);
+  if (mode === "secret-file") {
+    await writeStageSecretFile(process.env.MCP_CONTRACT_PREPARE_TOKEN, input.temp);
+    console.log("EDGE_CAS_STAGE_PROTECTED_SECRET_FILE_READY");
+    return;
+  }
   if (mode === "preflight") {
     console.log("EDGE_CAS_STAGE_LOCAL_CONTRACT_VERIFIED");
     return;
@@ -121,7 +158,7 @@ async function main() {
       deploymentId: input.expectedDeployment, versionId: input.expectedVersion,
       vars: config.vars, requiredSecrets: config.secrets.required,
     });
-    requirePublisherPrerequisites(report, input.expectedDeployment, input.expectedVersion);
+    requirePublisherPrerequisites(report, input.expectedDeployment, input.expectedVersion, { bundledSecret: true });
     const second = await activeSnapshot(input);
     verifyNoTrafficChange(first, second);
     await writeFile(path.join(input.temp, BASELINE), JSON.stringify({
