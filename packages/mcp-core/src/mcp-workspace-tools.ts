@@ -114,6 +114,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
+  githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -131,7 +133,7 @@ import {
   sourceControlOperationNameSchema,
   type SourceControlOperationName,
 } from "./source-control-contracts.js";
-import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor } from "./source-control-executor.js";
+import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor, GitHubWorkflowExecutor } from "./source-control-executor.js";
 import { AppError as AppErrorClass, asAppError } from "./errors.js";
 import {
   createOperationDeadline,
@@ -203,6 +205,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
+  "github_workflow_operation",
   "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
@@ -2447,7 +2450,7 @@ async function executeCommand(
   return result;
 }
 
-export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor;
+export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor & Partial<GitHubWorkflowExecutor>;
 
 export interface RegisterSourceControlToolsOptions {
   securitySchemes?: WorkspaceToolSecurityScheme[];
@@ -2695,6 +2698,18 @@ const sourceControlMcpSchemas = {
     }).strict(),
     output: mcpGitHubCommitChecksResult,
   },
+  github_workflow_operation: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName,
+      workflow: z.enum(["edge-f09-guarded-rollout.yml","release.yml"]),
+      tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
+      mode: z.enum(["dispatch","reconcile"]),
+      expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
+    }).strict(),
+    output: githubWorkflowOperationResultSchema,
+  },
   github_materialize_actions_artifact: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -2839,6 +2854,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_workflow_operation: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   github_wait_commit_checks_watch: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
@@ -3238,6 +3254,34 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_workflow_operation", include)) {
+    server.registerTool(
+      "github_workflow_operation",
+      {
+        title: "Run or reconcile guarded release workflow",
+        description: "Unified fixed-workflow public release or guarded Edge operation: dispatch once under exact main SHA, tag when required, and durable operationId; or reconcile by the same run identity. A 204 dispatch is not a completed deploy.",
+        inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
+        outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
+        annotations: sourceControlAnnotations.github_workflow_operation,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          if (!executor.githubWorkflowOperation) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Trusted GitHub workflow control is unavailable.");
+          const parsed = githubWorkflowOperationInputSchema.parse(input);
+          const structuredContent = githubWorkflowOperationResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              context => executor.githubWorkflowOperation!(parsed, context)),
+          );
+          return sourceControlSuccess("Guarded GitHub release workflow observed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
   if (shouldInclude("github_materialize_actions_artifact", include)) {
     server.registerTool("github_materialize_actions_artifact", {
       title: "Materialize pinned GitHub Actions artifact",
@@ -3532,6 +3576,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitPublishTag: "git_publish_tag",
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
+  githubWorkflowOperation: "github_workflow_operation",
   githubMaterializeActionsArtifact: "github_materialize_actions_artifact",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
   githubGetCommitChecksWatches: "github_get_commit_checks_watches",

@@ -11615,6 +11615,92 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Unified fixed-workflow public release or guarded Edge operation: dispatch once under exact main SHA, tag when required, and durable operationId; or reconcile by the same run identity. A 204 dispatch is not a completed deploy.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedMainSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "dispatch",
+            "reconcile"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$",
+          "type": "string"
+        },
+        "workflow": {
+          "enum": [
+            "edge-f09-guarded-rollout.yml",
+            "release.yml"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "workflow",
+        "mode",
+        "expectedMainSha",
+        "operationId"
+      ],
+      "type": "object"
+    },
+    "name": "github_workflow_operation",
+    "title": "Run or reconcile guarded release workflow"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": true,
@@ -21879,13 +21965,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8466fd7b77d669c9369bdcfb3298d43572393b76a5554713ef3ec543c716e45a",
-  "serverVersion": "0.4.0-catalog.c8466fd7b77d6.s7c90aeb8add4",
-  "toolCount": 97,
-  "toolSetRevision": "7c90aeb8add41d42ab96fb5323b12f24f7c7b5b411f527b8664d2942917398f1"
+  "contractRevision": "fdf44fbfd5ed6bcbecdc25034684002c434bdce5b3546d4474e005f61e4ab439",
+  "serverVersion": "0.4.0-catalog.cfdf44fbfd5ed.see734ae04a98",
+  "toolCount": 98,
+  "toolSetRevision": "ee734ae04a984b5f95e8a22164aecc9ece007138a8b9331c55cd8e9d052c54bc"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8466fd7b77d6.s7c90aeb8add4"
+  "version": "0.4.0-catalog.cfdf44fbfd5ed.see734ae04a98"
 } as const;

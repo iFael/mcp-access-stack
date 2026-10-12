@@ -90,8 +90,8 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
   const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
   const guard = "if: " + "$" +
-    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') }}";
-  assert.ok(release.includes(guard), "public release must fail closed for oracle-only tags");
+    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') }}";
+  assert.ok(release.includes(guard), "public release must fail closed for Oracle-only and Companion-only tags");
   assert.match(release, /metadata:\n\s+needs: signing-preflight/);
   assert.match(release, /edge:\n\s+needs:/);
   assert.match(release, /publish:\n\s+needs:/);

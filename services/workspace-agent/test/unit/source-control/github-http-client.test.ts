@@ -24,6 +24,49 @@ function requestOf(fetchImpl: ReturnType<typeof jest.fn>, index = 0): {
 }
 
 describe("GitHubHttpClient fixed transport", () => {
+  it("looks up one immutable lightweight tag through the fixed GitHub tag-ref endpoint",async()=>{
+    const fetchImpl=jest.fn(async()=>jsonResponse({
+      ref:"refs/tags/v1.1.0-beta.90",object:{sha:"a".repeat(40),type:"commit"},
+    }));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    const observed=await client.getTagRef("octo","repo","v1.1.0-beta.90");
+    expect(observed.object.sha).toBe("a".repeat(40));
+    expect(requestOf(fetchImpl).url).toBe(
+      "https://api.github.com/repos/octo/repo/git/ref/tags/v1.1.0-beta.90");
+  });
+
+  it("queries tag-push release runs without an implicit dispatch",async()=>{
+    const fetchImpl=jest.fn(async()=>jsonResponse({total_count:0,workflow_runs:[]}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    const observed=await client.getTagPushRuns("octo","repo","a".repeat(40));
+    expect(observed.total_count).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestOf(fetchImpl).url).toBe(
+      `https://api.github.com/repos/octo/repo/actions/workflows/release.yml/runs?event=push&head_sha=${"a".repeat(40)}&per_page=100`);
+    expect(requestOf(fetchImpl).init.method).toBe("GET");
+  });
+
+  it("uses fixed workflow endpoints and sends only pinned main/operation inputs", async () => {
+    const fetchImpl=jest.fn(async (_url:string, init:RequestInit) =>
+      init.method==="POST" ? new Response(null,{status:204})
+        : jsonResponse({ref:"refs/heads/main",object:{sha:"a".repeat(40),type:"commit"}}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    await client.getMainRef("octo","app");
+    await client.getWorkflowRuns("octo","app","edge-f09-guarded-rollout.yml","a".repeat(40));
+    await client.dispatchWorkflow("octo","app","edge-f09-guarded-rollout.yml",
+      "a".repeat(40),{operation_id:"11111111-2222-4333-8444-555555555555"});
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(requestOf(fetchImpl,0).url).toBe("https://api.github.com/repos/octo/app/git/ref/heads/main");
+    expect(requestOf(fetchImpl,1).url).toBe(
+      `https://api.github.com/repos/octo/app/actions/workflows/edge-f09-guarded-rollout.yml/runs?event=workflow_dispatch&branch=main&head_sha=${"a".repeat(40)}&per_page=100`);
+    expect(requestOf(fetchImpl,2).url).toBe(
+      "https://api.github.com/repos/octo/app/actions/workflows/edge-f09-guarded-rollout.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl,2).init.body))).toEqual({
+      ref:"main",inputs:{operation_id:"11111111-2222-4333-8444-555555555555",
+        expected_main_sha:"a".repeat(40)},
+    });
+  });
+
   it("builds only the fixed GitHub API endpoints, methods and headers", async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ ok: true }));
     const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });

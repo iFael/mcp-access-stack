@@ -114,6 +114,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
+  githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -142,6 +144,8 @@ import {
   type GitHubCommitChecksResult,
   type GitHubExecutor,
   type GitHubGetCommitChecksInput,
+  type GitHubWorkflowOperationInput,
+  type GitHubWorkflowOperationResult,
   type GitHubMaterializeActionsArtifactInput,
   type GitHubMaterializeActionsArtifactResult,
   type GitHubGetCommitChecksWatchesInput,
@@ -199,7 +203,8 @@ import {
 } from "./campaign/trusted-campaign-enrollment-catalog.js";
 import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt-store.js";
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
-import { GitHubHttpClient } from "./source-control/github-http-client.js";
+import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control/github-http-client.js";
+import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
 import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
 import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
@@ -223,6 +228,7 @@ export interface LocalAgentOptions {
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
+  workflowClient?: GitHubWorkflowApiClient;
   commandConfirmationRegistry?: CommandConfirmationRegistry;
   typedConfirmationRegistry?: TypedConfirmationRegistry;
   mutationReceiptStore?: MutationReceiptStore;
@@ -254,6 +260,8 @@ export class LocalAgent {
   private readonly mutationReceiptStores = new Map<string, MutationReceiptStore>();
   private gitRepositoryServicePromise: Promise<GitRepositoryService> | undefined;
   private gitHubExecutorPromise: Promise<GitHubExecutor> | undefined;
+  private workflowClientPromise: Promise<GitHubWorkflowApiClient> | undefined;
+  private readonly injectedWorkflowClient: GitHubWorkflowApiClient | undefined;
 
   private constructor(
     private readonly registry: WorkspaceRegistry,
@@ -267,6 +275,7 @@ export class LocalAgent {
     this.injectedGitRepositoryExecutor = options.gitRepositoryExecutor;
     this.injectedGitOriginResolver = options.gitOriginResolver;
     this.injectedGitHubExecutor = options.githubExecutor;
+    this.injectedWorkflowClient = options.workflowClient;
     this.typedConfirmationRegistry = options.typedConfirmationRegistry ?? new TypedConfirmationRegistry();
     this.injectedMutationReceiptStore = options.mutationReceiptStore;
     this.backgroundTaskManager = new BackgroundTaskManager({
@@ -1307,6 +1316,40 @@ export class LocalAgent {
     );
   }
 
+  async githubWorkflowOperation(
+    input: GitHubWorkflowOperationInput,
+    context: OperationContext = {},
+  ): Promise<GitHubWorkflowOperationResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubWorkflowOperation", githubWorkflowOperationInputSchema, input, context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        const capability = parsed.mode === "dispatch"
+          ? "github.workflow.dispatch" as const : "github.repository.read" as const;
+        metadata.sourceControlCapability = capability;
+        metadata.targetResource = "github:" + repository + ":workflow/" + parsed.workflow +
+          ":operation/" + parsed.operationId;
+        metadata.expectedSha = parsed.expectedMainSha;
+        await this.assertGitHubRepositoryCapability(workspace, capability, repository,
+          parsed.root ?? ".", parsed.mode === "dispatch", activeContext.signal);
+        const coordinator = new GitHubReleaseWorkflowOperation({
+          client: await this.getGitHubWorkflowApiClient(),
+          receipts: this.mutationReceiptStoreFor(workspace),
+          authorize: async () => {
+            await this.assertGitHubRepositoryCapability(workspace,
+              "github.workflow.dispatch", repository, parsed.root ?? ".", true,
+              activeContext.signal);
+            return true;
+          },
+        });
+        const outcome = parsed.mode === "dispatch"
+          ? await coordinator.dispatch(parsed, activeContext)
+          : await coordinator.reconcile(parsed, activeContext);
+        return githubWorkflowOperationResultSchema.parse(outcome);
+      },
+    );
+  }
+
   async githubStartCommitChecksWatch(
     input: GitHubStartCommitChecksWatchInput,
     context: OperationContext = {},
@@ -1822,6 +1865,14 @@ export class LocalAgent {
 
   private async getGitOriginResolver(): Promise<GitOriginResolver> {
     return this.injectedGitOriginResolver ?? this.getGitRepositoryService();
+  }
+
+  private async getGitHubWorkflowApiClient(): Promise<GitHubWorkflowApiClient> {
+    if (this.injectedWorkflowClient) return this.injectedWorkflowClient;
+    this.workflowClientPromise ??= (async () => new GitHubHttpClient({
+      credentialProvider: await GhCliUserCredentialProvider.create(),
+    }))();
+    return this.workflowClientPromise;
   }
 
   private async getGitHubExecutor(): Promise<GitHubExecutor> {

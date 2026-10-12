@@ -75,6 +75,41 @@ export interface GitHubMergePullRequestRequest {
   merge_method: "merge" | "squash";
 }
 
+export interface GitHubWorkflowRunRecord {
+  id: number;
+  workflow_id: number;
+  name: string;
+  display_title: string;
+  head_sha: string;
+  head_branch?: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  run_attempt: number;
+}
+export interface GitHubWorkflowRunsRecord {
+  total_count: number;
+  workflow_runs: GitHubWorkflowRunRecord[];
+}
+export interface GitHubRefRecord {
+  ref: string;
+  object: { sha: string; type: string };
+}
+
+/** Workflow dispatch uses the existing authenticated GitHub client without
+ * changing the established repository/PR adapter interface. */
+export interface GitHubWorkflowApiClient {
+  getMainRef(owner: string, repository: string, context?: OperationContext): Promise<GitHubRefRecord>;
+  getTagRef?(owner: string, repository: string, tag: string, context?: OperationContext): Promise<GitHubRefRecord>;
+  getWorkflowRuns(owner: string, repository: string, workflow: string,
+    headSha: string, context?: OperationContext): Promise<GitHubWorkflowRunsRecord>;
+  getTagPushRuns?(owner: string, repository: string, headSha: string,
+    context?: OperationContext): Promise<GitHubWorkflowRunsRecord>;
+  dispatchWorkflow(owner: string, repository: string, workflow: string,
+    expectedSha: string, inputs: Record<string, string>,
+    context?: OperationContext): Promise<void>;
+}
+
 export interface GitHubApiClient {
   getCurrentUser(context?: OperationContext): Promise<GitHubCurrentUserRecord>;
   getRepository(
@@ -187,6 +222,48 @@ export class GitHubHttpClient implements GitHubApiClient {
       },
       context,
     );
+  }
+
+  getMainRef(owner: string, repository: string, context?: OperationContext): Promise<GitHubRefRecord> {
+    return performGitHubRequest<GitHubRefRecord>(this.#credentialProvider, this.#fetchImpl, {
+      method: "GET", path: `/repos/${segment(owner)}/${segment(repository)}/git/ref/heads/main`,
+      mutation: false,
+    }, context);
+  }
+
+  getTagRef(owner:string,repository:string,tag:string,context?:OperationContext):Promise<GitHubRefRecord>{
+    return performGitHubRequest<GitHubRefRecord>(this.#credentialProvider,this.#fetchImpl,{
+      method:"GET",path:`/repos/${segment(owner)}/${segment(repository)}/git/ref/tags/${segment(tag)}`,
+      mutation:false,
+    },context);
+  }
+
+  getWorkflowRuns(owner: string, repository: string, workflow: string,
+    headSha: string, context?: OperationContext): Promise<GitHubWorkflowRunsRecord> {
+    return performGitHubRequest<GitHubWorkflowRunsRecord>(this.#credentialProvider, this.#fetchImpl, {
+      method: "GET",
+      path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/runs?event=workflow_dispatch&branch=main&head_sha=${segment(headSha)}&per_page=100`,
+      mutation: false,
+    }, context);
+  }
+
+  getTagPushRuns(owner:string,repository:string,headSha:string,
+    context?:OperationContext):Promise<GitHubWorkflowRunsRecord> {
+    return performGitHubRequest<GitHubWorkflowRunsRecord>(this.#credentialProvider,this.#fetchImpl,{
+      method:"GET",
+      path:`/repos/${segment(owner)}/${segment(repository)}/actions/workflows/release.yml/runs?event=push&head_sha=${segment(headSha)}&per_page=100`,
+      mutation:false,
+    },context);
+  }
+
+  async dispatchWorkflow(owner: string, repository: string, workflow: string,
+    expectedSha: string, inputs: Record<string, string>, context?: OperationContext): Promise<void> {
+    await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "POST",
+      path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/dispatches`,
+      body: { ref: "main", inputs: {...inputs, expected_main_sha: expectedSha} },
+      mutation: true,
+    }, context);
   }
 
   createUserRepository(

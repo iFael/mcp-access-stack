@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
 import type {
   BackgroundTaskListResult,
@@ -1824,6 +1824,7 @@ const expectedSourceControlAnnotations = {
   git_publish_tag: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_workflow_operation: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1836,7 +1837,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty source-control tools inside the 53-tool workspace surface", () => {
+  it("publishes twenty-one source-control tools inside the 54-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1849,6 +1850,7 @@ describe("registerSourceControlTools", () => {
       "git_publish_tag",
       "github_get_repository",
       "github_get_commit_checks",
+      "github_workflow_operation",
       "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
@@ -1859,9 +1861,31 @@ describe("registerSourceControlTools", () => {
       "github_close_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(53);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(53);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(54);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(54);
+  });
+
+  it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{
+    const operation=jest.fn(async(_input:unknown)=>({
+      status:"outcome_unknown" as const,
+      operationId:"11111111-2222-4333-8444-555555555555",
+    }));
+    const executor=Object.assign(new MockSourceControlExecutor(),{githubWorkflowOperation:operation});
+    const server=new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerSourceControlTools(server,executor,{includeTools:["github_workflow_operation"],
+      securitySchemes:[{type:"noauth"}]});
+    const tool=(server as unknown as {
+      _registeredTools:Record<string,RegisteredTool & {annotations?:unknown}>;
+    })._registeredTools.github_workflow_operation!;
+    expect(tool.annotations).toMatchObject({readOnlyHint:false,destructiveHint:true,idempotentHint:true});
+    const input={workspaceId:"ws",owner:"octo",repository:"repo",
+      workflow:"edge-f09-guarded-rollout.yml",
+      mode:"reconcile",expectedMainSha:sourceControlShaA,
+      operationId:"11111111-2222-4333-8444-555555555555"};
+    await tool.handler(input as never,{} as never);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(operation.mock.calls[0]?.[0]).toEqual(input);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

@@ -17,6 +17,7 @@ import {
   githubClosePullRequestInputSchema,
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -45,6 +46,7 @@ const expectedPublicSourceControlNames = [
   "github_create_pull_request",
   "github_create_repository",
   "github_get_commit_checks",
+  "github_workflow_operation",
   "github_materialize_actions_artifact",
   "github_get_commit_checks_watches",
   "github_start_commit_checks_watch",
@@ -66,6 +68,7 @@ const expectedSourceControlCapabilities = [
   "git.remote.push",
   "github.repository.read",
   "github.artifact.materialize",
+  "github.workflow.dispatch",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -179,6 +182,13 @@ const inputCases = [
     },
   },
   {
+    name: "github_workflow_operation",
+    schema: githubWorkflowOperationInputSchema,
+    input: { workspaceId: "repo", owner: "octo", repository: "app",
+      workflow: "edge-f09-guarded-rollout.yml", mode: "reconcile",
+      expectedMainSha: shaA, operationId: "11111111-2222-4333-8444-555555555555" },
+  },
+  {
     name: "github_materialize_actions_artifact",
     schema: githubMaterializeActionsArtifactInputSchema,
     input: {
@@ -286,7 +296,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty public tools, nineteen relay operations and twelve capabilities", () => {
+  it("exposes twenty-one public tools, twenty relay operations and thirteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -296,8 +306,8 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(sourceControlCapabilities).toHaveLength(12);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
+    expect(sourceControlCapabilities).toHaveLength(13);
 
     for (const forbiddenName of [
       "source_control",
