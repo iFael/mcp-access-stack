@@ -2703,7 +2703,7 @@ const sourceControlMcpSchemas = {
       workspaceId: mcpSourceControlWorkspaceId,
       root: mcpSourceControlRoot.optional(),
       owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName,
-      workflow: z.enum(["edge-f09-guarded-rollout.yml","release.yml"]),
+      workflow: z.enum(["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"]),
       tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
       mode: z.enum(["dispatch","reconcile"]),
       expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
@@ -3259,7 +3259,7 @@ export function registerSourceControlTools(
       "github_workflow_operation",
       {
         title: "Run or reconcile guarded release workflow",
-        description: "Unified fixed-workflow public release or guarded Edge operation: dispatch once under exact main SHA, tag when required, and durable operationId; or reconcile by the same run identity. A 204 dispatch is not a completed deploy.",
+        description: "One typed release operation: dispatch guarded Edge or tag bootstrap once under exact main SHA and UUID, reconcile by the same run ID, or observe the tag-triggered public release without another dispatch. Separate workspace capabilities authorize bootstrap and Edge; a 204 is not a completed release.",
         inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
         outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
         annotations: sourceControlAnnotations.github_workflow_operation,

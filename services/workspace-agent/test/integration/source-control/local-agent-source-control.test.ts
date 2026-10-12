@@ -291,6 +291,40 @@ describe("LocalAgent unified guarded GitHub workflow operation", () => {
     expect(count).toBe(1);
     expect(await agent.githubWorkflowOperation({...input,mode:"reconcile"},context))
       .toMatchObject({status:"observed",runId:77,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,
+      workflow:"release-tag-bootstrap.yml",tag:"v1.1.0-beta.90",mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
+  });
+
+  it("bootstraps release tag only under its separate workspace authorization",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getWorkflowRuns:async()=>({total_count:count>0?1:0,workflow_runs:count>0?[{
+        id:88,workflow_id:6,name:"Release tag bootstrap",
+        display_title:"mcp-release-"+input.operationId,
+        head_sha:SHA_A,event:"workflow_dispatch",status:"completed",
+        conclusion:"success",run_attempt:1,
+      }]:[]}),
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({
+      capabilities:["github.repository.read","github.workflow.bootstrap"],
+      workflowClient,origin:"https://github.com/octo/repo.git",
+    });
+    const bootstrap={...input,workflow:"release-tag-bootstrap.yml" as const,
+      tag:"v1.1.0-beta.90"};
+    expect((await agent.githubWorkflowOperation({...bootstrap,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect((await agent.githubWorkflowOperation({...bootstrap,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect(count).toBe(1);
+    expect(await agent.githubWorkflowOperation({...bootstrap,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:88,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
   });
 
   it("observes a tag-push public release with repository-read permission and no dispatch",async()=>{

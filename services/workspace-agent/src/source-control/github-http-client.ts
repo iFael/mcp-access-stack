@@ -258,10 +258,16 @@ export class GitHubHttpClient implements GitHubApiClient {
 
   async dispatchWorkflow(owner: string, repository: string, workflow: string,
     expectedSha: string, inputs: Record<string, string>, context?: OperationContext): Promise<void> {
+    if (workflow !== "edge-f09-guarded-rollout.yml" && workflow !== "release-tag-bootstrap.yml") {
+      throw new AppError("INVALID_ARGUMENT", "Workflow dispatch is not allowlisted.");
+    }
+    const requestInputs = workflow === "release-tag-bootstrap.yml"
+      ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_sha: expectedSha}
+      : {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha};
     await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
       method: "POST",
       path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/dispatches`,
-      body: { ref: "main", inputs: {...inputs, expected_main_sha: expectedSha} },
+      body: { ref: "main", inputs: requestInputs },
       mutation: true,
     }, context);
   }

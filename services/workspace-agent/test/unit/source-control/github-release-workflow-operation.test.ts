@@ -97,6 +97,22 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
     expect(f.dispatched()).toBe(1);
   });
 
+  it("bootstraps an existing guarded release-tag workflow exactly once and reconciles by UUID",async()=>{
+    const f=setup();
+    const bootstrap={...input,workflow:"release-tag-bootstrap.yml" as const,
+      tag:"v1.1.0-beta.90"};
+    expect((await f.coordinator.dispatch(bootstrap,context)).status).toBe("submitted");
+    expect((await f.coordinator.dispatch(bootstrap,context)).status).toBe("submitted");
+    expect(f.dispatched()).toBe(1);
+    f.addRun({name:"Release tag bootstrap",status:"completed",conclusion:"success"});
+    expect(await f.coordinator.reconcile(bootstrap,context)).toMatchObject({
+      status:"observed",runId:9921001,conclusion:"success",
+    });
+    await expect(f.coordinator.dispatch({...bootstrap,tag:"v1.1.0-beta.91"},context))
+      .rejects.toThrow();
+    expect(f.dispatched()).toBe(1);
+  });
+
   it("observes an automatically tag-triggered public release and forbids a duplicate dispatch",async()=>{
     const f=setup();
     const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};

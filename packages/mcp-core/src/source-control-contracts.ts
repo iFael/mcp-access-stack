@@ -168,6 +168,7 @@ export const sourceControlCapabilities = [
   "github.repository.read",
   "github.artifact.materialize",
   "github.workflow.dispatch",
+  "github.workflow.bootstrap",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -780,16 +781,18 @@ export const githubWorkflowOperationInputSchema = z.object({
   root: rootSchema.optional(),
   owner: githubOwnerSchema,
   repository: githubRepositoryNameSchema,
-  workflow: z.enum(["edge-f09-guarded-rollout.yml","release.yml"]),
+  workflow: z.enum(["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"]),
   tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
   mode: z.enum(["dispatch", "reconcile"]),
   expectedMainSha: gitShaSchema,
   operationId: z.uuid(),
 }).strict().superRefine((input,ctx)=>{
   const isPublic=input.workflow==="release.yml";
-  if((isPublic && (input.mode === "dispatch" || !input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
-      (!isPublic && input.tag!==undefined)){
-    ctx.addIssue({code:"custom",message:"Public release requires a non-reserved SemVer tag; f09 accepts no tag."});
+  const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
+  if((isPublic && input.mode==="dispatch") ||
+      (needsTag && (!input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
+      (!needsTag && input.tag!==undefined)){
+    ctx.addIssue({code:"custom",message:"Only f09 permits no tag; bootstrap requires a non-reserved SemVer tag; public release is observe-only."});
   }
 });
 export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;

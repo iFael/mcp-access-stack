@@ -1324,8 +1324,11 @@ export class LocalAgent {
       "githubWorkflowOperation", githubWorkflowOperationInputSchema, input, context,
       async (workspace, parsed, activeContext, metadata) => {
         const repository = parsed.owner + "/" + parsed.repository;
-        const capability = parsed.mode === "dispatch"
-          ? "github.workflow.dispatch" as const : "github.repository.read" as const;
+        const capability = parsed.mode !== "dispatch"
+          ? "github.repository.read" as const
+          : parsed.workflow === "release-tag-bootstrap.yml"
+            ? "github.workflow.bootstrap" as const
+            : "github.workflow.dispatch" as const;
         metadata.sourceControlCapability = capability;
         metadata.targetResource = "github:" + repository + ":workflow/" + parsed.workflow +
           ":operation/" + parsed.operationId;
@@ -1337,8 +1340,9 @@ export class LocalAgent {
           receipts: this.mutationReceiptStoreFor(workspace),
           authorize: async () => {
             await this.assertGitHubRepositoryCapability(workspace,
-              "github.workflow.dispatch", repository, parsed.root ?? ".", true,
-              activeContext.signal);
+              parsed.workflow === "release-tag-bootstrap.yml"
+                ? "github.workflow.bootstrap" : "github.workflow.dispatch",
+              repository, parsed.root ?? ".", true, activeContext.signal);
             return true;
           },
         });

@@ -46,6 +46,25 @@ describe("GitHubHttpClient fixed transport", () => {
     expect(requestOf(fetchImpl).init.method).toBe("GET");
   });
 
+  it("dispatches the existing release-tag bootstrap with only tag, expected_sha and operation_id",async()=>{
+    const fetchImpl=jest.fn(async()=>new Response(null,{status:204}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    await client.dispatchWorkflow("octo","repo","release-tag-bootstrap.yml","a".repeat(40),{
+      operation_id:"11111111-2222-4333-8444-555555555555",
+      tag:"v1.1.0-beta.90",
+      unrelated:"must-not-forward",
+    });
+    expect(requestOf(fetchImpl).url).toBe(
+      "https://api.github.com/repos/octo/repo/actions/workflows/release-tag-bootstrap.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl).init.body))).toEqual({
+      ref:"main",inputs:{operation_id:"11111111-2222-4333-8444-555555555555",
+        tag:"v1.1.0-beta.90",expected_sha:"a".repeat(40)},
+    });
+    await expect(client.dispatchWorkflow("octo","repo","release.yml","a".repeat(40),{}))
+      .rejects.toThrow("not allowlisted");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("uses fixed workflow endpoints and sends only pinned main/operation inputs", async () => {
     const fetchImpl=jest.fn(async (_url:string, init:RequestInit) =>
       init.method==="POST" ? new Response(null,{status:204})

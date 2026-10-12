@@ -69,6 +69,7 @@ const expectedSourceControlCapabilities = [
   "github.repository.read",
   "github.artifact.materialize",
   "github.workflow.dispatch",
+  "github.workflow.bootstrap",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -296,7 +297,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty-one public tools, twenty relay operations and thirteen capabilities", () => {
+  it("exposes twenty-one public tools, twenty relay operations and fourteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -307,7 +308,7 @@ describe("typed source-control public boundary", () => {
       [...expectedSourceControlCapabilities].sort(),
     );
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
-    expect(sourceControlCapabilities).toHaveLength(13);
+    expect(sourceControlCapabilities).toHaveLength(14);
 
     for (const forbiddenName of [
       "source_control",

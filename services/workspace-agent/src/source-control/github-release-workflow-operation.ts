@@ -7,6 +7,7 @@ import type { GitHubWorkflowApiClient, GitHubWorkflowRunRecord } from "./github-
 const SHA = /^[a-f0-9]{40}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const F09_WORKFLOW = "edge-f09-guarded-rollout.yml" as const;
+const TAG_BOOTSTRAP = "release-tag-bootstrap.yml" as const;
 const PUBLIC_RELEASE = "release.yml" as const;
 const PUBLIC_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u;
 
@@ -14,7 +15,7 @@ export interface GitHubReleaseWorkflowInput {
   workspaceId: string;
   owner: string;
   repository: string;
-  workflow: typeof F09_WORKFLOW | typeof PUBLIC_RELEASE;
+  workflow: typeof F09_WORKFLOW | typeof TAG_BOOTSTRAP | typeof PUBLIC_RELEASE;
   tag?: string | undefined;
   expectedMainSha: string;
   operationId: string;
@@ -40,7 +41,7 @@ export class GitHubReleaseWorkflowOperation {
 
   async dispatch(input: GitHubReleaseWorkflowInput, context: OperationContext): Promise<GitHubReleaseWorkflowObservation> {
     const identity = this.identity(input, context);
-    if (input.workflow !== F09_WORKFLOW) throw new AppError("CAPABILITY_UNSUPPORTED", "Public release is triggered by the tag push; duplicate dispatch is prohibited.");
+    if (input.workflow === PUBLIC_RELEASE) throw new AppError("CAPABILITY_UNSUPPORTED", "Public release is triggered by the tag push; duplicate dispatch is prohibited.");
     if (!await this.options.authorize(input, context)) throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
     const reservation = await this.options.receipts.reserve(identity);
     if (reservation.disposition === "replay_completed") {
@@ -57,7 +58,8 @@ export class GitHubReleaseWorkflowOperation {
       if (prior !== null) throw new Error("RELEASE_WORKFLOW_ALREADY_EXISTS");
       await this.options.receipts.markExecuting(identity);
       await this.options.client.dispatchWorkflow(input.owner,input.repository,input.workflow,
-        input.expectedMainSha,{operation_id:input.operationId},context);
+        input.expectedMainSha,{operation_id:input.operationId,
+          ...(input.workflow === TAG_BOOTSTRAP ? {tag:input.tag!} : {})},context);
       await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
       return {status:"submitted",operationId:input.operationId};
     } catch {
@@ -146,8 +148,8 @@ export class GitHubReleaseWorkflowOperation {
   private identity(input:GitHubReleaseWorkflowInput,context:OperationContext):MutationReceiptIdentity {
     if(!input.workspaceId || !/^[a-zA-Z0-9-]{1,100}$/.test(input.owner) ||
       !/^[a-zA-Z0-9_.-]{1,100}$/.test(input.repository) ||
-      ![F09_WORKFLOW,PUBLIC_RELEASE].includes(input.workflow) ||
-      (input.workflow===PUBLIC_RELEASE
+      ![F09_WORKFLOW,TAG_BOOTSTRAP,PUBLIC_RELEASE].includes(input.workflow) ||
+      (input.workflow===PUBLIC_RELEASE || input.workflow===TAG_BOOTSTRAP
         ? !input.tag || !PUBLIC_TAG.test(input.tag) || input.tag.includes("-oracle.") ||
           input.tag.includes("-companion.") : input.tag!==undefined) ||
       !SHA.test(input.expectedMainSha) ||
