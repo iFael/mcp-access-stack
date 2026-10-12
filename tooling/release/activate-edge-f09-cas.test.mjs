@@ -111,6 +111,30 @@ test("deployment ambiguous transport outcome stops and NEVER retries", async () 
   assert.equal(posts, 1);
 });
 
+test("Cloudflare deployment rejection reports only bounded status and code, without retry", async () => {
+  let posts=0;
+  const fetchImpl=async (_url, init)=>{
+    if (init.method === "GET") return response(health());
+    posts++;
+    return response({success:false, errors:[{code:10000,message:"secret diagnostic must never surface"}]}, 403);
+  };
+  await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
+    error=>error.message==="DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_403_CF_10000");
+  assert.equal(posts,1);
+});
+
+test("a successful HTTP status with an invalid receipt reports a distinct unknown outcome", async () => {
+  let posts=0;
+  const fetchImpl=async (_url,init)=>{
+    if(init.method==="GET") return response(health());
+    posts++;
+    return response({success:true,result:{id:"bad-id"}},200);
+  };
+  await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
+    /DEPLOYMENT_OUTCOME_UNKNOWN_RECEIPT/);
+  assert.equal(posts,1);
+});
+
 test("CAS candidate replacement makes one authenticated POST bound to operationId", async () => {
   let post = 0, compareCalls = 0;
   const compare = async () => { compareCalls++; return provenance("after"); };
