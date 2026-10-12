@@ -2,6 +2,7 @@ import { RELEASE_ACTIONS, type ReleaseAction } from "./types.js";
 import { beta80ReleaseBlueprint } from "./workflows/beta80-sequence.v1.js";
 import { ReleaseWorkflowExecutor, type ReleaseStepCapability } from "./release-workflow-executor.js";
 import { bindReleasePruneCleanup, type ReleaseCleanupBinding } from "./release-prune-capability.js";
+import { bindReleaseTagBootstrap, type ReleaseTagBootstrapBinding } from "./release-tag-bootstrap-capability.js";
 import { bindReleaseSourceControlReads, type ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 
@@ -13,6 +14,7 @@ import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 export interface ReleaseCapabilityComposition {
   readonly sourceControl?: ReleaseSourceControlReadBinding;
   readonly cleanup?: ReleaseCleanupBinding;
+  readonly tagBootstrap?: ReleaseTagBootstrapBinding;
   readonly other?: readonly ReleaseStepCapability[];
 }
 
@@ -44,6 +46,7 @@ export function composeReleaseCapabilities(input: ReleaseCapabilityComposition):
     }
   }
   if (input.cleanup) install(bindReleasePruneCleanup(input.cleanup));
+  if (input.tagBootstrap) install(bindReleaseTagBootstrap(input.tagBootstrap));
   for (const binding of input.other ?? []) install(binding);
   const missingActions = beta80ReleaseBlueprint.steps
     .filter(step => !installed.has(step.action)).map(step => step.action);
