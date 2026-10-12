@@ -1,6 +1,6 @@
 import { describe,expect,it } from "@jest/globals";
 import { bindReleaseVerificationReads, type VerificationAction } from "../../src/release-verification-capabilities.js";
-import { bindReleaseEffects, type EffectAction } from "../../src/release-effect-capabilities.js";
+import { bindReleaseEffects, type EffectAction, type ReleaseEffectRequest } from "../../src/release-effect-capabilities.js";
 import { composeReleaseCapabilities } from "../../src/release-capability-registry.js";
 import { beta80ReleaseBlueprint } from "../../src/workflows/beta80-sequence.v1.js";
 import type { ReleaseRunSnapshot, StepIntent, EvidenceInput } from "../../src/types.js";
@@ -123,7 +123,7 @@ describe("typed release side effects never infer completion from dispatch",()=>{
   });
   it("rejects unknown, duplicate or empty effect subsets without inventing actions",()=>{
     const binding={authorize:async()=>true,port:{
-      start:async()=>{},inspect:async input=>({...input,status:"pending" as const,evidence:[]}),
+      start:async()=>{},inspect:async (input:ReleaseEffectRequest)=>({...input,status:"pending" as const,evidence:[]}),
     }};
     expect(()=>bindReleaseEffects({...binding,actions:[]})).toThrow("RELEASE_EFFECT_ACTION_SET_INVALID");
     expect(()=>bindReleaseEffects({...binding,

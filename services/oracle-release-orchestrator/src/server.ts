@@ -5,6 +5,7 @@ import { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 import { createOracleReleaseReadApi } from "./read-api.js";
 import { createOracleReadApiServer } from "./node-read-server.js";
 import { SqliteReleaseLedger } from "./storage/sqlite-release-ledger.js";
+import { createTrustedOracleReleaseHost, type TrustedOracleReleaseHostOptions } from "./release-trusted-host.js";
 
 export interface OracleReadApiServiceConfig {
   readonly ledgerPath: string;
@@ -16,7 +17,8 @@ export interface OracleReadApiServiceConfig {
 
 export function startOracleReleaseReadApiService(
   config: OracleReadApiServiceConfig,
-): { close(): Promise<void> } {
+  trustedExecution?: TrustedOracleReleaseHostOptions,
+): { close(): Promise<void>; trustedControl: ReturnType<typeof createTrustedOracleReleaseHost> | null } {
   validateConfig(config);
   mkdirSync(config.releaseRoot, { recursive: true });
   const ledger = SqliteReleaseLedger.open({
@@ -26,6 +28,9 @@ export function startOracleReleaseReadApiService(
   const orchestrator = new ReleaseOrchestrator(ledger);
   try {
     orchestrator.recoverInterruptedOperations("system:oracle-startup");
+    // Share this EXACT Oracle ledger instance; do not instantiate a second writer.
+    const trustedControl = trustedExecution
+      ? createTrustedOracleReleaseHost(orchestrator, trustedExecution) : null;
     const handler = createOracleReleaseReadApi({
       orchestrator,
       bearerToken: config.bearerToken,
@@ -33,6 +38,7 @@ export function startOracleReleaseReadApiService(
     const server = createOracleReadApiServer({ handler, host: config.host });
     server.listen(config.port, config.host);
     return {
+      trustedControl,
       close: () => new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => {
           orchestrator.close();
