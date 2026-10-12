@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
-import { assertSourceControlCapability } from "@vs-code-gpt/shared";
+import { assertSourceControlCapability, policyFileSchema } from "@vs-code-gpt/shared";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "../../../src/companion/local-repository-manager.js";
 
 const execFileAsync = promisify(execFile);
@@ -412,13 +412,19 @@ describe("LocalRepositoryManager binding lifecycle", () => {
       expect(workspace.sourceControl?.accountOwners).toEqual(["iFael"]);
       expect(workspace.sourceControl?.additionalRepositories).toEqual([]);
       expect(() => assertSourceControlCapability({
-        policy: workspace,
+        policy: {
+          permissionProfile: workspace.permissionProfile,
+          ...(workspace.sourceControl === undefined ? {} : { sourceControl: workspace.sourceControl }),
+        },
         capability: "github.repository.create",
         accountOwner: "iFael",
         mutation: true,
       })).not.toThrow();
       expect(() => assertSourceControlCapability({
-        policy: workspace,
+        policy: {
+          permissionProfile: workspace.permissionProfile,
+          ...(workspace.sourceControl === undefined ? {} : { sourceControl: workspace.sourceControl }),
+        },
         capability: "github.repository.create",
         accountOwner: "unapproved-org",
         mutation: true,
@@ -427,8 +433,8 @@ describe("LocalRepositoryManager binding lifecycle", () => {
   }, 15_000);
 
   it("grants create on primary/managed workspaces without changing other capabilities", () => {
-    const base = {
-      version: 1 as const,
+    const base = policyFileSchema.parse({
+      version: 1,
       workspaces: [{
         id: "primary",
         name: "primary",
@@ -450,17 +456,20 @@ describe("LocalRepositoryManager binding lifecycle", () => {
           additionalRepositories: ["ExistingOrg/other"],
         },
       }],
-    };
-    const updated = withGlobalGitHubRepositoryCreatePolicy(base as Parameters<typeof withGlobalGitHubRepositoryCreatePolicy>[0], ["iFael"]);
+    });
+    const updated = withGlobalGitHubRepositoryCreatePolicy(base, ["iFael"]);
     expect(updated.workspaces[0]?.sourceControl).toEqual({
       capabilities: ["github.repository.read", "github.repository.create"],
       accountOwners: ["ExistingOrg", "iFael"],
       additionalRepositories: ["ExistingOrg/other"],
     });
     expect(withGlobalGitHubRepositoryCreatePolicy(updated, ["iFael"])).toEqual(updated);
-    expect(withGlobalGitHubRepositoryCreatePolicy(base as Parameters<typeof withGlobalGitHubRepositoryCreatePolicy>[0], [])).toEqual(base);
+    expect(withGlobalGitHubRepositoryCreatePolicy(base, [])).toEqual(base);
     expect(() => assertSourceControlCapability({
-      policy: base.workspaces[0]!,
+      policy: {
+        permissionProfile: base.workspaces[0]!.permissionProfile,
+        ...(base.workspaces[0]!.sourceControl === undefined ? {} : { sourceControl: base.workspaces[0]!.sourceControl }),
+      },
       capability: "github.repository.create",
       accountOwner: "iFael",
       mutation: true,
