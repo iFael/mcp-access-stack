@@ -5,6 +5,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import {
   AppError,
+  githubOwnerSchema,
+  policyFileSchema,
   type CreateRepositoryInput,
   type CurrentUser,
   type DiscoverLocalRepositoriesInput,
@@ -82,7 +84,54 @@ export interface LocalRepositoryManagerOptions {
   platform?: NodeJS.Platform;
   gitExecutable?: string;
   gitEnvironment?: NodeJS.ProcessEnv;
+  githubAccountOwners?: readonly string[];
   onChanged?: () => Promise<void>;
+}
+
+export function parseGitHubAccountOwners(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") return [];
+  const owners = value.split(",").map((owner) => owner.trim());
+  if (
+    value.length > 1_600 ||
+    owners.length > 16 ||
+    owners.some((owner) => !githubOwnerSchema.safeParse(owner).success) ||
+    new Set(owners.map((owner) => owner.toLowerCase())).size !== owners.length
+  ) {
+    throw new AppError("POLICY_INVALID", "Invalid global GitHub account owners allowlist.");
+  }
+  return owners;
+}
+
+export function withGlobalGitHubRepositoryCreatePolicy(
+  policy: PolicyFile,
+  configuredOwners: readonly string[],
+): PolicyFile {
+  if (configuredOwners.length === 0) return policy;
+  const owners = parseGitHubAccountOwners(configuredOwners.join(","));
+  return policyFileSchema.parse({
+    ...policy,
+    workspaces: policy.workspaces.map((workspace) => {
+      const sourceControl = workspace.sourceControl;
+      const accountOwners = [...(sourceControl?.accountOwners ?? [])];
+      const seen = new Set(accountOwners.map((owner) => owner.toLowerCase()));
+      for (const owner of owners) {
+        if (seen.has(owner.toLowerCase())) continue;
+        accountOwners.push(owner);
+        seen.add(owner.toLowerCase());
+      }
+      return {
+        ...workspace,
+        sourceControl: {
+          capabilities: [...new Set([
+            ...(sourceControl?.capabilities ?? []),
+            "github.repository.create",
+          ])],
+          accountOwners,
+          additionalRepositories: sourceControl?.additionalRepositories ?? [],
+        },
+      };
+    }),
+  });
 }
 
 export class LocalRepositoryManager implements RepositoryExecutor {
@@ -400,7 +449,7 @@ export class LocalRepositoryManager implements RepositoryExecutor {
       }
     }
     if (repositories.length === 0) return null;
-    return {
+    return withGlobalGitHubRepositoryCreatePolicy({
       version: 1,
       workspaces: repositories.map((repository) => ({
         id: repository.workspaceId,
@@ -433,7 +482,7 @@ export class LocalRepositoryManager implements RepositoryExecutor {
           additionalRepositories: [],
         },
       })),
-    };
+    }, this.options.githubAccountOwners ?? []);
   }
 
   async listWorkspaceSummaries(): Promise<WorkspaceSummary[]> {

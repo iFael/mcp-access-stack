@@ -13,7 +13,7 @@ import {
 import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
-import { LocalRepositoryManager } from "./companion/local-repository-manager.js";
+import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { EdgeConnector } from "./edge/connector.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
@@ -50,15 +50,19 @@ async function main(): Promise<void> {
   const internalAssertion = randomBytes(32).toString("base64url");
 
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
+  const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
   const reloadable = new ReloadableLocalAgent();
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
     const managedPolicy = await repositories.buildPolicy();
-    await reloadable.reload(mergePrimaryPolicies(basePolicy, managedPolicy));
+    await reloadable.reload(withGlobalGitHubRepositoryCreatePolicy(
+      mergePrimaryPolicies(basePolicy, managedPolicy), githubAccountOwners,
+    ));
   };
   repositories = await LocalRepositoryManager.create({
     stateDirectory: runtime.repositoryStateDirectory,
     managedRoot: runtime.managedRepositoryRoot,
+    githubAccountOwners,
     onChanged: reloadPrimaryRuntime,
   });
   await reloadPrimaryRuntime();
