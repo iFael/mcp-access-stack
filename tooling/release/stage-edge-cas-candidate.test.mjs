@@ -101,7 +101,7 @@ test("temporary secret file is private, exclusive, bounded and never a project a
     await assert.rejects(writeStageSecretFile("bad", dir), /EDGE_CAS_STAGE_SECRET_INVALID/u);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
-test("uploaded version validates Cloudflare version resources.bindings object metadata", () => {
+test("uploaded version accepts exactly one required secret in Cloudflare object or array metadata", () => {
   const payload = { success: true, result: { resources: {
     bindings: {
       MCP_SESSION: { type: "durable_object_namespace" },
@@ -109,11 +109,22 @@ test("uploaded version validates Cloudflare version resources.bindings object me
     },
   } } };
   assert.equal(verifyVersionSecretBinding(payload), true);
+  const candidateBindings = [
+    { name: "MCP_SESSION", type: "durable_object_namespace", value: "private-non-secret" },
+    { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text", text: "private-secret-NEVER-print" },
+  ];
+  assert.equal(verifyVersionSecretBinding({ result: { resources: { bindings: candidateBindings } } }), true);
   for (const bindings of [
     {}, { MCP_CONTRACT_PREPARE_TOKEN: { type: "plain_text" } },
     { MCP_OWNER_TOKEN: { type: "secret_text" } },
     { MCP_CONTRACT_PREPARE_TOKEN: { text: "missing-type" } },
-    [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" }],
+    [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "plain_text" }],
+    [{ name: "MCP_OWNER_TOKEN", type: "secret_text" }],
+    [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" },
+      { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" }],
+    [{ name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" }, null],
+    [{ name: "MCP_CONTRACT_PREPARE_TOKEN" }],
+    { MCP_CONTRACT_PREPARE_TOKEN: [{ type: "secret_text" }] },
     undefined, null,
   ]) {
     assert.throws(() => verifyVersionSecretBinding({

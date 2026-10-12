@@ -121,6 +121,32 @@ function deployment(payload) {
   };
 }
 
+function inspectVersionBinding(bindings) {
+  // Never return binding values, unexpected names, or arbitrary remote types.
+  const shape = bindings === undefined ? "missing" : bindings === null ? "null" :
+    Array.isArray(bindings) ? "array" : record(bindings) ? "object" : "other";
+  if (shape !== "object" && shape !== "array") {
+    return { shape, namePresence: "unverified", type: "unverified" };
+  }
+  const target = "MCP_CONTRACT_PREPARE_TOKEN";
+  const matching = shape === "object"
+    ? Object.hasOwn(bindings, target) ? [bindings[target]] : []
+    : bindings.filter(item => record(item) && item.name === target);
+  if (matching.length > 1) {
+    return { shape, namePresence: "unverified", type: "unverified" };
+  }
+  if (matching.length === 0) {
+    const namesReadable = shape === "object" ||
+      bindings.every(item => record(item) && typeof item.name === "string");
+    return { shape, namePresence: namesReadable ? "not_observed" : "unverified",
+      type: "unverified" };
+  }
+  const rawType = record(matching[0]) ? matching[0].type : undefined;
+  const type = typeof rawType !== "string" ? "unverified" :
+    rawType === "secret_text" || rawType === "plain_text" ? rawType : "other";
+  return { shape, namePresence: "present", type };
+}
+
 function version(payload, requestedId) {
   const data = unwrap(payload);
   if (data.id !== requestedId || !record(data.resources)) {
@@ -154,6 +180,7 @@ function version(payload, requestedId) {
   }
   return {
     scriptEtag, runtimeConfig, bindingMetadata,
+    bindingInspection: inspectVersionBinding(bindings),
     source: safeSource(data.metadata?.source),
     createdOn: safeTimestamp(data.metadata?.created_on),
   };
@@ -220,6 +247,7 @@ export async function compareWorkerVersions(input, fetchImpl = fetch) {
     scriptEtagEqual,
     runtimeMetadataParity: parity(active.runtimeConfig, reference.runtimeConfig),
     bindingMetadataParity: parity(active.bindingMetadata, reference.bindingMetadata),
+    referenceBindingInspection: reference.bindingInspection,
     secretValueParity: "unverified",
     status: scriptEtagEqual === null ? "inconclusive" :
       scriptEtagEqual ? "matching_script" : "different_script",
