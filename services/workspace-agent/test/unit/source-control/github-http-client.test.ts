@@ -60,9 +60,19 @@ describe("GitHubHttpClient fixed transport", () => {
       ref:"main",inputs:{operation_id:"11111111-2222-4333-8444-555555555555",
         tag:"v1.1.0-beta.90",expected_sha:"a".repeat(40)},
     });
-    await expect(client.dispatchWorkflow("octo","repo","release.yml","a".repeat(40),{}))
+    await client.dispatchWorkflow("octo","repo","release.yml","a".repeat(40),{
+      operation_id:"11111111-2222-4333-8444-555555555555",
+      tag:"v1.1.0-beta.90",unrelated:"must-not-forward",
+    });
+    expect(requestOf(fetchImpl,1).url).toBe(
+      "https://api.github.com/repos/octo/repo/actions/workflows/release.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl,1).init.body))).toEqual({
+      ref:"main",inputs:{operation_id:"11111111-2222-4333-8444-555555555555",
+        tag:"v1.1.0-beta.90",expected_main_sha:"a".repeat(40)},
+    });
+    await expect(client.dispatchWorkflow("octo","repo","unsafe-workflow.yml","a".repeat(40),{}))
       .rejects.toThrow("not allowlisted");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("uses fixed workflow endpoints and sends only pinned main/operation inputs", async () => {

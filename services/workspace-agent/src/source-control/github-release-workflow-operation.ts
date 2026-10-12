@@ -41,25 +41,35 @@ export class GitHubReleaseWorkflowOperation {
 
   async dispatch(input: GitHubReleaseWorkflowInput, context: OperationContext): Promise<GitHubReleaseWorkflowObservation> {
     const identity = this.identity(input, context);
-    if (input.workflow === PUBLIC_RELEASE) throw new AppError("CAPABILITY_UNSUPPORTED", "Public release is triggered by the tag push; duplicate dispatch is prohibited.");
-    if (!await this.options.authorize(input, context)) throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
+    if (!await this.options.authorize(input, context)) {
+      throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
+    }
+    const unknown = {status:"outcome_unknown" as const,operationId:input.operationId};
+    const previous = await this.options.receipts.get(identity.idempotencyKey);
+    if (previous !== undefined) {
+      const replay = await this.options.receipts.reserve(identity);
+      return replay.disposition === "replay_completed"
+        ? {status:"submitted",operationId:input.operationId} : unknown;
+    }
+    // Validate remote provenance BEFORE reserving an intent: temporary missing
+    // bootstrap/CI evidence must never consume the one-shot dispatch receipt.
+    if (input.workflow === PUBLIC_RELEASE && !await this.preflightPublicRelease(input,context)) return unknown;
     const reservation = await this.options.receipts.reserve(identity);
-    if (reservation.disposition === "replay_completed") {
-      return {status:"submitted", operationId:input.operationId};
-    }
-    if (reservation.disposition !== "execute") {
-      return {status:"outcome_unknown",operationId:input.operationId};
-    }
+    if (reservation.disposition === "replay_completed") return {status:"submitted",operationId:input.operationId};
+    if (reservation.disposition !== "execute") return unknown;
     try {
       const ref = await this.options.client.getMainRef(input.owner,input.repository,context);
       if (ref.ref !== "refs/heads/main" || ref.object.type !== "commit" ||
           ref.object.sha !== input.expectedMainSha) throw new Error("RELEASE_MAIN_SHA_MISMATCH");
+      if (input.workflow === PUBLIC_RELEASE && !await this.preflightPublicRelease(input,context)) {
+        throw new Error("PUBLIC_RELEASE_PRECONDITION_CHANGED");
+      }
       const prior = await this.matchingRuns(input,context);
       if (prior !== null) throw new Error("RELEASE_WORKFLOW_ALREADY_EXISTS");
       await this.options.receipts.markExecuting(identity);
       await this.options.client.dispatchWorkflow(input.owner,input.repository,input.workflow,
         input.expectedMainSha,{operation_id:input.operationId,
-          ...(input.workflow === TAG_BOOTSTRAP ? {tag:input.tag!} : {})},context);
+          ...(input.tag===undefined?{}:{tag:input.tag})},context);
       await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
       return {status:"submitted",operationId:input.operationId};
     } catch {
@@ -67,32 +77,37 @@ export class GitHubReleaseWorkflowOperation {
       if (persisted?.state === "executing") {
         await this.options.receipts.markReconciliationRequired(identity);
       }
-      // Includes the window between the remote POST and a durable receipt.
-      // Never issue a second dispatch under the same or a different receipt.
-      return {status:"outcome_unknown",operationId:input.operationId};
+      // The remote POST may already have happened; never retry this identity.
+      return unknown;
     }
   }
 
   async reconcile(input: GitHubReleaseWorkflowInput, context: OperationContext): Promise<GitHubReleaseWorkflowObservation> {
     const identity = this.identity(input,context);
-    if (input.workflow === PUBLIC_RELEASE) return this.observeTagPush(input,context);
     const receipt = await this.options.receipts.get(identity.idempotencyKey);
-    if (!receipt) return {status:"outcome_unknown",operationId:input.operationId};
-    // Reuse the existing receipt's identity verification without creating a new mutation.
-    await this.options.receipts.reserve(identity);
+    if (receipt !== undefined) await this.options.receipts.reserve(identity);
     try {
       const observed = await this.matchingRuns(input,context);
-      if (observed === null) return {status:"outcome_unknown",operationId:input.operationId};
-      if (receipt.state !== "completed") {
-        if (receipt.state === "reserved") return {status:"outcome_unknown",operationId:input.operationId};
-        if (receipt.state === "executing") await this.options.receipts.markReconciliationRequired(identity);
-        await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
+      if (observed !== null) {
+        if (receipt?.state === "executing") {
+          await this.options.receipts.markReconciliationRequired(identity);
+          await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
+        } else if (receipt?.state === "reconciliation_required") {
+          await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
+        } else if (receipt?.state === "reserved") {
+          // A typed run identity proves the POST happened even if the
+          // executing receipt write was interrupted.
+          await this.options.receipts.markExecuting(identity);
+          await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
+        }
+        return {status:"observed",operationId:input.operationId,runId:observed.id,
+          state:observed.status as "queued"|"in_progress"|"completed",conclusion:observed.conclusion};
       }
-      return {status:"observed",operationId:input.operationId,runId:observed.id,
-        state: observed.status as "queued"|"in_progress"|"completed",conclusion:observed.conclusion};
     } catch {
-      return {status:"outcome_unknown",operationId:input.operationId};
+      if (input.workflow !== PUBLIC_RELEASE) return {status:"outcome_unknown",operationId:input.operationId};
     }
+    if (input.workflow === PUBLIC_RELEASE) return this.observeTagPush(input,context);
+    return {status:"outcome_unknown",operationId:input.operationId};
   }
 
   /** Public release is already dispatched by Git's tag push. Observe it read-only;
@@ -121,6 +136,32 @@ export class GitHubReleaseWorkflowOperation {
       return {status:"observed",operationId:input.operationId,runId:run.id,
         state:run.status as "queued"|"in_progress"|"completed",conclusion:run.conclusion};
     } catch { return unknown; }
+  }
+
+  /** A GITHUB_TOKEN-created tag does NOT trigger the public workflow push.
+   * Dispatch it explicitly only after this SAME operation's bootstrap succeeds,
+   * its tag ref is immutable, and no existing release run could be duplicated. */
+  private async preflightPublicRelease(input: GitHubReleaseWorkflowInput,
+    context: OperationContext):Promise<boolean> {
+    if (!this.options.client.getTagRef || !this.options.client.getTagPushRuns) return false;
+    try {
+      const bootstrap = await this.matchingRuns({...input,workflow:TAG_BOOTSTRAP},context);
+      if (bootstrap?.status !== "completed" || bootstrap.conclusion !== "success") return false;
+      const tagRef = await this.options.client.getTagRef(input.owner,input.repository,input.tag!,context);
+      if (tagRef.ref !== "refs/tags/"+input.tag || tagRef.object.type !== "commit" ||
+          tagRef.object.sha !== input.expectedMainSha) return false;
+      const pushes = await this.options.client.getTagPushRuns(input.owner,input.repository,input.expectedMainSha,context);
+      if (!Number.isSafeInteger(pushes.total_count) || pushes.total_count < 0 ||
+          pushes.total_count >= 100 || !Array.isArray(pushes.workflow_runs) ||
+          pushes.workflow_runs.length > pushes.total_count ||
+          pushes.workflow_runs.some(run => run.event === "push" && run.head_branch === input.tag)) return false;
+      const dispatched = await this.options.client.getWorkflowRuns(input.owner,input.repository,
+        PUBLIC_RELEASE,input.expectedMainSha,context);
+      if (!Number.isSafeInteger(dispatched.total_count) || dispatched.total_count < 0 ||
+          dispatched.total_count >= 100 || !Array.isArray(dispatched.workflow_runs) ||
+          dispatched.workflow_runs.length !== 0 || dispatched.total_count !== 0) return false;
+      return true;
+    } catch { return false; }
   }
 
   private async matchingRuns(input: GitHubReleaseWorkflowInput,context: OperationContext):Promise<GitHubWorkflowRunRecord|null> {
@@ -165,6 +206,13 @@ export class GitHubReleaseWorkflowOperation {
     })).digest("hex");
     return {workspaceId:input.workspaceId,operation:"github_workflow_operation",
       targetResource,canonicalArgumentsDigest,
-      idempotencyKey:`release-workflow:${input.workspaceId}:${input.operationId}`};
+      // Reuse the original f09 identity; tag bootstrap is operation scoped.
+      // The public release is tag scoped so a different UUID cannot dispatch
+      // the SAME immutable tag again, even while GitHub runs are eventually consistent.
+      idempotencyKey: input.workflow === F09_WORKFLOW
+        ? `release-workflow:${input.workspaceId}:${input.operationId}`
+        : input.workflow === TAG_BOOTSTRAP
+          ? `release-workflow:${input.workspaceId}:tag-bootstrap:${input.operationId}`
+          : `release-workflow:${input.workspaceId}:public:${input.owner.toLowerCase()}/${input.repository.toLowerCase()}:${input.tag}`};
   }
 }

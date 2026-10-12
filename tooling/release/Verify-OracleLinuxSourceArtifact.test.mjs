@@ -87,6 +87,19 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
   assert.doesNotMatch(workflow, /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID|MCP_CONTRACT_PREPARE_TOKEN|MCP_OWNER_TOKEN/);
 });
 
+test("typed public release workflow pins main, lightweight tag and stable run UUID",()=>{
+  const release=readFileSync(".github/workflows/release.yml","utf8").replace(/\r\n/g,"\n");
+  assert.match(release,/run-name: .*mcp-release-/u);
+  assert.match(release,/expected_main_sha:/u);
+  assert.match(release,/operation_id:/u);
+  assert.match(release,/environment: public-release/u);
+  assert.match(release,/GITHUB_SHA.*EXPECTED_MAIN_SHA/u);
+  assert.match(release,/git\/ref\/tags\/\$RELEASE_TAG/u);
+  assert.match(release,/commit:\$EXPECTED_MAIN_SHA/u);
+  assert.match(release,/GITHUB_RUN_ATTEMPT.*"1"/u);
+  assert.match(release,/github\.event_name == 'workflow_dispatch' && inputs\.operation_id != ''/u);
+});
+
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
   const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
   const guard = "if: " + "$" +

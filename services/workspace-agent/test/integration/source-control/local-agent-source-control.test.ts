@@ -349,6 +349,40 @@ describe("LocalAgent unified guarded GitHub workflow operation", () => {
       .rejects.toThrow();
     expect(count).toBe(0);
   });
+
+  it("dispatches public release only with separate permission and completed same-operation bootstrap",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getTagRef:async(_owner,_repo,tag)=>({ref:"refs/tags/"+tag,object:{type:"commit",sha:SHA_A}}),
+      getTagPushRuns:async()=>({total_count:0,workflow_runs:[]}),
+      getWorkflowRuns:async(_owner,_repo,workflow)=> {
+        if (workflow==="release-tag-bootstrap.yml") return {total_count:1,workflow_runs:[{
+          id:88,workflow_id:6,name:"Release tag bootstrap",display_title:"mcp-release-"+input.operationId,
+          head_sha:SHA_A,event:"workflow_dispatch",status:"completed",conclusion:"success",run_attempt:1,
+        }]};
+        if(workflow==="release.yml" && count>0) return {total_count:1,workflow_runs:[{
+          id:89,workflow_id:7,name:"Public release",display_title:"mcp-release-"+input.operationId,
+          head_sha:SHA_A,event:"workflow_dispatch",status:"completed",conclusion:"success",run_attempt:1,
+        }]};
+        return {total_count:0,workflow_runs:[]};
+      },
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({capabilities:["github.repository.read","github.workflow.public_release"],
+      workflowClient,origin:"https://github.com/octo/repo.git"});
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect(count).toBe(1);
+    expect(await agent.githubWorkflowOperation({...release,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:89,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
+  });
 });
 
 describe("LocalAgent typed source-control authorization", () => {

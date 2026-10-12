@@ -169,6 +169,7 @@ export const sourceControlCapabilities = [
   "github.artifact.materialize",
   "github.workflow.dispatch",
   "github.workflow.bootstrap",
+  "github.workflow.public_release",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -789,10 +790,9 @@ export const githubWorkflowOperationInputSchema = z.object({
 }).strict().superRefine((input,ctx)=>{
   const isPublic=input.workflow==="release.yml";
   const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
-  if((isPublic && input.mode==="dispatch") ||
-      (needsTag && (!input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
+  if((needsTag && (!input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
       (!needsTag && input.tag!==undefined)){
-    ctx.addIssue({code:"custom",message:"Only f09 permits no tag; bootstrap requires a non-reserved SemVer tag; public release is observe-only."});
+    ctx.addIssue({code:"custom",message:"Only f09 permits no tag; public release and bootstrap require a non-reserved SemVer tag."});
   }
 });
 export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;

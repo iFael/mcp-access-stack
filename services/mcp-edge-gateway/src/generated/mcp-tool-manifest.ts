@@ -11620,7 +11620,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "One typed release operation: dispatch guarded Edge or tag bootstrap once under exact main SHA and UUID, reconcile by the same run ID, or observe the tag-triggered public release without another dispatch. Separate workspace capabilities authorize bootstrap and Edge; a 204 is not a completed release.",
+    "description": "One typed operation for guarded Edge and tag bootstrap dispatch, and public release dispatch only after verified same-operation bootstrap and no competing run. Exact main SHA, UUID receipt and separate workspace authorizations; a 204 is not proof of completed release.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -21966,13 +21966,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "8255a668cbd4210d9a03ab1a1b444b640154e83cc6bb1e4505c2cdf32d3d310b",
-  "serverVersion": "0.4.0-catalog.c8255a668cbd4.see734ae04a98",
+  "contractRevision": "4c6306b31e1b3d8c7fbfeda56060424d939893744dcfadc961fa3754e98c6e46",
+  "serverVersion": "0.4.0-catalog.c4c6306b31e1b.see734ae04a98",
   "toolCount": 98,
   "toolSetRevision": "ee734ae04a984b5f95e8a22164aecc9ece007138a8b9331c55cd8e9d052c54bc"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c8255a668cbd4.see734ae04a98"
+  "version": "0.4.0-catalog.c4c6306b31e1b.see734ae04a98"
 } as const;

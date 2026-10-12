@@ -15,7 +15,7 @@ function setup() {
   let authorized=true;
   let dispatched=0;
   let throwOnDispatch=false;
-  let runs:GitHubWorkflowRunRecord[]=[];
+  let runs:(GitHubWorkflowRunRecord & {workflow?:string})[]=[];
   let reportedTotal:number|undefined;
   const receipts=new InMemoryMutationReceiptStore();
   const coordinator=new GitHubReleaseWorkflowOperation({
@@ -23,7 +23,10 @@ function setup() {
     client:{
       getMainRef:async()=>({ref:"refs/heads/main",object:{sha:main,type:"commit"}}),
       getTagRef:async(_owner,_repo,tag)=>({ref:"refs/tags/"+tag,object:{sha:main,type:"commit"}}),
-      getWorkflowRuns:async()=>({total_count:reportedTotal??runs.length,workflow_runs:runs}),
+      getWorkflowRuns:async(_owner,_repo,workflow)=>{
+        const filtered=runs.filter(run=>(run.workflow??input.workflow)===workflow);
+        return {total_count:reportedTotal??filtered.length,workflow_runs:filtered};
+      },
       getTagPushRuns:async()=>({total_count:reportedTotal??runs.filter(r=>r.event==="push").length,
         workflow_runs:runs.filter(r=>r.event==="push")}),
       dispatchWorkflow:async(_owner,_repo,_workflow,_expected,details)=>{
@@ -33,7 +36,7 @@ function setup() {
       },
     },
   });
-  function addRun(overrides:Partial<GitHubWorkflowRunRecord>={}) {
+  function addRun(overrides:Partial<GitHubWorkflowRunRecord> & {workflow?:string}={}) {
     runs.push({
       id:9921001,workflow_id:555,name:"Guarded f09 Edge contract migration",
       display_title:"mcp-release-"+operationId,
@@ -104,7 +107,7 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
     expect((await f.coordinator.dispatch(bootstrap,context)).status).toBe("submitted");
     expect((await f.coordinator.dispatch(bootstrap,context)).status).toBe("submitted");
     expect(f.dispatched()).toBe(1);
-    f.addRun({name:"Release tag bootstrap",status:"completed",conclusion:"success"});
+    f.addRun({name:"Release tag bootstrap",workflow:"release-tag-bootstrap.yml",status:"completed",conclusion:"success"});
     expect(await f.coordinator.reconcile(bootstrap,context)).toMatchObject({
       status:"observed",runId:9921001,conclusion:"success",
     });
@@ -113,29 +116,66 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
     expect(f.dispatched()).toBe(1);
   });
 
-  it("observes an automatically tag-triggered public release and forbids a duplicate dispatch",async()=>{
+  it("dispatches public release once only after successful same-operation bootstrap and pinned tag",async()=>{
     const f=setup();
     const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
-    await expect(f.coordinator.dispatch(release,context)).rejects.toThrow("duplicate dispatch");
-    expect((await f.coordinator.reconcile(release,context)).status).toBe("outcome_unknown");
-    f.addRun({name:"Public release",event:"push",head_branch:release.tag,
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
+    expect(f.dispatched()).toBe(0);
+    f.addRun({workflow:"release-tag-bootstrap.yml",name:"Release tag bootstrap",
+      status:"completed",conclusion:"success"});
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("submitted");
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("submitted");
+    expect(f.dispatched()).toBe(1);
+    f.addRun({workflow:"release.yml",id:9921002,name:"Public release",
       status:"completed",conclusion:"success"});
     expect(await f.coordinator.reconcile(release,context)).toMatchObject({
-      status:"observed",runId:9921001,state:"completed",conclusion:"success",
+      status:"observed",runId:9921002,state:"completed",conclusion:"success",
+    });
+    expect(f.dispatched()).toBe(1);
+  });
+
+  it("does not dispatch public release when a tag-push run already exists",async()=>{
+    const f=setup();
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    f.addRun({workflow:"release.yml",name:"Public release",event:"push",
+      head_branch:release.tag,status:"completed",conclusion:"success"});
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
+    expect(await f.coordinator.reconcile(release,context)).toMatchObject({
+      status:"observed",runId:9921001,conclusion:"success",
     });
     expect(f.dispatched()).toBe(0);
-    expect(await f.receipts.get("release-workflow:mcp-access-stack:"+operationId)).toBeUndefined();
+  });
+
+  it("does not duplicate same public tag with a different operationId",async()=>{
+    const f=setup();
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    f.addRun({workflow:"release-tag-bootstrap.yml",status:"completed",
+      name:"Release tag bootstrap",conclusion:"success"});
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("submitted");
+    await expect(f.coordinator.dispatch({...release,
+      operationId:"11111111-2222-4333-8444-555555555556"},context)).rejects.toThrow();
+    expect(f.dispatched()).toBe(1);
+  });
+
+  it("does not dispatch public release when bootstrap failed, is pending or tag drifted",async()=>{
+    const f=setup();
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    f.addRun({workflow:"release-tag-bootstrap.yml",status:"in_progress",name:"Release tag bootstrap"});
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
+    f.setMain("b".repeat(40));
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
+    expect(f.dispatched()).toBe(0);
   });
 
   it("never accepts a stale tag, a main-push run, or duplicate tag-push runs",async()=>{
     const f=setup();
     const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
-    f.addRun({event:"push",head_branch:"main",status:"completed",conclusion:"success"});
+    f.addRun({workflow:"release.yml",event:"push",head_branch:"main",status:"completed",conclusion:"success"});
     expect((await f.coordinator.reconcile(release,context)).status).toBe("outcome_unknown");
-    f.addRun({id:9921002,event:"push",head_branch:release.tag,
+    f.addRun({workflow:"release.yml",id:9921002,event:"push",head_branch:release.tag,
       status:"completed",conclusion:"success"});
     expect((await f.coordinator.reconcile(release,context)).status).toBe("observed");
-    f.addRun({id:9921003,event:"push",head_branch:release.tag,
+    f.addRun({workflow:"release.yml",id:9921003,event:"push",head_branch:release.tag,
       status:"completed",conclusion:"success"});
     expect((await f.coordinator.reconcile(release,context)).status).toBe("outcome_unknown");
     f.setMain("b".repeat(40));

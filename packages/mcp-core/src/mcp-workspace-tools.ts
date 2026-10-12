@@ -3259,7 +3259,7 @@ export function registerSourceControlTools(
       "github_workflow_operation",
       {
         title: "Run or reconcile guarded release workflow",
-        description: "One typed release operation: dispatch guarded Edge or tag bootstrap once under exact main SHA and UUID, reconcile by the same run ID, or observe the tag-triggered public release without another dispatch. Separate workspace capabilities authorize bootstrap and Edge; a 204 is not a completed release.",
+        description: "One typed operation for guarded Edge and tag bootstrap dispatch, and public release dispatch only after verified same-operation bootstrap and no competing run. Exact main SHA, UUID receipt and separate workspace authorizations; a 204 is not proof of completed release.",
         inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
         outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
         annotations: sourceControlAnnotations.github_workflow_operation,

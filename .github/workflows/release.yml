@@ -1,5 +1,7 @@
 name: Public release
 
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.operation_id != '' && format('mcp-release-{0}', inputs.operation_id) || inputs.tag || github.ref_name }}
+
 on:
   push:
     tags:
@@ -9,6 +11,14 @@ on:
       tag:
         description: Existing SemVer tag to publish
         required: true
+        type: string
+      expected_main_sha:
+        description: Exact expected main SHA for typed operation (optional for legacy manual dispatch)
+        required: false
+        type: string
+      operation_id:
+        description: Stable UUID for typed release dispatch (optional for legacy manual dispatch)
+        required: false
         type: string
 
 permissions:
@@ -25,6 +35,23 @@ jobs:
     runs-on: ubuntu-latest
     environment: public-release
     steps:
+      - name: Validate pinned typed release after protected environment approval
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation_id != '' }}
+        shell: bash
+        env:
+          OPERATION_ID: ${{ inputs.operation_id }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.type + ":" + .object.sha')" == "commit:$EXPECTED_MAIN_SHA" ]]
       - name: Require release secrets before publishing anything
         shell: bash
         env:
