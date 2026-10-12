@@ -368,12 +368,16 @@ async function performGitHubRequest<T>(
   }
 
   if (!response.ok) {
+    // Never read or reflect a GitHub error body. Only numeric HTTP status and a
+    // strictly validated, non-sensitive request correlation ID can be surfaced.
     await discardBody(response);
     if (response.status === 401 || response.status === 403) {
-      throw new AppError("AUTHENTICATION_FAILED", "GitHub authentication failed.");
+      throw new AppError("AUTHENTICATION_FAILED",
+        "GitHub authentication failed " + safeClientErrorDiagnostic(response));
     }
     if (response.status >= 400 && response.status < 500) {
-      throw new AppError("INVALID_ARGUMENT", "GitHub rejected the typed request.");
+      throw new AppError("INVALID_ARGUMENT",
+        "GitHub rejected the typed request " + safeClientErrorDiagnostic(response));
     }
     throw unavailableError(request.mutation);
   }
@@ -385,6 +389,27 @@ async function performGitHubRequest<T>(
   } catch {
     throw new AppError("INTERNAL_ERROR", "GitHub returned an invalid response.");
   }
+}
+
+function safeClientErrorDiagnostic(response: Response): string {
+  const status = response.status;
+  // Classification is derived solely from HTTP status, never untrusted text.
+  const category = status === 400 ? "bad_request"
+    : status === 401 ? "unauthorized"
+    : status === 403 ? "forbidden"
+    : status === 404 ? "not_found"
+    : status === 405 ? "method_not_allowed"
+    : status === 409 ? "conflict"
+    : status === 422 ? "validation_failed"
+    : status === 429 ? "rate_limited"
+    : "other_client_error";
+  const rawRequestId = response.headers.get("x-github-request-id");
+  // GitHub correlation IDs are hexadecimal colon-separated groups. Reject
+  // unexpected formats instead of sanitizing and echoing hostile headers.
+  const requestId = rawRequestId !== null && rawRequestId.length <= 64 &&
+    /^[A-F0-9]{2,12}(?::[A-F0-9]{2,12}){1,5}$/u.test(rawRequestId)
+    ? rawRequestId : undefined;
+  return `(HTTP ${status}; category=${category}${requestId ? `; requestId=${requestId}` : ""}).`;
 }
 
 function unavailableError(mutation: boolean): AppError {

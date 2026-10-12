@@ -140,8 +140,61 @@ describe("GitHubHttpClient fixed transport", () => {
 
     expect(captured).toMatchObject({ code: "INVALID_ARGUMENT" });
     expect((captured as { details?: unknown }).details).toBeUndefined();
+    expect((captured as Error).message).toContain("HTTP 422");
+    expect((captured as Error).message).toContain("validation_failed");
     expect(JSON.stringify(captured)).not.toContain("raw validation body");
     expect(JSON.stringify(captured)).not.toContain("unit-test-token");
+  });
+
+  it.each([
+    [400, "bad_request", "INVALID_ARGUMENT"],
+    [401, "unauthorized", "AUTHENTICATION_FAILED"],
+    [403, "forbidden", "AUTHENTICATION_FAILED"],
+    [404, "not_found", "INVALID_ARGUMENT"],
+    [405, "method_not_allowed", "INVALID_ARGUMENT"],
+    [409, "conflict", "INVALID_ARGUMENT"],
+    [422, "validation_failed", "INVALID_ARGUMENT"],
+    [429, "rate_limited", "INVALID_ARGUMENT"],
+    [418, "other_client_error", "INVALID_ARGUMENT"],
+  ] as const)("reports only bounded HTTP %i category %s", async (status, category, code) => {
+    const fetchImpl = jest.fn(async () => new Response("secret raw body unit-test-token", {
+      status,
+      headers: { "x-github-request-id": "AB12:CD34:EF56:1234" },
+    }));
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+    let captured: unknown;
+    try { await client.mergePullRequest("octo", "repo", 7, {
+      sha: "a".repeat(40), merge_method: "merge",
+    }); } catch (error) { captured = error; }
+    expect(captured).toMatchObject({ code });
+    const diagnostic = JSON.stringify(captured);
+    expect(diagnostic).toContain(`HTTP ${status}`);
+    expect(diagnostic).toContain(category);
+    expect(diagnostic).toContain("AB12:CD34:EF56:1234");
+    expect(diagnostic).not.toContain("unit-test-token");
+    expect(diagnostic).not.toContain("secret raw body");
+    expect(diagnostic).not.toContain("Bearer");
+    expect((captured as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
+
+  it.each([
+    "Bearer unit-test-token",
+    "AB12:CD34:SECRET-BEARER",
+    "AB12:CD34\\r\\nInjected:unit-test-token",
+    "AB12:CD34:EF56:1234".repeat(8),
+  ])("omits malformed or suspicious GitHub request identifiers", async requestId => {
+    const fetchImpl = jest.fn(async () => new Response("hidden unit-test-token", {
+      status: 422,
+      headers: { "x-github-request-id": requestId },
+    }));
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+    let captured: unknown;
+    try { await client.getRepository("octo", "repo"); } catch (error) { captured = error; }
+    const diagnostic = JSON.stringify(captured);
+    expect(diagnostic).toContain("HTTP 422");
+    expect(diagnostic).not.toContain("requestId=");
+    expect(diagnostic).not.toContain("unit-test-token");
+    expect(diagnostic).not.toContain("hidden");
   });
 
   it("marks transport/5xx mutation failures as ambiguous and hides raw causes/bodies", async () => {

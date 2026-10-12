@@ -28,6 +28,8 @@ import type {
   PrepareReleaseResult,
   PromoteReleaseInput,
   PromoteReleaseResult,
+  PruneReleasesInput,
+  PruneReleasesResult,
   ReadBackgroundTaskLogsInput,
   ReadBackgroundTaskOutputInput,
   ReadFileInput,
@@ -114,6 +116,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     context?: OperationContext,
   ): Promise<PromoteReleaseResult> {
     return this.agent.promoteRelease(input, context);
+  }
+
+  pruneReleases(input: PruneReleasesInput, context?: OperationContext): Promise<PruneReleasesResult> {
+    return this.agent.pruneReleases(input, context);
   }
 
   runValidation(

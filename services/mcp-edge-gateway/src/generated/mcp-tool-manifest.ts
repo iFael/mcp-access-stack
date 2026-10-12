@@ -2317,12 +2317,12 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
-      "destructiveHint": false,
+      "destructiveHint": true,
       "idempotentHint": true,
       "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": false
     },
-    "description": "Reads bounded status for one allowlisted MCP V3 Linux service. Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
+    "description": "Plans or performs a bounded deletion of explicit generated release or staging directories. Requires operationId, dry-run plan lifecycle SHA, active/previous/candidate protections, process and task checks. Never accepts arbitrary paths or shell commands. Execution is destructive and leaves an unreconciled lock if interrupted.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2330,6 +2330,173 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "dryRun": {
+          "type": "boolean"
+        },
+        "expectedStateSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "release",
+                  "staging"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 96,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "type": "object"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "operationId",
+        "dryRun",
+        "targets"
+      ],
+      "type": "object"
+    },
+    "name": "prune_releases",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "release",
+                  "staging"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 96,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "eligible",
+                  "deleted",
+                  "absent"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "stateSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "planned",
+            "completed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "status",
+        "stateSha256",
+        "items"
+      ],
+      "type": "object"
+    },
+    "title": "Prune obsolete Oracle release artifacts"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Reads bounded status for one allowlisted MCP V3 Linux service. An optional two-hour diagnostic window inspects only sanitized journal event categories and fixed Polkit metadata; unavailable permissions are explicit, never bypassed. Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "additionalProperties": false,
+          "properties": {
+            "since": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "until": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "since",
+            "until"
+          ],
+          "type": "object"
+        },
         "serviceName": {
           "enum": [
             "mcp-v3-oracle-read-api.service",
@@ -2358,6 +2525,126 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 64,
           "minLength": 1,
           "type": "string"
+        },
+        "diagnostics": {
+          "additionalProperties": false,
+          "properties": {
+            "journal": {
+              "additionalProperties": false,
+              "properties": {
+                "events": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "starting",
+                          "stopping",
+                          "started",
+                          "stopped",
+                          "exit",
+                          "other"
+                        ],
+                        "type": "string"
+                      },
+                      "origin": {
+                        "enum": [
+                          "systemd_manager",
+                          "service",
+                          "other"
+                        ],
+                        "type": "string"
+                      },
+                      "timestamp": {
+                        "maxLength": 64,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "timestamp",
+                      "kind",
+                      "origin"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                "status": {
+                  "enum": [
+                    "available",
+                    "permission_denied",
+                    "unavailable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "events"
+              ],
+              "type": "object"
+            },
+            "polkit": {
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "anyOf": [
+                    {
+                      "maxLength": 8,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "owner": {
+                  "anyOf": [
+                    {
+                      "maxLength": 64,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sha256": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "available",
+                    "missing",
+                    "permission_denied",
+                    "unavailable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "owner",
+                "mode",
+                "sha256"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "journal",
+            "polkit"
+          ],
+          "type": "object"
         },
         "execMainStatus": {
           "anyOf": [
@@ -2510,6 +2797,126 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "minLength": 1,
               "type": "string"
             },
+            "diagnostics": {
+              "additionalProperties": false,
+              "properties": {
+                "journal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "starting",
+                              "stopping",
+                              "started",
+                              "stopped",
+                              "exit",
+                              "other"
+                            ],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "enum": [
+                              "systemd_manager",
+                              "service",
+                              "other"
+                            ],
+                            "type": "string"
+                          },
+                          "timestamp": {
+                            "maxLength": 64,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "timestamp",
+                          "kind",
+                          "origin"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    "status": {
+                      "enum": [
+                        "available",
+                        "permission_denied",
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "events"
+                  ],
+                  "type": "object"
+                },
+                "polkit": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "anyOf": [
+                        {
+                          "maxLength": 8,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "owner": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sha256": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "available",
+                        "missing",
+                        "permission_denied",
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "owner",
+                    "mode",
+                    "sha256"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "journal",
+                "polkit"
+              ],
+              "type": "object"
+            },
             "execMainStatus": {
               "anyOf": [
                 {
@@ -2593,6 +3000,126 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "maxLength": 64,
               "minLength": 1,
               "type": "string"
+            },
+            "diagnostics": {
+              "additionalProperties": false,
+              "properties": {
+                "journal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "starting",
+                              "stopping",
+                              "started",
+                              "stopped",
+                              "exit",
+                              "other"
+                            ],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "enum": [
+                              "systemd_manager",
+                              "service",
+                              "other"
+                            ],
+                            "type": "string"
+                          },
+                          "timestamp": {
+                            "maxLength": 64,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "timestamp",
+                          "kind",
+                          "origin"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    "status": {
+                      "enum": [
+                        "available",
+                        "permission_denied",
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "events"
+                  ],
+                  "type": "object"
+                },
+                "polkit": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "anyOf": [
+                        {
+                          "maxLength": 8,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "owner": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sha256": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "available",
+                        "missing",
+                        "permission_denied",
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "owner",
+                    "mode",
+                    "sha256"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "journal",
+                "polkit"
+              ],
+              "type": "object"
             },
             "execMainStatus": {
               "anyOf": [
@@ -21336,13 +21863,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "c73274d7f1d3d7b9b35a9172eeb1d19b17cd998b564ff05026f3e3b5d26c4949",
-  "serverVersion": "0.4.0-catalog.cc73274d7f1d3.s18486ee28d2b",
-  "toolCount": 96,
-  "toolSetRevision": "18486ee28d2baa817925116178acf64439c139bdc824cc7fb76d3986ccafd1e6"
+  "contractRevision": "da7f5d3967de5325b5daa36951ce87417767a308ebf5eb0d3a999019d7780c92",
+  "serverVersion": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4",
+  "toolCount": 97,
+  "toolSetRevision": "7c90aeb8add41d42ab96fb5323b12f24f7c7b5b411f527b8664d2942917398f1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cc73274d7f1d3.s18486ee28d2b"
+  "version": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4"
 } as const;

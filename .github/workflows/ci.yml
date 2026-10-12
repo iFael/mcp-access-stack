@@ -66,6 +66,115 @@ jobs:
         shell: bash
         run: echo "Impact resolution failed; CI expanded to broad coverage."
 
+  pr-edge-beta84-bridge-dry-run:
+    needs: impact
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.impact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact PR commit with historical manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup same Node version as staging
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Prepare clean Linux dependency graph, no credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @mcp-access-stack/mcp-owner-auth
+
+      - name: Validate stage preconditions and frozen bundle (no Cloudflare)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tooling/release/build-edge-beta84-inspection-bridge.test.mjs tooling/release/stage-edge-beta84-bridge-guard.test.mjs tooling/release/stage-edge-cas-candidate.test.mjs tooling/release/diagnose-edge-beta84-stage-upload.test.mjs tooling/release/inspect-cloudflare-do-migration.test.mjs tooling/release/inspect-cloudflare-service-preflight.test.mjs tooling/release/inspect-cloudflare-publisher-policy.test.mjs
+          node tooling/release/build-edge-beta84-inspection-bridge.mjs --dry-run
+          node tooling/release/diagnose-edge-beta84-stage-upload.mjs preflight
+
+  campaign-runner-linux-artifact:
+    needs: impact
+    if: >-
+      always() &&
+      (github.event_name == 'pull_request' || github.event_name == 'push') &&
+      needs.impact.result == 'success' &&
+      (needs.impact.outputs.operationsTooling == 'true' ||
+       needs.impact.outputs.workspaceAgent == 'true' ||
+       needs.impact.outputs.shared == 'true' ||
+       needs.impact.outputs.rootBroad == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact campaign artifact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26.10.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Validate campaign artifact integrity logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tooling/release/Build-CampaignRunnerLinux.mjs
+          node --check tooling/release/Verify-CampaignRunnerLinux.mjs
+          node --test tooling/release/Verify-CampaignRunnerLinux.test.mjs
+
+      - name: Compile production package graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build --workspace @vs-code-gpt/shared
+          npm run build --workspace @vs-code-gpt/local-agent
+
+      - name: Create pinned Linux x64 campaign artifact
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node --version)" = "v26.10.0"
+          output="$RUNNER_TEMP/mcp-v3-campaign-linux-x64-$SOURCE_SHA.tar.gz"
+          node tooling/release/Build-CampaignRunnerLinux.mjs --source-commit "$SOURCE_SHA" --output "$output"
+          (cd "$RUNNER_TEMP" && sha256sum --check "$(basename "$output").sha256")
+          unpacked="$(mktemp -d "$RUNNER_TEMP/campaign-verify.XXXXXX")"
+          tar -xzf "$output" -C "$unpacked"
+          "$unpacked/runtime/node" "$unpacked/verify.mjs" "$unpacked" "$SOURCE_SHA"
+          "$unpacked/runtime/node" --version
+
+      - name: Upload campaign artifact without deployment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: campaign-runner-linux-x64-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/mcp-v3-campaign-linux-x64-*.tar.gz
+            ${{ runner.temp }}/mcp-v3-campaign-linux-x64-*.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
+
   pr-validation:
     needs: impact
     if: >-
@@ -97,6 +206,9 @@ jobs:
       - name: Test exact release tag bootstrap (no network or GitHub mutation)
         run: node --test tooling/release/bootstrap-release-tag.test.mjs
 
+      - name: Test Oracle Linux-only attested source distribution (no publishing)
+        run: node --test tooling/release/Verify-OracleLinuxSourceArtifact.test.mjs
+
       - name: Validate repository structure
         run: node tooling/structure/validate-repository-structure.test.mjs
 
@@ -104,6 +216,9 @@ jobs:
         if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
         run: npm ci
 
+      - name: Test isolated Edge staging and Cloudflare GET-only inventory (no Cloudflare calls)
+        if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
+        run: node --test tooling/release/stage-edge-beta84-bridge-guard.test.mjs tooling/release/list-cloudflare-worker-versions.test.mjs
 
       - name: Validate cheap syntax contracts
         if: github.event_name == 'pull_request' && (needs.impact.outputs.docsOnly != 'true')
@@ -477,11 +592,13 @@ jobs:
   check:
     needs:
       - impact
+      - pr-edge-beta84-bridge-dry-run
       - pr-validation
       - pr-browser-worker
       - pr-workspace-agent
       - pr-runtime-assurance
       - pr-linux-runtime
+      - campaign-runner-linux-artifact
     if: ${{ always() }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -495,7 +612,10 @@ jobs:
           WORKSPACE_AGENT_IMPACT: ${{ needs.impact.outputs.workspaceAgent }}
           WINDOWS_RUNTIME_IMPACT: ${{ needs.impact.outputs.windowsRuntime }}
           LINUX_RUNTIME_IMPACT: ${{ needs.impact.outputs.linuxRuntime }}
+          CAMPAIGN_ARTIFACT_REQUIRED: ${{ needs.impact.outputs.operationsTooling == 'true' || needs.impact.outputs.workspaceAgent == 'true' || needs.impact.outputs.shared == 'true' || needs.impact.outputs.rootBroad == 'true' }}
+          CAMPAIGN_ARTIFACT_RESULT: ${{ needs.campaign-runner-linux-artifact.result }}
           VALIDATION_RESULT: ${{ needs.pr-validation.result }}
+          EDGE_BRIDGE_LINUX_RESULT: ${{ needs.pr-edge-beta84-bridge-dry-run.result }}
           BROWSER_WORKER_RESULT: ${{ needs.pr-browser-worker.result }}
           WORKSPACE_AGENT_RESULT: ${{ needs.pr-workspace-agent.result }}
           RUNTIME_ASSURANCE_RESULT: ${{ needs.pr-runtime-assurance.result }}
@@ -504,7 +624,16 @@ jobs:
           set -euo pipefail
           test "$IMPACT_RESULT" = "success"
           test "$VALIDATION_RESULT" = "success"
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            test "$EDGE_BRIDGE_LINUX_RESULT" = "skipped"
+          fi
+          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$CAMPAIGN_ARTIFACT_REQUIRED" == "true" ]]; then
+            test "$CAMPAIGN_ARTIFACT_RESULT" = "success"
+          else
+            test "$CAMPAIGN_ARTIFACT_RESULT" = "skipped"
+          fi
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            test "$EDGE_BRIDGE_LINUX_RESULT" = "success"
             if [[ "$BROWSER_WORKER_IMPACT" == "true" ]]; then
               test "$BROWSER_WORKER_RESULT" = "success"
             else

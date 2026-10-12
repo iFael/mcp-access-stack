@@ -72,6 +72,16 @@ describe("ReleaseLifecycleService", () => {
     });
   });
 
+  it("refuses Oracle pruning on Windows and in an untrusted workspace", async()=>{
+    const payload={workspaceId:"ws",operationId:"123e4567-e89b-42d3-a456-426614174001",
+      dryRun:true as const,targets:[{kind:"staging" as const,name:"1.1.0-beta.69.abcdefgh"}]};
+    await expect(new ReleaseLifecycleService({} as any,{} as any,"win32")
+      .prune(workspace,payload)).rejects.toMatchObject({code:"CAPABILITY_UNSUPPORTED"});
+    const other={...workspace,rootPath:path.join(installationRoot,"other")} as ResolvedWorkspace;
+    await expect(new ReleaseLifecycleService({} as any,{} as any,"linux")
+      .prune(other,payload)).rejects.toMatchObject({code:"PERMISSION_DENIED"});
+  });
+
   it("reads R10 local lifecycle state without the legacy stack root", async () => {
     delete process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
     delete process.env.VS_CODE_GPT_STACK_ROOT;

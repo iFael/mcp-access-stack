@@ -75,6 +75,7 @@ import {
   promoteReleaseInputSchema,
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
+import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const relativePathSchema = z.string().min(1);
@@ -891,6 +892,7 @@ export const relayOperations = [
   "getReleaseState",
   "prepareRelease",
   "promoteRelease",
+  "pruneReleases",
   "runValidation",
   "runCommand",
   "searchFiles",
@@ -975,6 +977,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     operation: z.literal("promoteRelease"),
     input: promoteReleaseInputSchema,
   }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("pruneReleases"), input: pruneReleasesInputSchema }).strict(),
   z.object({
     ...relayRequestBase,
     operation: z.literal("runValidation"),
@@ -1135,6 +1138,7 @@ export const relayResultSchemas = {
   getReleaseState: getReleaseStateResultSchema,
   prepareRelease: prepareReleaseResultSchema,
   promoteRelease: promoteReleaseResultSchema,
+  pruneReleases: pruneReleasesResultSchema,
   runValidation: runWorkspaceValidationResultSchema,
   runCommand: runCommandResultSchema,
   searchFiles: searchFilesResultSchema,

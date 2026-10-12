@@ -1,0 +1,88 @@
+name: Cloudflare Worker version provenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact main commit SHA approved for this read-only diagnostic
+        required: true
+        type: string
+      reference_version_id:
+        description: Immutable Cloudflare Worker Version UUID to compare
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-worker-version-provenance
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate repository, branch, immutable SHA and inputs without secrets
+        shell: bash
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          REFERENCE_VERSION_ID: ${{ inputs.reference_version_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$REFERENCE_VERSION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]
+          actual_main="$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')"
+          [[ "$actual_main" == "$EXPECTED_MAIN_SHA" ]]
+          echo "Immutable main and input preflight passed."
+
+  inspect:
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-observability
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact validated main SHA without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Reconcile main again after Environment protection
+        shell: bash
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          actual_main="$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')"
+          [[ "$actual_main" == "$EXPECTED_MAIN_SHA" ]]
+          echo "Main SHA remains pinned."
+
+      - name: Compare Worker version metadata using GET only
+        shell: bash
+        env:
+          CF_PROVENANCE_READ_TOKEN: ${{ secrets.CF_PROVENANCE_READ_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          REFERENCE_VERSION_ID: ${{ inputs.reference_version_id }}
+        run: |
+          set -euo pipefail
+          node tooling/release/compare-cloudflare-worker-versions.mjs

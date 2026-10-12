@@ -13,6 +13,7 @@ type StorageValue = unknown;
 
 class MemoryStorage {
   private readonly values = new Map<string, StorageValue>();
+  readonly writes: string[] = [];
 
   async get<T>(key: string): Promise<T | undefined> {
     return this.values.get(key) as T | undefined;
@@ -20,16 +21,22 @@ class MemoryStorage {
 
   async put(keyOrEntries: string | Record<string, unknown>, value?: unknown): Promise<void> {
     if (typeof keyOrEntries === "string") {
+      this.writes.push(keyOrEntries);
       this.values.set(keyOrEntries, value);
       return;
     }
     for (const [key, entry] of Object.entries(keyOrEntries)) {
+      this.writes.push(key);
       this.values.set(key, entry);
     }
   }
 
   async transaction<T>(callback: (transaction: MemoryStorage) => Promise<T>): Promise<T> {
     return callback(this);
+  }
+
+  async list({ limit }: { limit?: number } = {}): Promise<Map<string, unknown>> {
+    return new Map(Array.from(this.values.entries()).slice(0, limit));
   }
 
   async delete(key: string): Promise<boolean> {
@@ -41,14 +48,17 @@ class MemoryStorage {
   }
 }
 
-async function createSession(storage: MemoryStorage) {
+async function createSession(storage: MemoryStorage, connectors: object[] = []) {
   const { McpSession } = await import("../src/mcp-session.js");
   const ctx = {
     storage,
-    blockConcurrencyWhile: jest.fn(() => Promise.resolve()),
-    getWebSockets: jest.fn(() => []),
+    blockConcurrencyWhile: jest.fn((callback: () => Promise<void>) => callback()),
+    getWebSockets: jest.fn(() => connectors),
   };
-  return new McpSession(ctx as never, {} as never);
+  const session = new McpSession(ctx as never, {} as never);
+  // Mirrors Cloudflare's blockConcurrencyWhile completion before request dispatch.
+  await (ctx.blockConcurrencyWhile.mock.results[0]?.value ?? Promise.resolve());
+  return session;
 }
 
 function toolCall(
@@ -114,6 +124,495 @@ const RUNTIME_ID = "rt_33333333-3333-4333-8333-333333333333";
 const OLD_EPOCH = "44444444-4444-4444-8444-444444444444";
 const NEW_EPOCH = "55555555-5555-4555-8555-555555555555";
 
+describe("McpSession read-only contract inspection", () => {
+  it("never writes storage on a cold-start with an existing active contract", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const state = { version: 1, activeContractRevision: "a".repeat(64) };
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, state);
+    const session = await createSession(storage);
+    await session.getStatus();
+    expect(storage.writes).toEqual([]);
+    const inspection = JSON.parse(await (session as unknown as {
+      inspectContractRollout(): Promise<string>;
+    }).inspectContractRollout()) as { status: number; body: Record<string, unknown> };
+    expect(inspection).toMatchObject({
+      status: 200,
+      body: { activeContractRevision: state.activeContractRevision, candidateConnectorReady: false },
+    });
+    expect(storage.writes).toEqual([]);
+    expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(state);
+  });
+
+  it("preserves a beta.84 candidate, historic active catalog, and unrelated KV across cold-start inspection", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key, EXPECTED_MCP_CONTRACT_REVISION: next } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const active = "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c";
+    const candidate = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59";
+    expect(next).not.toBe(candidate);
+    const state = {
+      version: 1 as const, activeContractRevision: active, candidateContractRevision: candidate,
+      preparedAt: "2026-10-08T03:27:40.414Z", previousContractRevision: "f".repeat(64),
+    };
+    const storage = new MemoryStorage();
+    storage.set(key, state);
+    storage.set(`edge:mcp-catalog:v1:${active}:header`, {
+      version: 1, contractRevision: active, chunkCount: 1, toolCount: 1,
+      catalogMetadata: { contractRevision: active, toolCount: 1 },
+      serverIdentity: { name: "legacy-catalog", version: "beta" },
+    });
+    storage.set(`edge:mcp-catalog:v1:${active}:chunk:0`, [{ name: "legacy_tool" }]);
+    storage.set("edge:account-store:legacy", { privateData: "not-for-inspection" });
+    const originalCatalog = await readMcpCatalogSnapshot(storage, active);
+    const session = await createSession(storage);
+    const inspection = JSON.parse(await session.inspectContractRollout()) as {
+      status: number; body: Record<string, unknown>;
+    };
+    expect(inspection).toEqual({
+      status: 200,
+      body: {
+        activeContractRevision: active, candidateContractRevision: candidate,
+        candidateConnectorReady: false, preparedAt: state.preparedAt,
+      },
+    });
+    expect(JSON.stringify(inspection)).not.toContain("not-for-inspection");
+    expect(JSON.stringify(inspection)).not.toContain("legacy_tool");
+    expect((await session.getStatus()).activeContractRevision).toBe(active);
+    expect(JSON.parse(await session.prepareContractRollout({
+      expectedActiveContractRevision: active, expectedCandidateContractRevision: next,
+    }))).toMatchObject({ status: 409, body: { error: "candidate_contract_mismatch" } });
+    expect(JSON.parse(await session.bootstrapContractRollout({
+      expectedState: "absent", expectedActiveContractRevision: next,
+    }))).toMatchObject({ status: 409 });
+    expect(await storage.get(key)).toEqual(state);
+    expect(await readMcpCatalogSnapshot(storage, active)).toEqual(originalCatalog);
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("fails closed without repairing missing or damaged beta.83 snapshots under the beta.84 candidate", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const active = "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c";
+    const candidate = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59";
+    const state = {
+      version: 1 as const, activeContractRevision: active, candidateContractRevision: candidate,
+      preparedAt: "2026-10-08T03:27:40.414Z",
+    };
+    const header = {
+      version: 1, contractRevision: active, chunkCount: 1, toolCount: 1,
+      catalogMetadata: { contractRevision: active, toolCount: 1 },
+      serverIdentity: { name: "mcp-edge-gateway", version: "1.1.0-beta.83" },
+    };
+    for (const snapshot of [
+      {}, // No historical snapshot at all.
+      { header }, // Incomplete: required tool chunk missing.
+      { header: { ...header, contractRevision: candidate }, chunk: [{ name: "legacy" }] },
+      { header: { ...header, toolCount: 2 }, chunk: [{ name: "legacy" }] },
+    ]) {
+      const storage = new MemoryStorage();
+      storage.set(key, state);
+      storage.set("edge:unrelated:keep", { marker: "intact" });
+      if ("header" in snapshot) storage.set("edge:mcp-catalog:v1:" + active + ":header", snapshot.header);
+      if ("chunk" in snapshot) storage.set("edge:mcp-catalog:v1:" + active + ":chunk:0", snapshot.chunk);
+      expect(await readMcpCatalogSnapshot(storage, active)).toBeNull();
+      const session = await createSession(storage);
+      const inspection = JSON.parse(await session.inspectContractRollout()) as {
+        status: number; body: Record<string, unknown>;
+      };
+      expect(inspection).toEqual({
+        status: 200,
+        body: {
+          activeContractRevision: active,
+          candidateContractRevision: candidate,
+          candidateConnectorReady: false,
+          preparedAt: state.preparedAt,
+        },
+      });
+      expect((await session.getStatus()).controlPlaneReady).toBe(false);
+      expect(await storage.get(key)).toEqual(state);
+      expect(await storage.get("edge:unrelated:keep")).toEqual({ marker: "intact" });
+      expect(storage.writes).toEqual([]);
+    }
+  });
+
+  it("re-reads a legacy rollout after an external change without repairing it", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const active = "1".repeat(64);
+    storage.set(key, { version: 1, activeContractRevision: active });
+    const session = await createSession(storage);
+    const candidate = "2".repeat(64);
+    storage.set(key, { version: 1, activeContractRevision: active, candidateContractRevision: candidate });
+    expect(JSON.parse(await session.inspectContractRollout())).toEqual({
+      status: 200, body: {
+        activeContractRevision: active, candidateContractRevision: candidate,
+        candidateConnectorReady: false,
+      },
+    });
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("fails closed on absent and malformed persisted state without any writes", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
+    for (const invalid of [undefined, { version: 1, activeContractRevision: "not-a-revision" }]) {
+      const storage = new MemoryStorage();
+      if (invalid !== undefined) storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, invalid);
+      const session = await createSession(storage);
+      const health = await session.getStatus();
+      expect(health.controlPlaneReady).toBe(false);
+      expect(health.executionPlaneReady).toBe(false);
+      const inspection = JSON.parse(await (session as unknown as {
+        inspectContractRollout(): Promise<string>;
+      }).inspectContractRollout()) as { status: number; body: Record<string, unknown> };
+      expect(inspection).toEqual({ status: 503, body: { error: "contract_rollout_state_unavailable" } });
+      expect(storage.writes).toEqual([]);
+    }
+  });
+
+  it("returns bounded candidate state without disclosing arbitrary fields or mutating storage", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, {
+      version: 1, activeContractRevision: "a".repeat(64),
+      candidateContractRevision: "b".repeat(64),
+      preparedAt: "2026-10-08T15:00:00.000Z", secret: "never-echo-me",
+    });
+    const session = await createSession(storage);
+    const response = JSON.parse(await (session as unknown as {
+      inspectContractRollout(): Promise<string>;
+    }).inspectContractRollout()) as { status: number; body: Record<string, unknown> };
+    expect(response).toMatchObject({
+      status: 200, body: {
+        activeContractRevision: "a".repeat(64),
+        candidateContractRevision: "b".repeat(64),
+        candidateConnectorReady: false,
+        preparedAt: "2026-10-08T15:00:00.000Z",
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain("never-echo-me");
+    expect(storage.writes).toEqual([]);
+  });
+});
+
+  it("reports live connector readiness only for an open matching WebSocket", async () => {
+    const { EDGE_PROTOCOL_VERSION } = await import("../src/protocol.js");
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const candidate = "b".repeat(64);
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, {
+      version: 1, activeContractRevision: "a".repeat(64), candidateContractRevision: candidate,
+    });
+    const socket = {
+      readyState: WebSocket.OPEN,
+      deserializeAttachment: () => ({
+        role: "connector", ready: true, protocolVersion: EDGE_PROTOCOL_VERSION,
+        runtime: {
+          version: 1,
+          connectorInstanceId: "11111111-1111-4111-8111-111111111111",
+          connectionGeneration: 7,
+          processStartedAt: "2026-10-10T12:00:00.000Z",
+          catalogContractRevision: candidate, toolSetRevision: "c".repeat(64),
+          toolCount: 93, serverVersion: "1.1.0-test", nodePid: 123, hostPid: 456,
+        },
+      }),
+    };
+    const session = await createSession(storage, [socket]);
+    const inspect = async () => JSON.parse(await (session as unknown as {
+      inspectContractRollout(): Promise<string>;
+    }).inspectContractRollout()) as { status: number; body: { candidateConnectorReady: boolean } };
+    expect((await inspect()).body.candidateConnectorReady).toBe(true);
+    socket.readyState = WebSocket.CLOSED;
+    expect((await inspect()).body.candidateConnectorReady).toBe(false);
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("returns a bounded error if persisted state becomes unreadable", async () => {
+    const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    storage.set(MCP_CONTRACT_ROLLOUT_STORAGE_KEY, {
+      version: 1, activeContractRevision: "a".repeat(64),
+    });
+    const session = await createSession(storage);
+    storage.get = async () => { throw new Error("sensitive storage failure"); };
+    const response = await (session as unknown as {
+      inspectContractRollout(): Promise<string>;
+    }).inspectContractRollout();
+    expect(JSON.parse(response)).toEqual({
+      status: 503, body: { error: "contract_rollout_state_unavailable" },
+    });
+    expect(response).not.toContain("sensitive");
+    expect(storage.writes).toEqual([]);
+  });
+
+
+describe("McpSession legacy candidate replacement CAS", () => {
+  const active = "39889807df9cb6f09fdb51a1940fce4783de302c1fd161f0429061a9a27e264c";
+  const legacy = "a35a966fee8333618c3018e2b621196a64860dc3d6d578a6d4173d09ee984e59";
+  const operationId = "99999999-9999-4999-8999-999999999999";
+  const invoke = async (session: object, input: unknown) =>
+    JSON.parse(await (session as { replaceContractCandidate(input: unknown): Promise<string> })
+      .replaceContractCandidate(input)) as { status: number; body: Record<string, unknown> };
+  const input = (revision: string) => ({
+    operationId,
+    expectedActiveContractRevision: active,
+    expectedPreviousCandidateContractRevision: legacy,
+    expectedCandidateContractRevision: revision,
+  });
+  const seed = (storage: MemoryStorage) => {
+    const state = {
+      version: 1 as const, activeContractRevision: active,
+      previousContractRevision: "a".repeat(64),
+      candidateContractRevision: legacy, preparedAt: "2026-10-08T03:27:40.414Z",
+    };
+    storage.set("edge:mcp-contract-rollout:v1", state);
+    storage.set(`edge:mcp-catalog:v1:${active}:header`, {
+      version: 1, contractRevision: active, chunkCount: 1, toolCount: 1,
+      catalogMetadata: { contractRevision: active, toolCount: 1 },
+      serverIdentity: { name: "legacy", version: "beta.82" },
+    });
+    storage.set(`edge:mcp-catalog:v1:${active}:chunk:0`, [{ name: "legacy_tool" }]);
+    storage.set("edge:unrelated:preserve", { key: "unrelated" });
+    return state;
+  };
+
+  it("atomically persists a replacement, catalog and audit receipt; exact replay has zero writes", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: next, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const storage = new MemoryStorage();
+    const previous = seed(storage);
+    const catalogBefore = await readMcpCatalogSnapshot(storage, active);
+    const session = await createSession(storage);
+    expect(storage.writes).toEqual([]);
+    expect(await invoke(session, input(next))).toMatchObject({
+      status: 200, body: {
+        status: "replaced", operationId, activeContractRevision: active,
+        candidateContractRevision: next, candidateConnectorReady: false,
+      },
+    });
+    const after = await storage.get<typeof previous>(key);
+    expect(after).toMatchObject({
+      version: 1, activeContractRevision: active,
+      previousContractRevision: previous.previousContractRevision,
+      candidateContractRevision: next,
+    });
+    expect(after?.preparedAt).not.toBe(previous.preparedAt);
+    expect(await readMcpCatalogSnapshot(storage, active)).toEqual(catalogBefore);
+    expect((await readMcpCatalogSnapshot(storage, next))?.catalogMetadata.contractRevision).toBe(next);
+    expect(await storage.get("edge:unrelated:preserve")).toEqual({ key: "unrelated" });
+    const receiptKey = `edge:mcp-contract-candidate-replacement:v1:${operationId}`;
+    expect(await storage.get(receiptKey)).toMatchObject(input(next));
+    expect(storage.writes).toContain(key);
+    expect(storage.writes).toContain(receiptKey);
+    const writes = storage.writes.slice();
+    const replay = await createSession(storage);
+    expect(await invoke(replay, input(next))).toMatchObject({
+      status: 200, body: { status: "already-replaced", operationId },
+    });
+    expect(storage.writes).toEqual(writes);
+    expect((await invoke(replay, { ...input(next), operationId: "88888888-8888-4888-8888-888888888888" })))
+      .toMatchObject({ status: 409, body: { error: "candidate_contract_mismatch" } });
+    expect(storage.writes).toEqual(writes);
+    storage.set(receiptKey, { ...(await storage.get(receiptKey) as object), expectedPreviousCandidateContractRevision: "f".repeat(64) });
+    expect(await invoke(replay, input(next))).toEqual({
+      status: 409, body: { error: "operation_id_conflict" },
+    });
+    expect(storage.writes).toEqual(writes);
+    storage.set(receiptKey, { ...(await storage.get(receiptKey) as object), expectedPreviousCandidateContractRevision: legacy });
+    storage.set(key, previous);
+    expect(await invoke(replay, input(next))).toEqual({
+      status: 409, body: { error: "replacement_state_changed" },
+    });
+    expect(storage.writes).toEqual(writes);
+  });
+
+  it("rejects malformed input, drifted active/old candidate, conflict and unavailable catalog without writes", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: next, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    for (const [mutate, expected] of [
+      [(s: MemoryStorage) => s.set(key, { version: 1, activeContractRevision: "b".repeat(64), candidateContractRevision: legacy }), "active_contract_mismatch"],
+      [(s: MemoryStorage) => s.set(key, { version: 1, activeContractRevision: active, candidateContractRevision: "c".repeat(64) }), "candidate_contract_mismatch"],
+      [(s: MemoryStorage) => s.set(key, { version: 1, activeContractRevision: active }), "candidate_contract_mismatch"],
+      [(s: MemoryStorage) => s.set(key, { version: 1, activeContractRevision: "broken", candidateContractRevision: legacy }), "contract_rollout_state_unavailable"],
+    ] as const) {
+      const storage = new MemoryStorage();
+      seed(storage);
+      mutate(storage);
+      const session = await createSession(storage);
+      const outcome = await invoke(session, input(next));
+      expect(outcome.body.error).toBe(expected);
+      expect(storage.writes).toEqual([]);
+    }
+    const storage = new MemoryStorage();
+    const session = await createSession(storage);
+    expect(await invoke(session, input(next))).toEqual({
+      status: 503, body: { error: "contract_rollout_state_unavailable" },
+    });
+    expect(storage.writes).toEqual([]);
+    const withState = new MemoryStorage();
+    withState.set(key, { version: 1, activeContractRevision: active, candidateContractRevision: legacy });
+    const noCatalog = await createSession(withState);
+    expect(await invoke(noCatalog, input(next))).toEqual({
+      status: 503, body: { error: "active_catalog_unavailable" },
+    });
+    expect(withState.writes).toEqual([]);
+    const bad = new MemoryStorage();
+    seed(bad);
+    const goodSession = await createSession(bad);
+    for (const invalid of [
+      { ...input(next), operationId: "not-a-uuid" },
+      { ...input(next), extra: true },
+      { ...input(next), expectedCandidateContractRevision: "d".repeat(64) },
+      { ...input(next), expectedPreviousCandidateContractRevision: next },
+    ]) {
+      const outcome = await invoke(goodSession, invalid);
+      expect([400, 409]).toContain(outcome.status);
+    }
+    expect(bad.writes).toEqual([]);
+  });
+
+  it("returns a sanitized 503 for storage failure without reporting success", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: next } = await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    seed(storage);
+    const session = await createSession(storage);
+    storage.transaction = async () => { throw new Error("sensitive internal storage failure"); };
+    const outcome = await invoke(session, input(next));
+    expect(outcome).toEqual({ status: 503, body: { error: "candidate_replacement_unavailable" } });
+    expect(JSON.stringify(outcome)).not.toContain("sensitive");
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("blocks displacement of a live matching legacy connector", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: next } =
+      await import("../src/contract-compatibility.js");
+    const { EDGE_PROTOCOL_VERSION } = await import("../src/protocol.js");
+    const storage = new MemoryStorage();
+    seed(storage);
+    const socket = {
+      readyState: WebSocket.OPEN,
+      deserializeAttachment: () => ({
+        role: "connector", ready: true, protocolVersion: EDGE_PROTOCOL_VERSION,
+        runtime: {
+          version: 1, connectorInstanceId: "11111111-1111-4111-8111-111111111111",
+          connectionGeneration: 1, processStartedAt: "2026-10-11T22:00:00Z",
+          catalogContractRevision: legacy, toolSetRevision: "b".repeat(64),
+          toolCount: 94, serverVersion: "beta.84", nodePid: 1, hostPid: 1,
+        },
+      }),
+    };
+    const session = await createSession(storage, [socket]);
+    expect(await invoke(session, input(next))).toEqual({
+      status: 409, body: { error: "previous_candidate_in_use" },
+    });
+    expect(storage.writes).toEqual([]);
+  });
+});
+
+describe("McpSession explicit first-install bootstrap", () => {
+  const invoke = async (session: object, input: unknown) =>
+    JSON.parse(await (session as { bootstrapContractRollout(input: unknown): Promise<string> })
+      .bootstrapContractRollout(input)) as { status: number; body: Record<string, unknown> };
+
+  it("initializes only an empty store with the exact build revision; replay is write-free", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { readMcpCatalogSnapshot } = await import("../src/control-plane/active-catalog.js");
+    const storage = new MemoryStorage();
+    const session = await createSession(storage);
+    expect(storage.writes).toEqual([]);
+    const input = { expectedState: "absent", expectedActiveContractRevision: revision };
+    expect(await invoke(session, input)).toEqual({
+      status: 200, body: { status: "bootstrapped", activeContractRevision: revision },
+    });
+    expect(await storage.get(key)).toEqual({ version: 1, activeContractRevision: revision });
+    expect((await readMcpCatalogSnapshot(storage, revision))?.catalogMetadata.contractRevision).toBe(revision);
+    const writes = storage.writes.slice();
+    expect(writes).toContain(key);
+    expect(await invoke(session, input)).toEqual({
+      status: 200, body: { status: "already-bootstrapped", activeContractRevision: revision },
+    });
+    expect(storage.writes).toEqual(writes);
+    const restarted = await createSession(storage);
+    expect((await invoke(restarted, input)).body.status).toBe("already-bootstrapped");
+    expect(storage.writes).toEqual(writes);
+  });
+
+  it("rejects malformed input, mismatched CAS and a nonempty or malformed store without writing", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const base = { expectedState: "absent", expectedActiveContractRevision: revision };
+    for (const [existing, input, status] of [
+      [undefined, { ...base, unexpected: true }, 400],
+      [undefined, { ...base, expectedState: "present" }, 400],
+      [undefined, { ...base, expectedActiveContractRevision: "b".repeat(64) }, 409],
+      [{ version: 1, activeContractRevision: "a".repeat(64) }, base, 409],
+      [{ version: 1, activeContractRevision: revision, candidateContractRevision: "a".repeat(64) }, base, 409],
+      [{ version: 1, activeContractRevision: "broken" }, base, 409],
+    ] as const) {
+      const storage = new MemoryStorage();
+      if (existing) storage.set(key, existing);
+      const session = await createSession(storage);
+      const result = await invoke(session, input);
+      expect(result.status).toBe(status);
+      expect(storage.writes).toEqual([]);
+      expect(await storage.get(key)).toEqual(existing);
+    }
+  });
+
+  it("rejects an empty rollout with existing runtime evidence rather than claiming a fresh installation", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { CONNECTOR_TELEMETRY_STORAGE_KEY } = await import("../src/connector-telemetry.js");
+    const storage = new MemoryStorage();
+    storage.set(CONNECTOR_TELEMETRY_STORAGE_KEY, { version: 1, readyCount: 1 });
+    const session = await createSession(storage);
+    const result = await invoke(session, {
+      expectedState: "absent", expectedActiveContractRevision: revision,
+    });
+    expect(result).toEqual({ status: 409, body: { error: "bootstrap_storage_not_empty" } });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+  });
+  it("refuses an empty store if a connector or companion is already attached", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const storage = new MemoryStorage();
+    const session = await createSession(storage, [{ readyState: WebSocket.OPEN }]);
+    expect(await invoke(session, {
+      expectedState: "absent", expectedActiveContractRevision: revision,
+    })).toEqual({ status: 409, body: { error: "bootstrap_connections_present" } });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+  });
+
+  it("refuses unrelated historical storage and sanitizes storage inspection failures", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: revision, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const args = { expectedState: "absent", expectedActiveContractRevision: revision };
+    const storage = new MemoryStorage();
+    storage.set("edge:account-store:v1", { private: "do-not-reveal" });
+    const session = await createSession(storage);
+    expect(await invoke(session, args)).toEqual({
+      status: 409, body: { error: "bootstrap_storage_not_empty" },
+    });
+    expect(await storage.get(key)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+
+    const empty = new MemoryStorage();
+    const inaccessible = await createSession(empty);
+    empty.list = async () => { throw new Error("secret-read-failure"); };
+    const result = await invoke(inaccessible, args);
+    expect(result).toEqual({ status: 503, body: { error: "contract_bootstrap_unavailable" } });
+    expect(JSON.stringify(result)).not.toContain("secret-read-failure");
+    expect(empty.writes).toEqual([]);
+  });
+
+});
+
 describe("McpSession explicit contract preparation persistence", () => {
   it("persists an exact candidate and returns an idempotent replay without changing preparedAt", async () => {
     const { EXPECTED_MCP_CONTRACT_REVISION, MCP_CONTRACT_ROLLOUT_STORAGE_KEY } =
@@ -146,9 +645,12 @@ describe("McpSession explicit contract preparation persistence", () => {
     });
     expect(persisted?.preparedAt).toBeDefined();
 
+    const writesAfterFirstPrepare = storage.writes.length;
+    expect(writesAfterFirstPrepare).toBeGreaterThan(0);
     const again = JSON.parse(await session.prepareContractRollout(input)) as {
       status: number; body: { status: string };
     };
+    expect(storage.writes).toHaveLength(writesAfterFirstPrepare);
     expect(again).toMatchObject({ status: 200, body: { status: "already-prepared" } });
     expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(persisted);
   });
@@ -179,6 +681,7 @@ describe("McpSession explicit contract preparation persistence", () => {
       body: { error: "candidate_contract_mismatch" },
     });
     expect(await storage.get(MCP_CONTRACT_ROLLOUT_STORAGE_KEY)).toEqual(current);
+    expect(storage.writes).toEqual([]);
   });
 });
 

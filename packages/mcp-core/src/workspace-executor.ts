@@ -23,6 +23,7 @@ import type {
   PromoteReleaseInput,
   PromoteReleaseResult,
 } from "./release-lifecycle-contracts.js";
+import type { PruneReleasesInput, PruneReleasesResult } from "./release-prune-contracts.js";
 import type {
   GetWorkspaceContextInput,
   GetWorkspaceContextResult,
@@ -98,6 +99,7 @@ export interface WorkspaceExecutor {
     input: PromoteReleaseInput,
     context?: OperationContext,
   ): Promise<PromoteReleaseResult>;
+  pruneReleases(input: PruneReleasesInput, context?: OperationContext): Promise<PruneReleasesResult>;
   runValidation(
     input: RunWorkspaceValidationInput,
     context?: OperationContext,
