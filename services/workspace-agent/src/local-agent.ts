@@ -189,6 +189,11 @@ import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
 import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js";
+import {
+  OracleControlCaller, type OracleControlCallerInput,
+  type OracleControlCallerResult, type OracleControlCallerBinding,
+} from "./release/oracle-control-caller.js";
+import { parseOracleControlAdvance } from "@mcp-access-stack/update-control-contract";
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
@@ -233,6 +238,8 @@ export interface LocalAgentOptions {
   typedConfirmationRegistry?: TypedConfirmationRegistry;
   mutationReceiptStore?: MutationReceiptStore;
   elevationBroker?: ElevationBroker;
+  /** Host-owned control capability: absent unless explicitly enrolled. */
+  oracleControl?: OracleControlCallerBinding;
 }
 
 function backgroundTaskAccess(
@@ -250,6 +257,7 @@ export class LocalAgent {
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
   private readonly releaseLifecycleService: ReleaseLifecycleService;
+  private readonly oracleControlCaller: OracleControlCaller | undefined;
   private readonly serviceControlService = new LinuxServiceControlService();
   private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
@@ -302,6 +310,8 @@ export class LocalAgent {
         terminate: terminateProcessTreeByPid,
       },
     });
+    this.oracleControlCaller = options.oracleControl === undefined
+      ? undefined : new OracleControlCaller(options.oracleControl);
     this.releaseLifecycleService = new ReleaseLifecycleService(
       this.shellService,
       this.backgroundTaskManager,
@@ -531,6 +541,46 @@ export class LocalAgent {
       context,
       () => ({}),
       (workspace) => this.releaseLifecycleService.getState(workspace),
+    );
+  }
+
+  /** Private typed binding for the future unified release tool. No MCP catalog
+   * entry or automatic dispatch is created by this enrollment. */
+  async oracleReleaseAdvance(
+    input: OracleControlCallerInput,
+    context: OperationContext = {},
+  ): Promise<OracleControlCallerResult> {
+    const schema = {safeParse:(value:unknown) => {
+      try {
+        if(!value || typeof value!=="object" || Array.isArray(value) ||
+          Object.keys(value).length!==5 || !Object.hasOwn(value,"workspaceId") ||
+          (value as {workspaceId?:unknown}).workspaceId!=="mcp-access-stack") {
+          return {success:false as const};
+        }
+        const v=value as OracleControlCallerInput;
+        const parsed=parseOracleControlAdvance({
+          runId:v.runId,expectedSourceSha:v.expectedSourceSha,
+          expectedLastSeq:v.expectedLastSeq,operationId:v.operationId,
+        });
+        return {success:true as const,data:{workspaceId:v.workspaceId,...parsed}};
+      } catch {return {success:false as const};}
+    }};
+    return this.runValidatedAudited(
+      "oracleReleaseAdvance","shell",schema,input,context,
+      parsed=>({query:parsed.operationId,
+        targetResource:`oracle:${parsed.workspaceId}:run/${parsed.runId}`,
+        expectedSha:parsed.expectedSourceSha}),
+      async(workspace,parsed,activeContext)=>{
+        if(!this.oracleControlCaller ||
+          workspace.id!=="mcp-access-stack" ||
+          workspace.permissionProfile!=="full-repo-write" ||
+          workspace.confirmationMode!=="trusted-workspace") {
+          throw new AppError("CAPABILITY_UNSUPPORTED",
+            "Oracle control is not enrolled for this trusted workspace.");
+        }
+        return this.oracleControlCaller.advance(
+          parsed,this.mutationReceiptStoreFor(workspace),activeContext);
+      },
     );
   }
 

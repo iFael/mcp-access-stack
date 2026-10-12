@@ -1,4 +1,4 @@
-export { ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_SCOPE, ORACLE_CONTROL_ORIGIN, ORACLE_CONTROL_MAX_BODY_BYTES, ORACLE_CONTROL_TIMEOUT_MS, parseOracleControlAdvance, parseOracleControlCommand, parseOracleControlResponse } from "./oracle-control.js";
+export { ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_SCOPE, ORACLE_CONTROL_ORIGIN, ORACLE_CONTROL_MAX_BODY_BYTES, ORACLE_CONTROL_TIMEOUT_MS, parseOracleControlAdvance, parseOracleControlCommand, parseOracleControlResponse, oracleControlCanonicalBytes, signOracleControlRequest } from "./oracle-control.js";
 export type { OracleControlAdvanceInput, OracleControlPrincipal, OracleControlRpcCommand, OracleControlResponse } from "./oracle-control.js";
 
 export const UPDATE_CONTROL_RUN_STATUSES = [

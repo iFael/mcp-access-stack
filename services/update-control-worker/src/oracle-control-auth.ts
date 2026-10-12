@@ -1,10 +1,10 @@
 import {
   ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_MAX_BODY_BYTES,
-  parseOracleControlAdvance, type OracleControlAdvanceInput,
+  parseOracleControlAdvance, oracleControlCanonicalBytes,
+  type OracleControlAdvanceInput,
 } from "@mcp-access-stack/update-control-contract";
 
 const AUTH=/^HMAC-SHA256 v2=(0|[1-9][0-9]{0,11})\.([0-9a-f]{64})$/u;
-const DOMAIN="mcp-v3:oracle-release-control-advance:v1";
 const SKEW_SECONDS=300;
 function bytesToHex(bytes:Uint8Array):string{
   return [...bytes].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -16,11 +16,6 @@ function hexToBytes(hex:string):Uint8Array{
 }
 function exactBuffer(bytes:Uint8Array):ArrayBuffer{
   const copy=new Uint8Array(bytes.byteLength);copy.set(bytes);return copy.buffer;
-}
-function canonical(bodyHash:string,input:OracleControlAdvanceInput,epoch:string):Uint8Array{
-  return new TextEncoder().encode([DOMAIN,"POST",ORACLE_CONTROL_DISPATCH_PATH,
-    input.operationId,input.runId,input.expectedSourceSha,
-    String(input.expectedLastSeq),epoch,bodyHash].join("\n"));
 }
 async function readBounded(request:Request):Promise<string>{
   const len=request.headers.get("content-length");
@@ -67,18 +62,8 @@ export async function verifyOracleControlRequest(
     const digest=bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(rawBody))));
     const hmac=await crypto.subtle.importKey("raw",exactBuffer(hexToBytes(keyHex!)),{name:"HMAC",hash:"SHA-256"},false,["verify"]);
     const good=await crypto.subtle.verify("HMAC",hmac,exactBuffer(hexToBytes(auth[2])),
-      exactBuffer(canonical(digest,input,auth[1])));
+      exactBuffer(oracleControlCanonicalBytes(digest,input,auth[1])));
     return good?{input,rawBody}:null;
   }catch{return null;}
 }
-/** Used by authorized MCP V3 host (never exported to the read-only API). */
-export async function signOracleControlRequest(
-  input:OracleControlAdvanceInput,keyHex:string,epoch=Math.floor(Date.now()/1000),
-):Promise<{authorization:string;body:string}> {
-  if(!/^[0-9a-f]{64}$/u.test(keyHex))throw new Error("ORACLE_CONTROL_KEY_INVALID");
-  const body=JSON.stringify(parseOracleControlAdvance(input));
-  const digest=bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(body))));
-  const key=await crypto.subtle.importKey("raw",exactBuffer(hexToBytes(keyHex)),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
-  const sig=new Uint8Array(await crypto.subtle.sign("HMAC",key,exactBuffer(canonical(digest,input,String(epoch)))));
-  return {authorization:`HMAC-SHA256 v2=${epoch}.${bytesToHex(sig)}`,body};
-}
+export { signOracleControlRequest } from "@mcp-access-stack/update-control-contract";

@@ -67,6 +67,43 @@ export function parseOracleControlResponse(value:unknown):OracleControlResponse 
   }
   return value as unknown as OracleControlResponse;
 }
+/** Shared, fixed canonical signature input used by both the Worker verifier
+ * and the MCP V3 trusted caller. The body hash prevents signed-body swaps. */
+export function oracleControlCanonicalBytes(
+  bodyHash:string,input:OracleControlAdvanceInput,epoch:string,
+):Uint8Array {
+  if(!/^[a-f0-9]{64}$/u.test(bodyHash) || !/^(0|[1-9][0-9]{0,11})$/u.test(epoch)) {
+    throw new Error("ORACLE_CONTROL_CANONICAL_INVALID");
+  }
+  parseOracleControlAdvance(input);
+  return new TextEncoder().encode(["mcp-v3:oracle-release-control-advance:v1",
+    "POST",ORACLE_CONTROL_DISPATCH_PATH,input.operationId,input.runId,
+    input.expectedSourceSha,String(input.expectedLastSeq),epoch,bodyHash].join("\n"));
+}
+export async function signOracleControlRequest(
+  input:OracleControlAdvanceInput,keyHex:string,epoch=Math.floor(Date.now()/1000),
+):Promise<{authorization:string;body:string}> {
+  if(!/^[a-f0-9]{64}$/u.test(keyHex))throw new Error("ORACLE_CONTROL_KEY_INVALID");
+  const body=JSON.stringify(parseOracleControlAdvance(input));
+  const bytes=new TextEncoder().encode(body);
+  const digest=hex(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)));
+  const key=await crypto.subtle.importKey("raw",buffer(unhex(keyHex)),
+    {name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  const signature=new Uint8Array(await crypto.subtle.sign("HMAC",key,
+    buffer(oracleControlCanonicalBytes(digest,input,String(epoch)))));
+  return {authorization:`HMAC-SHA256 v2=${epoch}.${hex(signature)}`,body};
+}
+function hex(value:Uint8Array):string{
+  return [...value].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+function unhex(value:string):Uint8Array{
+  const result=new Uint8Array(value.length/2);
+  for(let i=0;i<result.length;i++)result[i]=Number.parseInt(value.slice(i*2,i*2+2),16);
+  return result;
+}
+function buffer(value:Uint8Array):ArrayBuffer{
+  const result=new Uint8Array(value.byteLength);result.set(value);return result.buffer;
+}
 function isRecord(x:unknown):x is Record<string,unknown> {
   return x!==null && typeof x==="object" && !Array.isArray(x);
 }
