@@ -1,6 +1,10 @@
 export { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 export { ReleaseWorkflowExecutor } from "./release-workflow-executor.js";
 export { bindReleasePruneCleanup } from "./release-prune-capability.js";
+export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
+export { composeReleaseCapabilities } from "./release-capability-registry.js";
+export type { ReleaseCapabilityComposition, ReleaseCapabilityRegistry } from "./release-capability-registry.js";
+export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
 export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
 export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult } from "./release-workflow-executor.js";
 export type {
