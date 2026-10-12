@@ -118,5 +118,14 @@ test("workflow is one-shot, Environment-gated, CAS-bound and upload-only", async
   assert.equal((workflow.match(/npx wrangler versions upload/gu) ?? []).length, 1);
   assert.doesNotMatch(workflow, /wrangler (?:deploy|versions deploy|secret put)/u);
   assert.doesNotMatch(workflow, /\/health\b|\/_internal\/contract-rollout\/(?:prepare|bootstrap)/u);
-  assert.doesNotMatch(workflow, /secrets\.MCP_OWNER_TOKEN|secrets\.MCP_CONTRACT_PREPARE_TOKEN/u);
+  assert.doesNotMatch(workflow, /secrets\.MCP_OWNER_TOKEN/u);
+  const upload = stageSteps[uploadAt];
+  assert.equal(upload.env.MCP_CONTRACT_PREPARE_TOKEN, "${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}");
+  assert.ok(stageSteps.every((step, i) =>
+    i === uploadAt || !JSON.stringify(step).includes("secrets.MCP_CONTRACT_PREPARE_TOKEN")));
+  assert.match(upload.run, /writeStageSecretFile/u);
+  assert.match(upload.run, /--secrets-file ["']?\$RUNNER_TEMP\/edge-cas-candidate-secrets\.json/u);
+  assert.match(upload.run, /trap .*rm -f.*edge-cas-candidate-secrets\.json/u);
+  assert.match(upload.run, /unset MCP_CONTRACT_PREPARE_TOKEN/u);
+  assert.doesNotMatch(upload.run, /set -x|echo.*MCP_CONTRACT_PREPARE_TOKEN|cat .*secrets/u);
 });
