@@ -3,6 +3,8 @@ import { beta80ReleaseBlueprint } from "./workflows/beta80-sequence.v1.js";
 import { ReleaseWorkflowExecutor, type ReleaseStepCapability } from "./release-workflow-executor.js";
 import { bindReleasePruneCleanup, type ReleaseCleanupBinding } from "./release-prune-capability.js";
 import { bindReleaseTagBootstrap, type ReleaseTagBootstrapBinding } from "./release-tag-bootstrap-capability.js";
+import { bindReleaseVerificationReads, type ReleaseVerificationBinding } from "./release-verification-capabilities.js";
+import { bindReleaseEffects, type ReleaseEffectBinding } from "./release-effect-capabilities.js";
 import { bindReleaseSourceControlReads, type ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 
@@ -15,6 +17,8 @@ export interface ReleaseCapabilityComposition {
   readonly sourceControl?: ReleaseSourceControlReadBinding;
   readonly cleanup?: ReleaseCleanupBinding;
   readonly tagBootstrap?: ReleaseTagBootstrapBinding;
+  readonly verifications?: ReleaseVerificationBinding;
+  readonly effects?: ReleaseEffectBinding;
   readonly other?: readonly ReleaseStepCapability[];
 }
 
@@ -47,6 +51,8 @@ export function composeReleaseCapabilities(input: ReleaseCapabilityComposition):
   }
   if (input.cleanup) install(bindReleasePruneCleanup(input.cleanup));
   if (input.tagBootstrap) install(bindReleaseTagBootstrap(input.tagBootstrap));
+  if (input.verifications) for (const binding of bindReleaseVerificationReads(input.verifications).values()) install(binding);
+  if (input.effects) for (const binding of bindReleaseEffects(input.effects).values()) install(binding);
   for (const binding of input.other ?? []) install(binding);
   const missingActions = beta80ReleaseBlueprint.steps
     .filter(step => !installed.has(step.action)).map(step => step.action);

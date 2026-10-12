@@ -20,6 +20,14 @@ on:
         description: Stable UUID for typed release dispatch (optional for legacy manual dispatch)
         required: false
         type: string
+      release_mode:
+        description: Separate typed signed build/publication from Edge deployment; legacy dispatch is full
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - build_publish
 
 permissions:
   contents: read
@@ -40,11 +48,13 @@ jobs:
         shell: bash
         env:
           OPERATION_ID: ${{ inputs.operation_id }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          [[ "$RELEASE_MODE" == "build_publish" ]]
           [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
           [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
@@ -481,6 +491,8 @@ jobs:
     needs:
       - metadata
       - package
+    # A typed release signs and publishes first; Edge is a separately gated stage.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'build_publish' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: public-release
@@ -738,6 +750,9 @@ jobs:
       - package
       - unix-packages
       - edge
+    # The typed signing phase may publish only after signed platform builds.
+    # Legacy full releases still require Edge success before publication.
+    if: ${{ always() && needs.metadata.result == 'success' && needs.package.result == 'success' && needs['unix-packages'].result == 'success' && (needs.edge.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.release_mode == 'build_publish' && needs.edge.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

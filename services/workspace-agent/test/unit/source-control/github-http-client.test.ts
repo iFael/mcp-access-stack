@@ -68,7 +68,7 @@ describe("GitHubHttpClient fixed transport", () => {
       "https://api.github.com/repos/octo/repo/actions/workflows/release.yml/dispatches");
     expect(JSON.parse(String(requestOf(fetchImpl,1).init.body))).toEqual({
       ref:"main",inputs:{operation_id:"11111111-2222-4333-8444-555555555555",
-        tag:"v1.1.0-beta.90",expected_main_sha:"a".repeat(40)},
+        tag:"v1.1.0-beta.90",expected_main_sha:"a".repeat(40),release_mode:"build_publish"},
     });
     await expect(client.dispatchWorkflow("octo","repo","unsafe-workflow.yml","a".repeat(40),{}))
       .rejects.toThrow("not allowlisted");

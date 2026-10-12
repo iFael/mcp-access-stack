@@ -100,6 +100,23 @@ test("typed public release workflow pins main, lightweight tag and stable run UU
   assert.match(release,/github\.event_name == 'workflow_dispatch' && inputs\.operation_id != ''/u);
 });
 
+test("typed public signing phase is isolated from Edge mutation and legacy full release stays intact",()=>{
+  const release=readFileSync(".github/workflows/release.yml","utf8").replace(/\r\n/g,"\n");
+  assert.match(release,/release_mode:/u);
+  assert.match(release,/default: full/u);
+  assert.match(release,/build_publish/u);
+  assert.match(release,/\[\[ "\$RELEASE_MODE" == "build_publish" \]\]/u);
+  const edge=release.slice(release.indexOf("\n  edge:"),release.indexOf("\n  publish:"));
+  const publish=release.slice(release.indexOf("\n  publish:"));
+  assert.match(edge,/inputs\.release_mode != 'build_publish'/u);
+  assert.match(publish,/always\(\)/u);
+  assert.match(publish,/needs\.metadata\.result == 'success'/u);
+  assert.match(publish,/needs\.package\.result == 'success'/u);
+  assert.match(publish,/needs\['unix-packages'\]\.result == 'success'/u);
+  assert.match(publish,/needs\.edge\.result == 'success'/u);
+  assert.match(publish,/needs\.edge\.result == 'skipped'/u);
+});
+
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
   const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
   const guard = "if: " + "$" +

@@ -264,7 +264,7 @@ export class GitHubHttpClient implements GitHubApiClient {
     const requestInputs = workflow === "release-tag-bootstrap.yml"
       ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_sha: expectedSha}
       : workflow === "release.yml"
-        ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_main_sha: expectedSha}
+        ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_main_sha: expectedSha,release_mode: "build_publish"}
         : {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha};
     await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
       method: "POST",
