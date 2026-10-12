@@ -91,6 +91,8 @@ test("a pinned immutable deployment makes exactly one POST and reconciles its re
     assert.match(url, /\/deployments$/);
     const req = JSON.parse(init.body);
     assert.deepEqual(req.versions, [{version_id: PIN.targetVersion, percentage: 100}]);
+    assert.deepEqual(req.annotations, {"workers/message": "Signed f09 CAS cutover run " + input.runId});
+    assert.equal(Object.hasOwn(req.annotations, "workers/triggered_by"), false);
     return response(deploymentReceipt(), 201);
   };
   const id = await deployOnce(input, {compare, fetchImpl, sleep: async () => {}});
