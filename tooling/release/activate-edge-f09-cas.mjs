@@ -165,7 +165,6 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
         versions: [{percentage: 100, version_id: PIN.targetVersion}],
         annotations: {
           "workers/message": "Signed f09 CAS cutover run " + input.runId,
-          "workers/triggered_by": "mcp-v3-f09-guarded-rollout",
         },
       }),
       redirect: "error", signal: AbortSignal.timeout(20000),
