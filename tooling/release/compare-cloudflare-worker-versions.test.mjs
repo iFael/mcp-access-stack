@@ -32,10 +32,10 @@ function fixture(options = {}) {
         compatibility_date: "2026-08-17T00:00:00Z",
         compatibility_flags: opts.flags ?? ["nodejs_compat"],
       },
-      bindings: opts.bindings ?? {
+      ...(opts.omitBindings ? {} : { bindings: opts.bindings === undefined ? {
         MCP_SESSION: { type: "durable_object_namespace", secret_value: "private-binding-value" },
         MCP_OWNER_TOKEN: { type: "secret_text", text: "private-secret-value" },
-      },
+      } : opts.bindings }),
     },
   });
   const fetchImpl = async (address, init) => {
@@ -82,6 +82,7 @@ function fixture(options = {}) {
       } : {
         flags: options.referenceFlags,
         bindings: options.referenceBindings,
+        omitBindings: options.omitReferenceBindings,
         badSource: options.badSource,
       },
     ) }), { status: 200 });
@@ -154,6 +155,54 @@ test("non-standard binding shape produces unverified metadata", async () => {
   const f = fixture({ referenceBindings: { X: { value: "do not read" } } });
   const result = await compareWorkerVersions(f.input, f.fetchImpl);
   assert.equal(result.bindingMetadataParity, "unverified");
+});
+
+test("reference version exposes only sanitized binding shape, target name and type evidence", async () => {
+  const privateValue = "secret-must-never-be-printed";
+  const cases = [
+    [{
+      referenceBindings: {
+        MCP_CONTRACT_PREPARE_TOKEN: { type: "secret_text", text: privateValue },
+        UNRELATED_PRIVATE_NAME: { type: "secret_text", text: privateValue },
+      },
+    }, { shape: "object", namePresence: "present", type: "secret_text" }],
+    [{
+      referenceBindings: [
+        { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text", text: privateValue },
+      ],
+    }, { shape: "array", namePresence: "present", type: "secret_text" }],
+    [{ referenceBindings: { MCP_CONTRACT_PREPARE_TOKEN: { type: "plain_text" } } },
+      { shape: "object", namePresence: "present", type: "plain_text" }],
+    [{ referenceBindings: { MCP_CONTRACT_PREPARE_TOKEN: { type: "private-unknown-type" } } },
+      { shape: "object", namePresence: "present", type: "other" }],
+    [{ referenceBindings: {} },
+      { shape: "object", namePresence: "not_observed", type: "unverified" }],
+    [{ referenceBindings: [] },
+      { shape: "array", namePresence: "not_observed", type: "unverified" }],
+    [{ referenceBindings: null },
+      { shape: "null", namePresence: "unverified", type: "unverified" }],
+    [{ omitReferenceBindings: true },
+      { shape: "missing", namePresence: "unverified", type: "unverified" }],
+    [{ referenceBindings: "unexpected-private-value" },
+      { shape: "other", namePresence: "unverified", type: "unverified" }],
+    [{ referenceBindings: [{ name: "unknown" }, null] },
+      { shape: "array", namePresence: "unverified", type: "unverified" }],
+    [{ referenceBindings: [
+      { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "secret_text" },
+      { name: "MCP_CONTRACT_PREPARE_TOKEN", type: "plain_text" },
+    ] }, { shape: "array", namePresence: "unverified", type: "unverified" }],
+  ];
+  for (const [options, expected] of cases) {
+    const f = fixture(options);
+    const result = await compareWorkerVersions(f.input, f.fetchImpl);
+    assert.deepEqual(result.referenceBindingInspection, expected);
+    assert.equal(f.calls.length, 4);
+    const serialized = JSON.stringify(result);
+    for (const forbidden of [privateValue, "UNRELATED_PRIVATE_NAME", "private-unknown-type",
+      "unexpected-private-value", TOKEN, ACCOUNT]) {
+      assert.equal(serialized.includes(forbidden), false, forbidden);
+    }
+  }
 });
 
 test("split deployment is rejected before version reads", async () => {
