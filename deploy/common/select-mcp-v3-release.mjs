@@ -37,11 +37,16 @@ export function compareReleaseTags(a, b) {
 
 export function selectPublishedRelease(releases, { channel, assetSuffix, currentReleaseId }) {
   if (!Array.isArray(releases) || releases.length > 100 ||
-      !["stable", "prerelease"].includes(channel) || !ASSET_SUFFIX.test(assetSuffix) ||
+      !["stable", "prerelease", "companion"].includes(channel) || !ASSET_SUFFIX.test(assetSuffix) ||
       !parseTag("v" + currentReleaseId)) throw new Error("RELEASE_SELECTION_INVALID");
   const eligible = releases.filter(release => {
     if (!release || release.draft !== false || !parseTag(release.tag_name) ||
-        release.prerelease !== (channel === "prerelease") || !Array.isArray(release.assets)) return false;
+        !Array.isArray(release.assets)) return false;
+    const companion = /-companion\.[1-9][0-9]*$/u.test(release.tag_name);
+    const oracleOnly = /-oracle\./u.test(release.tag_name);
+    if (channel === "stable" ? release.prerelease || companion || oracleOnly
+      : channel === "companion" ? !release.prerelease || !companion
+      : !release.prerelease || companion || oracleOnly) return false;
     const asset = release.tag_name + assetSuffix;
     const names = release.assets.map(x => x?.name);
     return names.includes(asset) && names.includes(asset + ".sha256");

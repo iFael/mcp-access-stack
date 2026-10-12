@@ -20,8 +20,8 @@ concurrency:
 
 jobs:
   signing-preflight:
-    # Reserved Oracle-only tags must not enter the public Edge release path.
-    if: ${{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') }}
+    # Oracle-only and Companion-only tags must never trigger public Edge deploy.
+    if: ${{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') }}
     runs-on: ubuntu-latest
     environment: public-release
     steps:

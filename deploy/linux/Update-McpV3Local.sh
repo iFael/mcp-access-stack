@@ -59,5 +59,14 @@ args=(--edge-base-url "$edge" --app-root "$app_root" --state-root "$state_root")
 if [[ -n "$device" ]]; then args+=(--device-name "$device"); fi
 "$package_root/deploy/linux/Install-McpV3Local.sh" "${args[@]}"
 
+# Cleanup is post-cutover only; failures preserve the update and the last
+# known rollback. Never delete when the service is not demonstrably active.
+if systemctl --user is-active --quiet mcp-v3-local.service; then
+  mcp_v3_prune_local_releases "$app_root/current/runtime/node/node" "$app_root" \
+    "$target_release" "$current_release" || printf '%s\n' 'LOCAL_RETENTION_DEFERRED' >&2
+else
+  printf '%s\n' 'LOCAL_RETENTION_DEFERRED' >&2
+fi
+
 printf '{"status":"updated","previousReleaseId":"%s","releaseId":"%s"}\n' \
   "$current_release" "$target_release"

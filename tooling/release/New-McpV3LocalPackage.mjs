@@ -445,6 +445,7 @@ function platformRuntimeFiles(platform) {
     return [
       "deploy/unix/McpV3Local.Common.sh",
       "deploy/common/select-mcp-v3-release.mjs",
+      "deploy/common/prune-mcp-v3-local.mjs",
       "tooling/release/Verify-McpV3LocalPackage.mjs",
       "deploy/linux/Install-McpV3Local.sh",
       "deploy/linux/Update-McpV3Local.sh",
@@ -455,6 +456,7 @@ function platformRuntimeFiles(platform) {
     return [
       "deploy/unix/McpV3Local.Common.sh",
       "deploy/common/select-mcp-v3-release.mjs",
+      "deploy/common/prune-mcp-v3-local.mjs",
       "tooling/release/Verify-McpV3LocalPackage.mjs",
       "deploy/macos/Install-McpV3Local.sh",
       "deploy/macos/Update-McpV3Local.sh",

@@ -108,11 +108,17 @@ Assert-ContainsAll -Label 'Companion-only workflow' -Source $companionWorkflow -
     'Get-FileHash',
     'actions/attest@',
     'actions/upload-artifact@',
-    'retention-days: 30'
-)
-Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
+    'retention-days: 30',
     'workflow_dispatch:',
     'inputs.expected_sha',
+    'inputs.ci_run_id',
+    'bootstrap-release-tag.mjs',
+    'gh release create',
+    '--verify-tag --prerelease',
+    'sha256sum --check --status',
+    'contents: write'
+)
+Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
     'inputs.release_id',
     'npm run deploy',
     'wrangler deploy',
@@ -121,11 +127,14 @@ Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow 
     'CLOUDFLARE_API_TOKEN',
     'CLOUDFLARE_ACCOUNT_ID',
     'MCP_OWNER_TOKEN',
-    'gh release create',
-    'contents: write',
     'git push',
     '  push:',
     'edge:'
+)
+$publicReleaseWorkflow = Read-ProjectFile '.github\workflows\release.yml'
+Assert-ContainsAll -Label 'Companion-only tag must bypass public Edge deploy' -Source $publicReleaseWorkflow -Tokens @(
+    "!contains(github.ref_name, '-companion.')",
+    "!contains(inputs.tag, '-companion.')"
 )
 if ($CompanionOnly) {
     Write-Output 'Companion-only distribution workflow structural contract PASS.'

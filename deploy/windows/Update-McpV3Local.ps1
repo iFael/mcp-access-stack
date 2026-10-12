@@ -62,7 +62,7 @@ if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
             throw 'The active signed release lacks the unified version selector.'
         }
     }
-    $channel = if ($currentReleaseId.Contains('-')) { 'prerelease' } else { 'stable' }
+    $channel = if ($currentReleaseId -match '-companion\.[1-9][0-9]*$') { 'companion' } elseif ($currentReleaseId.Contains('-')) { 'prerelease' } else { 'stable' }
     $selected = @(& $node $selector $Repository $channel '-windows-x64.zip' $currentReleaseId)
     if ($LASTEXITCODE -ne 0) {
         throw 'Release catalog selection failed; installation state was not changed.'
@@ -103,8 +103,41 @@ if ([string]$switchResult.status -ne 'active' -or [string]$switchResult.releaseI
     throw 'MCP V3 local updater failed to activate the prepared release.'
 }
 
+# Retire old, verified local release folders only after the new task passed
+# the existing handover and startup health checks. Retention never masks a
+# successful switch and never deletes active/previous/candidate releases.
+$retentionStatus = 'deferred'
+if ([bool]$switchResult.taskRunning) {
+    try {
+        $activeNode = Join-Path $targetReleaseRoot 'runtime\node\node.exe'
+        $retentionScript = Join-Path $targetReleaseRoot 'deploy\common\prune-mcp-v3-local.mjs'
+        if (-not (Test-Path -LiteralPath $activeNode -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $retentionScript -PathType Leaf)) {
+            throw 'Signed local retention prerequisites are missing.'
+        }
+        $planOutput = @(& $activeNode $retentionScript $installation $expectedReleaseId $currentReleaseId)
+        if ($LASTEXITCODE -ne 0) { throw 'Local retention preview failed.' }
+        $plan = $planOutput -join '' | ConvertFrom-Json
+        if ([string]$plan.status -ne 'planned' -or
+            [string]$plan.planSha256 -notmatch '^[a-f0-9]{64}$') {
+            throw 'Local retention plan identity is invalid.'
+        }
+        $doneOutput = @(& $activeNode $retentionScript $installation $expectedReleaseId $currentReleaseId ([string]$plan.planSha256))
+        if ($LASTEXITCODE -ne 0) { throw 'Local retention execution requires reconciliation.' }
+        $done = $doneOutput -join '' | ConvertFrom-Json
+        if ([string]$done.status -ne 'completed') {
+            throw 'Local retention completion is unverified.'
+        }
+        $retentionStatus = 'completed'
+    }
+    catch {
+        $retentionStatus = 'deferred'
+    }
+}
+
 [pscustomobject]@{
     status = 'updated'
+    retentionStatus = $retentionStatus
     previousReleaseId = $currentReleaseId
     releaseId = $expectedReleaseId
     taskName = $TaskName

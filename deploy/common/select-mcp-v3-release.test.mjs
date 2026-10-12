@@ -19,6 +19,7 @@ test("chooses signed asset pair on requested channel and refuses downgrade", () 
   const releases=[
     release("v1.1.0-beta.100"),release("v1.1.0-beta.99"),
     release("v1.1.0-beta.101",{withAssets:false}),
+    release("v1.1.0-companion.999"),
     release("v1.1.0"),release("v1.1.0-beta.200",{draft:true}),
   ];
   assert.deepEqual(selectPublishedRelease(releases,{
@@ -28,6 +29,9 @@ test("chooses signed asset pair on requested channel and refuses downgrade", () 
     channel:"stable",assetSuffix:asset,currentReleaseId:"1.1.0-beta.99",
   }),{status:"available",tag:"v1.1.0"});
   assert.deepEqual(selectPublishedRelease(releases,{
+    channel:"companion",assetSuffix:asset,currentReleaseId:"1.1.0-companion.998",
+  }),{status:"available",tag:"v1.1.0-companion.999"});
+  assert.deepEqual(selectPublishedRelease(releases,{
     channel:"prerelease",assetSuffix:asset,currentReleaseId:"1.1.0-beta.100",
   }),{status:"up-to-date"});
 });
@@ -36,7 +40,7 @@ test("excludes Oracle-only releases and refuses invalid catalog shape", () => {
   assert.deepEqual(selectPublishedRelease([release("v1.1.0-beta.200",{withAssets:false})],{
     channel:"prerelease",assetSuffix:asset,currentReleaseId:"1.1.0-beta.99",
   }),{status:"up-to-date"});
-  for(const bad of [{channel:"beta"},{assetSuffix:"-arbitrary.exe"},{currentReleaseId:"../etc"}]){
+  for(const bad of [{channel:"arbitrary"},{assetSuffix:"-arbitrary.exe"},{currentReleaseId:"../etc"}]){
     assert.throws(()=>selectPublishedRelease([],{
       channel:"prerelease",assetSuffix:asset,currentReleaseId:"1.1.0-beta.1",...bad,
     }),/RELEASE_SELECTION_INVALID/u);

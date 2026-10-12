@@ -1,19 +1,29 @@
 name: Windows companion-only signed distribution
 
-run-name: companion CI-${{ github.event.workflow_run.id }} @ ${{ github.event.workflow_run.head_sha }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('publish companion CI-{0} @ {1}', inputs.ci_run_id, inputs.expected_sha) || format('companion CI-{0} @ {1}', github.event.workflow_run.id, github.event.workflow_run.head_sha) }}
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current main SHA with canonical green CI
+        required: true
+        type: string
+      ci_run_id:
+        description: Exact successful main CI run that produced the signed companion artifact
+        required: true
+        type: string
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: companion-only-ci-${{ github.event.workflow_run.id }}
+  group: companion-only-ci-${{ github.event.workflow_run.id || inputs.ci_run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -223,3 +233,78 @@ jobs:
             ${{ runner.temp }}/companion-distribution/v${{ needs.preflight.outputs.release-id }}-windows-x64.zip.sha256
           if-no-files-found: error
           retention-days: 30
+
+  publish-companion:
+    # Explicit approved gate reuses the already signed artifact.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: public-release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout exact authorized main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Verify canonical CI and signed artifact, then publish once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_SHA" ]]
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          observed_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$observed_main" == "$EXPECTED_SHA" ]]
+          ci="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID" --jq '{head_sha,head_branch,event,status,conclusion,repository:.repository.full_name}')"
+          jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success" and .repository == $repo' <<< "$ci" >/dev/null
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow companion-only-distribution.yml \
+            --event workflow_run --limit 100 --json databaseId,displayTitle,status,conclusion,headSha)"
+          [[ "$(jq 'length' <<< "$runs")" -lt 100 ]]
+          ids="$(jq -r --arg title "companion CI-$CI_RUN_ID @ $EXPECTED_SHA" --arg sha "$EXPECTED_SHA" \
+            '[.[] | select(.displayTitle == $title and .headSha == $sha and .status == "completed" and .conclusion == "success") | .databaseId] | .[]' <<< "$runs")"
+          [[ "$(wc -l <<< "$ids")" == "1" ]]
+          [[ "$ids" =~ ^[1-9][0-9]*$ ]]
+          base="$(git tag --merged "$EXPECTED_SHA" --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          [[ "$base" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-.][0-9A-Za-z.-]+)?$ ]]
+          release_id="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-companion.$CI_RUN_ID"
+          release_tag="v$release_id"
+          artifact="windows-companion-$release_id-$EXPECTED_SHA"
+          mkdir -p "$RUNNER_TEMP/companion-publish"
+          gh run download "$ids" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "$RUNNER_TEMP/companion-publish"
+          cd "$RUNNER_TEMP/companion-publish"
+          archive="$release_tag-windows-x64.zip"
+          test -s "$archive"
+          test -s "$archive.sha256"
+          sha256sum --check --status "$archive.sha256"
+          cd "$GITHUB_WORKSPACE"
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXPECTED_SHA" ]]
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json id >/dev/null 2>&1; then
+            echo 'COMPANION_RELEASE_ALREADY_PUBLISHED: reconcile, never republish' >&2
+            exit 1
+          fi
+          export RELEASE_TAG="$release_tag"
+          node tooling/release/bootstrap-release-tag.mjs
+          gh release create "$release_tag" \
+            "$RUNNER_TEMP/companion-publish/$archive" \
+            "$RUNNER_TEMP/companion-publish/$archive.sha256" \
+            --verify-tag --prerelease --repo "$GITHUB_REPOSITORY" \
+            --title "$release_tag (Windows companion only)" \
+            --notes "Signed Windows companion artifact from successful main CI $CI_RUN_ID. No Edge, Oracle, or runtime deployment."

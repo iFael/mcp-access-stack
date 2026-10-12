@@ -1,4 +1,6 @@
 export { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
+export { ReleaseWorkflowExecutor } from "./release-workflow-executor.js";
+export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult } from "./release-workflow-executor.js";
 export type {
   CreateRunResult,
   ReconcileOperationInput,

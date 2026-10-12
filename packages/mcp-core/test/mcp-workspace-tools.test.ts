@@ -218,7 +218,8 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
       operationId: input.operationId,
       status: input.dryRun ? "planned" : "completed",
       stateSha256: "1".repeat(64),
-      items: input.targets.map(target => ({...target, status: input.dryRun ? "eligible" as const : "deleted" as const})),
+      ...(input.selection === "eligible" ? {planSha256: "1".repeat(64)} : {}),
+      items: (input.targets ?? []).map(target => ({...target, status: input.dryRun ? "eligible" as const : "deleted" as const})),
     };
   }
 
