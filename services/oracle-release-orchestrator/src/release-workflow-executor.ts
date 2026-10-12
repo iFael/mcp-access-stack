@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 import { getWorkflowBlueprint } from "./workflows/index.js";
 import type {
@@ -35,6 +36,19 @@ export interface ReleaseExecutionResult {
   readonly run: ReleaseRunSnapshot;
   readonly executed: number;
   readonly reconciled: number;
+}
+
+export interface ReleasePollingOptions {
+  readonly maxPolls?: number;
+  readonly intervalMs?: number;
+  readonly signal?: AbortSignal;
+  /** Used by a trusted host or a deterministic test; no shell/task creation. */
+  readonly wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+}
+export interface ReleasePollingResult {
+  readonly status: "terminal" | "poll_limit";
+  readonly polls: number;
+  readonly latest: ReleaseExecutionResult;
 }
 
 const key = (runId: string, stepId: string) =>
@@ -141,6 +155,35 @@ export class ReleaseWorkflowExecutor {
       run = updated;
     }
     return stop("step_limit", this.orchestrator.getRun(runId), executed, reconciled);
+  }
+
+  /**
+   * Wait on the SAME canonical run/operation identities. A new poll reconciles
+   * only saved outcome_unknown or observes a concurrently running step; it
+   * never retries an uncertain effect. All other stops remain terminal here.
+   */
+  async poll(
+    runId: string, actorId: string, options: ReleasePollingOptions = {},
+  ): Promise<ReleasePollingResult> {
+    const maxPolls = options.maxPolls ?? 20;
+    const intervalMs = options.intervalMs ?? 5_000;
+    if (!Number.isSafeInteger(maxPolls) || maxPolls < 1 || maxPolls > 120 ||
+        !Number.isSafeInteger(intervalMs) || intervalMs < 1_000 || intervalMs > 30_000) {
+      throw new Error("RELEASE_POLL_BOUNDS_INVALID");
+    }
+    const wait = options.wait ?? (async (ms: number, signal?: AbortSignal) => {
+      await sleep(ms, undefined, signal ? { signal } : {});
+    });
+    let latest: ReleaseExecutionResult | undefined;
+    for (let attempt = 1; attempt <= maxPolls; attempt++) {
+      if (options.signal?.aborted) throw new Error("RELEASE_POLL_CANCELLED");
+      latest = await this.advance(runId, actorId);
+      if (latest.stop !== "outcome_unknown" && latest.stop !== "operation_in_progress") {
+        return { status: "terminal", polls: attempt, latest };
+      }
+      if (attempt < maxPolls) await wait(intervalMs, options.signal);
+    }
+    return { status: "poll_limit", polls: maxPolls, latest: latest! };
   }
 
   private resolveMeasuredGate(run: ReleaseRunSnapshot, stepId: string,

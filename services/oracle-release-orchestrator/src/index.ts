@@ -6,7 +6,7 @@ export { composeReleaseCapabilities } from "./release-capability-registry.js";
 export type { ReleaseCapabilityComposition, ReleaseCapabilityRegistry } from "./release-capability-registry.js";
 export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
 export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
-export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult } from "./release-workflow-executor.js";
+export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult, ReleasePollingOptions, ReleasePollingResult } from "./release-workflow-executor.js";
 export type {
   CreateRunResult,
   ReconcileOperationInput,

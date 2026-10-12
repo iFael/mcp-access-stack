@@ -131,6 +131,43 @@ describe("ReleaseWorkflowExecutor typed source control reads", () => {
     }
   });
 
+  it("polls the SAME CI operation until terminal without dispatching again",async()=>{
+    originalChecks={...checks(),allCompleted:false,passed:false,pendingCount:1,
+      successfulCount:1,checks:[checks().checks[0]!,
+        {id:102,name:"platform-linux",status:"in_progress",conclusion:"pending"}]};
+    const {run,executor}=setup();
+    let waits=0;
+    const observed=await executor.poll(run.runId,actor,{
+      maxPolls:3,intervalMs:1000,
+      wait:async()=>{waits++;originalChecks=checks();},
+    });
+    expect(observed.status).toBe("terminal");
+    expect(observed.polls).toBe(2);
+    expect(observed.latest.stop).toBe("blocked_missing_capability");
+    expect(observed.latest.reconciled).toBe(1);
+    expect(observed.latest.run.steps[1]?.status).toBe("succeeded");
+    expect(waits).toBe(1);
+    expect(checkReads).toBe(2);
+  });
+
+  it("poll limit keeps an uncertain operation paused without retry or new intent",async()=>{
+    originalChecks={...checks(),allCompleted:false,passed:false,pendingCount:1,
+      successfulCount:1,checks:[checks().checks[0]!,
+        {id:102,name:"platform-linux",status:"in_progress",conclusion:"pending"}]};
+    const {run,executor}=setup();
+    const observed=await executor.poll(run.runId,actor,{
+      maxPolls:3,intervalMs:1000,wait:async()=>{},
+    });
+    expect(observed.status).toBe("poll_limit");
+    expect(observed.polls).toBe(3);
+    expect(observed.latest.stop).toBe("outcome_unknown");
+    expect(observed.latest.run.steps[1]?.status).toBe("outcome_unknown");
+    expect(observed.latest.run.steps[1]?.attemptCount).toBe(1);
+    expect(checkReads).toBe(3);
+    await expect(executor.poll(run.runId,actor,{maxPolls:0})).rejects
+      .toThrow("RELEASE_POLL_BOUNDS_INVALID");
+  });
+
   it("reconciles an uncertain exact-main observation using the original operation only",async()=>{
     const {run,executor}=setup();
     service.startRun(run.runId,actor);
