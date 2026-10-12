@@ -37,6 +37,8 @@ export interface TypedReleaseEffectPort {
 export interface ReleaseEffectBinding {
   readonly port: TypedReleaseEffectPort;
   readonly authorize: (action: EffectAction,run:ReleaseRunSnapshot)=>Promise<boolean>;
+  /** Explicit subset when signed distribution is owned by the specialized binding. */
+  readonly actions?: readonly EffectAction[];
 }
 
 const SHA=/^[a-f0-9]{40}$/u;
@@ -76,7 +78,12 @@ function request(intent:StepIntent,run:ReleaseRunSnapshot,action:EffectAction):R
 export function bindReleaseEffects(
   binding:ReleaseEffectBinding,
 ): ReadonlyMap<EffectAction,ReleaseStepCapability> {
-  return new Map((Object.keys(RECEIPTS) as EffectAction[]).map(action=>{
+  const actions=binding.actions??(Object.keys(RECEIPTS) as EffectAction[]);
+  if(actions.length<1 || new Set(actions).size!==actions.length ||
+    actions.some(action=>!Object.hasOwn(RECEIPTS,action))) {
+    throw new Error("RELEASE_EFFECT_ACTION_SET_INVALID");
+  }
+  return new Map(actions.map(action=>{
     const capability:ReleaseStepCapability={
       action,executionClass:"external_effect",
       authorize:(_step,run)=>binding.authorize(action,run),

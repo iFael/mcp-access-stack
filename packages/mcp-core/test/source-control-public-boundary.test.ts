@@ -78,6 +78,27 @@ const expectedSourceControlCapabilities = [
   "github.pull_request.merge",
 ] as const;
 
+describe("unified workflow bootstrap provenance",()=>{
+  const base={workspaceId:"repo",owner:"octo",repository:"app",
+    workflow:"release.yml" as const,mode:"dispatch" as const,
+    tag:"v1.1.0-beta.90",expectedMainSha:shaA,
+    operationId:"11111111-2222-4333-8444-555555555556"};
+  it("requires prior Oracle bootstrap UUID for public release dispatch",()=>{
+    expect(githubWorkflowOperationInputSchema.safeParse(base).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      bootstrapOperationId:"11111111-2222-4333-8444-555555555555"}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,mode:"reconcile"}).success).toBe(true);
+  });
+  it("refuses foreign bootstrap identities on other workflows",()=>{
+    const bootstrapOperationId="11111111-2222-4333-8444-555555555555";
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      workflow:"edge-f09-guarded-rollout.yml",tag:undefined,
+      bootstrapOperationId}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      workflow:"release-tag-bootstrap.yml",bootstrapOperationId}).success).toBe(false);
+  });
+});
+
 const forbiddenEscapeHatchValues = {
   command: "git status",
   args: ["status"],

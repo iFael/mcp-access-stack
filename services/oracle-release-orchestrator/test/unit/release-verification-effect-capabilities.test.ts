@@ -121,6 +121,17 @@ describe("typed release side effects never infer completion from dispatch",()=>{
     expect((await binding.reconcile({...intent,operationId:"different"},run)).outcome)
       .toBe("still_unknown");
   });
+  it("rejects unknown, duplicate or empty effect subsets without inventing actions",()=>{
+    const binding={authorize:async()=>true,port:{
+      start:async()=>{},inspect:async input=>({...input,status:"pending" as const,evidence:[]}),
+    }};
+    expect(()=>bindReleaseEffects({...binding,actions:[]})).toThrow("RELEASE_EFFECT_ACTION_SET_INVALID");
+    expect(()=>bindReleaseEffects({...binding,
+      actions:["deploy_edge","deploy_edge"]})).toThrow("RELEASE_EFFECT_ACTION_SET_INVALID");
+    expect(()=>bindReleaseEffects({...binding,
+      actions:["execute_arbitrary_shell" as never]})).toThrow("RELEASE_EFFECT_ACTION_SET_INVALID");
+  });
+
   it("covers 19 blueprint actions only with explicit trusted ports, never invents the 20th",()=>{
     const registry=composeReleaseCapabilities({
       effects:{authorize:async()=>false,port:{

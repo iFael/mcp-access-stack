@@ -2707,6 +2707,7 @@ const sourceControlMcpSchemas = {
       tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
       mode: z.enum(["dispatch","reconcile"]),
       expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
+      bootstrapOperationId: z.uuid().optional(),
     }).strict(),
     output: githubWorkflowOperationResultSchema,
   },
@@ -3259,7 +3260,7 @@ export function registerSourceControlTools(
       "github_workflow_operation",
       {
         title: "Run or reconcile guarded release workflow",
-        description: "One typed operation for guarded Edge and tag bootstrap dispatch, and public release dispatch only after verified same-operation bootstrap and no competing run. Exact main SHA, UUID receipt and separate workspace authorizations; a 204 is not proof of completed release.",
+        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
         inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
         outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
         annotations: sourceControlAnnotations.github_workflow_operation,

@@ -19,6 +19,7 @@ export interface GitHubReleaseWorkflowInput {
   tag?: string | undefined;
   expectedMainSha: string;
   operationId: string;
+  bootstrapOperationId?: string | undefined;
 }
 export type GitHubReleaseWorkflowObservation =
   | { status: "submitted" | "outcome_unknown"; operationId: string }
@@ -41,6 +42,9 @@ export class GitHubReleaseWorkflowOperation {
 
   async dispatch(input: GitHubReleaseWorkflowInput, context: OperationContext): Promise<GitHubReleaseWorkflowObservation> {
     const identity = this.identity(input, context);
+    if (input.workflow === PUBLIC_RELEASE && !UUID.test(input.bootstrapOperationId ?? "")) {
+      throw new AppError("INVALID_ARGUMENT", "Public release dispatch requires the original bootstrap operation identity.");
+    }
     if (!await this.options.authorize(input, context)) {
       throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
     }
@@ -145,7 +149,9 @@ export class GitHubReleaseWorkflowOperation {
     context: OperationContext):Promise<boolean> {
     if (!this.options.client.getTagRef || !this.options.client.getTagPushRuns) return false;
     try {
-      const bootstrap = await this.matchingRuns({...input,workflow:TAG_BOOTSTRAP},context);
+      if (!UUID.test(input.bootstrapOperationId ?? "")) return false;
+      const bootstrap = await this.matchingRuns({...input,workflow:TAG_BOOTSTRAP,
+        operationId:input.bootstrapOperationId!},context);
       if (bootstrap?.status !== "completed" || bootstrap.conclusion !== "success") return false;
       const tagRef = await this.options.client.getTagRef(input.owner,input.repository,input.tag!,context);
       if (tagRef.ref !== "refs/tags/"+input.tag || tagRef.object.type !== "commit" ||
@@ -193,6 +199,8 @@ export class GitHubReleaseWorkflowOperation {
       (input.workflow===PUBLIC_RELEASE || input.workflow===TAG_BOOTSTRAP
         ? !input.tag || !PUBLIC_TAG.test(input.tag) || input.tag.includes("-oracle.") ||
           input.tag.includes("-companion.") : input.tag!==undefined) ||
+      (input.workflow !== PUBLIC_RELEASE && input.bootstrapOperationId!==undefined) ||
+      (input.bootstrapOperationId!==undefined && !UUID.test(input.bootstrapOperationId)) ||
       !SHA.test(input.expectedMainSha) ||
       !UUID.test(input.operationId) || !context.ownerScope) {
       throw new AppError("INVALID_ARGUMENT","Invalid pinned release workflow operation identity.");
@@ -201,7 +209,7 @@ export class GitHubReleaseWorkflowOperation {
     const canonicalArgumentsDigest=createHash("sha256").update(JSON.stringify({
       workspaceId:input.workspaceId,owner:input.owner,repository:input.repository,
       workflow:input.workflow,tag:input.tag??null,expectedMainSha:input.expectedMainSha,
-      operationId:input.operationId,
+      operationId:input.operationId,bootstrapOperationId:input.bootstrapOperationId??null,
       ownerScopeDigest:createHash("sha256").update(context.ownerScope).digest("hex"),
     })).digest("hex");
     return {workspaceId:input.workspaceId,operation:"github_workflow_operation",

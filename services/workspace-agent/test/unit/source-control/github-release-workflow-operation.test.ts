@@ -31,7 +31,7 @@ function setup() {
         workflow_runs:runs.filter(r=>r.event==="push")}),
       dispatchWorkflow:async(_owner,_repo,_workflow,_expected,details)=>{
         dispatched++;
-        expect(details).toMatchObject({operation_id:operationId});
+        expect(details.operation_id).toMatch(/^[0-9a-f-]{36}$/);
         if(throwOnDispatch)throw new Error("POST outcome unknown");
       },
     },
@@ -118,7 +118,8 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
 
   it("dispatches public release once only after successful same-operation bootstrap and pinned tag",async()=>{
     const f=setup();
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId};
     expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
     expect(f.dispatched()).toBe(0);
     f.addRun({workflow:"release-tag-bootstrap.yml",name:"Release tag bootstrap",
@@ -134,9 +135,38 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
     expect(f.dispatched()).toBe(1);
   });
 
+  it("proves public dispatch using distinct Oracle step operation IDs",async()=>{
+    const f=setup();
+    const publicOperationId="11111111-2222-4333-8444-555555555556";
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId,operationId:publicOperationId};
+    f.addRun({workflow:"release-tag-bootstrap.yml",name:"Release tag bootstrap",
+      status:"completed",conclusion:"success",
+      display_title:"mcp-release-"+operationId});
+    expect((await f.coordinator.dispatch(release,context)).status).toBe("submitted");
+    expect(f.dispatched()).toBe(1);
+    f.addRun({workflow:"release.yml",name:"Public release",id:9921002,
+      display_title:"mcp-release-"+publicOperationId,status:"completed",conclusion:"success"});
+    expect(await f.coordinator.reconcile(release,context)).toMatchObject({
+      status:"observed",operationId:publicOperationId,runId:9921002,
+      state:"completed",conclusion:"success",
+    });
+    await expect(f.coordinator.dispatch({...release,bootstrapOperationId:
+      "11111111-2222-4333-8444-555555555557"},context)).rejects.toThrow();
+    expect(f.dispatched()).toBe(1);
+  });
+
+  it("rejects dispatch with no trusted bootstrap operationId",async()=>{
+    const f=setup();
+    await expect(f.coordinator.dispatch({...input,workflow:"release.yml",
+      tag:"v1.1.0-beta.90"},context)).rejects.toThrow("bootstrap operation identity");
+    expect(f.dispatched()).toBe(0);
+  });
+
   it("does not dispatch public release when a tag-push run already exists",async()=>{
     const f=setup();
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId};
     f.addRun({workflow:"release.yml",name:"Public release",event:"push",
       head_branch:release.tag,status:"completed",conclusion:"success"});
     expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
@@ -148,7 +178,8 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
 
   it("does not duplicate same public tag with a different operationId",async()=>{
     const f=setup();
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId};
     f.addRun({workflow:"release-tag-bootstrap.yml",status:"completed",
       name:"Release tag bootstrap",conclusion:"success"});
     expect((await f.coordinator.dispatch(release,context)).status).toBe("submitted");
@@ -159,7 +190,8 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
 
   it("does not dispatch public release when bootstrap failed, is pending or tag drifted",async()=>{
     const f=setup();
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId};
     f.addRun({workflow:"release-tag-bootstrap.yml",status:"in_progress",name:"Release tag bootstrap"});
     expect((await f.coordinator.dispatch(release,context)).status).toBe("outcome_unknown");
     f.setMain("b".repeat(40));
@@ -169,7 +201,8 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
 
   it("never accepts a stale tag, a main-push run, or duplicate tag-push runs",async()=>{
     const f=setup();
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:operationId};
     f.addRun({workflow:"release.yml",event:"push",head_branch:"main",status:"completed",conclusion:"success"});
     expect((await f.coordinator.reconcile(release,context)).status).toBe("outcome_unknown");
     f.addRun({workflow:"release.yml",id:9921002,event:"push",head_branch:release.tag,

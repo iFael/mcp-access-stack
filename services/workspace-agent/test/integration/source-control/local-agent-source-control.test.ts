@@ -342,7 +342,8 @@ describe("LocalAgent unified guarded GitHub workflow operation", () => {
     };
     const {agent}=await setupAgent({capabilities:["github.repository.read"],
       workflowClient,origin:"https://github.com/octo/repo.git"});
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:input.operationId};
     expect(await agent.githubWorkflowOperation({...release,mode:"reconcile"},context))
       .toMatchObject({status:"observed",runId:78,conclusion:"success"});
     await expect(agent.githubWorkflowOperation({...release,mode:"dispatch"},context))
@@ -371,7 +372,8 @@ describe("LocalAgent unified guarded GitHub workflow operation", () => {
     };
     const {agent}=await setupAgent({capabilities:["github.repository.read","github.workflow.public_release"],
       workflowClient,origin:"https://github.com/octo/repo.git"});
-    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90"};
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:input.operationId};
     expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)
       .toBe("submitted");
     expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)

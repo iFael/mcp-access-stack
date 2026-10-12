@@ -787,12 +787,15 @@ export const githubWorkflowOperationInputSchema = z.object({
   mode: z.enum(["dispatch", "reconcile"]),
   expectedMainSha: gitShaSchema,
   operationId: z.uuid(),
+  bootstrapOperationId: z.uuid().optional(),
 }).strict().superRefine((input,ctx)=>{
   const isPublic=input.workflow==="release.yml";
   const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
   if((needsTag && (!input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
-      (!needsTag && input.tag!==undefined)){
-    ctx.addIssue({code:"custom",message:"Only f09 permits no tag; public release and bootstrap require a non-reserved SemVer tag."});
+      (!needsTag && input.tag!==undefined) ||
+      (isPublic && input.mode==="dispatch" && !input.bootstrapOperationId) ||
+      (!isPublic && input.bootstrapOperationId!==undefined)){
+    ctx.addIssue({code:"custom",message:"Public release dispatch needs an exact bootstrapOperationId; other workflows forbid that field."});
   }
 });
 export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;

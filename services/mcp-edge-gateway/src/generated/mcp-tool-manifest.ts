@@ -11620,7 +11620,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "One typed operation for guarded Edge and tag bootstrap dispatch, and public release dispatch only after verified same-operation bootstrap and no competing run. Exact main SHA, UUID receipt and separate workspace authorizations; a 204 is not proof of completed release.",
+    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -11628,6 +11628,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "bootstrapOperationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
         "expectedMainSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
           "type": "string"
@@ -21966,13 +21971,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "4c6306b31e1b3d8c7fbfeda56060424d939893744dcfadc961fa3754e98c6e46",
-  "serverVersion": "0.4.0-catalog.c4c6306b31e1b.see734ae04a98",
+  "contractRevision": "6fb4da4641b23d2a3217f87949d2cabd3b086050983afaaa904326f2e6c5efe7",
+  "serverVersion": "0.4.0-catalog.c6fb4da4641b2.see734ae04a98",
   "toolCount": 98,
   "toolSetRevision": "ee734ae04a984b5f95e8a22164aecc9ece007138a8b9331c55cd8e9d052c54bc"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c4c6306b31e1b.see734ae04a98"
+  "version": "0.4.0-catalog.c6fb4da4641b2.see734ae04a98"
 } as const;
