@@ -274,14 +274,7 @@ mcp_v3_prune_local_releases() {
   local previous="$4"
   local script="$app_root/current/deploy/common/prune-mcp-v3-local.mjs"
   [[ -f "$script" ]] || mcp_v3_die "Signed local retention helper is missing."
-  local plan plan_sha
-  plan="$("$node" "$script" "$app_root" "$active" "$previous")" || return 1
-  plan_sha="$("$node" -e '
-const x=JSON.parse(process.argv[1]);
-if(x.status!=="planned"||typeof x.planSha256!=="string"||!/^[0-9a-f]{64}$/.test(x.planSha256))process.exit(2);
-process.stdout.write(x.planSha256);
-' "$plan")" || return 1
-  "$node" "$script" "$app_root" "$active" "$previous" "$plan_sha" >/dev/null
+  "$node" "$script" --drain "$app_root" "$active" "$previous" >/dev/null
 }
 
 mcp_v3_download_verified_asset() {

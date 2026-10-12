@@ -3,7 +3,7 @@ import test from "node:test";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, mkdir, writeFile, symlink, readdir, readFile, rm, lstat } from "node:fs/promises";
-import { pruneLocalReleases } from "./prune-mcp-v3-local.mjs";
+import { pruneLocalReleases, drainLocalReleases } from "./prune-mcp-v3-local.mjs";
 
 const active = "1.1.0-beta.84";
 const previous = "1.1.0-beta.83";
@@ -64,6 +64,46 @@ test("refuses stale plan when another release appears",async t=>{
   assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
     [active,previous,...old,"1.1.0-beta.80"].sort());
 });
+test("bounded drain completes multiple batches without pruning foreign or protected versions",async t=>{
+  const root=await fixture(t,true);
+  const extra=Array.from({length:11},(_,i)=>"1.1.0-beta."+String(i+60));
+  for(const id of extra) {
+    const dir=path.join(root,"releases",id);
+    await mkdir(dir);
+    await writeFile(path.join(dir,"mcp-v3-local-manifest.json"),JSON.stringify({releaseId:id}));
+  }
+  const foreign=path.join(root,"releases","1.1.0-beta.59");
+  await mkdir(foreign);
+  const input={installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+    processCheck:async()=>false};
+  const result=await drainLocalReleases(input);
+  assert.equal(result.status,"completed");
+  assert.equal(result.removedCount,13);
+  assert.equal(result.batches,3);
+  assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
+    [active,previous,"1.1.0-beta.59"].sort());
+  assert.deepEqual(await drainLocalReleases(input),{status:"completed",removedCount:0,batches:0});
+});
+
+test("drain never reports completion after bounded budget, retaining rollback",async t=>{
+  const root=await fixture(t);
+  for(let i=0;i<5;i++){
+    const id="1.1.0-beta."+String(i+60), dir=path.join(root,"releases",id);
+    await mkdir(dir);
+    await writeFile(path.join(dir,"mcp-v3-local-manifest.json"),JSON.stringify({releaseId:id}));
+  }
+  const input={installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+    processCheck:async()=>false};
+  await assert.rejects(drainLocalReleases(input,1),/LOCAL_RETENTION_BATCH_LIMIT/u);
+  const remainder=await readdir(path.join(root,"releases"));
+  assert.equal(remainder.includes(active),true);
+  assert.equal(remainder.includes(previous),true);
+  assert.equal(remainder.length,4);
+  const rest=await drainLocalReleases(input);
+  assert.equal(rest.status,"completed");
+  assert.equal(rest.removedCount,2);
+});
+
 test("rejects a candidate symlink without following it",async t=>{
   const root=await fixture(t);
   const external=await mkdtemp(path.join(os.tmpdir(),"mcp-prune-outside-"));

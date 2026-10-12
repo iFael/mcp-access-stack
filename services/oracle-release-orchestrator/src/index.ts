@@ -1,5 +1,7 @@
 export { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 export { ReleaseWorkflowExecutor } from "./release-workflow-executor.js";
+export { bindReleasePruneCleanup } from "./release-prune-capability.js";
+export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
 export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult } from "./release-workflow-executor.js";
 export type {
   CreateRunResult,

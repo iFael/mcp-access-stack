@@ -2346,6 +2346,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
           "type": "string"
         },
+        "reconcile": {
+          "const": true,
+          "type": "boolean"
+        },
         "selection": {
           "enum": [
             "eligible"
@@ -21875,13 +21879,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ba7b95d6ebd18310b07d784d8ad1da0e9d7e7971250647842b51d8243168c083",
-  "serverVersion": "0.4.0-catalog.cba7b95d6ebd1.s7c90aeb8add4",
+  "contractRevision": "8466fd7b77d669c9369bdcfb3298d43572393b76a5554713ef3ec543c716e45a",
+  "serverVersion": "0.4.0-catalog.c8466fd7b77d6.s7c90aeb8add4",
   "toolCount": 97,
   "toolSetRevision": "7c90aeb8add41d42ab96fb5323b12f24f7c7b5b411f527b8664d2942917398f1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cba7b95d6ebd1.s7c90aeb8add4"
+  "version": "0.4.0-catalog.c8466fd7b77d6.s7c90aeb8add4"
 } as const;

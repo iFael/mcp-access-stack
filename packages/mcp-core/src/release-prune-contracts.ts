@@ -11,11 +11,19 @@ export const pruneReleasesInputSchema = z.object({
   workspaceId: z.string().trim().min(1),
   operationId: z.uuid(),
   dryRun: z.boolean(),
+  reconcile: z.literal(true).optional(),
   expectedStateSha256: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
   selection: z.enum(["eligible"]).optional(),
   targets: z.array(pruneReleaseTargetSchema).min(1).max(5).optional(),
   expectedPlanSha256: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
 }).strict().superRefine((input, ctx) => {
+  if (input.reconcile) {
+    if (!input.dryRun || input.selection !== undefined || input.targets !== undefined ||
+        input.expectedStateSha256 !== undefined || input.expectedPlanSha256 !== undefined) {
+      ctx.addIssue({ code: "custom", message: "Receipt reconciliation is read-only and accepts only operationId." });
+    }
+    return;
+  }
   if (!input.dryRun && !input.expectedStateSha256) {
     ctx.addIssue({ code: "custom", message: "Execution requires the lifecycle SHA from a prior dry run." });
   }

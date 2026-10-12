@@ -136,14 +136,35 @@ export async function pruneLocalReleases({
   }
 }
 
+export async function drainLocalReleases(options, maxBatches = 20) {
+  if (!Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > 20) abort();
+  let removedCount = 0;
+  for (let index = 0; index < maxBatches; index++) {
+    const preview = await pruneLocalReleases({...options,dryRun:true});
+    if (preview.names.length === 0) {
+      return {status:"completed",removedCount,batches:index};
+    }
+    const result = await pruneLocalReleases({...options,dryRun:false,
+      expectedPlanSha256:preview.planSha256});
+    if (result.status !== "completed" ||
+        result.planSha256 !== preview.planSha256 ||
+        result.names.length !== preview.names.length) abort();
+    removedCount += result.names.length;
+  }
+  throw new Error("LOCAL_RETENTION_BATCH_LIMIT");
+}
+
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   try {
-    const [root, active, previous, planSha] = process.argv.slice(2);
-    if (process.argv.length !== 5 && process.argv.length !== 6) abort();
-    const result = await pruneLocalReleases({
-      installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
-      ...(planSha ? {dryRun:false,expectedPlanSha256:planSha} : {}),
-    });
+    const drain = process.argv[2] === "--drain";
+    const [root, active, previous, planSha] = process.argv.slice(drain ? 3 : 2);
+    if (drain ? process.argv.length !== 6 :
+      (process.argv.length !== 5 && process.argv.length !== 6)) abort();
+    const input = {installationRoot:root,activeReleaseId:active,previousReleaseId:previous};
+    const result = drain
+      ? await drainLocalReleases(input)
+      : await pruneLocalReleases({...input,
+          ...(planSha ? {dryRun:false,expectedPlanSha256:planSha} : {})});
     process.stdout.write(JSON.stringify(result) + "\n");
   } catch {
     process.stderr.write("LOCAL_RETENTION_REFUSED\n");

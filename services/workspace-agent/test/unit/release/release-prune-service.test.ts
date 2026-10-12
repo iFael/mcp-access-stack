@@ -228,6 +228,36 @@ describe("ReleasePruneService (isolated physical fixture)", () => {
     });
     expect(done.status).toBe("completed");
     expect(done.items).toEqual([]);
+    const receipt=await service.prune({workspaceId:"ws",operationId:input.operationId,
+      dryRun:true,reconcile:true});
+    expect(receipt).toEqual(done);
+  });
+
+  it("reconciles a completed prune exclusively from its durable operation receipt",async()=>{
+    const preview=await service.prune(makeInput(true));
+    const id=randomUUID();
+    const result=await service.prune(makeInput(false,preview.stateSha256,id));
+    await writeState({...state(),updatedAt:"2026-10-12T18:32:00Z"});
+    const observed=await service.prune({workspaceId:"ws",operationId:id,dryRun:true,reconcile:true});
+    expect(observed).toEqual(result);
+    expect(await exists(path.join(root,"releases",old))).toBe(false);
+  });
+
+  it("fails closed for absent and forged reconciliation receipts, never deleting",async()=>{
+    const id=randomUUID();
+    const check={workspaceId:"ws",operationId:id,dryRun:true,reconcile:true as const};
+    expect(pruneReleasesInputSchema.safeParse({...check,selection:"eligible"}).success).toBe(false);
+    expect(pruneReleasesInputSchema.safeParse({...check,dryRun:false}).success).toBe(false);
+    await expect(service.prune(check)).rejects.toMatchObject({code:"EXECUTION_OUTCOME_UNKNOWN"});
+    expect(await exists(path.join(root,"releases",old))).toBe(true);
+    const receipts=path.join(root,"state","release-prune-receipts");
+    await mkdir(receipts);
+    await writeFile(path.join(receipts,id+".json"),JSON.stringify({
+      fingerprint:"f".repeat(64),result:{status:"completed",operationId:randomUUID(),
+        stateSha256:"a".repeat(64),items:[]},
+    }));
+    await expect(service.prune(check)).rejects.toMatchObject({code:"EXECUTION_OUTCOME_UNKNOWN"});
+    expect(await exists(path.join(root,"releases",old))).toBe(true);
   });
 
   it("never treats staged source as the active release",async()=>{

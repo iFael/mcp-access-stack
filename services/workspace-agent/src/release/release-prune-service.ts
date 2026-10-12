@@ -47,6 +47,35 @@ export class ReleasePruneService {
     for (const child of ["releases", "staging", "state"]) {
       await this.requirePhysicalDirectory(path.join(root, child), path.join(root, child));
     }
+    const receiptRoot = path.join(root, "state", "release-prune-receipts");
+    const receiptFile = path.join(receiptRoot, input.operationId + ".json");
+    if (input.reconcile) {
+      // Read-only receipt lookup; it must never begin a second deletion.
+      const receiptDirectory = await lstat(receiptRoot).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!receiptDirectory) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune completion has no durable receipt.");
+      }
+      await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
+      const receiptInfo = await lstat(receiptFile).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!receiptInfo || !receiptInfo.isFile() || receiptInfo.isSymbolicLink()) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt cannot prove completion.");
+      }
+      const record = JSON.parse(await readFile(receiptFile, "utf8")) as { fingerprint?: unknown; result?: unknown };
+      if (typeof record.fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(record.fingerprint)) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt identity is invalid.");
+      }
+      const result = pruneReleasesResultSchema.parse(record.result);
+      if (result.status !== "completed" || result.operationId !== input.operationId) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt does not match the operation.");
+      }
+      return result;
+    }
     const stateFile = path.join(root, "state", "lifecycle-state.v1.json");
     const stateInfo = await lstat(stateFile);
     if (!stateInfo.isFile() || stateInfo.isSymbolicLink()) deny("Release lifecycle state is not a physical file.");
@@ -62,14 +91,12 @@ export class ReleasePruneService {
     const protectedIds = new Set(
       [active.releaseId, previous.releaseId, state.candidate?.releaseId].filter((v): v is string => !!v),
     );
-    const receiptRoot = path.join(root, "state", "release-prune-receipts");
     const fingerprint = SHA(JSON.stringify({
       ...(input.selection ? { selection: input.selection } : {}),
       targets: input.targets,
       expectedStateSha256: input.expectedStateSha256,
       ...(input.expectedPlanSha256 ? { expectedPlanSha256: input.expectedPlanSha256 } : {}),
     }));
-    const receiptFile = path.join(receiptRoot, input.operationId + ".json");
     if (!input.dryRun) {
       if (this.options.signal?.aborted) throw new AppError("OPERATION_CANCELLED", "Release prune was cancelled.");
       const receiptInfo = await lstat(receiptRoot).catch((error: NodeJS.ErrnoException) => {
@@ -145,15 +172,36 @@ export class ReleasePruneService {
       ...(planSha256 ? { planSha256 } : {}), items: resultItems,
     });
     if (input.dryRun) return planned;
+    const lockFile = path.join(root, "state", "release-prune.lock");
     if (targets.length === 0) {
-      return pruneReleasesResultSchema.parse({ ...planned, status: "completed" });
+      const unresolved = await lstat(lockFile).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (unresolved) conflict("Unreconciled release prune lock prevents an empty completion.");
+      await mkdir(receiptRoot, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
+      const completed = pruneReleasesResultSchema.parse({ ...planned, status: "completed" });
+      try {
+        await writeFile(receiptFile, JSON.stringify({ fingerprint, result: completed }),
+          { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const existing = await lstat(receiptFile);
+        if (!existing.isFile() || existing.isSymbolicLink()) deny("Prune receipt must be a physical file.");
+        const prior = JSON.parse(await readFile(receiptFile, "utf8")) as { fingerprint?: string; result?: unknown };
+        if (prior.fingerprint !== fingerprint) conflict("Release prune operationId has a different receipt.");
+        return pruneReleasesResultSchema.parse(prior.result);
+      }
+      return completed;
     }
 
     await mkdir(receiptRoot, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error;
     });
     await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
-    const lockFile = path.join(root, "state", "release-prune.lock");
     const handle = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
       .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "EEXIST") conflict("Another prune or unreconciled prune lock exists.");

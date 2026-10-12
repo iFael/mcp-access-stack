@@ -115,14 +115,7 @@ if ([bool]$switchResult.taskRunning) {
             -not (Test-Path -LiteralPath $retentionScript -PathType Leaf)) {
             throw 'Signed local retention prerequisites are missing.'
         }
-        $planOutput = @(& $activeNode $retentionScript $installation $expectedReleaseId $currentReleaseId)
-        if ($LASTEXITCODE -ne 0) { throw 'Local retention preview failed.' }
-        $plan = $planOutput -join '' | ConvertFrom-Json
-        if ([string]$plan.status -ne 'planned' -or
-            [string]$plan.planSha256 -notmatch '^[a-f0-9]{64}$') {
-            throw 'Local retention plan identity is invalid.'
-        }
-        $doneOutput = @(& $activeNode $retentionScript $installation $expectedReleaseId $currentReleaseId ([string]$plan.planSha256))
+        $doneOutput = @(& $activeNode $retentionScript --drain $installation $expectedReleaseId $currentReleaseId)
         if ($LASTEXITCODE -ne 0) { throw 'Local retention execution requires reconciliation.' }
         $done = $doneOutput -join '' | ConvertFrom-Json
         if ([string]$done.status -ne 'completed') {
