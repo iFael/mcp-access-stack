@@ -69,10 +69,12 @@ export async function writeStageSecretFile(rawSecret, runnerTemp) {
 }
 
 export function verifyVersionSecretBinding(payload) {
+  // Cloudflare Workers Version details expose resources.bindings as an object
+  // keyed by binding name; /settings instead exposes an array of descriptors.
   const bindings = payload?.result?.resources?.bindings;
-  if (!Array.isArray(bindings) ||
-      !bindings.some(x => x?.name === "MCP_CONTRACT_PREPARE_TOKEN" &&
-                           x?.type === "secret_text")) {
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings) ||
+      !Object.hasOwn(bindings, "MCP_CONTRACT_PREPARE_TOKEN") ||
+      bindings.MCP_CONTRACT_PREPARE_TOKEN?.type !== "secret_text") {
     deny("VERSION_SECRET_UNVERIFIED");
   }
   return true;
