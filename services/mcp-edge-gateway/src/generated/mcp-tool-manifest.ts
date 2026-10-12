@@ -2333,6 +2333,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "dryRun": {
           "type": "boolean"
         },
+        "expectedPlanSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "expectedStateSha256": {
           "pattern": "^[0-9a-f]{64}$",
           "type": "string"
@@ -2340,6 +2344,12 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "operationId": {
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "selection": {
+          "enum": [
+            "eligible"
+          ],
           "type": "string"
         },
         "targets": {
@@ -2378,8 +2388,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "required": [
         "workspaceId",
         "operationId",
-        "dryRun",
-        "targets"
+        "dryRun"
       ],
       "type": "object"
     },
@@ -2422,12 +2431,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "type": "object"
           },
           "maxItems": 5,
-          "minItems": 1,
           "type": "array"
         },
         "operationId": {
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "planSha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "type": "string"
         },
         "stateSha256": {
@@ -21863,13 +21875,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "da7f5d3967de5325b5daa36951ce87417767a308ebf5eb0d3a999019d7780c92",
-  "serverVersion": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4",
+  "contractRevision": "ba7b95d6ebd18310b07d784d8ad1da0e9d7e7971250647842b51d8243168c083",
+  "serverVersion": "0.4.0-catalog.cba7b95d6ebd1.s7c90aeb8add4",
   "toolCount": 97,
   "toolSetRevision": "7c90aeb8add41d42ab96fb5323b12f24f7c7b5b411f527b8664d2942917398f1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4"
+  "version": "0.4.0-catalog.cba7b95d6ebd1.s7c90aeb8add4"
 } as const;
