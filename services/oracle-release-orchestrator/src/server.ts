@@ -6,6 +6,7 @@ import { createOracleReleaseReadApi } from "./read-api.js";
 import { createOracleReadApiServer } from "./node-read-server.js";
 import { SqliteReleaseLedger } from "./storage/sqlite-release-ledger.js";
 import { createTrustedOracleReleaseHost, type TrustedOracleReleaseHostOptions } from "./release-trusted-host.js";
+import { OracleReleaseControlConnector, type OracleControlSocketConfig } from "./oracle-control-connector.js";
 
 export interface OracleReadApiServiceConfig {
   readonly ledgerPath: string;
@@ -18,7 +19,10 @@ export interface OracleReadApiServiceConfig {
 export function startOracleReleaseReadApiService(
   config: OracleReadApiServiceConfig,
   trustedExecution?: TrustedOracleReleaseHostOptions,
+  controlTransport?: OracleControlSocketConfig,
 ): { close(): Promise<void>; trustedControl: ReturnType<typeof createTrustedOracleReleaseHost> | null } {
+  if(controlTransport && (!trustedExecution || !trustedExecution.capabilities.ready))
+    throw new Error("ORACLE_CONTROL_REQUIRES_AUTHORIZED_CAPABILITIES");
   validateConfig(config);
   mkdirSync(config.releaseRoot, { recursive: true });
   const ledger = SqliteReleaseLedger.open({
@@ -31,21 +35,30 @@ export function startOracleReleaseReadApiService(
     // Share this EXACT Oracle ledger instance; do not instantiate a second writer.
     const trustedControl = trustedExecution
       ? createTrustedOracleReleaseHost(orchestrator, trustedExecution) : null;
+    // An opt-in outbound control connection stays inside this SAME ledger process.
+    // No credential is read from the GET-only read API environment.
+    const controlAbort=new AbortController();
+    const connection=controlTransport && trustedControl
+      ? new OracleReleaseControlConnector(controlTransport,trustedControl) : null;
     const handler = createOracleReleaseReadApi({
       orchestrator,
       bearerToken: config.bearerToken,
     });
     const server = createOracleReadApiServer({ handler, host: config.host });
     server.listen(config.port, config.host);
+    const controlTask=connection?.run(controlAbort.signal).catch(()=>undefined);
     return {
       trustedControl,
-      close: () => new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => {
-          orchestrator.close();
-          if (error) rejectClose(error);
-          else resolveClose();
+      close: async () => {
+        controlAbort.abort();
+        await controlTask?.catch(()=>undefined);
+        await new Promise<void>((resolveClose,rejectClose)=>{
+          server.close(error=>{
+            orchestrator.close();
+            if(error)rejectClose(error);else resolveClose();
+          });
         });
-      }),
+      },
     };
   } catch (error) {
     orchestrator.close();

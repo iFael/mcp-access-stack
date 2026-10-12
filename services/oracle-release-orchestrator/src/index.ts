@@ -8,6 +8,8 @@ export { bindReleasePublicDistribution } from "./release-public-distribution-cap
 export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
 export { composeReleaseCapabilities } from "./release-capability-registry.js";
 export { createTrustedOracleReleaseHost } from "./release-trusted-host.js";
+export { OracleReleaseControlConnector, validateOracleControlSocketConfig } from "./oracle-control-connector.js";
+export type { OracleControlSocketConfig, OracleTrustedControl } from "./oracle-control-connector.js";
 export type { ReleaseCapabilityComposition, ReleaseCapabilityRegistry } from "./release-capability-registry.js";
 export type { TrustedReleasePrincipal, TrustedReleaseAdvanceInput, TrustedOracleReleaseHostOptions } from "./release-trusted-host.js";
 export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";

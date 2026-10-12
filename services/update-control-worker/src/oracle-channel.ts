@@ -15,6 +15,10 @@ import {
   parseUpdateWaitEventsArguments,
   type OracleChannelReadCommand,
   type OracleChannelResponseFrame,
+  ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_SCOPE,
+  ORACLE_CONTROL_ORIGIN, ORACLE_CONTROL_TIMEOUT_MS,
+  parseOracleControlCommand, parseOracleControlResponse,
+  type OracleControlRpcCommand,
 } from "@mcp-access-stack/update-control-contract";
 
 export {
@@ -46,6 +50,7 @@ export interface OracleChannelDurableState {
 
 export interface OracleChannelEnvironment {
   readonly UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_CONTROL_TOKEN?: string;
 }
 
 export interface OracleChannelNamespace {
@@ -90,11 +95,11 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    if (url.pathname === ORACLE_CHANNEL_CONNECT_PATH) {
-      return this.connectOracle(request, url);
+    if (url.pathname === ORACLE_CHANNEL_CONNECT_PATH || url.pathname === ORACLE_CONTROL_CONNECT_PATH) {
+      return this.connectOracle(request, url, url.pathname === ORACLE_CONTROL_CONNECT_PATH);
     }
-    if (url.pathname === ORACLE_CHANNEL_RPC_PATH) {
-      return this.handleRpc(request, url);
+    if (url.pathname === ORACLE_CHANNEL_RPC_PATH || url.pathname === ORACLE_CONTROL_RPC_PATH) {
+      return this.handleRpc(request, url, url.pathname === ORACLE_CONTROL_RPC_PATH);
     }
     return jsonResponse({ error: "not_found" }, 404);
   }
@@ -109,7 +114,8 @@ export class UpdateControlOracleChannel {
         this.protocolViolation(socket, 1009, "frame too large");
         return;
       }
-      const active = this.state.getWebSockets(ORACLE_CHANNEL_SCOPE);
+      const control=this.state.getWebSockets(ORACLE_CONTROL_SCOPE).includes(socket);
+      const active = this.state.getWebSockets(control?ORACLE_CONTROL_SCOPE:ORACLE_CHANNEL_SCOPE);
       if (!active.includes(socket)) {
         this.protocolViolation(socket, 1008, "inactive Oracle connection");
         return;
@@ -133,7 +139,8 @@ export class UpdateControlOracleChannel {
       }
       if (frame.outcome === "success") {
         const responseBody = JSON.stringify({ result: frame.result });
-        if (utf8ByteLength(responseBody) > ORACLE_CHANNEL_MAX_FRAME_BYTES) {
+        if (utf8ByteLength(responseBody) > ORACLE_CHANNEL_MAX_FRAME_BYTES ||
+            (control && !validControlResult(frame.result))) {
           this.finish(pending, jsonResponse({ error: "invalid_oracle_response" }, 502));
           return;
         }
@@ -160,10 +167,10 @@ export class UpdateControlOracleChannel {
     this.failPendingForSocket(socket);
   }
 
-  private async connectOracle(request: Request, url: URL): Promise<Response> {
+  private async connectOracle(request: Request, url: URL, control=false): Promise<Response> {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
-        url.pathname !== ORACLE_CHANNEL_CONNECT_PATH) {
+        url.pathname !== (control?ORACLE_CONTROL_CONNECT_PATH:ORACLE_CHANNEL_CONNECT_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if (url.href.length > MAX_URL_LENGTH || !headersWithinBounds(request.headers)) {
@@ -172,11 +179,12 @@ export class UpdateControlOracleChannel {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse({ error: "websocket_required" }, 426);
     }
-    if (request.headers.get("origin") !== ORACLE_CHANNEL_ORIGIN) {
+    if (request.headers.get("origin") !== (control?ORACLE_CONTROL_ORIGIN:ORACLE_CHANNEL_ORIGIN)) {
       return jsonResponse({ error: "invalid_origin" }, 403);
     }
 
-    const expected = this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN;
+    const expected = control?this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN;
+    if(control && expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN)return jsonResponse({error:"oracle_control_not_configured"},503);
     if (typeof expected !== "string" || expected.length < TOKEN_MIN_LENGTH ||
         expected.length > TOKEN_MAX_LENGTH || /[\r\n\0]/u.test(expected)) {
       return jsonResponse({ error: "oracle_channel_not_configured" }, 503);
@@ -192,21 +200,22 @@ export class UpdateControlOracleChannel {
     }
 
     try {
-      for (const previous of this.state.getWebSockets(ORACLE_CHANNEL_SCOPE)) {
+      const scope=control?ORACLE_CONTROL_SCOPE:ORACLE_CHANNEL_SCOPE;
+      for (const previous of this.state.getWebSockets(scope)) {
         this.failPendingForSocket(previous);
         previous.close(1012, "Oracle connection replaced");
       }
       const pair = this.pairFactory();
-      this.state.acceptWebSocket(pair.server, [ORACLE_CHANNEL_SCOPE]);
+      this.state.acceptWebSocket(pair.server, [scope]);
       return this.upgradeResponseFactory(pair.client);
     } catch {
       return jsonResponse({ error: "oracle_channel_unavailable" }, 503);
     }
   }
 
-  private async handleRpc(request: Request, url: URL): Promise<Response> {
+  private async handleRpc(request: Request, url: URL, control=false): Promise<Response> {
     if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "POST" });
-    if (url.search || url.hash || url.pathname !== ORACLE_CHANNEL_RPC_PATH) {
+    if (url.search || url.hash || url.pathname !== (control?ORACLE_CONTROL_RPC_PATH:ORACLE_CHANNEL_RPC_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if ((request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
@@ -229,9 +238,9 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    let command: ReadCommand;
+    let command: ReadCommand | OracleControlRpcCommand;
     try {
-      command = parseReadCommand(value);
+      command = control?parseOracleControlCommand(value):parseReadCommand(value);
     } catch (error) {
       if (error instanceof UpdateControlInputError || error instanceof InvalidRpcCommandError) {
         return jsonResponse({ error: "invalid_request" }, 400);
@@ -239,7 +248,7 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    const socket = this.getActiveOracleSocket();
+    const socket = this.getActiveOracleSocket(control?ORACLE_CONTROL_SCOPE:ORACLE_CHANNEL_SCOPE);
     if (!socket) return jsonResponse({ error: "oracle_unavailable" }, 503);
     if (this.pending.size >= ORACLE_CHANNEL_MAX_IN_FLIGHT) {
       return jsonResponse({ error: "oracle_channel_busy" }, 503);
@@ -255,6 +264,7 @@ export class UpdateControlOracleChannel {
       requestId,
       method: command.method,
       arguments: command.arguments,
+      ...(control ? {principal:(command as OracleControlRpcCommand).principal} : {}),
     });
     if (utf8ByteLength(frame) > ORACLE_CHANNEL_MAX_FRAME_BYTES) {
       return jsonResponse({ error: "request_too_large" }, 413);
@@ -267,7 +277,7 @@ export class UpdateControlOracleChannel {
         resolve,
         timer: setTimeout(() => {
           this.finish(pending, jsonResponse({ error: "transport_timeout" }, 504));
-        }, rpcTimeoutFor(command)),
+        }, control?ORACLE_CONTROL_TIMEOUT_MS:rpcTimeoutFor(command as ReadCommand)),
       };
       this.pending.set(requestId, pending);
       try {
@@ -278,8 +288,8 @@ export class UpdateControlOracleChannel {
     });
   }
 
-  private getActiveOracleSocket(): WebSocket | null {
-    const sockets = this.state.getWebSockets(ORACLE_CHANNEL_SCOPE)
+  private getActiveOracleSocket(scope=ORACLE_CHANNEL_SCOPE): WebSocket | null {
+    const sockets = this.state.getWebSockets(scope)
       .filter((socket) => socket.readyState === 1);
     if (sockets.length !== 1) {
       if (sockets.length > 1) {
@@ -313,6 +323,11 @@ export class UpdateControlOracleChannel {
     }
     this.failPendingForSocket(socket);
   }
+}
+
+function validControlResult(value:unknown):boolean {
+  try { parseOracleControlResponse(value); return true; }
+  catch { return false; }
 }
 
 function parseReadCommand(value: unknown): ReadCommand {

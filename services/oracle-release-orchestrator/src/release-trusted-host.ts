@@ -19,6 +19,8 @@ export interface TrustedReleaseAdvanceInput {
   readonly runId: string;
   readonly expectedSourceSha: string;
   readonly expectedLastSeq: number;
+  /** Signed caller operation identity, available to the host policy/audit. */
+  readonly requestOperationId?: string;
 }
 
 export interface TrustedOracleReleaseHostOptions {
@@ -57,6 +59,7 @@ export function createTrustedOracleReleaseHost(
   function assertInput(input: TrustedReleaseAdvanceInput, principal: TrustedReleasePrincipal): void {
     if (!input || !UUID.test(input.runId) || !SHA.test(input.expectedSourceSha) ||
       !Number.isSafeInteger(input.expectedLastSeq) || input.expectedLastSeq < 0 ||
+      (input.requestOperationId!==undefined && !UUID.test(input.requestOperationId)) ||
       !principal || principal.workspaceId !== options.workspaceId ||
       !PRINCIPAL.test(principal.authenticatedActorId) ||
       typeof principal.ownerScope !== "string" || !principal.ownerScope.trim() ||

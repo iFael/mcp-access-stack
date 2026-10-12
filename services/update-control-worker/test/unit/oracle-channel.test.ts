@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
+import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -19,6 +20,7 @@ import { UpdateControlOracleChannelReadClient } from "../../src/oracle-channel-c
 import { createUpdateControlReadOnlyTools } from "../../src/tools.js";
 
 const TOKEN = "oracle-channel-test-token-".padEnd(48, "x");
+const CONTROL_TOKEN="oracle-control-separated-token-".padEnd(48,"y");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -131,7 +133,8 @@ function createHarness() {
   const pairs: Array<{ client: MemorySocket; server: MemorySocket }> = [];
   let channel = new UpdateControlOracleChannel(
     state,
-    { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN } satisfies OracleChannelEnvironment,
+    { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -169,7 +172,8 @@ function createHarness() {
   function reactivate(): void {
     channel = new UpdateControlOracleChannel(
       state,
-      { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN } satisfies OracleChannelEnvironment,
+      { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -218,6 +222,54 @@ function attachOraclePeer(
     void state.flush();
   };
 }
+
+describe("isolated control mode on existing Oracle channel DO implementation",()=>{
+  it("rejects the read token and read origin for the separate control socket",async()=>{
+    const h=createHarness();
+    const url="https://worker.example"+ORACLE_CONTROL_CONNECT_PATH;
+    const mk=(token:string,origin=ORACLE_CONTROL_ORIGIN)=>new Request(url,{
+      method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+    });
+    expect((await h.channel().fetch(mk(TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(mk(CONTROL_TOKEN,ORACLE_CHANNEL_ORIGIN))).status).toBe(403);
+    const response=await h.channel().fetch(mk(CONTROL_TOKEN));
+    expect(response.status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_CONTROL_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_CHANNEL_SCOPE)).toHaveLength(0);
+    expect((await h.channel().fetch(rpcRequest("advance_release",{}))).status).toBe(400);
+  });
+  it("delivers only the fixed typed operation on the dedicated RPC path",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_CONTROL_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_CONTROL_ORIGIN,
+        authorization:"Bearer "+CONTROL_TOKEN},
+    }));
+    const oracle=h.pairs.at(-1)!.client,server=h.pairs.at(-1)!.server;
+    server.receiver=(message)=>h.channel().webSocketMessage(server as unknown as WebSocket,message);
+    let request:Record<string,unknown>|undefined;
+    oracle.receiver=(message)=>{
+      if(typeof message!=="string")return;
+      request=JSON.parse(message) as Record<string,unknown>;
+      oracle.send(JSON.stringify({version:1,type:"response",requestId:request.requestId,
+        outcome:"success",result:{runId, lastSeq:4,status:"paused_outcome_unknown",stop:"outcome_unknown"}}));
+      void h.state.flush();
+    };
+    const body={method:"advance_release",
+      arguments:{runId,expectedSourceSha:"a".repeat(40),expectedLastSeq:3,
+        operationId:"11111111-2222-4333-8444-555555555555"},
+      principal:{workspaceId:"mcp-access-stack",authenticatedActorId:"mcp:v3-release-control",
+        ownerScope:"trusted:release-operator"}};
+    const rpc=(value:unknown)=>h.channel().fetch(new Request("https://control.internal"+ORACLE_CONTROL_RPC_PATH,{
+      method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value),
+    }));
+    expect((await rpc({...body,method:"shell"})).status).toBe(400);
+    expect((await rpc({...body,principal:{...body.principal,ownerScope:"owner"}})).status).toBe(400);
+    expect((await rpc(body)).status).toBe(200);
+    expect(request).toMatchObject({method:"advance_release",arguments:body.arguments,
+      principal:body.principal});
+    expect((await h.channel().fetch(rpcRequest("advance_release",body.arguments))).status).toBe(400);
+  });
+});
 
 describe("Update Control reverse WSS channel", () => {
   it("routes the three existing read-only tools end to end without changing arguments or results", async () => {
