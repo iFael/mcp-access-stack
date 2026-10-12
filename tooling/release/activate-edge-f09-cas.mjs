@@ -130,6 +130,28 @@ export async function preflight(input, {compare = compareWorkerVersions, fetchIm
   return true;
 }
 
+// Strict fixed-vocabulary diagnostics: no remote message, pointer, binding, or token in logs.
+export function classifyDeploymentRejection(payload) {
+  const message = typeof payload?.errors?.[0]?.message === "string" ?
+    payload.errors[0].message.slice(0, 4096) : "";
+  const labels = [
+    ["migration", /migrat|durable[ -]?object|sqlite/iu],
+    ["secret", /secrets?|bindings?|environment variables?/iu],
+    ["force", /\bforce\b|rollback|roll.back|older versions?/iu],
+    ["version", /versions?|version_id/iu],
+    ["incompatible", /incompatib|mismatch|not compatible|not supported/iu],
+    ["permission", /permission|unauthoriz|forbidden|not allowed/iu],
+    ["invalid", /invalid|malformed|bad request|unrecognized/iu],
+    ["annotation", /annotation|triggered_by/iu],
+    ["deployment", /deployment/iu],
+    ["limit", /\blimit\b|quota|too many|exceed/iu],
+    ["script", /\bscript\b|\bworker\b/iu],
+    ["changes", /\bchanged?\b|modified|update(?:d|s)?/iu],
+    ["required", /required|\bmust\b|\bneed/iu],
+  ].filter(([,pattern])=>pattern.test(message)).map(([name])=>name);
+  return labels.length ? labels.join("_") : "unclassified";
+}
+
 export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = defaultSleep} = {}) {
   await preflight(input, {compare, fetchImpl});
   // NO RE-POST on errors, timeouts or ambiguous responses. Reconcile Cloudflare.
@@ -155,13 +177,15 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
     const status = Number.isInteger(response.status) &&
       response.status >= 100 && response.status <= 599 ? response.status : 0;
     let code = 0;
+    let hint = "unclassified";
     try {
       const payload = await boundedJson(response, 8192);
       const remoteCode = payload?.errors?.[0]?.code;
       if (Number.isSafeInteger(remoteCode) && remoteCode >= 1 &&
           remoteCode <= 99999999) code = remoteCode;
+      hint = classifyDeploymentRejection(payload);
     } catch { /* Response may be unreadable; HTTP status still bounded. */ }
-    deny("DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_" + status + "_CF_" + code);
+    deny("DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_" + status + "_CF_" + code + "_HINT_" + hint);
   }
   let receipt;
   try { receipt = verifyDeploymentReceipt(await boundedJson(response)); }

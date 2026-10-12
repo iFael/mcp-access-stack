@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   PIN, ActivationRefused, parseInput, verifyProvenance, verifyHealth,
-  verifyDeploymentReceipt, verifyReplaceReceipt, deployOnce, replaceOnce,
+  verifyDeploymentReceipt, verifyReplaceReceipt, deployOnce, replaceOnce, classifyDeploymentRejection,
 } from "./activate-edge-f09-cas.mjs";
 
 const OP = "46d1e80b-74be-4320-9de4-5773f74d1775";
@@ -119,7 +119,7 @@ test("Cloudflare deployment rejection reports only bounded status and code, with
     return response({success:false, errors:[{code:10000,message:"secret diagnostic must never surface"}]}, 403);
   };
   await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
-    error=>error.message==="DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_403_CF_10000");
+    error=>error.message==="DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_403_CF_10000_HINT_secret_required");
   assert.equal(posts,1);
 });
 
@@ -133,6 +133,18 @@ test("a successful HTTP status with an invalid receipt reports a distinct unknow
   await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
     /DEPLOYMENT_OUTCOME_UNKNOWN_RECEIPT/);
   assert.equal(posts,1);
+});
+
+test("Cloudflare diagnostics only emit static labels and never echo error strings", () => {
+  const secret="EXAMPLE_SECRET_12345";
+  const result=classifyDeploymentRejection({errors:[{code:10210,
+    message:"Cannot deploy version: incompatible Durable Object migration. Secret binding changed; force required "+secret}]});
+  assert.match(result,/migration/);
+  assert.match(result,/version/);
+  assert.match(result,/force/);
+  assert.match(result,/secret/);
+  assert.doesNotMatch(result,/12345|EXAMPLE_SECRET|token|object/iu);
+  assert.equal(classifyDeploymentRejection({errors:[{message:"private-person-ABC123"}]}),"unclassified");
 });
 
 test("CAS candidate replacement makes one authenticated POST bound to operationId", async () => {
