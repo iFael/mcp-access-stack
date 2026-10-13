@@ -11,11 +11,12 @@ const base={workspaceId:"mcp-access-stack",owner:"octo",repository:"repo",tag:"v
 
 describe("host-owned typed Oracle GitHub workflow adapter",()=>{
   function setup(){
-    const operation=jest.fn(async(input:{operationId:string})=>({
+    const operation=jest.fn(async(input:{operationId:string},_context:{ownerScope:string})=>({
       status:"observed" as const,operationId:input.operationId,runId:123,
       state:"completed" as const,conclusion:"success",
     }));
-    const verify=jest.fn(async()=>true);
+    const verify=jest.fn(async(_repo:{workspaceId:string;owner:string;repository:string},
+      _tag:string,_sha:string,_context:{ownerScope:string})=>true);
     const host={githubWorkflowOperation:operation,
       releaseVerifyGitHubLightweightTag:verify} as unknown as Pick<LocalAgent,
       "githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag">;
