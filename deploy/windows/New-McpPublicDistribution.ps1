@@ -437,6 +437,49 @@ try {
     $distributionManifestPath = Join-Path $stage 'distribution-manifest.ps1'
     New-DataScript -Value $distributionManifest -Path $distributionManifestPath
     Sign-Script -Path $distributionManifestPath -Certificate $certificate
+
+    # Produce the immutable ZIP while the existing pinned RSA signing
+    # certificate is still available. The detached proof authenticates the
+    # EXACT ZIP digest (not merely the CI job conclusion or a .sha256 sidecar).
+    $assetPath = Join-Path $output "$ReleaseTag-windows-x64.zip"
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $assetPath -CompressionLevel Optimal
+    $assetHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hashPath = "$assetPath.sha256"
+    Write-Utf8NoBom -Path $hashPath -Content ("$assetHash *$([IO.Path]::GetFileName($assetPath))$([Environment]::NewLine)")
+    if ($WorkflowName -eq 'Public release') {
+        if ($BuildRunId -le 0) {
+            throw 'Public signed ZIP proof requires an exact positive GitHub workflow run identity.'
+        }
+        $signerCertificateSha256 = (Get-FileHash -LiteralPath $publicSignerCertificatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $proof = [ordered]@{
+            schemaVersion = 1
+            product = 'mcp-access-stack'
+            purpose = 'mcp-public-windows-zip-v1'
+            releaseTag = $ReleaseTag
+            sourceCommitSha = $SourceCommit
+            workflowRunId = $BuildRunId
+            windowsAssetName = [IO.Path]::GetFileName($assetPath)
+            windowsAssetSha256 = $assetHash
+            signerCertificateSha256 = $signerCertificateSha256
+        }
+        $proofPath = Join-Path $output "$ReleaseTag-windows-x64.proof.json"
+        Write-Utf8NoBom -Path $proofPath -Content ($proof | ConvertTo-Json -Depth 5 -Compress)
+        $signerRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
+        if ($null -eq $signerRsa) {
+            throw 'Pinned Windows release signing certificate does not have an RSA private key.'
+        }
+        try {
+            $detachedSignature = $signerRsa.SignData(
+                [IO.File]::ReadAllBytes($proofPath),
+                [Security.Cryptography.HashAlgorithmName]::SHA256,
+                [Security.Cryptography.RSASignaturePadding]::Pkcs1
+            )
+            [IO.File]::WriteAllBytes("$proofPath.sig", $detachedSignature)
+        }
+        finally {
+            $signerRsa.Dispose()
+        }
+    }
 }
 finally {
     if ($certificate) {
@@ -444,14 +487,6 @@ finally {
     }
     Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
 }
-
-$assetPath = Join-Path $output "$ReleaseTag-windows-x64.zip"
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $assetPath -CompressionLevel Optimal
-$assetHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$hashPath = "$assetPath.sha256"
-Write-Utf8NoBom `
-    -Path $hashPath `
-    -Content ("$assetHash *$([IO.Path]::GetFileName($assetPath))$([Environment]::NewLine)")
 
 [pscustomobject]@{
     status = 'created'

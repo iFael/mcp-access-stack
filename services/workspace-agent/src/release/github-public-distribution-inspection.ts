@@ -22,6 +22,8 @@ export interface GitHubPublicDistributionInspection {
   readonly signatureVerified:false;
   readonly verifiedAssetCount:number;
   readonly assetInventorySha256:string;
+  /** Presence is metadata only, not cryptographic verification. */
+  readonly windowsDetachedProofAvailable:boolean;
 }
 
 /** Authenticated GitHub metadata and small checksum sidecars are verified
@@ -64,7 +66,11 @@ export async function inspectGitHubPublicReleaseAssets(
     !release.published_at || !Number.isFinite(Date.parse(release.published_at)))
     throw new Error("GITHUB_PUBLIC_INSPECTION_PROVENANCE_UNVERIFIED");
 
-  const wanted=ASSET_SUFFIXES.flatMap(suffix=>[tag+"-"+suffix,tag+"-"+suffix+".sha256"]);
+  const baseAssets=ASSET_SUFFIXES.flatMap(suffix=>[tag+"-"+suffix,tag+"-"+suffix+".sha256"]);
+  const proofAssets=[tag+"-windows-x64.proof.json",tag+"-windows-x64.proof.json.sig"];
+  const hasDetachedProof=Array.isArray(release.assets) &&
+    release.assets.length===baseAssets.length+proofAssets.length;
+  const wanted=hasDetachedProof?[...baseAssets,...proofAssets]:baseAssets;
   if(!Array.isArray(release.assets) || release.assets.length!==wanted.length)
     throw new Error("GITHUB_PUBLIC_INSPECTION_ASSET_SET_INVALID");
   const assetByName=new Map<string,{id:number;name:string;size:number;digest:string;state:string}>();
@@ -103,7 +109,18 @@ export async function inspectGitHubPublicReleaseAssets(
       throw new Error("GITHUB_PUBLIC_INSPECTION_PACKAGE_DIGEST_MISMATCH");
     inventory.push(filename+":"+prefix);
   }
+  if(hasDetachedProof){
+    const proof=assetByName.get(proofAssets[0]!);
+    const signature=assetByName.get(proofAssets[1]!);
+    if(!proof || !signature || proof.size>4096 || signature.size>8192)
+      throw new Error("GITHUB_PUBLIC_INSPECTION_SIGNED_PROOF_ASSET_INVALID");
+    // These metadata digests are included in inventory; only a separate RSA
+    // verification with the pinned public certificate can claim authenticity.
+    inventory.push(proof.name+":"+proof.digest.slice(7));
+    inventory.push(signature.name+":"+signature.digest.slice(7));
+  }
   return {sourceCommitSha:commitSha,releaseTag:tag,workflowRunId:runId,
     releasePublished:true,signatureVerified:false,verifiedAssetCount:ASSET_SUFFIXES.length,
-    assetInventorySha256:hash(inventory.join("\n"))};
+    assetInventorySha256:hash(inventory.join("\n")),
+    windowsDetachedProofAvailable:hasDetachedProof};
 }

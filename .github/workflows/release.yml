@@ -236,6 +236,8 @@ jobs:
           path: |
             ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.zip
             ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.zip.sha256
+            ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.proof.json
+            ${{ runner.temp }}/public-distribution/${{ needs.metadata.outputs.tag }}-windows-x64.proof.json.sig
           if-no-files-found: error
           retention-days: 1
 

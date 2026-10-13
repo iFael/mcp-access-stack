@@ -46,9 +46,30 @@ describe("authenticated GitHub release asset integrity inspector",()=>{
       "octo","repo",runId,tag,sha);
     expect(proof).toMatchObject({sourceCommitSha:sha,releaseTag:tag,
       workflowRunId:runId,releasePublished:true,signatureVerified:false,
-      verifiedAssetCount:5});
+      verifiedAssetCount:5,windowsDetachedProofAvailable:false});
     expect(proof.assetInventorySha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(api.getReleaseAssetChecksum).toHaveBeenCalledTimes(5);
+  });
+  it("recognizes both detached proof assets without claiming signature verification",async()=>{
+    const extended=[...assets,
+      {id:11,name:tag+"-windows-x64.proof.json",size:512,
+        digest:"sha256:"+"a".repeat(64),state:"uploaded"},
+      {id:12,name:tag+"-windows-x64.proof.json.sig",size:384,
+        digest:"sha256:"+"b".repeat(64),state:"uploaded"}];
+    const api=client({release:{assets:extended}});
+    const observation=await inspectGitHubPublicReleaseAssets(
+      api as unknown as GitHubWorkflowApiClient,"octo","repo",runId,tag,sha);
+    expect(observation.windowsDetachedProofAvailable).toBe(true);
+    expect(observation.signatureVerified).toBe(false);
+    await expect(inspectGitHubPublicReleaseAssets(
+      client({release:{assets:extended.slice(0,-1)}}) as unknown as GitHubWorkflowApiClient,
+      "octo","repo",runId,tag,sha)).rejects.toThrow();
+    const oversized=client({release:{assets:[
+      ...extended.slice(0,-1),{...extended[11]!,size:9000},
+    ]}});
+    await expect(inspectGitHubPublicReleaseAssets(
+      oversized as unknown as GitHubWorkflowApiClient,
+      "octo","repo",runId,tag,sha)).rejects.toThrow();
   });
   it.each([
     ["wrong sha",{run:{head_sha:"b".repeat(40)}}],
