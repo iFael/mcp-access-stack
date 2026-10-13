@@ -1304,6 +1304,40 @@ export class LocalAgent {
     );
   }
 
+  /** Internal release-provider read. Uses the same authenticated GitHub
+   * client, repository ACL and audit path as existing typed source-control
+   * tools, without introducing a general-purpose public GitHub-ref tool. */
+  async releaseReadGitHubMainHead(
+    input: GitHubGetRepositoryInput,
+    context: OperationContext = {},
+  ): Promise<string> {
+    return this.runSourceControlValidatedAudited(
+      "releaseReadGitHubMainHead",
+      githubGetRepositoryInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = "github:" + repository + ":ref/heads/main";
+        await this.assertGitHubRepositoryCapability(
+          workspace, "github.repository.read", repository,
+          parsed.root ?? ".", false, activeContext.signal,
+        );
+        const ref = await (await this.getGitHubWorkflowApiClient()).getMainRef(
+          parsed.owner, parsed.repository, activeContext,
+        );
+        if (ref.ref !== "refs/heads/main" || ref.object.type !== "commit" ||
+          !/^[a-f0-9]{40}$/u.test(ref.object.sha)) {
+          throw new AppError("EXECUTION_STATE_INVALID",
+            "Canonical GitHub main ref is not a commit.");
+        }
+        metadata.resultSha = ref.object.sha;
+        return ref.object.sha;
+      },
+    );
+  }
+
   async githubMaterializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, context: OperationContext = {}): Promise<GitHubMaterializeActionsArtifactResult> {
     return this.runSourceControlValidatedAudited(
       "githubMaterializeActionsArtifact",
