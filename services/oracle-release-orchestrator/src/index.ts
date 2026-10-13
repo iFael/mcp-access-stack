@@ -7,6 +7,8 @@ export { bindReleaseEffects } from "./release-effect-capabilities.js";
 export { bindReleasePublicDistribution } from "./release-public-distribution-capability.js";
 export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
 export {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
+export {OracleRemoteWorkflowPort} from "./oracle-remote-workflow-port.js";
+export {resolveOracleRemoteWorkflowPort} from "./oracle-workflow-host-binding.js";
 export {resolveOracleRemoteSourceReadPort,composeOracleHostReleaseCapabilities} from "./oracle-source-host-binding.js";
 export type {OracleHostReleaseBindings} from "./oracle-source-host-binding.js";
 export { composeReleaseCapabilities } from "./release-capability-registry.js";

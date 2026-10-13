@@ -3,6 +3,7 @@ import {readCredentialFromEnvironment} from "./oracle-channel-connector.js";
 import {composeReleaseCapabilities, type ReleaseCapabilityComposition, type ReleaseCapabilityRegistry} from "./release-capability-registry.js";
 import type {ReleaseRunSnapshot} from "./types.js";
 import {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
+import {resolveOracleRemoteWorkflowPort} from "./oracle-workflow-host-binding.js";
 
 /** Opt-in host-owned read capability. Never part of the Oracle GET-only API.
  * The release registry must still be fully populated and authorized before
@@ -45,6 +46,7 @@ export function resolveOracleRemoteSourceReadPort(
 export interface OracleHostReleaseBindings
   extends Omit<ReleaseCapabilityComposition,"sourceControl"|"other"> {
   readonly authorizeRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  readonly authorizeWorkflow?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
 }
 export function composeOracleHostReleaseCapabilities(
   environment:Readonly<Record<string,string|undefined>>,
@@ -54,10 +56,20 @@ export function composeOracleHostReleaseCapabilities(
   if(source && typeof bindings.authorizeRead!=="function") {
     throw new Error("ORACLE_SOURCE_HOST_AUTH_REQUIRED");
   }
+  const workflow=resolveOracleRemoteWorkflowPort(environment);
+  if(workflow && typeof bindings.authorizeWorkflow!=="function") {
+    throw new Error("ORACLE_WORKFLOW_HOST_AUTH_REQUIRED");
+  }
+  if(workflow && bindings.tagBootstrap) {
+    throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_BOOTSTRAP");
+  }
   return composeReleaseCapabilities({
     ...(source ? {sourceControl:{port:source,authorizeRead:bindings.authorizeRead!}} : {}),
     ...(bindings.cleanup ? {cleanup:bindings.cleanup} : {}),
-    ...(bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
+    ...(workflow ? {tagBootstrap:{workspaceId:workflow.workspaceId,
+      owner:workflow.owner,repository:workflow.repository,port:workflow,
+      authorized:bindings.authorizeWorkflow!}} :
+      bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
     ...(bindings.verifications ? {verifications:bindings.verifications} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
     ...(bindings.publicDistribution ? {publicDistribution:bindings.publicDistribution} : {}),
