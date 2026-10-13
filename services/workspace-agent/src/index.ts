@@ -2,6 +2,8 @@ export { InProcessWorkspaceExecutor } from "./in-process-workspace-executor.js";
 export { LocalAgent, type LocalAgentOptions } from "./local-agent.js";
 export { loadOracleControlBindingFromEnvironment } from "./release/oracle-control-host-binding.js";
 export { createOracleReleaseGitHubReadPort } from "./release/oracle-github-read-port.js";
+export { createOracleReleaseGitHubWorkflowPort } from "./release/oracle-github-workflow-port.js";
+export type {OracleReleaseGitHubWorkflowPolicy} from "./release/oracle-github-workflow-port.js";
 export type {OracleReleaseGitHubReadConfig} from "./release/oracle-github-read-port.js";
 export { CommandConfirmationRegistry, type CommandConfirmationBinding } from "./shell/confirmation.js";
 export { WindowsElevationBroker, type ElevationBroker, type ElevatedCommandRequest, type WindowsElevationBrokerOptions } from "./shell/elevation-broker.js";

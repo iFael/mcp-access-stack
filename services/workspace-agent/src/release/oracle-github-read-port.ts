@@ -21,9 +21,7 @@ const REPOSITORY=/^[A-Za-z0-9._-]{1,100}$/u;
  * A separate authenticated bridge is still required before this port can
  * be injected into the remote Oracle One-writer process.
  */
-export function createOracleReleaseGitHubReadPort(
-  host:ReadHost,config:OracleReleaseGitHubReadConfig,
-){
+export function assertOracleReleaseGitHubConfig(config:OracleReleaseGitHubReadConfig):void {
   if(config.workspaceId!=="mcp-access-stack" ||
     !OWNER.test(config.owner) || !REPOSITORY.test(config.repository) ||
     config.repository==="." || config.repository===".." ||
@@ -31,6 +29,12 @@ export function createOracleReleaseGitHubReadPort(
     (config.root!==undefined && (config.root.length===0 || config.root.length>4096))) {
     throw new Error("ORACLE_RELEASE_GITHUB_READ_CONFIG_INVALID");
   }
+}
+
+export function createOracleReleaseGitHubReadPort(
+  host:ReadHost,config:OracleReleaseGitHubReadConfig,
+){
+  assertOracleReleaseGitHubConfig(config);
   const repo:GitHubGetRepositoryInput={
     workspaceId:config.workspaceId,
     owner:config.owner,repository:config.repository,

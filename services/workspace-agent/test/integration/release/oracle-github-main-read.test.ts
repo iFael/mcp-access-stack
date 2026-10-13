@@ -24,12 +24,15 @@ async function setup(options?:{capabilities?:string[];ref?:string;sha?:string;ty
     ref:options?.ref??"refs/heads/main",
     object:{sha:options?.sha??sha,type:options?.type??"commit"},
   }));
-  const workflowClient={getMainRef:readMain} as unknown as GitHubWorkflowApiClient;
+  const readTag=jest.fn(async(_owner:string,_repo:string,tag:string)=>({
+    ref:"refs/tags/"+tag,object:{sha:options?.sha??sha,type:options?.type??"commit"},
+  }));
+  const workflowClient={getMainRef:readMain,getTagRef:readTag} as unknown as GitHubWorkflowApiClient;
   const agent=await LocalAgent.create(fixture.policyPath,{
     workflowClient,
     gitOriginResolver:{canonicalOriginUrl:async()=>"https://github.com/octo/repo.git"},
   });
-  return {agent,readMain};
+  return {agent,readMain,readTag};
 }
 const input={workspaceId:"mcp-access-stack",owner:"octo",repository:"repo"};
 describe("audited MCP source-control main-ref read for Oracle host",()=>{
@@ -40,6 +43,25 @@ describe("audited MCP source-control main-ref read for Oracle host",()=>{
     expect(await agent.releaseReadGitHubMainHead({...input,workspaceId:id},
       {ownerScope:"trusted:release-operator"})).toBe(sha);
     expect(readMain).toHaveBeenCalledTimes(1);
+  });
+  it("checks host-owned lightweight release tag via authenticated audited GitHub GET",async()=>{
+    const {agent,readTag}=await setup();
+    const id=(await agent.listWorkspaces())[0]!.id;
+    const repo={...input,workspaceId:id};
+    expect(await agent.releaseVerifyGitHubLightweightTag(repo,"v1.1.0-beta.90",sha,
+      {ownerScope:"trusted:release-operator"})).toBe(true);
+    expect(readTag).toHaveBeenCalledTimes(1);
+    expect(await agent.releaseVerifyGitHubLightweightTag(repo,"v1.1.0-beta.90",
+      "b".repeat(40),{ownerScope:"trusted:release-operator"})).toBe(false);
+    await expect(agent.releaseVerifyGitHubLightweightTag(repo,"../bad",sha,
+      {ownerScope:"trusted:release-operator"})).rejects.toThrow();
+  });
+  it("denies unauthorized release tag read without querying GitHub",async()=>{
+    const {agent,readTag}=await setup({capabilities:[]});
+    const id=(await agent.listWorkspaces())[0]!.id;
+    await expect(agent.releaseVerifyGitHubLightweightTag({...input,workspaceId:id},
+      "v1.1.0-beta.90",sha,{ownerScope:"trusted:release-operator"})).rejects.toThrow();
+    expect(readTag).not.toHaveBeenCalled();
   });
   it("rejects unauthorized source-control capability before contacting GitHub",async()=>{
     const {agent,readMain}=await setup({capabilities:[]});

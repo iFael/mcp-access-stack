@@ -1338,6 +1338,47 @@ export class LocalAgent {
     );
   }
 
+  /** Internal Oracle release tag verifier. GitHub lightweight refs alone
+   * qualify; annotated tags and any unexpected commit are refused. Reuses the
+   * existing source-control policy, authenticated client and audit trail. */
+  async releaseVerifyGitHubLightweightTag(
+    input: GitHubGetRepositoryInput,
+    tag: string,
+    commitSha: string,
+    context: OperationContext = {},
+  ): Promise<boolean> {
+    return this.runSourceControlValidatedAudited(
+      "releaseVerifyGitHubLightweightTag",
+      githubGetRepositoryInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(tag) ||
+            tag.includes("-oracle.") || tag.includes("-companion.") ||
+            !/^[a-f0-9]{40}$/u.test(commitSha)) {
+          throw new AppError("INVALID_ARGUMENT", "Invalid immutable public release tag identity.");
+        }
+        const repository = parsed.owner + "/" + parsed.repository;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = "github:" + repository + ":ref/tags/" + tag;
+        metadata.expectedSha = commitSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace, "github.repository.read", repository,
+          parsed.root ?? ".", false, activeContext.signal,
+        );
+        const client = await this.getGitHubWorkflowApiClient();
+        if (!client.getTagRef) {
+          throw new AppError("CAPABILITY_UNSUPPORTED", "Authenticated tag ref read unavailable.");
+        }
+        const ref = await client.getTagRef(parsed.owner, parsed.repository, tag, activeContext);
+        const verified = ref.ref === "refs/tags/" + tag &&
+          ref.object.type === "commit" && ref.object.sha === commitSha;
+        if (verified) metadata.resultSha = commitSha;
+        return verified;
+      },
+    );
+  }
+
   async githubMaterializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, context: OperationContext = {}): Promise<GitHubMaterializeActionsArtifactResult> {
     return this.runSourceControlValidatedAudited(
       "githubMaterializeActionsArtifact",
