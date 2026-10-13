@@ -163,6 +163,12 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleReleaseAdvance(
+    input:import("@vs-code-gpt/shared").OracleReleaseAdvanceInput,
+  ):Promise<import("@vs-code-gpt/shared").OracleReleaseAdvanceResult>{
+    this.calls.push("oracleReleaseAdvance");
+    return {status:"outcome_unknown",operationId:input.operationId};
+  }
   async getReleaseState(): Promise<import("@vs-code-gpt/shared").GetReleaseStateResult> {
     this.calls.push("getReleaseState");
     return {
@@ -483,6 +489,34 @@ function registeredTools(server: McpServer): Record<string, RegisteredTool> {
 }
 
 describe("registerWorkspaceTools", () => {
+  it("registers one release facade, keeps strict Oracle CAS, and never substitutes a shell tool",async()=>{
+    const executor=new MockWorkspaceExecutor();
+    const server=new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerWorkspaceTools(server,executor,{
+      includeTools:["release_orchestrator"],securitySchemes:[{type:"noauth"}],
+    });
+    const tools=registeredTools(server);
+    expect(Object.keys(tools)).toEqual(["release_orchestrator"]);
+    expect(tools.release_orchestrator?.annotations).toMatchObject({
+      readOnlyHint:false,destructiveHint:true,idempotentHint:true,
+    });
+    const id="123e4567-e89b-42d3-a456-426614174000";
+    const args={action:"advance_oracle",workspaceId:"mcp-access-stack",
+      runId:id,operationId:"123e4567-e89b-42d3-a456-426614174001",
+      expectedSourceSha:"a".repeat(40),expectedLastSeq:2};
+    const result=await tools.release_orchestrator!.handler(args,{
+      signal:new AbortController().signal,
+    });
+    expect(result.structuredContent).toEqual({action:"advance_oracle",
+      result:{status:"outcome_unknown",operationId:args.operationId}});
+    expect(executor.calls).toEqual(["oracleReleaseAdvance"]);
+    const invalid=await tools.release_orchestrator!.handler({...args,command:"rm -rf /"},{
+      signal:new AbortController().signal,
+    });
+    expect(invalid.isError).toBe(true);
+    expect(executor.calls).toEqual(["oracleReleaseAdvance"]);
+  });
+
   it("registers only the requested subset", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -1837,7 +1871,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-one source-control tools inside the 54-tool workspace surface", () => {
+  it("publishes twenty-one source-control tools inside the 55-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1862,8 +1896,8 @@ describe("registerSourceControlTools", () => {
       "github_merge_pull_request",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(54);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(54);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(55);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(55);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

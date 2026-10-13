@@ -191,9 +191,10 @@ import { ValidationService } from "./validation/service.js";
 import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js";
 import {
   OracleControlCaller, type OracleControlCallerInput,
-  type OracleControlCallerResult, type OracleControlCallerBinding,
+  type OracleControlCallerBinding,
 } from "./release/oracle-control-caller.js";
 import { parseOracleControlAdvance } from "@mcp-access-stack/update-control-contract";
+import {oracleReleaseAdvanceResultSchema,type OracleReleaseAdvanceResult} from "@vs-code-gpt/shared";
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
@@ -549,7 +550,7 @@ export class LocalAgent {
   async oracleReleaseAdvance(
     input: OracleControlCallerInput,
     context: OperationContext = {},
-  ): Promise<OracleControlCallerResult> {
+  ): Promise<OracleReleaseAdvanceResult> {
     const schema = {safeParse:(value:unknown) => {
       try {
         if(!value || typeof value!=="object" || Array.isArray(value) ||
@@ -578,8 +579,8 @@ export class LocalAgent {
           throw new AppError("CAPABILITY_UNSUPPORTED",
             "Oracle control is not enrolled for this trusted workspace.");
         }
-        return this.oracleControlCaller.advance(
-          parsed,this.mutationReceiptStoreFor(workspace),activeContext);
+        return oracleReleaseAdvanceResultSchema.parse(await this.oracleControlCaller.advance(
+          parsed,this.mutationReceiptStoreFor(workspace),activeContext));
       },
     );
   }

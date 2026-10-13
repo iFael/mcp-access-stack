@@ -80,6 +80,7 @@ import {
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
+import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
   managedServiceSnapshotSchema,
   serviceGetStatusInputSchema,
@@ -229,6 +230,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "patch_files",
   "delete_file",
   "get_release_state",
+  "release_orchestrator",
   "prepare_release",
   "promote_release",
   "prune_releases",
@@ -1277,6 +1279,43 @@ export function registerWorkspaceTools(
         }
       },
     );
+  }
+
+  if (shouldInclude("release_orchestrator",include)) {
+    server.registerTool("release_orchestrator",{
+      title:"Release lifecycle orchestrator",
+      description:"Single typed release facade for local-state inspection and an Oracle run advance. "
+        +"Oracle advance requires a separately enrolled authenticated control host, trusted workspace, owner policy, "
+        +"exact SHA/sequence and a durable operationId. No user-supplied endpoints, tokens or shell commands. "
+        +"Uncertain results must be reconciled read-only, never re-dispatched.",
+      inputSchema:releaseOrchestratorInputSchema,
+      outputSchema:releaseOrchestratorResultSchema,
+      annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true,idempotentHint:true},
+      _meta:meta,
+    },async(input,extra)=>{
+      const authError=validateAuthentication(options,extra.authInfo);
+      if(authError)return authError;
+      try {
+        const parsed=releaseOrchestratorInputSchema.parse(input);
+        const result=await withToolOperationContext(options.operationContextFactory,extra,
+          MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,async context=>
+            parsed.action==="get_local_state"
+              ? {action:"get_local_state" as const,result:await executor.getReleaseState(
+                {workspaceId:parsed.workspaceId},context)}
+              : {action:"advance_oracle" as const,result:await executor.oracleReleaseAdvance(
+                oracleReleaseAdvanceInputSchema.parse({workspaceId:parsed.workspaceId,
+                  runId:parsed.runId,operationId:parsed.operationId,
+                  expectedSourceSha:parsed.expectedSourceSha,expectedLastSeq:parsed.expectedLastSeq}),context)});
+        const structuredContent=releaseOrchestratorResultSchema.parse(result);
+        return {content:[{type:"text",
+          text:parsed.action==="get_local_state"
+            ? "Release lifecycle state read."
+            : structuredContent.action==="advance_oracle" && structuredContent.result.status==="observed"
+              ? "Oracle release-control observation recorded; not proof of production deployment."
+              : "Oracle release operation outcome unknown; reconcile the same operation without retrying POST."
+        }],structuredContent};
+      } catch(error){return toolError(error);}
+    });
   }
 
   if (shouldInclude("prepare_release", include)) {
@@ -3551,6 +3590,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   patchFile: "patch_file",
   deleteFile: "delete_file",
   getReleaseState: "get_release_state",
+  oracleReleaseAdvance:"release_orchestrator",
   prepareRelease: "prepare_release",
   promoteRelease: "promote_release",
   pruneReleases: "prune_releases",

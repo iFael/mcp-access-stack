@@ -97,6 +97,13 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.deleteFile(input, context);
   }
 
+  oracleReleaseAdvance(
+    input:import("@vs-code-gpt/shared").OracleReleaseAdvanceInput,
+    context?:OperationContext,
+  ):Promise<import("@vs-code-gpt/shared").OracleReleaseAdvanceResult>{
+    return this.agent.oracleReleaseAdvance(input,context);
+  }
+
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

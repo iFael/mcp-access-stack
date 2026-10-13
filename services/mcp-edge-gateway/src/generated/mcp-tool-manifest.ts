@@ -1831,6 +1831,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Single typed release facade for local-state inspection and an Oracle run advance. Oracle advance requires a separately enrolled authenticated control host, trusted workspace, owner policy, exact SHA/sequence and a durable operationId. No user-supplied endpoints, tokens or shell commands. Uncertain results must be reconciled read-only, never re-dispatched.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "release_orchestrator",
+    "title": "Release lifecycle orchestrator"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": true,
@@ -21971,13 +21999,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "6fb4da4641b23d2a3217f87949d2cabd3b086050983afaaa904326f2e6c5efe7",
-  "serverVersion": "0.4.0-catalog.c6fb4da4641b2.see734ae04a98",
-  "toolCount": 98,
-  "toolSetRevision": "ee734ae04a984b5f95e8a22164aecc9ece007138a8b9331c55cd8e9d052c54bc"
+  "contractRevision": "ce3a0733faa582929fa53e2813f94f3253636df73058a05449d222ecc5a14a59",
+  "serverVersion": "0.4.0-catalog.cce3a0733faa5.sa95bdb31158c",
+  "toolCount": 99,
+  "toolSetRevision": "a95bdb31158cf1e4fe47b0d96d8039bf9b59ca72f1b1e5eb9f9628447c13bba6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c6fb4da4641b2.see734ae04a98"
+  "version": "0.4.0-catalog.cce3a0733faa5.sa95bdb31158c"
 } as const;

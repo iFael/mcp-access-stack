@@ -24,6 +24,7 @@ import type {
   PromoteReleaseResult,
 } from "./release-lifecycle-contracts.js";
 import type { PruneReleasesInput, PruneReleasesResult } from "./release-prune-contracts.js";
+import type {OracleReleaseAdvanceInput,OracleReleaseAdvanceResult} from "./release-orchestrator-contracts.js";
 import type {
   GetWorkspaceContextInput,
   GetWorkspaceContextResult,
@@ -87,6 +88,7 @@ export interface WorkspaceExecutor {
   writeFile(input: WriteFileInput, context?: OperationContext): Promise<WriteFileResult>;
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult>;
   deleteFile(input: DeleteFileInput, context?: OperationContext): Promise<DeleteFileResult>;
+  oracleReleaseAdvance(input:OracleReleaseAdvanceInput,context?:OperationContext):Promise<OracleReleaseAdvanceResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,
