@@ -62,7 +62,8 @@ $workspacePaths = @(
     'services/workspace-agent',
     'services/mcp-gateway',
     'packages/mcp-core',
-    'packages/edge-protocol'
+    'packages/edge-protocol',
+    'packages/update-control-contract'
 )
 foreach ($workspacePath in $workspacePaths) {
     $workspaceRoot = Join-Path $root $workspacePath
@@ -207,6 +208,19 @@ try {
     $bundledVersion = @(& $bundledNode --version)
     if ($LASTEXITCODE -ne 0 -or $bundledVersion.Count -ne 1 -or [string]$bundledVersion[0] -ne $nodeVersion) {
         throw 'Bundled Node.js runtime failed version verification.'
+    }
+
+    # Import the real Companion release path, not just its manifest: this catches
+    # workspace packages omitted by npm workspace-link removal before publication.
+    Push-Location $staging
+    try {
+        & $bundledNode --input-type=module -e 'await import("./node_modules/@vs-code-gpt/local-agent/dist/release/oracle-control-caller.js");'
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Immutable Windows release cannot load its Oracle runtime dependencies.'
+        }
+    }
+    finally {
+        Pop-Location
     }
 
     $validationConfigSource = Join-Path $root 'config\validation'

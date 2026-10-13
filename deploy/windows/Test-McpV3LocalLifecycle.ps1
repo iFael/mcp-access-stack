@@ -218,6 +218,13 @@ Assert-ContainsAll -Label 'MCP V3 Windows execution-node staging retry' -Source 
     'directory move failed after {0} attempts'
 )
 
+$immutableReleaseBuilder = Read-ProjectFile 'deploy\windows\New-McpRelease.ps1'
+Assert-ContainsAll -Label 'Immutable Windows runtime dependencies' -Source $immutableReleaseBuilder -Tokens @(
+    "'packages/update-control-contract'",
+    'oracle-control-caller.js',
+    'Immutable Windows release cannot load its Oracle runtime dependencies.'
+)
+
 $distribution = Read-ProjectFile 'deploy\windows\New-McpPublicDistribution.ps1'
 Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -Tokens @(
     'Install-McpV3Local.ps1',

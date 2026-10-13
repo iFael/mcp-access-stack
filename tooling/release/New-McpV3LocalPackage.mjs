@@ -20,6 +20,7 @@ const WORKSPACES = [
   "services/mcp-gateway",
   "packages/mcp-core",
   "packages/edge-protocol",
+  "packages/update-control-contract",
 ];
 
 const CRITICAL_RUNTIME_MODULES = [
@@ -27,6 +28,7 @@ const CRITICAL_RUNTIME_MODULES = [
   "@vs-code-gpt/remote-mcp-gateway",
   "@vs-code-gpt/shared",
   "@mcp-access-stack/edge-protocol",
+  "@mcp-access-stack/update-control-contract",
 ];
 
 const GITLEAKS_VERSION = "8.30.1";
@@ -149,6 +151,10 @@ try {
       `Bundled Node.js mismatch: expected=${process.version} actual=${bundledVersion}`,
     );
   }
+  run(nodeTarget, [
+    "--input-type=module", "-e",
+    'await import("./node_modules/@vs-code-gpt/local-agent/dist/release/oracle-control-caller.js");',
+  ], staging);
 
   for (const relative of platformRuntimeFiles(platform)) {
     await copyFileRequired(root, staging, relative);
