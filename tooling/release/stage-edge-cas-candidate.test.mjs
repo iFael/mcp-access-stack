@@ -17,8 +17,11 @@ const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const config = JSON.parse(await readFile(path.join(base, "services/mcp-edge-gateway/wrangler.jsonc"), "utf8"));
 const manifest = await readFile(path.join(base, "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts"), "utf8");
 
-test("local staging accepts exact compiled CAS catalog and immutable configuration", () => {
-  assert.equal(verifyLocalCandidate(config, manifest, revision), revision);
+test("frozen Edge staging rejects a newer MCP catalog instead of changing its pinned CAS", () => {
+  // This historical staging gate is pinned to the original 97-tool revision.
+  // The current branch has 99 tools; it must not be staged as the old candidate.
+  assert.throws(() => verifyLocalCandidate(config, manifest, revision),
+    /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
 test("cannot stage a mismatched revision, fake manifest, missing secret, DO or migration drift", () => {
   for (const [c, m, rev] of [
