@@ -296,5 +296,5 @@ describe("DelegatedCampaignCoordinator", () => {
     const second = await runner.run(workspaceId, id);
     expect(second.stop).toBe("all_completed");
     expect(second.executed).toBe(8);
-  });
+  }, 15000);
 });

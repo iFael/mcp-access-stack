@@ -1,4 +1,29 @@
 export { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
+export { ReleaseWorkflowExecutor } from "./release-workflow-executor.js";
+export { bindReleasePruneCleanup } from "./release-prune-capability.js";
+export { bindReleaseTagBootstrap } from "./release-tag-bootstrap-capability.js";
+export { bindReleaseVerificationReads } from "./release-verification-capabilities.js";
+export { bindReleaseEffects } from "./release-effect-capabilities.js";
+export { bindReleasePublicDistribution } from "./release-public-distribution-capability.js";
+export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
+export {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
+export {OracleRemoteWorkflowPort} from "./oracle-remote-workflow-port.js";
+export {resolveOracleRemoteWorkflowPort} from "./oracle-workflow-host-binding.js";
+export {resolveOracleRemoteSourceReadPort,composeOracleHostReleaseCapabilities} from "./oracle-source-host-binding.js";
+export type {OracleHostReleaseBindings} from "./oracle-source-host-binding.js";
+export { composeReleaseCapabilities } from "./release-capability-registry.js";
+export { createTrustedOracleReleaseHost } from "./release-trusted-host.js";
+export { OracleReleaseControlConnector, validateOracleControlSocketConfig } from "./oracle-control-connector.js";
+export type { OracleControlSocketConfig, OracleTrustedControl } from "./oracle-control-connector.js";
+export type { ReleaseCapabilityComposition, ReleaseCapabilityRegistry } from "./release-capability-registry.js";
+export type { TrustedReleasePrincipal, TrustedReleaseAdvanceInput, TrustedOracleReleaseHostOptions } from "./release-trusted-host.js";
+export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
+export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
+export type { TypedTagBootstrapPort, ReleaseTagBootstrapBinding } from "./release-tag-bootstrap-capability.js";
+export type { TypedReleaseVerificationPort, ReleaseVerificationBinding, ReleaseVerificationReceipt } from "./release-verification-capabilities.js";
+export type { TypedReleaseEffectPort, ReleaseEffectBinding, ReleaseEffectRequest, ReleaseEffectReceipt } from "./release-effect-capabilities.js";
+export type { TypedPublicDistributionPort, PublicDistributionBinding, PublicDistributionProof } from "./release-public-distribution-capability.js";
+export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult, ReleasePollingOptions, ReleasePollingResult } from "./release-workflow-executor.js";
 export type {
   CreateRunResult,
   ReconcileOperationInput,

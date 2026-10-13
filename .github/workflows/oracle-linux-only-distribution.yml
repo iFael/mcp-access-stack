@@ -92,8 +92,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      id-token: write
-      attestations: write
     steps:
       - name: Checkout exact validated commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -152,23 +150,6 @@ jobs:
           echo "directory=$directory" >> "$GITHUB_OUTPUT"
           echo "archive=$directory/$name" >> "$GITHUB_OUTPUT"
 
-      - name: Sign Oracle source provenance using GitHub attestations
-        id: provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: ${{ steps.artifact.outputs.archive }}
-
-      - name: Preserve signed Sigstore attestation bundle
-        shell: bash
-        env:
-          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
-          DESTINATION: ${{ steps.artifact.outputs.directory }}
-        run: |
-          set -euo pipefail
-          test -s "$BUNDLE_PATH"
-          cp -- "$BUNDLE_PATH" "$DESTINATION/oracle-source-attestation.sigstore.json"
-          test -s "$DESTINATION/oracle-source-attestation.sigstore.json"
-
       - name: Recheck main CAS before artifact availability
         shell: bash
         env:
@@ -179,7 +160,7 @@ jobs:
           remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
           [[ "$remote_main" == "$EXPECTED_SHA" ]]
 
-      - name: Upload attested source bundle without release, tag or Edge deploy
+      - name: Upload checksummed source bundle without release, tag or Edge deploy
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: oracle-linux-source-${{ needs.preflight.outputs.tag }}-${{ needs.preflight.outputs.commit }}
@@ -187,7 +168,6 @@ jobs:
             ${{ steps.artifact.outputs.directory }}/oracle-linux-source-*.tar.gz
             ${{ steps.artifact.outputs.directory }}/oracle-linux-source-*.tar.gz.sha256
             ${{ steps.artifact.outputs.directory }}/oracle-source-manifest.json
-            ${{ steps.artifact.outputs.directory }}/oracle-source-attestation.sigstore.json
           if-no-files-found: error
           retention-days: 30
 
@@ -200,7 +180,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - name: Checkout exact signed source identity
+      - name: Checkout exact pinned source identity
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.preflight.outputs.commit }}
@@ -211,13 +191,13 @@ jobs:
         with:
           node-version: 26
 
-      - name: Download artifact from successful signed package job
+      - name: Download artifact from successful package job
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: oracle-linux-source-${{ needs.preflight.outputs.tag }}-${{ needs.preflight.outputs.commit }}
           path: oracle-source-assets
 
-      - name: Verify artifact, attestation prerequisite, main SHA and release tag CAS
+      - name: Verify artifact, main SHA and release tag CAS
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -235,7 +215,6 @@ jobs:
           remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
           remote_tag="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
           [[ "$remote_main" == "$EXPECTED_SHA" && "$remote_tag" == "$EXPECTED_SHA" ]]
-          test -s "$directory/oracle-source-attestation.sigstore.json"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json id >/dev/null 2>&1; then
             echo "An Oracle release already exists; refusing duplicate publication." >&2
             exit 1
@@ -253,7 +232,6 @@ jobs:
             "oracle-source-assets/oracle-linux-source-$EXPECTED_SHA.tar.gz" \
             "oracle-source-assets/oracle-linux-source-$EXPECTED_SHA.tar.gz.sha256" \
             "oracle-source-assets/oracle-source-manifest.json" \
-            "oracle-source-assets/oracle-source-attestation.sigstore.json" \
             --verify-tag --prerelease --repo "$GITHUB_REPOSITORY" \
             --title "$RELEASE_TAG (Oracle Linux source only)" \
-            --notes "Oracle Linux-only source archive with SHA-256 and GitHub signed build attestation. No Edge deployment, service installation or cutover. The current Oracle updater builds the runtime from this pinned Git tag."
+            --notes "Oracle Linux-only source archive with SHA-256 and GitHub SHA-256 manifest. No Edge deployment, service installation or cutover. The current Oracle updater builds the runtime from this pinned Git tag."

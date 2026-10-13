@@ -8,6 +8,7 @@ import {
   type GitRepositoryExecutor,
 } from "@vs-code-gpt/shared";
 import { LocalAgent } from "../../../src/local-agent.js";
+import type { GitHubWorkflowApiClient } from "../../../src/source-control/github-http-client.js";
 import {
   createFixture,
   git,
@@ -50,6 +51,7 @@ async function setupAgent(options: {
   branch?: string;
   gitExecutor?: GitRepositoryExecutor;
   githubExecutor?: GitHubExecutor;
+  workflowClient?: GitHubWorkflowApiClient;
   confirmationMode?: "standard" | "trusted-workspace";
 }) {
   fixture = await createFixture({ profile: "full-repo-write" });
@@ -85,6 +87,7 @@ async function setupAgent(options: {
       canonicalOriginUrl: async () => options.origin ?? "https://github.com/octo/repo.git",
     },
     githubExecutor,
+    ...(options.workflowClient ? { workflowClient: options.workflowClient } : {}),
     typedConfirmationRegistry: confirmationRegistry,
     mutationReceiptStore: receiptStore,
   } as never);
@@ -242,6 +245,147 @@ function fakeGitHubExecutor(): GitHubExecutor {
     })),
   };
 }
+
+describe("LocalAgent unified guarded GitHub workflow operation", () => {
+  const input={
+    workspaceId:"test",owner:"octo",repository:"repo",
+    workflow:"edge-f09-guarded-rollout.yml" as const,
+    expectedMainSha:SHA_A,operationId:"11111111-2222-4333-8444-555555555555",
+  };
+  const context={ownerScope:"test:release-operator"};
+
+  it("refuses remote dispatch without explicit workspace capability",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getWorkflowRuns:async()=>({total_count:0,workflow_runs:[]}),
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({capabilities:["github.repository.read"],
+      workflowClient,origin:"https://github.com/octo/repo.git"});
+    await expect(agent.githubWorkflowOperation({...input,mode:"dispatch"},context)).rejects.toThrow();
+    expect(count).toBe(0);
+    expect((await agent.githubWorkflowOperation({...input,mode:"reconcile"},context)).status)
+      .toBe("outcome_unknown");
+  });
+
+  it("submits at most once, then reconciles by the exact durable operationId",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getWorkflowRuns:async()=>({total_count:count>0?1:0,workflow_runs:count>0?[{
+        id:77,workflow_id:5,name:"f09",display_title:"mcp-release-"+input.operationId,
+        head_sha:SHA_A,event:"workflow_dispatch",status:"completed",
+        conclusion:"success",run_attempt:1,
+      }]:[]}),
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({
+      capabilities:["github.repository.read","github.workflow.dispatch"],
+      workflowClient,origin:"https://github.com/octo/repo.git",
+    });
+    expect((await agent.githubWorkflowOperation({...input,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect((await agent.githubWorkflowOperation({...input,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect(count).toBe(1);
+    expect(await agent.githubWorkflowOperation({...input,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:77,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,
+      workflow:"release-tag-bootstrap.yml",tag:"v1.1.0-beta.90",mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
+  });
+
+  it("bootstraps release tag only under its separate workspace authorization",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getWorkflowRuns:async()=>({total_count:count>0?1:0,workflow_runs:count>0?[{
+        id:88,workflow_id:6,name:"Release tag bootstrap",
+        display_title:"mcp-release-"+input.operationId,
+        head_sha:SHA_A,event:"workflow_dispatch",status:"completed",
+        conclusion:"success",run_attempt:1,
+      }]:[]}),
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({
+      capabilities:["github.repository.read","github.workflow.bootstrap"],
+      workflowClient,origin:"https://github.com/octo/repo.git",
+    });
+    const bootstrap={...input,workflow:"release-tag-bootstrap.yml" as const,
+      tag:"v1.1.0-beta.90"};
+    expect((await agent.githubWorkflowOperation({...bootstrap,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect((await agent.githubWorkflowOperation({...bootstrap,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect(count).toBe(1);
+    expect(await agent.githubWorkflowOperation({...bootstrap,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:88,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
+  });
+
+  it("observes a tag-push public release with repository-read permission and no dispatch",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getTagRef:async(_owner,_repo,tag)=>({ref:"refs/tags/"+tag,object:{type:"commit",sha:SHA_A}}),
+      getTagPushRuns:async()=>({total_count:1,workflow_runs:[{
+        id:78,workflow_id:10,name:"Public release",display_title:"v1.1.0-beta.90",
+        event:"push",head_branch:"v1.1.0-beta.90",head_sha:SHA_A,
+        status:"completed",conclusion:"success",run_attempt:1,
+      }]}),
+      getWorkflowRuns:async()=>({total_count:0,workflow_runs:[]}),
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({capabilities:["github.repository.read"],
+      workflowClient,origin:"https://github.com/octo/repo.git"});
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:input.operationId};
+    expect(await agent.githubWorkflowOperation({...release,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:78,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...release,mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(0);
+  });
+
+  it("dispatches public release only with separate permission and completed same-operation bootstrap",async()=>{
+    let count=0;
+    const workflowClient:GitHubWorkflowApiClient={
+      getMainRef:async()=>({ref:"refs/heads/main",object:{type:"commit",sha:SHA_A}}),
+      getTagRef:async(_owner,_repo,tag)=>({ref:"refs/tags/"+tag,object:{type:"commit",sha:SHA_A}}),
+      getTagPushRuns:async()=>({total_count:0,workflow_runs:[]}),
+      getWorkflowRuns:async(_owner,_repo,workflow)=> {
+        if (workflow==="release-tag-bootstrap.yml") return {total_count:1,workflow_runs:[{
+          id:88,workflow_id:6,name:"Release tag bootstrap",display_title:"mcp-release-"+input.operationId,
+          head_sha:SHA_A,event:"workflow_dispatch",status:"completed",conclusion:"success",run_attempt:1,
+        }]};
+        if(workflow==="release.yml" && count>0) return {total_count:1,workflow_runs:[{
+          id:89,workflow_id:7,name:"Public release",display_title:"mcp-release-"+input.operationId,
+          head_sha:SHA_A,event:"workflow_dispatch",status:"completed",conclusion:"success",run_attempt:1,
+        }]};
+        return {total_count:0,workflow_runs:[]};
+      },
+      dispatchWorkflow:async()=>{count++;},
+    };
+    const {agent}=await setupAgent({capabilities:["github.repository.read","github.workflow.public_release"],
+      workflowClient,origin:"https://github.com/octo/repo.git"});
+    const release={...input,workflow:"release.yml" as const,tag:"v1.1.0-beta.90",
+      bootstrapOperationId:input.operationId};
+    expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect((await agent.githubWorkflowOperation({...release,mode:"dispatch"},context)).status)
+      .toBe("submitted");
+    expect(count).toBe(1);
+    expect(await agent.githubWorkflowOperation({...release,mode:"reconcile"},context))
+      .toMatchObject({status:"observed",runId:89,conclusion:"success"});
+    await expect(agent.githubWorkflowOperation({...input,mode:"dispatch"},context))
+      .rejects.toThrow();
+    expect(count).toBe(1);
+  });
+});
 
 describe("LocalAgent typed source-control authorization", () => {
   it("denies missing git.index.write before invoking the stage backend", async () => {

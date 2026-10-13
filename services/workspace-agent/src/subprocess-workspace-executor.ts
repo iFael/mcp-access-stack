@@ -56,6 +56,11 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("deleteFile"));
   }
 
+  oracleReleaseAdvance(...args:Parameters<WorkspaceExecutor["oracleReleaseAdvance"]>){
+    return this.fallback?.oracleReleaseAdvance(...args) ??
+      Promise.reject(this.notImplemented("oracleReleaseAdvance"));
+  }
+
   getReleaseState(...args: Parameters<WorkspaceExecutor["getReleaseState"]>) {
     return this.fallback?.getReleaseState(...args) ??
       Promise.reject(this.notImplemented("getReleaseState"));

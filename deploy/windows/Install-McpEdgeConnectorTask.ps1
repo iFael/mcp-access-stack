@@ -129,7 +129,7 @@ $pwshCommand = Get-Command pwsh.exe -ErrorAction Stop
 $pwsh = [IO.Path]::GetFullPath($pwshCommand.Source)
 $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-$executionPolicy = if ($AllowUnsignedDevelopment) { 'Bypass' } else { 'AllSigned' }
+$executionPolicy = 'Bypass'
 $plan = [ordered]@{
     taskName = $TaskName
     releaseId = $ReleaseId
@@ -172,16 +172,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required Edge Connector task dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and
-        -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -198,7 +193,7 @@ if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
     [string]$executionManifest.commit -ne $releaseCommit -or
     [string]$executionManifest.platform -ne 'win32-x64' -or
     [string]$executionManifest.runtimeMode -ne 'bundled-node' -or
-    [string]$executionManifest.integrityRoot -ne 'signed-distribution-manifest') {
+    [string]$executionManifest.integrityRoot -ne 'sha256-distribution-manifest') {
     throw 'Edge Connector release identity or execution manifest contract is invalid.'
 }
 $executionIdentity = $releaseManifest.executionNode
@@ -213,7 +208,7 @@ if ($expectedManifestSha256 -notmatch '^[a-f0-9]{64}$' -or
     $manifestSha256 -ne $expectedManifestSha256 -or
     [string]$releaseAttestation.releaseId -ne $ReleaseId -or
     [string]$releaseAttestation.commit -ne $releaseCommit) {
-    throw 'Edge Connector execution manifest is not bound to the signed release attestation.'
+    throw 'Edge Connector execution manifest is not bound to the SHA-256 release identity.'
 }
 if (-not (Test-Path -LiteralPath $validationLauncherPath -PathType Leaf)) {
     throw "Edge Connector validation launcher is missing from release: $validationLauncherPath"
@@ -221,17 +216,17 @@ if (-not (Test-Path -LiteralPath $validationLauncherPath -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $edgeHostPath -PathType Leaf)) {
     throw "Edge Connector native host is missing from release: $edgeHostPath"
 }
-Assert-McpPublicSignature -Path $validationLauncherPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $edgeHostPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $validationLauncherPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $edgeHostPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 $validationLauncherRecord = @($executionManifest.artifacts | Where-Object { [string]$_.id -eq 'edge-validation-launcher' })
-if ($validationLauncherRecord.Count -ne 1 -or $validationLauncherRecord[0].authenticodeRequired -ne $true) {
-    throw 'Edge Connector validation launcher must be a signed critical release artifact.'
+if ($validationLauncherRecord.Count -ne 1 -or $validationLauncherRecord[0].authenticodeRequired -ne $false) {
+    throw 'Edge Connector validation launcher must be a SHA-256 verified release artifact.'
 }
 $edgeHostRecord = @($executionManifest.artifacts | Where-Object { [string]$_.id -eq 'edge-host' })
 if ($edgeHostRecord.Count -ne 1 -or
     [string]$edgeHostRecord[0].path -ne 'native/McpEdgeHost.exe' -or
-    $edgeHostRecord[0].authenticodeRequired -ne $true) {
-    throw 'Edge Connector native host must be the signed native/McpEdgeHost.exe critical artifact.'
+    $edgeHostRecord[0].authenticodeRequired -ne $false) {
+    throw 'Edge Connector native host must be the SHA-256 verified native/McpEdgeHost.exe critical artifact.'
 }
 
 $validationArguments = @(
@@ -349,7 +344,7 @@ if (-not $alreadyInstalled) {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the signed fixed-contract McpEdgeHost.'
+        -Description 'Owns the persistent outbound Cloudflare MCP Edge Connector through the immutable fixed-contract McpEdgeHost.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 

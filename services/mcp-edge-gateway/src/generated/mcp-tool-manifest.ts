@@ -1831,6 +1831,333 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Single typed release facade for local-state inspection and an Oracle run advance. Oracle advance requires a separately enrolled authenticated control host, trusted workspace, owner policy, exact SHA/sequence and a durable operationId. No user-supplied endpoints, tokens or shell commands. Uncertain results must be reconciled read-only, never re-dispatched.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get_local_state",
+            "advance_oracle"
+          ],
+          "type": "string"
+        },
+        "expectedLastSeq": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "expectedSourceSha": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "release_orchestrator",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get_local_state",
+            "advance_oracle"
+          ],
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeBootstrap": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cutoverScriptPresent": {
+                      "type": "boolean"
+                    },
+                    "updateScriptPresent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "updateScriptPresent",
+                    "cutoverScriptPresent"
+                  ],
+                  "type": "object"
+                },
+                "installationRoot": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "state": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "candidate": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "previous": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "updatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "active",
+                    "candidate",
+                    "previous",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                },
+                "workspaceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspaceId",
+                "installationRoot",
+                "state",
+                "activeBootstrap"
+              ],
+              "type": "object"
+            },
+            {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operationId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "outcome_unknown",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "operationId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operationId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "result": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "lastSeq": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "runId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "planned",
+                            "running",
+                            "paused_outcome_unknown",
+                            "failed",
+                            "succeeded"
+                          ],
+                          "type": "string"
+                        },
+                        "stop": {
+                          "enum": [
+                            "outcome_unknown",
+                            "succeeded",
+                            "step_limit",
+                            "blocked_gate",
+                            "blocked_missing_capability",
+                            "blocked_unauthorized",
+                            "operation_in_progress",
+                            "reconciled_not_applied",
+                            "failed"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "runId",
+                        "lastSeq",
+                        "status",
+                        "stop"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "const": "observed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "operationId",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "result"
+      ],
+      "type": "object"
+    },
+    "title": "Release lifecycle orchestrator"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": true,
@@ -2333,6 +2660,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "dryRun": {
           "type": "boolean"
         },
+        "expectedPlanSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "expectedStateSha256": {
           "pattern": "^[0-9a-f]{64}$",
           "type": "string"
@@ -2340,6 +2671,16 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "operationId": {
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "reconcile": {
+          "const": true,
+          "type": "boolean"
+        },
+        "selection": {
+          "enum": [
+            "eligible"
+          ],
           "type": "string"
         },
         "targets": {
@@ -2378,8 +2719,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "required": [
         "workspaceId",
         "operationId",
-        "dryRun",
-        "targets"
+        "dryRun"
       ],
       "type": "object"
     },
@@ -2422,12 +2762,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "type": "object"
           },
           "maxItems": 5,
-          "minItems": 1,
           "type": "array"
         },
         "operationId": {
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "planSha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "type": "string"
         },
         "stateSha256": {
@@ -11586,6 +11929,145 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Get GitHub commit checks"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "bootstrapOperationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "expectedMainSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "dispatch",
+            "reconcile"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$",
+          "type": "string"
+        },
+        "workflow": {
+          "enum": [
+            "edge-f09-guarded-rollout.yml",
+            "release-tag-bootstrap.yml",
+            "release.yml"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "workflow",
+        "mode",
+        "expectedMainSha",
+        "operationId"
+      ],
+      "type": "object"
+    },
+    "name": "github_workflow_operation",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "outcome_unknown",
+            "observed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operationId"
+      ],
+      "type": "object"
+    },
+    "title": "Run or reconcile guarded release workflow"
   },
   {
     "_meta": {
@@ -21863,13 +22345,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "da7f5d3967de5325b5daa36951ce87417767a308ebf5eb0d3a999019d7780c92",
-  "serverVersion": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4",
-  "toolCount": 97,
-  "toolSetRevision": "7c90aeb8add41d42ab96fb5323b12f24f7c7b5b411f527b8664d2942917398f1"
+  "contractRevision": "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1",
+  "serverVersion": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c",
+  "toolCount": 99,
+  "toolSetRevision": "a95bdb31158cf1e4fe47b0d96d8039bf9b59ca72f1b1e5eb9f9628447c13bba6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cda7f5d3967de.s7c90aeb8add4"
+  "version": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c"
 } as const;

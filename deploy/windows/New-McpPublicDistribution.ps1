@@ -52,20 +52,11 @@ if (-not $edgeUri.IsAbsoluteUri -or
 $edgeOrigin = $edgeUri.GetLeftPart([UriPartial]::Authority) + '/'
 $publicCommonPath = Join-Path $root 'deploy\windows\PublicDistribution.Common.ps1'
 . $publicCommonPath
-$publicSignerCertificatePath = Join-Path $root 'deploy\windows\mcp-access-stack-code-signing.cer'
-Assert-McpPublicCertificateThumbprint `
-    -Path $publicSignerCertificatePath `
-    -ExpectedThumbprint $script:McpPublicCodeSigningThumbprint | Out-Null
 $stage = Join-Path $output 'stage'
 $releaseSource = Join-Path $root "releases\$ReleaseId"
 if (-not (Test-Path -LiteralPath $releaseSource -PathType Container)) {
     throw "Immutable release was not found: $ReleaseId"
 }
-if ([string]::IsNullOrWhiteSpace([string]$env:WINDOWS_SIGNING_PFX_BASE64) -or
-    [string]::IsNullOrWhiteSpace([string]$env:WINDOWS_SIGNING_PFX_PASSWORD)) {
-    throw 'Public distribution requires WINDOWS_SIGNING_PFX_BASE64 and WINDOWS_SIGNING_PFX_PASSWORD.'
-}
-
 function Write-Utf8NoBom {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -107,30 +98,6 @@ function New-DataScript {
     Write-Utf8NoBom -Path $Path -Content ($script + [Environment]::NewLine)
 }
 
-function Sign-Script {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][object]$Certificate
-    )
-    Set-AuthenticodeSignature `
-        -LiteralPath $Path `
-        -Certificate $Certificate `
-        -HashAlgorithm SHA256 `
-        -TimestampServer 'http://timestamp.digicert.com' | Out-Null
-    $observed = Get-AuthenticodeSignature -LiteralPath $Path
-    if (-not $observed.SignerCertificate) {
-        throw "Authenticode signing produced no signer certificate: $Path"
-    }
-    $actualThumbprint = Normalize-McpPublicThumbprint -Value $observed.SignerCertificate.Thumbprint
-    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
-    if ($actualThumbprint -ne $expectedThumbprint) {
-        throw "Authenticode signing used an unexpected certificate: $Path"
-    }
-    if ($observed.Status -notin @('Valid', 'NotTrusted', 'UnknownError')) {
-        throw "Authenticode signing failed: $Path (Status=$($observed.Status))"
-    }
-}
-
 if (Test-Path -LiteralPath $output) {
     Remove-Item -LiteralPath $output -Recurse -Force
 }
@@ -139,6 +106,8 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $runtimeFiles = @(
     'package.json',
     'config\workspace-policy.example.json',
+    'deploy\common\select-mcp-v3-release.mjs',
+    'deploy\common\prune-mcp-v3-local.mjs',
     'deploy\windows\Install-McpAccessStack.ps1',
     'deploy\windows\Install-McpV3Local.ps1',
     'deploy\windows\Install-McpV3LocalTask.ps1',
@@ -158,7 +127,6 @@ $runtimeFiles = @(
     'deploy\windows\Install-McpBrowserWorkerTask.ps1',
     'deploy\windows\Start-McpEdgeConnector.ps1',
     'deploy\windows\Invoke-McpWindowsExecutionNodeCutover.ps1',
-    'deploy\windows\mcp-access-stack-code-signing.cer',
     'deploy\windows\Update-McpAccessStack.ps1',
     'operations\validation\Initialize-ValidationTools.ps1'
 
@@ -200,6 +168,10 @@ foreach ($name in $edgeRecoveryReleaseFiles) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     Copy-Item -LiteralPath $source -Destination $target -Force
 }
+$catalogSelectorTarget = Join-Path $releaseTarget 'deploy\common\select-mcp-v3-release.mjs'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $catalogSelectorTarget) | Out-Null
+Copy-Item -LiteralPath (Join-Path $stage 'deploy\common\select-mcp-v3-release.mjs') -Destination $catalogSelectorTarget
+Copy-Item -LiteralPath (Join-Path $stage 'deploy\common\prune-mcp-v3-local.mjs') -Destination (Join-Path (Split-Path -Parent $catalogSelectorTarget) 'prune-mcp-v3-local.mjs')
 $releaseManifestPath = Join-Path $releaseTarget 'manifest.json'
 $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
 if ([string]$releaseManifest.releaseId -ne $ReleaseId -or
@@ -261,47 +233,6 @@ if ($BuildRunId -gt 0) {
 }
 $releaseManifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $releaseManifestPath -Encoding UTF8
 
-$pfxPath = Join-Path $output 'signing.pfx'
-[IO.File]::WriteAllBytes(
-    $pfxPath,
-    [Convert]::FromBase64String([string]$env:WINDOWS_SIGNING_PFX_BASE64)
-)
-$password = ConvertTo-SecureString ([string]$env:WINDOWS_SIGNING_PFX_PASSWORD) -AsPlainText -Force
-$certificate = Import-PfxCertificate `
-    -FilePath $pfxPath `
-    -CertStoreLocation Cert:\CurrentUser\My `
-    -Password $password
-try {
-    if (-not $certificate.HasPrivateKey) {
-        throw 'The configured code-signing certificate does not contain a private key.'
-    }
-    $certificateThumbprint = Normalize-McpPublicThumbprint -Value $certificate.Thumbprint
-    $expectedSignerThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
-    if ($certificateThumbprint -ne $expectedSignerThumbprint) {
-        throw 'The configured PFX is not the pinned MCP Access Stack code-signing certificate.'
-    }
-
-    foreach ($script in @(
-        Get-ChildItem -LiteralPath $stage -Recurse -File -Filter '*.ps1' |
-            Where-Object {
-                -not $_.FullName.StartsWith(
-                    $nodeRuntimeTarget,
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            } |
-            Sort-Object FullName
-    )) {
-        Sign-Script -Path $script.FullName -Certificate $certificate
-    }
-
-    $edgeHostExecutablePath = Join-Path $releaseTarget 'native\McpEdgeHost.exe'
-    $compatLauncherPath = Join-Path $releaseTarget 'compat\McpNodeHostLauncher.exe'
-    $compatBrokerPath = Join-Path $releaseTarget 'compat\McpCredentialBroker.exe'
-    $elevationBrokerPath = Join-Path $releaseTarget 'native\McpElevationBroker.exe'
-    foreach ($nativeExecutable in @($edgeHostExecutablePath, $compatLauncherPath, $compatBrokerPath, $elevationBrokerPath)) {
-        Sign-Script -Path $nativeExecutable -Certificate $certificate
-    }
-
     function New-ExecutionNodeArtifactRecord {
         param(
             [Parameter(Mandatory = $true)][string]$Id,
@@ -312,17 +243,6 @@ try {
         $absolutePath = Join-Path $releaseTarget ($RelativePath.Replace('/', '\'))
         if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
             throw "Execution-node artifact is missing: $RelativePath"
-        }
-        if ($AuthenticodeRequired) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $absolutePath
-            if (-not $signature.SignerCertificate) {
-                throw "Execution-node artifact is unsigned: $RelativePath"
-            }
-            $actualThumbprint = Normalize-McpPublicThumbprint -Value $signature.SignerCertificate.Thumbprint
-            $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
-            if ($actualThumbprint -ne $expectedThumbprint) {
-                throw "Execution-node artifact signer mismatch: $RelativePath"
-            }
         }
         $item = Get-Item -LiteralPath $absolutePath
         return [ordered]@{
@@ -342,21 +262,21 @@ try {
         platform = 'win32-x64'
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
+        integrityRoot = 'sha256-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
             [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },
             [ordered]@{ id = 'local-companion'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
-            (New-ExecutionNodeArtifactRecord -Id 'edge-host' -Owner 'edge-runtime' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'edge-host' -Owner 'edge-runtime' -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Id 'edge-connector' -Owner 'edge-runtime' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Id 'edge-validation-launcher' -Owner 'edge-runtime' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'edge-validation-launcher' -Owner 'edge-runtime' -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Id 'browser-worker-server' -Owner 'browser-worker' -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Id 'local-companion-runtime' -Owner 'shared' -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js' -AuthenticodeRequired $false),
-            (New-ExecutionNodeArtifactRecord -Id 'node-host-launcher' -Owner 'shared' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Id 'browser-credential-broker' -Owner 'browser-worker' -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
-            (New-ExecutionNodeArtifactRecord -Id 'elevation-broker' -Owner 'shared' -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $true),
+            (New-ExecutionNodeArtifactRecord -Id 'node-host-launcher' -Owner 'shared' -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Id 'browser-credential-broker' -Owner 'browser-worker' -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $false),
+            (New-ExecutionNodeArtifactRecord -Id 'elevation-broker' -Owner 'shared' -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $false),
             (New-ExecutionNodeArtifactRecord -Id 'node-runtime' -Owner 'shared' -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }
@@ -405,7 +325,6 @@ try {
     }
     $releaseAttestationPath = Join-Path $releaseTarget 'release-attestation.ps1'
     New-DataScript -Value $releaseAttestation -Path $releaseAttestationPath
-    Sign-Script -Path $releaseAttestationPath -Certificate $certificate
 
     $distributionFiles = @(
         Get-ChildItem -LiteralPath $stage -Recurse -File |
@@ -430,22 +349,12 @@ try {
     }
     $distributionManifestPath = Join-Path $stage 'distribution-manifest.ps1'
     New-DataScript -Value $distributionManifest -Path $distributionManifestPath
-    Sign-Script -Path $distributionManifestPath -Certificate $certificate
-}
-finally {
-    if ($certificate) {
-        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
-}
 
 $assetPath = Join-Path $output "$ReleaseTag-windows-x64.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $assetPath -CompressionLevel Optimal
 $assetHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $hashPath = "$assetPath.sha256"
-Write-Utf8NoBom `
-    -Path $hashPath `
-    -Content ("$assetHash *$([IO.Path]::GetFileName($assetPath))$([Environment]::NewLine)")
+Write-Utf8NoBom -Path $hashPath -Content ("$assetHash *$([IO.Path]::GetFileName($assetPath))$([Environment]::NewLine)")
 
 [pscustomobject]@{
     status = 'created'

@@ -1,5 +1,8 @@
 name: Guarded f09 Edge contract migration
 
+# Stable run identity lets the existing MCP source-control receipts reconcile a 204 dispatch.
+run-name: mcp-release-${{ inputs.operation_id }}
+
 on:
   workflow_dispatch:
     inputs:

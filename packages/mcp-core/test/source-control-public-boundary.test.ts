@@ -17,6 +17,7 @@ import {
   githubClosePullRequestInputSchema,
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -45,6 +46,7 @@ const expectedPublicSourceControlNames = [
   "github_create_pull_request",
   "github_create_repository",
   "github_get_commit_checks",
+  "github_workflow_operation",
   "github_materialize_actions_artifact",
   "github_get_commit_checks_watches",
   "github_start_commit_checks_watch",
@@ -66,12 +68,36 @@ const expectedSourceControlCapabilities = [
   "git.remote.push",
   "github.repository.read",
   "github.artifact.materialize",
+  "github.workflow.dispatch",
+  "github.workflow.bootstrap",
+  "github.workflow.public_release",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
   "github.pull_request.close",
   "github.pull_request.merge",
 ] as const;
+
+describe("unified workflow bootstrap provenance",()=>{
+  const base={workspaceId:"repo",owner:"octo",repository:"app",
+    workflow:"release.yml" as const,mode:"dispatch" as const,
+    tag:"v1.1.0-beta.90",expectedMainSha:shaA,
+    operationId:"11111111-2222-4333-8444-555555555556"};
+  it("requires prior Oracle bootstrap UUID for public release dispatch",()=>{
+    expect(githubWorkflowOperationInputSchema.safeParse(base).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      bootstrapOperationId:"11111111-2222-4333-8444-555555555555"}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,mode:"reconcile"}).success).toBe(true);
+  });
+  it("refuses foreign bootstrap identities on other workflows",()=>{
+    const bootstrapOperationId="11111111-2222-4333-8444-555555555555";
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      workflow:"edge-f09-guarded-rollout.yml",tag:undefined,
+      bootstrapOperationId}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...base,
+      workflow:"release-tag-bootstrap.yml",bootstrapOperationId}).success).toBe(false);
+  });
+});
 
 const forbiddenEscapeHatchValues = {
   command: "git status",
@@ -177,6 +203,13 @@ const inputCases = [
       repository: "app",
       commitSha: shaA,
     },
+  },
+  {
+    name: "github_workflow_operation",
+    schema: githubWorkflowOperationInputSchema,
+    input: { workspaceId: "repo", owner: "octo", repository: "app",
+      workflow: "edge-f09-guarded-rollout.yml", mode: "reconcile",
+      expectedMainSha: shaA, operationId: "11111111-2222-4333-8444-555555555555" },
   },
   {
     name: "github_materialize_actions_artifact",
@@ -286,7 +319,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty public tools, nineteen relay operations and twelve capabilities", () => {
+  it("exposes twenty-one public tools, twenty relay operations and fifteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -296,8 +329,8 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(sourceControlCapabilities).toHaveLength(12);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
+    expect(sourceControlCapabilities).toHaveLength(15);
 
     for (const forbiddenName of [
       "source_control",

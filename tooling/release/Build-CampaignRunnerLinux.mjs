@@ -12,6 +12,7 @@ const ARCHIVE = "node-v26.10.0-linux-x64.tar.xz";
 const ARCHIVE_SHA256 = "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022";
 const SOURCE_PACKAGES = [
   ["packages/mcp-core", "@vs-code-gpt/shared"],
+  ["packages/update-control-contract", "@mcp-access-stack/update-control-contract"],
   ["services/workspace-agent", "@vs-code-gpt/local-agent"],
 ];
 const SHA = /^[a-f0-9]{40}$/u;

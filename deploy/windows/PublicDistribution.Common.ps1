@@ -4,34 +4,6 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$script:McpPublicCodeSigningThumbprint = 'EC1DACA3C03E386BAB8E95B6E7929A4CA8342672'
-$script:McpPublicSignatureValidationMode = 'System'
-
-function Normalize-McpPublicThumbprint {
-    param([Parameter(Mandatory = $true)][string]$Value)
-    return ($Value -replace '[^A-Fa-f0-9]', '').ToUpperInvariant()
-}
-
-function Assert-McpPublicCertificateThumbprint {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$ExpectedThumbprint
-    )
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Certificate file was not found: $Path"
-    }
-    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
-        [System.IO.Path]::GetFullPath($Path)
-    )
-    $actual = Normalize-McpPublicThumbprint -Value $certificate.Thumbprint
-    $expected = Normalize-McpPublicThumbprint -Value $ExpectedThumbprint
-    if ($actual -ne $expected) {
-        throw "Certificate thumbprint mismatch: $Path"
-    }
-    return $certificate
-}
-
 function Get-McpPublicProjectRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 }
@@ -61,89 +33,13 @@ function Assert-McpPublicWindowsX64 {
     }
 }
 
-function Set-McpPublicSignatureValidationMode {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('System', 'OfflinePinned')]
-        [string]$Mode
-    )
-
-    if ($Mode -eq 'OfflinePinned' -and [string]$env:GITHUB_ACTIONS -ne 'true') {
-        throw 'OfflinePinned Authenticode validation is GitHub Actions-only to avoid local C# compilation.'
-    }
-    $script:McpPublicSignatureValidationMode = $Mode
-}
-
-function Assert-McpPublicOfflinePinnedSignature {
+function Assert-McpPublicFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [switch]$AllowUnsignedDevelopment
     )
-
-    if (-not ('McpAuthenticodeVerifier' -as [type])) {
-        $verifierSource = Join-Path (Get-McpPublicProjectRoot) 'tooling\windows-execution-node\McpAuthenticodeVerifier.cs'
-        if (-not (Test-Path -LiteralPath $verifierSource -PathType Leaf)) {
-            throw "Offline Authenticode verifier source was not found: $verifierSource"
-        }
-        Add-Type -Path $verifierSource
-    }
-
-    $verification = [McpAuthenticodeVerifier]::Verify([System.IO.Path]::GetFullPath($Path))
-    $statusCode = [uint32]$verification.StatusCode
-    $signerThumbprint = [string]$verification.SignerThumbprint
-    $trustNoSignature = [Convert]::ToUInt32('800B0100', 16)
-    $trustUntrustedRoot = [Convert]::ToUInt32('800B0109', 16)
-
-    if ($AllowUnsignedDevelopment -and
-        $statusCode -eq $trustNoSignature -and
-        [string]::IsNullOrWhiteSpace($signerThumbprint)) {
-        return
-    }
-
-    # The project signer is self-signed and its exact thumbprint is the trust anchor.
-    # A cryptographically valid signature may therefore report CERT_E_UNTRUSTEDROOT
-    # on an ephemeral runner that intentionally does not mutate the Windows Root store.
-    if ($statusCode -notin @([uint32]0, $trustUntrustedRoot)) {
-        throw ("Invalid offline Authenticode signature for {0}. WinVerifyTrust=0x{1:X8}" -f $Path, $statusCode)
-    }
-    if ([string]::IsNullOrWhiteSpace($signerThumbprint)) {
-        throw "Offline Authenticode verification did not expose a signer certificate: $Path"
-    }
-
-    $actualThumbprint = Normalize-McpPublicThumbprint -Value $signerThumbprint
-    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
-    if ($actualThumbprint -ne $expectedThumbprint) {
-        throw "Offline Authenticode signer is not the MCP Access Stack project signer: $Path"
-    }
-}
-
-function Assert-McpPublicSignature {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [switch]$AllowUnsignedDevelopment
-    )
-
-    if ($script:McpPublicSignatureValidationMode -eq 'OfflinePinned') {
-        Assert-McpPublicOfflinePinnedSignature `
-            -Path $Path `
-            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-        return
-    }
-
-    $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned') {
-        return
-    }
-    if ($signature.Status -ne 'Valid') {
-        throw "Invalid Authenticode signature for $Path. Status=$($signature.Status)"
-    }
-    if (-not $signature.SignerCertificate) {
-        throw "Authenticode signature does not expose a signer certificate: $Path"
-    }
-    $actualThumbprint = Normalize-McpPublicThumbprint -Value $signature.SignerCertificate.Thumbprint
-    $expectedThumbprint = Normalize-McpPublicThumbprint -Value $script:McpPublicCodeSigningThumbprint
-    if ($actualThumbprint -ne $expectedThumbprint) {
-        throw "Authenticode signer is not the MCP Access Stack project signer: $Path"
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Required public distribution file is missing: $Path"
     }
 }
 
@@ -186,14 +82,14 @@ function Assert-McpPublicDistribution {
     $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
     $manifestPath = Join-Path $resolvedRoot 'distribution-manifest.ps1'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        throw "Signed distribution manifest was not found: $manifestPath"
+        throw "Distribution manifest was not found: $manifestPath"
     }
-    Assert-McpPublicSignature `
+    Assert-McpPublicFile `
         -Path $manifestPath `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     $manifest = & $manifestPath
     if ($null -eq $manifest) {
-        throw 'Signed distribution manifest returned no data.'
+        throw 'Distribution manifest returned no data.'
     }
     $schemaVersion = [int]$manifest.schemaVersion
     if ($schemaVersion -ne 2) {
@@ -249,9 +145,9 @@ function Assert-McpPublicReleaseAttestation {
     $resolvedRoot = [System.IO.Path]::GetFullPath($ReleaseRoot)
     $attestationPath = Join-Path $resolvedRoot 'release-attestation.ps1'
     if (-not (Test-Path -LiteralPath $attestationPath -PathType Leaf)) {
-        throw "Signed release attestation was not found: $attestationPath"
+        throw "Release integrity record was not found: $attestationPath"
     }
-    Assert-McpPublicSignature `
+    Assert-McpPublicFile `
         -Path $attestationPath `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     $attestation = & $attestationPath

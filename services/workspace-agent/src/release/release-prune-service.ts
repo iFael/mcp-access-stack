@@ -47,6 +47,35 @@ export class ReleasePruneService {
     for (const child of ["releases", "staging", "state"]) {
       await this.requirePhysicalDirectory(path.join(root, child), path.join(root, child));
     }
+    const receiptRoot = path.join(root, "state", "release-prune-receipts");
+    const receiptFile = path.join(receiptRoot, input.operationId + ".json");
+    if (input.reconcile) {
+      // Read-only receipt lookup; it must never begin a second deletion.
+      const receiptDirectory = await lstat(receiptRoot).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!receiptDirectory) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune completion has no durable receipt.");
+      }
+      await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
+      const receiptInfo = await lstat(receiptFile).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!receiptInfo || !receiptInfo.isFile() || receiptInfo.isSymbolicLink()) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt cannot prove completion.");
+      }
+      const record = JSON.parse(await readFile(receiptFile, "utf8")) as { fingerprint?: unknown; result?: unknown };
+      if (typeof record.fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(record.fingerprint)) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt identity is invalid.");
+      }
+      const result = pruneReleasesResultSchema.parse(record.result);
+      if (result.status !== "completed" || result.operationId !== input.operationId) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Release prune receipt does not match the operation.");
+      }
+      return result;
+    }
     const stateFile = path.join(root, "state", "lifecycle-state.v1.json");
     const stateInfo = await lstat(stateFile);
     if (!stateInfo.isFile() || stateInfo.isSymbolicLink()) deny("Release lifecycle state is not a physical file.");
@@ -62,12 +91,12 @@ export class ReleasePruneService {
     const protectedIds = new Set(
       [active.releaseId, previous.releaseId, state.candidate?.releaseId].filter((v): v is string => !!v),
     );
-    const receiptRoot = path.join(root, "state", "release-prune-receipts");
     const fingerprint = SHA(JSON.stringify({
+      ...(input.selection ? { selection: input.selection } : {}),
       targets: input.targets,
       expectedStateSha256: input.expectedStateSha256,
+      ...(input.expectedPlanSha256 ? { expectedPlanSha256: input.expectedPlanSha256 } : {}),
     }));
-    const receiptFile = path.join(receiptRoot, input.operationId + ".json");
     if (!input.dryRun) {
       if (this.options.signal?.aborted) throw new AppError("OPERATION_CANCELLED", "Release prune was cancelled.");
       const receiptInfo = await lstat(receiptRoot).catch((error: NodeJS.ErrnoException) => {
@@ -94,9 +123,18 @@ export class ReleasePruneService {
     if (current !== path.join(root, "releases", active.releaseId)) {
       deny("Current symlink does not match the active release.");
     }
+    const selected = input.selection === "eligible"
+      ? await this.selectEligible(root, protectedIds)
+      : input.targets!;
+    const planSha256 = input.selection === "eligible"
+      ? SHA(JSON.stringify({ stateSha256, targets: selected })) : undefined;
+    if (!input.dryRun && input.selection === "eligible" &&
+        input.expectedPlanSha256 !== planSha256) {
+      conflict("Eligible release inventory changed since the dry-run plan.");
+    }
     const resultItems: PruneReleasesResult["items"] = [];
     const targets: string[] = [];
-    for (const target of input.targets) {
+    for (const target of selected) {
       const release = target.kind === "release";
       if (!(release ? RELEASE_ID : STAGE_ID).test(target.name) ||
           target.name.startsWith(".") || target.name.includes("..")) {
@@ -130,15 +168,40 @@ export class ReleasePruneService {
       targets.push(absolute);
     }
     const planned = pruneReleasesResultSchema.parse({
-      operationId: input.operationId, status: "planned", stateSha256, items: resultItems,
+      operationId: input.operationId, status: "planned", stateSha256,
+      ...(planSha256 ? { planSha256 } : {}), items: resultItems,
     });
     if (input.dryRun) return planned;
+    const lockFile = path.join(root, "state", "release-prune.lock");
+    if (targets.length === 0) {
+      const unresolved = await lstat(lockFile).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (unresolved) conflict("Unreconciled release prune lock prevents an empty completion.");
+      await mkdir(receiptRoot, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
+      const completed = pruneReleasesResultSchema.parse({ ...planned, status: "completed" });
+      try {
+        await writeFile(receiptFile, JSON.stringify({ fingerprint, result: completed }),
+          { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const existing = await lstat(receiptFile);
+        if (!existing.isFile() || existing.isSymbolicLink()) deny("Prune receipt must be a physical file.");
+        const prior = JSON.parse(await readFile(receiptFile, "utf8")) as { fingerprint?: string; result?: unknown };
+        if (prior.fingerprint !== fingerprint) conflict("Release prune operationId has a different receipt.");
+        return pruneReleasesResultSchema.parse(prior.result);
+      }
+      return completed;
+    }
 
     await mkdir(receiptRoot, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error;
     });
     await this.requirePhysicalDirectory(receiptRoot, receiptRoot);
-    const lockFile = path.join(root, "state", "release-prune.lock");
     const handle = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
       .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "EEXIST") conflict("Another prune or unreconciled prune lock exists.");
@@ -180,7 +243,8 @@ export class ReleasePruneService {
         finished.push({ ...resultItems[i]!, status: "deleted" });
       }
       const completed = pruneReleasesResultSchema.parse({
-        operationId: input.operationId, status: "completed", stateSha256, items: finished,
+        operationId: input.operationId, status: "completed", stateSha256,
+        ...(planSha256 ? { planSha256 } : {}), items: finished,
       });
       const receiptTemp = path.join(receiptRoot, input.operationId + ".tmp");
       await writeFile(receiptTemp, JSON.stringify({ fingerprint, result: completed }), { flag: "wx", mode: 0o600 });
@@ -191,6 +255,26 @@ export class ReleasePruneService {
       await handle.close().catch(() => undefined);
       if (success) await rm(lockFile, { force: true });
     }
+  }
+
+  private async selectEligible(
+    root: string,
+    protectedIds: ReadonlySet<string>,
+  ): Promise<NonNullable<PruneReleasesInput["targets"]>> {
+    const eligible: NonNullable<PruneReleasesInput["targets"]> = [];
+    for (const kind of ["release", "staging"] as const) {
+      const parent = path.join(root, kind === "release" ? "releases" : "staging");
+      for (const entry of await readdir(parent, { withFileTypes: true })) {
+        const pattern = kind === "release" ? RELEASE_ID : STAGE_ID;
+        if (!pattern.test(entry.name) || entry.name.includes("..")) continue;
+        const releaseId = kind === "release" ? entry.name : entry.name.slice(0, -9);
+        if (protectedIds.has(releaseId)) continue;
+        // Let the existing physical-directory checks reject suspicious entries.
+        eligible.push({ kind, name: entry.name });
+      }
+    }
+    eligible.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+    return eligible.slice(0, 5);
   }
 
   private async requirePhysicalDirectory(directory: string, canonical: string): Promise<void> {

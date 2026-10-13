@@ -14,6 +14,8 @@ import type {
   GitHubGetCommitChecksWatchesInput,
   GitHubGetCommitChecksWatchesResult,
   GitHubGetCommitChecksInput,
+  GitHubWorkflowOperationInput,
+  GitHubWorkflowOperationResult,
   GitHubMaterializeActionsArtifactInput,
   GitHubMaterializeActionsArtifactResult,
   GitHubGetPullRequestInput,
@@ -88,6 +90,12 @@ export interface GitHubChecksWatchExecutor {
     input: GitHubWaitCommitChecksWatchInput,
     context?: OperationContext,
   ): Promise<GitHubWaitCommitChecksWatchResult>;
+}
+
+/** Unified typed GitHub Actions control, dispatch and reconciliation in one operation. */
+export interface GitHubWorkflowExecutor {
+  githubWorkflowOperation(input: GitHubWorkflowOperationInput,
+    context?: OperationContext): Promise<GitHubWorkflowOperationResult>;
 }
 
 export interface GitHubExecutor {

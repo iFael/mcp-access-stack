@@ -1,0 +1,67 @@
+import { describe, expect, it } from "@jest/globals";
+import { composeReleaseCapabilities } from "../../src/release-capability-registry.js";
+import { beta80ReleaseBlueprint } from "../../src/workflows/beta80-sequence.v1.js";
+import type { ReleaseStepCapability } from "../../src/release-workflow-executor.js";
+
+const source = {
+  authorizeRead: async()=>true,
+  port:{
+    readMainHead:async()=> "a".repeat(40),
+    readCommitChecks:async(commitSha:string)=>({
+      commitSha,totalCount:1,returnedCount:1,pendingCount:0,
+      successfulCount:1,failingCount:0,allCompleted:true,truncated:false,passed:true,
+      checks:[{id:1,name:"CI",status:"completed",conclusion:"success"}],
+    }),
+  },
+};
+const cleanup = {
+  workspaceId:"mcp-access-stack",
+  authorized:async()=>true,
+  prune:{pruneReleases:async()=>({
+    operationId:"00000000-0000-4000-8000-000000000000",status:"completed" as const,
+    stateSha256:"a".repeat(64),planSha256:"b".repeat(64),items:[],
+  })},
+};
+const mutation: ReleaseStepCapability={
+  action:"publish_release_tag",executionClass:"external_effect",
+  authorize:async()=>false,
+  execute:async()=>({state:"outcome_unknown"}),
+  reconcile:async()=>({outcome:"still_unknown"}),
+};
+describe("single canonical release capability registry",()=>{
+  it("reports absent abilities without inventing adapters or starting workflows",()=>{
+    const registry=composeReleaseCapabilities({sourceControl:source,cleanup});
+    expect(registry.ready).toBe(false);
+    expect(registry.capabilities.size).toBe(3);
+    expect(registry.missingActions).toHaveLength(beta80ReleaseBlueprint.steps.length-3);
+    expect(registry.missingActions).toContain("publish_release_tag");
+    expect(registry.missingActions).not.toContain("verify_canonical_ci");
+    expect(registry.missingActions).not.toContain("cleanup_known_temporary_residue");
+    expect(() => registry.createExecutor(null as never)).toThrow("RELEASE_CAPABILITY_INCOMPLETE");
+  });
+  it("rejects duplicates, unknown or wrong-class capabilities",()=>{
+    expect(()=>composeReleaseCapabilities({sourceControl:source,
+      other:[{...mutation,action:"verify_canonical_ci",executionClass:"read_only"}]}))
+      .toThrow("RELEASE_CAPABILITY_DUPLICATE");
+    expect(()=>composeReleaseCapabilities({other:[{...mutation,executionClass:"read_only"}]}))
+      .toThrow("RELEASE_CAPABILITY_CLASS_MISMATCH");
+    expect(()=>composeReleaseCapabilities({other:[{...mutation,action:"arbitrary_shell" as never}]}))
+      .toThrow("RELEASE_CAPABILITY_UNRECOGNIZED");
+  });
+  it("permits full registration only with exact typed actions",()=>{
+    const actions=new Map(beta80ReleaseBlueprint.steps.map(step => [
+      step.action,step,
+    ] as const));
+    const registry=composeReleaseCapabilities({sourceControl:source,cleanup,
+      other:beta80ReleaseBlueprint.steps.filter(step=>![
+        "resolve_main_commit","verify_canonical_ci","cleanup_known_temporary_residue"
+      ].includes(step.action)).map(step=>({
+        action:step.action,executionClass:step.executionClass,
+        authorize:mutation.authorize,execute:mutation.execute,reconcile:mutation.reconcile,
+      })),
+    });
+    expect(registry.ready).toBe(true);
+    expect(registry.capabilities.size).toBe(actions.size);
+    expect(registry.missingActions).toEqual([]);
+  });
+});

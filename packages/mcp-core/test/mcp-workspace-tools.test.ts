@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
 import type {
   BackgroundTaskListResult,
@@ -163,6 +163,12 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleReleaseAdvance(
+    input:import("@vs-code-gpt/shared").OracleReleaseAdvanceInput,
+  ):Promise<import("@vs-code-gpt/shared").OracleReleaseAdvanceResult>{
+    this.calls.push("oracleReleaseAdvance");
+    return {status:"outcome_unknown",operationId:input.operationId};
+  }
   async getReleaseState(): Promise<import("@vs-code-gpt/shared").GetReleaseStateResult> {
     this.calls.push("getReleaseState");
     return {
@@ -218,7 +224,8 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
       operationId: input.operationId,
       status: input.dryRun ? "planned" : "completed",
       stateSha256: "1".repeat(64),
-      items: input.targets.map(target => ({...target, status: input.dryRun ? "eligible" as const : "deleted" as const})),
+      ...(input.selection === "eligible" ? {planSha256: "1".repeat(64)} : {}),
+      items: (input.targets ?? []).map(target => ({...target, status: input.dryRun ? "eligible" as const : "deleted" as const})),
     };
   }
 
@@ -482,6 +489,34 @@ function registeredTools(server: McpServer): Record<string, RegisteredTool> {
 }
 
 describe("registerWorkspaceTools", () => {
+  it("registers one release facade, keeps strict Oracle CAS, and never substitutes a shell tool",async()=>{
+    const executor=new MockWorkspaceExecutor();
+    const server=new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerWorkspaceTools(server,executor,{
+      includeTools:["release_orchestrator"],securitySchemes:[{type:"noauth"}],
+    });
+    const tools=registeredTools(server);
+    expect(Object.keys(tools)).toEqual(["release_orchestrator"]);
+    expect(tools.release_orchestrator?.annotations).toMatchObject({
+      readOnlyHint:false,destructiveHint:true,idempotentHint:true,
+    });
+    const id="123e4567-e89b-42d3-a456-426614174000";
+    const args={action:"advance_oracle",workspaceId:"mcp-access-stack",
+      runId:id,operationId:"123e4567-e89b-42d3-a456-426614174001",
+      expectedSourceSha:"a".repeat(40),expectedLastSeq:2};
+    const result=await tools.release_orchestrator!.handler(args,{
+      signal:new AbortController().signal,
+    });
+    expect(result.structuredContent).toEqual({action:"advance_oracle",
+      result:{status:"outcome_unknown",operationId:args.operationId}});
+    expect(executor.calls).toEqual(["oracleReleaseAdvance"]);
+    const invalid=await tools.release_orchestrator!.handler({...args,command:"rm -rf /"},{
+      signal:new AbortController().signal,
+    });
+    expect(invalid.isError).toBe(true);
+    expect(executor.calls).toEqual(["oracleReleaseAdvance"]);
+  });
+
   it("registers only the requested subset", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -1823,6 +1858,7 @@ const expectedSourceControlAnnotations = {
   git_publish_tag: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  github_workflow_operation: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1835,7 +1871,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty source-control tools inside the 53-tool workspace surface", () => {
+  it("publishes twenty-one source-control tools inside the 55-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1848,6 +1884,7 @@ describe("registerSourceControlTools", () => {
       "git_publish_tag",
       "github_get_repository",
       "github_get_commit_checks",
+      "github_workflow_operation",
       "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
@@ -1858,9 +1895,31 @@ describe("registerSourceControlTools", () => {
       "github_close_pull_request",
       "github_merge_pull_request",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(20);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(53);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(53);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(55);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(55);
+  });
+
+  it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{
+    const operation=jest.fn(async(_input:unknown)=>({
+      status:"outcome_unknown" as const,
+      operationId:"11111111-2222-4333-8444-555555555555",
+    }));
+    const executor=Object.assign(new MockSourceControlExecutor(),{githubWorkflowOperation:operation});
+    const server=new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerSourceControlTools(server,executor,{includeTools:["github_workflow_operation"],
+      securitySchemes:[{type:"noauth"}]});
+    const tool=(server as unknown as {
+      _registeredTools:Record<string,RegisteredTool & {annotations?:unknown}>;
+    })._registeredTools.github_workflow_operation!;
+    expect(tool.annotations).toMatchObject({readOnlyHint:false,destructiveHint:true,idempotentHint:true});
+    const input={workspaceId:"ws",owner:"octo",repository:"repo",
+      workflow:"edge-f09-guarded-rollout.yml",
+      mode:"reconcile",expectedMainSha:sourceControlShaA,
+      operationId:"11111111-2222-4333-8444-555555555555"};
+    await tool.handler(input as never,{} as never);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(operation.mock.calls[0]?.[0]).toEqual(input);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

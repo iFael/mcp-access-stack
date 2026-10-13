@@ -100,21 +100,21 @@ function New-TestDistribution {
         platform = 'win32-x64'
         createdAt = '2026-09-13T00:00:00.000Z'
         runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
+        integrityRoot = 'sha256-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
             [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },
             [ordered]@{ id = 'local-companion'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
-            (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $true),
+            (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $false),
             (New-ArtifactRecord 'edge-connector' 'edge-runtime' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' $false),
-            (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
+            (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $false),
             (New-ArtifactRecord 'browser-worker-server' 'browser-worker' 'services/browser-worker/dist/server.js' $false),
             (New-ArtifactRecord 'local-companion-runtime' 'shared' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js' $false),
-            (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $true),
-            (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $true),
-            (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $true),
+            (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $false),
+            (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $false),
+            (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $false),
             (New-ArtifactRecord 'node-runtime' 'shared' 'runtime/node/node.exe' $false)
         )
     }

@@ -75,6 +75,64 @@ export interface GitHubMergePullRequestRequest {
   merge_method: "merge" | "squash";
 }
 
+export interface GitHubWorkflowRunRecord {
+  id: number;
+  workflow_id: number;
+  name: string;
+  display_title: string;
+  head_sha: string;
+  head_branch?: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  run_attempt: number;
+}
+export interface GitHubWorkflowRunsRecord {
+  total_count: number;
+  workflow_runs: GitHubWorkflowRunRecord[];
+}
+export interface GitHubPublicReleaseAssetRecord {
+  id:number;
+  name:string;
+  size:number;
+  digest:string|null;
+  state:string;
+}
+export interface GitHubPublicReleaseRecord {
+  tag_name:string;
+  draft:boolean;
+  published_at:string|null;
+  assets:GitHubPublicReleaseAssetRecord[];
+}
+export interface GitHubWorkflowRunDetail extends GitHubWorkflowRunRecord {
+  path:string;
+  head_branch:string|null;
+}
+export interface GitHubRefRecord {
+  ref: string;
+  object: { sha: string; type: string };
+}
+
+/** Workflow dispatch uses the existing authenticated GitHub client without
+ * changing the established repository/PR adapter interface. */
+export interface GitHubWorkflowApiClient {
+  getMainRef(owner: string, repository: string, context?: OperationContext): Promise<GitHubRefRecord>;
+  getTagRef?(owner: string, repository: string, tag: string, context?: OperationContext): Promise<GitHubRefRecord>;
+  getWorkflowRuns(owner: string, repository: string, workflow: string,
+    headSha: string, context?: OperationContext): Promise<GitHubWorkflowRunsRecord>;
+  getTagPushRuns?(owner: string, repository: string, headSha: string,
+    context?: OperationContext): Promise<GitHubWorkflowRunsRecord>;
+  getWorkflowRun?(owner:string,repository:string,runId:number,
+    context?:OperationContext):Promise<GitHubWorkflowRunDetail>;
+  getReleaseByTag?(owner:string,repository:string,tag:string,
+    context?:OperationContext):Promise<GitHubPublicReleaseRecord>;
+  getReleaseAssetChecksum?(owner:string,repository:string,assetId:number,
+    context?:OperationContext):Promise<string>;
+  dispatchWorkflow(owner: string, repository: string, workflow: string,
+    expectedSha: string, inputs: Record<string, string>,
+    context?: OperationContext): Promise<void>;
+}
+
 export interface GitHubApiClient {
   getCurrentUser(context?: OperationContext): Promise<GitHubCurrentUserRecord>;
   getRepository(
@@ -187,6 +245,136 @@ export class GitHubHttpClient implements GitHubApiClient {
       },
       context,
     );
+  }
+
+  getMainRef(owner: string, repository: string, context?: OperationContext): Promise<GitHubRefRecord> {
+    return performGitHubRequest<GitHubRefRecord>(this.#credentialProvider, this.#fetchImpl, {
+      method: "GET", path: `/repos/${segment(owner)}/${segment(repository)}/git/ref/heads/main`,
+      mutation: false,
+    }, context);
+  }
+
+  getTagRef(owner:string,repository:string,tag:string,context?:OperationContext):Promise<GitHubRefRecord>{
+    return performGitHubRequest<GitHubRefRecord>(this.#credentialProvider,this.#fetchImpl,{
+      method:"GET",path:`/repos/${segment(owner)}/${segment(repository)}/git/ref/tags/${segment(tag)}`,
+      mutation:false,
+    },context);
+  }
+
+  getWorkflowRuns(owner: string, repository: string, workflow: string,
+    headSha: string, context?: OperationContext): Promise<GitHubWorkflowRunsRecord> {
+    return performGitHubRequest<GitHubWorkflowRunsRecord>(this.#credentialProvider, this.#fetchImpl, {
+      method: "GET",
+      path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/runs?event=workflow_dispatch&branch=main&head_sha=${segment(headSha)}&per_page=100`,
+      mutation: false,
+    }, context);
+  }
+
+  getTagPushRuns(owner:string,repository:string,headSha:string,
+    context?:OperationContext):Promise<GitHubWorkflowRunsRecord> {
+    return performGitHubRequest<GitHubWorkflowRunsRecord>(this.#credentialProvider,this.#fetchImpl,{
+      method:"GET",
+      path:`/repos/${segment(owner)}/${segment(repository)}/actions/workflows/release.yml/runs?event=push&head_sha=${segment(headSha)}&per_page=100`,
+      mutation:false,
+    },context);
+  }
+
+  getWorkflowRun(owner:string,repository:string,runId:number,
+    context?:OperationContext):Promise<GitHubWorkflowRunDetail>{
+    return performGitHubRequest<GitHubWorkflowRunDetail>(this.#credentialProvider,this.#fetchImpl,{
+      method:"GET",
+      path:`/repos/${segment(owner)}/${segment(repository)}/actions/runs/${positiveInteger(runId)}`,
+      mutation:false,
+    },context);
+  }
+
+  getReleaseByTag(owner:string,repository:string,tag:string,
+    context?:OperationContext):Promise<GitHubPublicReleaseRecord>{
+    if(!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(tag) || tag.length>128)
+      throw new AppError("INVALID_ARGUMENT","Invalid release tag.");
+    return performGitHubRequest<GitHubPublicReleaseRecord>(
+      this.#credentialProvider,this.#fetchImpl,{
+        method:"GET",path:`/repos/${segment(owner)}/${segment(repository)}/releases/tags/${segment(tag)}`,
+        mutation:false,
+      },context);
+  }
+
+  async getReleaseAssetChecksum(owner:string,repository:string,assetId:number,
+    context?:OperationContext):Promise<string>{
+    const maxBytes=512;
+    const signal=context?.signal;
+    if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+    const credential=await this.#credentialProvider.getCredential(context);
+    if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+    const path=`/repos/${segment(owner)}/${segment(repository)}/releases/assets/${positiveInteger(assetId)}`;
+    let response:Response;
+    try{
+      response=await this.#fetchImpl(GITHUB_API_BASE_URL+path,{
+        method:"GET",redirect:"manual",cache:"no-store",
+        headers:{Accept:"application/octet-stream",
+          "X-GitHub-Api-Version":GITHUB_API_VERSION,
+          Authorization:`Bearer ${credential.token}`},
+        ...(signal===undefined?{}:{signal}),
+      });
+      if(response.status===302){
+        const location=response.headers.get("location");
+        await discardBody(response);
+        if(!location || location.length>8192)throw new Error("untrusted asset redirect");
+        const url=new URL(location);
+        if(url.protocol!=="https:" || url.hostname!=="release-assets.githubusercontent.com" ||
+          url.username || url.password || (url.port!==""&&url.port!=="443") || url.hash)
+          throw new Error("untrusted asset redirect");
+        // Signed GitHub asset URLs require NO Authorization header.
+        // Never forward the GitHub bearer token across origins.
+        response=await this.#fetchImpl(url.href,{method:"GET",
+          redirect:"error",cache:"no-store",
+          ...(signal===undefined?{}:{signal})});
+      }
+      if(response.status!==200){
+        await discardBody(response);
+        throw new Error("asset unavailable");
+      }
+      if(response.headers.get("content-length") &&
+        Number(response.headers.get("content-length"))>maxBytes)
+        throw new Error("asset too large");
+      if(!response.body)throw new Error("asset response empty");
+      const reader=response.body.getReader();let total=0;
+      const chunks:Uint8Array[]=[];
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          total+=chunk.value.byteLength;
+          if(total>maxBytes){await reader.cancel();throw new Error("asset too large");}
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const all=new Uint8Array(total);let offset=0;
+      for(const chunk of chunks){all.set(chunk,offset);offset+=chunk.byteLength;}
+      if(total<1)throw new Error("asset empty");
+      return new TextDecoder("utf8",{fatal:true}).decode(all);
+    }catch{
+      if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+      throw unavailableError(false);
+    }
+  }
+
+  async dispatchWorkflow(owner: string, repository: string, workflow: string,
+    expectedSha: string, inputs: Record<string, string>, context?: OperationContext): Promise<void> {
+    if (!["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"].includes(workflow)) {
+      throw new AppError("INVALID_ARGUMENT", "Workflow dispatch is not allowlisted.");
+    }
+    const requestInputs = workflow === "release-tag-bootstrap.yml"
+      ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_sha: expectedSha}
+      : workflow === "release.yml"
+        ? {operation_id: inputs.operation_id ?? "",tag: inputs.tag ?? "",expected_main_sha: expectedSha,release_mode: "build_publish"}
+        : {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha};
+    await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "POST",
+      path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/dispatches`,
+      body: { ref: "main", inputs: requestInputs },
+      mutation: true,
+    }, context);
   }
 
   createUserRepository(

@@ -69,7 +69,6 @@ Assert-ContainsAll -Label 'Public release workflow' -Source $releaseWorkflow -To
     'New-McpWindowsExecutionNodeArtifacts.ps1',
     'New-McpPublicDistribution.ps1',
     'Test-McpWindowsExecutionNodePackage.ps1',
-    '-OfflinePinnedAuthenticode',
     'timeout-minutes: 5'
 )
 Assert-ContainsNone -Label 'Public release workflow' -Source $releaseWorkflow -Tokens @(
@@ -97,22 +96,24 @@ Assert-ContainsAll -Label 'Companion-only workflow' -Source $companionWorkflow -
     'git tag --merged',
     'companion-only-distribution.yml',
     'environment: public-release',
-    'WINDOWS_SIGNING_PFX_BASE64',
-    'WINDOWS_SIGNING_PFX_PASSWORD',
     'New-McpRelease.ps1',
     'New-McpWindowsExecutionNodeArtifacts.ps1',
     'New-McpPublicDistribution.ps1',
     "-WorkflowName 'Companion-only distribution'",
     'Test-McpWindowsExecutionNodePackage.ps1',
-    '-OfflinePinnedAuthenticode',
     'Get-FileHash',
-    'actions/attest@',
     'actions/upload-artifact@',
-    'retention-days: 30'
-)
-Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
+    'retention-days: 30',
     'workflow_dispatch:',
     'inputs.expected_sha',
+    'inputs.ci_run_id',
+    'bootstrap-release-tag.mjs',
+    'gh release create',
+    '--verify-tag --prerelease',
+    'sha256sum --check --status',
+    'contents: write'
+)
+Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow -Tokens @(
     'inputs.release_id',
     'npm run deploy',
     'wrangler deploy',
@@ -121,11 +122,14 @@ Assert-ContainsNone -Label 'Companion-only workflow' -Source $companionWorkflow 
     'CLOUDFLARE_API_TOKEN',
     'CLOUDFLARE_ACCOUNT_ID',
     'MCP_OWNER_TOKEN',
-    'gh release create',
-    'contents: write',
     'git push',
     '  push:',
     'edge:'
+)
+$publicReleaseWorkflow = Read-ProjectFile '.github\workflows\release.yml'
+Assert-ContainsAll -Label 'Companion-only tag must bypass public Edge deploy' -Source $publicReleaseWorkflow -Tokens @(
+    "!contains(github.ref_name, '-companion.')",
+    "!contains(inputs.tag, '-companion.')"
 )
 if ($CompanionOnly) {
     Write-Output 'Companion-only distribution workflow structural contract PASS.'
@@ -183,9 +187,11 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     "-Owner 'browser-worker'",
     "-Owner 'shared'",
     'services = @(',
-    'Set-AuthenticodeSignature'
+    'Get-FileHash'
 )
 Assert-ContainsNone -Label 'Public distribution builder' -Source $distributionBuilder -Tokens @(
+    'Set-AuthenticodeSignature',
+    'Import-PfxCertificate',
     'McpHost.exe',
     "-Role 'mcp-host'",
     'Invoke-McpWindowsExecutionNodeTransition.ps1',
@@ -267,7 +273,6 @@ Assert-ContainsAll -Label 'Windows detached cutover handover' -Source $handover 
     'ExpectedRequestSha256',
     'handoverDelaySeconds = 3',
     'Set-McpWindowsScheduledTaskOwnerAccess',
-    "'AllSigned'",
     "status = 'started'",
     'detached = $true'
 )

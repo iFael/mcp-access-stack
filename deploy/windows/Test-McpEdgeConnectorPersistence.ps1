@@ -62,7 +62,7 @@ foreach ($required in @(
     'EnableBrowserWorker',
     'edge-host',
     'processSubsystem',
-    'Assert-McpPublicSignature -Path $edgeHostPath',
+    'Assert-McpPublicFile -Path $edgeHostPath',
     'Assert-McpPublicReleaseAttestation',
     'executionNode.manifestSha256',
     '--validate-only',
@@ -143,19 +143,19 @@ try {
         platform = 'win32-x64'
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
         runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
+        integrityRoot = 'sha256-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
             [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
-            (New-FixtureArtifact -Id 'edge-host' -Owner 'edge-runtime' -Path $edgeHost -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'edge-host' -Owner 'edge-runtime' -Path $edgeHost -RelativePath 'native/McpEdgeHost.exe' -AuthenticodeRequired $false),
             (New-FixtureArtifact -Id 'edge-connector' -Owner 'edge-runtime' -Path $edgeCli -RelativePath 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' -AuthenticodeRequired $false),
-            (New-FixtureArtifact -Id 'edge-validation-launcher' -Owner 'edge-runtime' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'edge-validation-launcher' -Owner 'edge-runtime' -Path $launcher -RelativePath 'deploy/windows/Start-McpEdgeConnector.ps1' -AuthenticodeRequired $false),
             (New-FixtureArtifact -Id 'browser-worker-server' -Owner 'browser-worker' -Path $browserServer -RelativePath 'services/browser-worker/dist/server.js' -AuthenticodeRequired $false),
-            (New-FixtureArtifact -Id 'node-host-launcher' -Owner 'shared' -Path $browserLauncher -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $true),
-            (New-FixtureArtifact -Id 'browser-credential-broker' -Owner 'browser-worker' -Path $browserBroker -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $true),
-            (New-FixtureArtifact -Id 'elevation-broker' -Owner 'shared' -Path $elevationBroker -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $true),
+            (New-FixtureArtifact -Id 'node-host-launcher' -Owner 'shared' -Path $browserLauncher -RelativePath 'compat/McpNodeHostLauncher.exe' -AuthenticodeRequired $false),
+            (New-FixtureArtifact -Id 'browser-credential-broker' -Owner 'browser-worker' -Path $browserBroker -RelativePath 'compat/McpCredentialBroker.exe' -AuthenticodeRequired $false),
+            (New-FixtureArtifact -Id 'elevation-broker' -Owner 'shared' -Path $elevationBroker -RelativePath 'native/McpElevationBroker.exe' -AuthenticodeRequired $false),
             (New-FixtureArtifact -Id 'node-runtime' -Owner 'shared' -Path $nodePath -RelativePath 'runtime/node/node.exe' -AuthenticodeRequired $false)
         )
     }

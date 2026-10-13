@@ -350,7 +350,7 @@ internal static class Program
             !string.Equals(RequireJsonString(executionManifest, "commit"), commit, StringComparison.Ordinal) ||
             !string.Equals(RequireJsonString(executionManifest, "platform"), "win32-x64", StringComparison.Ordinal) ||
             !string.Equals(RequireJsonString(executionManifest, "runtimeMode"), "bundled-node", StringComparison.Ordinal) ||
-            !string.Equals(RequireJsonString(executionManifest, "integrityRoot"), "signed-distribution-manifest", StringComparison.Ordinal))
+            !string.Equals(RequireJsonString(executionManifest, "integrityRoot"), "sha256-distribution-manifest", StringComparison.Ordinal))
         {
             throw new InvalidDataException("Execution-node manifest identity is invalid.");
         }
@@ -378,14 +378,14 @@ internal static class Program
             "edge-validation-launcher",
             "edge-runtime",
             "deploy/windows/Start-McpEdgeConnector.ps1",
-            true);
+            false);
         string edgeHostPath = ValidateArtifact(
             artifacts,
             root,
             "edge-host",
             "edge-runtime",
             "native/McpEdgeHost.exe",
-            true);
+            false);
 
         ReleaseInfo result = new ReleaseInfo();
         result.Root = root;
@@ -478,10 +478,6 @@ internal static class Program
         if (!string.Equals(Sha256File(artifactPath), expectedHash, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Execution-node artifact hash mismatch: " + id);
-        }
-        if (authenticodeRequired && !OptionalJsonBoolean(match, "authenticodeRequired", false))
-        {
-            throw new InvalidDataException("Execution-node native artifact must require Authenticode: " + id);
         }
         return artifactPath;
     }

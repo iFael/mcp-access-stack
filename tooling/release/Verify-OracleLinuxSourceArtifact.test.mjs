@@ -74,10 +74,8 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
   assert.match(workflow, /git archive --format=tar/);
   assert.match(workflow, /gzip -n/);
   assert.match(workflow, /Verify-OracleLinuxSourceArtifact\.mjs/);
-  assert.match(workflow, /actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6/);
+  assert.equal(workflow.includes("actions/attest@"),false);
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);
-  assert.match(workflow, /id-token: write/);
-  assert.match(workflow, /attestations: write/);
   assert.match(workflow, /gh release create "\$RELEASE_TAG"/);
   assert.match(workflow, /--verify-tag --prerelease/);
   assert.match(workflow, /^  publish:\n    needs: \[preflight, package\]$/m);
@@ -87,11 +85,41 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
   assert.doesNotMatch(workflow, /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID|MCP_CONTRACT_PREPARE_TOKEN|MCP_OWNER_TOKEN/);
 });
 
+test("typed public release workflow pins main, lightweight tag and stable run UUID",()=>{
+  const release=readFileSync(".github/workflows/release.yml","utf8").replace(/\r\n/g,"\n");
+  assert.match(release,/run-name: .*mcp-release-/u);
+  assert.match(release,/expected_main_sha:/u);
+  assert.match(release,/operation_id:/u);
+  assert.match(release,/environment: public-release/u);
+  assert.match(release,/GITHUB_SHA.*EXPECTED_MAIN_SHA/u);
+  assert.match(release,/git\/ref\/tags\/\$RELEASE_TAG/u);
+  assert.match(release,/commit:\$EXPECTED_MAIN_SHA/u);
+  assert.match(release,/GITHUB_RUN_ATTEMPT.*"1"/u);
+  assert.match(release,/github\.event_name == 'workflow_dispatch' && inputs\.operation_id != ''/u);
+});
+
+test("typed public signing phase is isolated from Edge mutation and legacy full release stays intact",()=>{
+  const release=readFileSync(".github/workflows/release.yml","utf8").replace(/\r\n/g,"\n");
+  assert.match(release,/release_mode:/u);
+  assert.match(release,/default: full/u);
+  assert.match(release,/build_publish/u);
+  assert.match(release,/\[\[ "\$RELEASE_MODE" == "build_publish" \]\]/u);
+  const edge=release.slice(release.indexOf("\n  edge:"),release.indexOf("\n  publish:"));
+  const publish=release.slice(release.indexOf("\n  publish:"));
+  assert.match(edge,/inputs\.release_mode != 'build_publish'/u);
+  assert.match(publish,/always\(\)/u);
+  assert.match(publish,/needs\.metadata\.result == 'success'/u);
+  assert.match(publish,/needs\.package\.result == 'success'/u);
+  assert.match(publish,/needs\['unix-packages'\]\.result == 'success'/u);
+  assert.match(publish,/needs\.edge\.result == 'success'/u);
+  assert.match(publish,/needs\.edge\.result == 'skipped'/u);
+});
+
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
   const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
   const guard = "if: " + "$" +
-    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') }}";
-  assert.ok(release.includes(guard), "public release must fail closed for oracle-only tags");
+    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') }}";
+  assert.ok(release.includes(guard), "public release must fail closed for Oracle-only and Companion-only tags");
   assert.match(release, /metadata:\n\s+needs: signing-preflight/);
   assert.match(release, /edge:\n\s+needs:/);
   assert.match(release, /publish:\n\s+needs:/);
