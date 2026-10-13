@@ -73,7 +73,9 @@ describe("embedded gateway HTTP surface", () => {
 
       for (const tool of body.result.tools) {
         expect(typeof tool.inputSchema).toBe("object");
-        expect(typeof tool.outputSchema).toBe("object");
+        expect({name:tool.name, outputSchemaType:typeof tool.outputSchema}).toEqual({
+          name:tool.name, outputSchemaType:"object",
+        });
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         expect(tool._meta).toEqual({
           securitySchemes: [{ type: "noauth" }],

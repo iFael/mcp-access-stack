@@ -231,7 +231,7 @@ Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -To
     "id = 'local-companion'",
     "-Id 'local-companion-runtime'",
     'edgeBaseUrl = $edgeOrigin',
-    'native\McpElevationBroker.exe'
+    'native/McpElevationBroker.exe'
 )
 
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'

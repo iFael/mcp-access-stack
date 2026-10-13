@@ -80,7 +80,7 @@ import {
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
-import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
+import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
   managedServiceSnapshotSchema,
   serviceGetStatusInputSchema,
@@ -1288,8 +1288,8 @@ export function registerWorkspaceTools(
         +"Oracle advance requires a separately enrolled authenticated control host, trusted workspace, owner policy, "
         +"exact SHA/sequence and a durable operationId. No user-supplied endpoints, tokens or shell commands. "
         +"Uncertain results must be reconciled read-only, never re-dispatched.",
-      inputSchema:releaseOrchestratorInputSchema,
-      outputSchema:releaseOrchestratorResultSchema,
+      inputSchema:releaseOrchestratorPublishedInputSchema,
+      outputSchema:releaseOrchestratorPublishedOutputSchema,
       annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true,idempotentHint:true},
       _meta:meta,
     },async(input,extra)=>{
@@ -2748,7 +2748,17 @@ const sourceControlMcpSchemas = {
       expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
       bootstrapOperationId: z.uuid().optional(),
     }).strict(),
-    output: githubWorkflowOperationResultSchema,
+    // The MCP SDK publishes object schemas, not a discriminated union root.
+    // Runtime results still use the strict branch-specific contract.
+    output: z.object({
+      status: z.enum(["submitted", "outcome_unknown", "observed"]),
+      operationId: z.uuid(),
+      runId: z.number().int().positive().optional(),
+      state: z.enum(["queued", "in_progress", "completed"]).optional(),
+      conclusion: z.string().nullable().optional(),
+    }).strict().refine(value => githubWorkflowOperationResultSchema.safeParse(value).success, {
+      message: "Invalid github_workflow_operation MCP result.",
+    }),
   },
   github_materialize_actions_artifact: {
     input: z.object({

@@ -36,6 +36,21 @@ export const releaseOrchestratorInputSchema=z.discriminatedUnion("action",[
     ...oracleReleaseAdvanceInputSchema.shape,
   }).strict(),
 ]);
+/** Object-shaped MCP SDK schemas; strict discriminated unions above/below still
+ * validate the actual operation before dispatch and before returning. */
+export const releaseOrchestratorPublishedInputSchema=z.object({
+  action:z.enum(["get_local_state","advance_oracle"]),
+  workspaceId:workspace,
+  runId:UUID.optional(),
+  operationId:UUID.optional(),
+  expectedSourceSha:SHA.optional(),
+  expectedLastSeq:z.number().int().nonnegative().safe().optional(),
+}).strict();
+export const releaseOrchestratorPublishedOutputSchema=z.object({
+  action:z.enum(["get_local_state","advance_oracle"]),
+  result:z.union([getReleaseStateResultSchema,oracleReleaseAdvanceResultSchema]),
+}).strict();
+
 export const releaseOrchestratorResultSchema=z.discriminatedUnion("action",[
   z.object({
     action:z.literal("get_local_state"),
