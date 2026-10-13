@@ -50,7 +50,7 @@ $currentReleaseId = [string]$currentState.active.releaseId
 $resolvedTag = $Tag
 if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
     $activeReleaseRoot = Join-Path $installation ("releases\$currentReleaseId")
-    $null = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $activeReleaseRoot -ExpectedReleaseId $currentReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    $null = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $activeReleaseRoot -ExpectedReleaseId $currentReleaseId -AllowLegacyInstalledFormat -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     $node = Join-Path $activeReleaseRoot 'runtime\node\node.exe'
     $selector = Join-Path $activeReleaseRoot 'deploy\common\select-mcp-v3-release.mjs'
     foreach ($required in @($node, $selector)) {

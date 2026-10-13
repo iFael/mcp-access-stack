@@ -144,7 +144,7 @@ function Remove-McpV3OAuthCredential {
                 $releaseRoot = Join-Path $installation ("releases\$releaseId")
                 if (Test-Path -LiteralPath $releaseRoot -PathType Container) {
                     try {
-                        $verified = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $releaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+                        $verified = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $releaseId -AllowLegacyInstalledFormat -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
                         $record = @($verified.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'browser-credential-broker' })
                         if ($record.Count -eq 1) {
                             $candidate = Resolve-McpPublicChildPath -Root $releaseRoot -RelativePath ([string]$record[0].path)
