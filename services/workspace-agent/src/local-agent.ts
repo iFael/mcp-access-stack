@@ -211,6 +211,8 @@ import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
 import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control/github-http-client.js";
 import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
+import {inspectGitHubPublicReleaseAssets,
+  type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
 import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
 import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
@@ -1375,6 +1377,38 @@ export class LocalAgent {
           ref.object.type === "commit" && ref.object.sha === commitSha;
         if (verified) metadata.resultSha = commitSha;
         return verified;
+      },
+    );
+  }
+
+  /** Authenticated, audited postcondition for fixed public release assets.
+   * Integrity and publication only: signatureVerified stays false until an
+   * independent Authenticode / Sigstore verifier is implemented. */
+  async releaseInspectGitHubPublicDistribution(
+    input:GitHubGetRepositoryInput,runId:number,tag:string,commitSha:string,
+    context:OperationContext={},
+  ):Promise<GitHubPublicDistributionInspection>{
+    return this.runSourceControlValidatedAudited(
+      "releaseInspectGitHubPublicDistribution",githubGetRepositoryInputSchema,
+      input,context,
+      async(workspace,parsed,activeContext,metadata)=>{
+        const repository=parsed.owner+"/"+parsed.repository;
+        metadata.sourceControlCapability="github.repository.read";
+        metadata.targetResource="github:"+repository+":release/"+tag+":run/"+runId;
+        metadata.expectedSha=commitSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace,"github.repository.read",repository,parsed.root??".",
+          false,activeContext.signal,
+        );
+        const client=await this.getGitHubWorkflowApiClient();
+        if(!client.getWorkflowRun || !client.getReleaseByTag ||
+          !client.getTagRef || !client.getReleaseAssetChecksum)
+          throw new AppError("CAPABILITY_UNSUPPORTED",
+            "Authenticated GitHub public release inspection unavailable.");
+        const observation=await inspectGitHubPublicReleaseAssets(
+          client,parsed.owner,parsed.repository,runId,tag,commitSha,activeContext);
+        metadata.resultSha=observation.assetInventorySha256;
+        return observation;
       },
     );
   }
