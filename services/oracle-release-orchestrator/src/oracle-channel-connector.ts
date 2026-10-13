@@ -104,9 +104,9 @@ export function parseOracleChannelConnectorConfig(
   return { channelUrl, channelToken, orchestratorToken };
 }
 
-function readCredentialFromEnvironment(
+export function readCredentialFromEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
-  variable: "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE" | "UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE",
+  variable: "UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN_FILE" | "UPDATE_CONTROL_ORCHESTRATOR_TOKEN_FILE" | "UPDATE_CONTROL_ORACLE_CONTROL_TOKEN_FILE",
 ): string {
   const filePath = environment[variable]?.trim();
   if (!filePath || !isAbsolute(filePath)) {

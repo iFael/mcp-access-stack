@@ -15,6 +15,7 @@ import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
+import {loadOracleControlBindingFromEnvironment} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
@@ -51,7 +52,8 @@ async function main(): Promise<void> {
 
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
   const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
-  const reloadable = new ReloadableLocalAgent();
+  const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
+  const reloadable = new ReloadableLocalAgent(oracleControl ? {oracleControl} : {});
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
     const managedPolicy = await repositories.buildPolicy();
