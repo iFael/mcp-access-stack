@@ -5,38 +5,6 @@ const credentialProvider:GitHubCredentialProvider={
   getCredential:async()=>({token:"test-github-token",source:"gh-cli-user"}),
 };
 describe("bounded authenticated release checksum download",()=>{
-  it("reads exact proof bytes via authenticated API then unauthenticated GitHub CDN",async()=>{
-    const bytes=new Uint8Array([0,1,2,255,3]);
-    const requests:Array<{url:string;init:RequestInit}>=[];
-    const fetchImpl=jest.fn(async(url:string,init:RequestInit)=>{
-      requests.push({url,init});
-      return requests.length===1
-        ? new Response(null,{status:302,headers:{
-            location:"https://release-assets.githubusercontent.com/test/proof?sig=abc",
-          }}) : new Response(bytes,{status:200,headers:{
-            "content-length":String(bytes.byteLength),
-          }});
-    });
-    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
-    expect(await client.getReleaseAssetBytes("octo","repo",99,4096)).toEqual(bytes);
-    expect(requests).toHaveLength(2);
-    expect((requests[0]!.init.headers as Record<string,string>).Authorization)
-      .toBe("Bearer test-github-token");
-    expect(requests[1]!.init.headers).toBeUndefined();
-    expect(requests[0]!.init.redirect).toBe("manual");
-    expect(requests[1]!.init.redirect).toBe("error");
-  });
-  it("rejects invalid proof read bounds, overstated header and oversized streams",async()=>{
-    const fetchImpl=jest.fn(async()=>new Response("x".repeat(4097),{status:200}));
-    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
-    await expect(client.getReleaseAssetBytes("octo","repo",1,4096)).rejects.toThrow();
-    await expect(client.getReleaseAssetBytes("octo","repo",1,8193)).rejects.toThrow();
-    await expect(client.getReleaseAssetBytes("octo","repo",1,0)).rejects.toThrow();
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const header=new GitHubHttpClient({credentialProvider,fetchImpl:async()=>new Response(
-      "x",{status:200,headers:{"content-length":"9000"}})});
-    await expect(header.getReleaseAssetBytes("octo","repo",1,4096)).rejects.toThrow();
-  });
   it("uses API bearer only on github.com, never forwards it to the asset CDN",async()=>{
     const seen:Array<{url:string;init:RequestInit}>=[];
     const fetchImpl=jest.fn(async(url:string,init:RequestInit)=>{

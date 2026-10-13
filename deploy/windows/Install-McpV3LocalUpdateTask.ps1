@@ -32,15 +32,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 updater task dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -72,7 +68,7 @@ $script = @(
     'if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}'
 ) -join '; '
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-$arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -EncodedCommand $encoded"
+$arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
 $pwshCommand = Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $pwsh = [IO.Path]::GetFullPath([string]$pwshCommand.Source)
 if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {

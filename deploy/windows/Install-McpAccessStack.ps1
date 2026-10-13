@@ -39,13 +39,6 @@ $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 if (-not (Test-Path -LiteralPath $publicCommonPath -PathType Leaf)) {
     throw "Public distribution helper was not found: $publicCommonPath"
 }
-$publicCommonSignature = Get-AuthenticodeSignature -LiteralPath $publicCommonPath
-if (
-    $publicCommonSignature.Status -ne 'Valid' -and
-    -not ($AllowUnsignedDevelopment -and $publicCommonSignature.Status -eq 'NotSigned')
-) {
-    throw "Invalid Authenticode signature for $publicCommonPath. Status=$($publicCommonSignature.Status)"
-}
 . $publicCommonPath
 
 if (-not $Execute) {
@@ -85,8 +78,8 @@ if ($EnableBrowserWorker) {
     }
 }
 
-Assert-McpPublicSignature -Path $PSCommandPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature `
+Assert-McpPublicFile -Path $PSCommandPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile `
     -Path (Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1') `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 $distribution = Assert-McpPublicDistribution `
@@ -117,7 +110,7 @@ foreach ($scriptPath in @($stageScript, $handoverScript)) {
     if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
         throw "Required Windows runtime script was not found: $scriptPath"
     }
-    Assert-McpPublicSignature -Path $scriptPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    Assert-McpPublicFile -Path $scriptPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 }
 
 $stageResult = & $stageScript `

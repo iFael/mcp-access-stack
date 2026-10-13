@@ -1,4 +1,4 @@
-name: Windows companion-only signed distribution
+name: Windows companion-only checksummed distribution
 
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('publish companion CI-{0} @ {1}', inputs.ci_run_id, inputs.expected_sha) || format('companion CI-{0} @ {1}', github.event.workflow_run.id, github.event.workflow_run.head_sha) }}
 
@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       ci_run_id:
-        description: Exact successful main CI run that produced the signed companion artifact
+        description: Exact successful main CI run that produced the checksummed companion artifact
         required: true
         type: string
 
@@ -101,8 +101,6 @@ jobs:
     environment: public-release
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     defaults:
       run:
         shell: pwsh
@@ -158,16 +156,11 @@ jobs:
             -SourceCommit $env:SOURCE_COMMIT `
             -OutputDirectory (Join-Path $env:RUNNER_TEMP 'companion-native')
 
-      - name: Assemble signed local Windows distribution only
+      - name: Assemble checksummed local Windows distribution only
         env:
-          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
           RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
           SOURCE_COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
-          if (-not $env:WINDOWS_SIGNING_PFX_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_PASSWORD) {
-            throw 'Pinned Windows signing credentials are required.'
-          }
           $edgeMatch = [regex]::Match(
             (Get-Content services/mcp-edge-gateway/wrangler.jsonc -Raw),
             '"MCP_PUBLIC_BASE_URL"\s*:\s*"([^"]+)"'
@@ -185,13 +178,12 @@ jobs:
             -EdgeBaseUrl $edgeBase `
             -OutputDirectory (Join-Path $env:RUNNER_TEMP 'companion-distribution')
 
-      - name: Verify pinned signatures and execution-node runtime smoke
+      - name: Verify SHA-256 manifests and execution-node runtime smoke
         env:
           RELEASE_ID: ${{ needs.preflight.outputs.release-id }}
         run: |
           & ./deploy/windows/Test-McpWindowsExecutionNodePackage.ps1 `
             -ReleaseRoot (Join-Path $env:RUNNER_TEMP "companion-distribution/stage/releases/$env:RELEASE_ID") `
-            -OfflinePinnedAuthenticode
 
       - name: Verify companion artifact checksum before publishing build artifact
         env:
@@ -202,19 +194,14 @@ jobs:
           $zip = Join-Path $dir $name
           $sum = Join-Path $dir "$name.sha256"
           if (-not (Test-Path -LiteralPath $zip -PathType Leaf) -or
-              -not (Test-Path -LiteralPath $sum -PathType Leaf)) { throw 'Signed artifact or SHA-256 is missing.' }
+              -not (Test-Path -LiteralPath $sum -PathType Leaf)) { throw 'ZIP or SHA-256 is missing.' }
           $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = (Get-Content -LiteralPath $sum -Raw).Trim() -split '\s+'
           if ($expected.Length -ne 2 -or $expected[0] -cne $actual -or $expected[1] -cne "*$name") {
             throw 'Companion distribution checksum mismatch.'
           }
 
-      - name: Attest signed ZIP build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: ${{ runner.temp }}/companion-distribution/v${{ needs.preflight.outputs.release-id }}-windows-x64.zip
-
-      - name: Recheck main CAS before making the signed artifact available
+      - name: Recheck main CAS before making the checksummed artifact available
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
@@ -224,7 +211,7 @@ jobs:
             throw 'main advanced while packaging; refuse to publish a stale distribution.'
           }
 
-      - name: Upload signed companion distribution without publishing a GitHub Release
+      - name: Upload checksummed companion distribution without publishing a GitHub Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-companion-${{ needs.preflight.outputs.release-id }}-${{ needs.preflight.outputs.commit }}
@@ -235,7 +222,7 @@ jobs:
           retention-days: 30
 
   publish-companion:
-    # Explicit approved gate reuses the already signed artifact.
+    # Explicit approved gate reuses the already checksummed artifact.
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -257,7 +244,7 @@ jobs:
         with:
           node-version: 26
 
-      - name: Verify canonical CI and signed artifact, then publish once
+      - name: Verify canonical CI and checksummed artifact, then publish once
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,4 +294,4 @@ jobs:
             "$RUNNER_TEMP/companion-publish/$archive.sha256" \
             --verify-tag --prerelease --repo "$GITHUB_REPOSITORY" \
             --title "$release_tag (Windows companion only)" \
-            --notes "Signed Windows companion artifact from successful main CI $CI_RUN_ID. No Edge, Oracle, or runtime deployment."
+            --notes "Checksummed Windows companion artifact from successful main CI $CI_RUN_ID. No Edge, Oracle, or runtime deployment."

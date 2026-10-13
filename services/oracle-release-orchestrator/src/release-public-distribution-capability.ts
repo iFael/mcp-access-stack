@@ -25,16 +25,16 @@ export type PublicWorkflowObservation =
       readonly conclusion: string | null };
 
 /** The host must perform authenticated GitHub reads and independently check
- * artifact contents, signature provenance, release tag/commit and asset hashes.
- * A workflow success alone is not sufficient to claim signed distribution.
+ * artifact manifests, SHA-256 digests, release tag/commit and release state.
+ * A workflow success alone cannot establish published, checksum-verified assets.
  */
 export interface PublicDistributionProof {
   readonly sourceCommitSha: string;
   readonly releaseTag: string;
   readonly workflowRunId: number;
-  readonly signatureVerified: boolean;
+  readonly integrityVerified: boolean;
   readonly releasePublished: boolean;
-  readonly signedManifestSha256: string;
+  readonly manifestSha256: string;
   readonly assetDigestSha256: string;
 }
 export interface TypedPublicDistributionPort {
@@ -69,13 +69,13 @@ function workflowRequest(input:PublicDistributionBinding,
 function proofIsValid(p:PublicDistributionProof,run:ReleaseRunSnapshot,runId:number):boolean {
   return p.sourceCommitSha===run.sourceCommitSha &&
     p.releaseTag===run.targetRelease && p.workflowRunId===runId &&
-    p.signatureVerified===true && DIGEST.test(p.signedManifestSha256) &&
+    p.integrityVerified===true && DIGEST.test(p.manifestSha256) &&
     DIGEST.test(p.assetDigestSha256);
 }
 function evidence(action:PublicAction,run:ReleaseRunSnapshot,runId:number,
   p:PublicDistributionProof):EvidenceInput {
   const body={action,runId,tag:run.targetRelease,sha:run.sourceCommitSha,
-    signedManifestSha256:p.signedManifestSha256,assetDigestSha256:p.assetDigestSha256};
+    manifestSha256:p.manifestSha256,assetDigestSha256:p.assetDigestSha256};
   return {kind:action==="build_and_sign_release"?"signed_build_receipt":"release_publication_receipt",
     source:"mcp_v3_verified_github_release",
     sha256:createHash("sha256").update(JSON.stringify(body)).digest("hex"),

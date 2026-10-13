@@ -80,7 +80,7 @@ function Assert-McpWindowsScheduledTaskPathVisibility {
         'if(@($results|Where-Object{-not $_.visible}).Count -gt 0){exit 3}else{exit 0}'
     ) -join ';'
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeScript))
-    $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -EncodedCommand $encodedCommand"
+    $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
 
     $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     if ([string]::IsNullOrWhiteSpace($userId)) {
@@ -130,20 +130,6 @@ function Assert-McpWindowsScheduledTaskPathVisibility {
     }
 }
 
-function Assert-McpWindowsExecutionNodeSignature {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [switch]$AllowUnsignedDevelopment
-    )
-
-    if ($AllowUnsignedDevelopment) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $Path
-        if ($signature.Status -in @('NotSigned', 'UnknownError') -and $null -eq $signature.SignerCertificate) {
-            return
-        }
-    }
-    Assert-McpPublicSignature -Path $Path -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-}
 function Resolve-McpWindowsAccountSidValue {
     param([Parameter(Mandatory = $true)][string]$UserId)
 
@@ -342,7 +328,7 @@ function Assert-McpWindowsExecutionNodeDistributionCompleteness {
     foreach ($entry in @($Manifest.files)) {
         $relativePath = ([string]$entry.path).Replace('\', '/')
         if (-not $expected.Add($relativePath)) {
-            throw "Signed distribution manifest contains a duplicate path: $relativePath"
+            throw "SHA-256 distribution manifest contains a duplicate path: $relativePath"
         }
     }
 
@@ -354,11 +340,11 @@ function Assert-McpWindowsExecutionNodeDistributionCompleteness {
             }
     )
     if ($actual.Count -ne $expected.Count) {
-        throw 'Signed distribution file set does not match the extracted package.'
+        throw 'SHA-256 distribution file set does not match the extracted package.'
     }
     foreach ($relativePath in $actual) {
         if (-not $expected.Contains($relativePath)) {
-            throw "Extracted distribution contains an unsigned extra file: $relativePath"
+            throw "Extracted distribution contains an unexpected extra file: $relativePath"
         }
     }
 }
@@ -377,7 +363,7 @@ function Assert-McpWindowsExecutionNodeMaterializedRelease {
             Where-Object { ([string]$_.path).Replace('\', '/').StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) }
     )
     if ($entries.Count -eq 0) {
-        throw 'Signed distribution manifest contains no files for the requested execution-node release.'
+        throw 'SHA-256 distribution manifest contains no files for the requested execution-node release.'
     }
 
     $expected = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -389,7 +375,7 @@ function Assert-McpWindowsExecutionNodeMaterializedRelease {
         }
         $targetPath = Resolve-McpPublicChildPath -Root $resolvedRelease -RelativePath $relativePath
         if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
-            throw "Materialized execution-node release is missing a signed file: $relativePath"
+            throw "Materialized execution-node release is missing a manifest file: $relativePath"
         }
         $expectedHash = ([string]$entry.sha256).ToLowerInvariant()
         $actualHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -405,11 +391,11 @@ function Assert-McpWindowsExecutionNodeMaterializedRelease {
             }
     )
     if ($actual.Count -ne $expected.Count) {
-        throw 'Materialized execution-node release file set differs from the signed distribution.'
+        throw 'Materialized execution-node release file set differs from the SHA-256 distribution.'
     }
     foreach ($relativePath in $actual) {
         if (-not $expected.Contains($relativePath)) {
-            throw "Materialized execution-node release contains an unsigned extra file: $relativePath"
+            throw "Materialized execution-node release contains an unexpected extra file: $relativePath"
         }
     }
 }
@@ -457,7 +443,7 @@ function Assert-McpWindowsExecutionNodeRelease {
         [string]$executionManifest.commit -ne $commit -or
         [string]$executionManifest.platform -ne 'win32-x64' -or
         [string]$executionManifest.runtimeMode -ne 'bundled-node' -or
-        [string]$executionManifest.integrityRoot -ne 'signed-distribution-manifest') {
+        [string]$executionManifest.integrityRoot -ne 'sha256-distribution-manifest') {
         throw 'Execution-node manifest identity, platform or integrity root is invalid.'
     }
 
@@ -487,11 +473,6 @@ function Assert-McpWindowsExecutionNodeRelease {
         $expectedHash = ([string]$Record.sha256).ToLowerInvariant()
         if ($expectedHash -notmatch '^[a-f0-9]{64}$' -or $actualHash -ne $expectedHash) {
             throw "Execution-node artifact hash mismatch: $($Record.path)"
-        }
-        if ($Record.authenticodeRequired -eq $true) {
-            Assert-McpWindowsExecutionNodeSignature `
-                -Path $artifactPath `
-                -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
         }
         return $artifactPath
     }
@@ -533,20 +514,20 @@ function Assert-McpWindowsExecutionNodeRelease {
             if ([string]$entry[0].owner -notin @($serviceId, 'shared')) {
                 throw "Execution-node service entry artifact must be owned by $serviceId or shared"
             }
-            if ($entry[0].authenticodeRequired -ne $true) {
-                throw "Execution-node service entry artifact must require Authenticode: $serviceId"
+            if ($entry[0].authenticodeRequired -ne $false) {
+                throw "Execution-node service entry artifact must use manifest SHA-256: $serviceId"
             }
         }
 
         $requiredArtifacts = @{
-            'edge-host' = @('edge-runtime', 'native/McpEdgeHost.exe', $true)
+            'edge-host' = @('edge-runtime', 'native/McpEdgeHost.exe', $false)
             'edge-connector' = @('edge-runtime', 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js', $false)
-            'edge-validation-launcher' = @('edge-runtime', 'deploy/windows/Start-McpEdgeConnector.ps1', $true)
+            'edge-validation-launcher' = @('edge-runtime', 'deploy/windows/Start-McpEdgeConnector.ps1', $false)
             'browser-worker-server' = @('browser-worker', 'services/browser-worker/dist/server.js', $false)
             'local-companion-runtime' = @('shared', 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js', $false)
-            'node-host-launcher' = @('shared', 'compat/McpNodeHostLauncher.exe', $true)
-            'browser-credential-broker' = @('browser-worker', 'compat/McpCredentialBroker.exe', $true)
-            'elevation-broker' = @('shared', 'native/McpElevationBroker.exe', $true)
+            'node-host-launcher' = @('shared', 'compat/McpNodeHostLauncher.exe', $false)
+            'browser-credential-broker' = @('browser-worker', 'compat/McpCredentialBroker.exe', $false)
+            'elevation-broker' = @('shared', 'native/McpElevationBroker.exe', $false)
             'node-runtime' = @('shared', 'runtime/node/node.exe', $false)
         }
         foreach ($artifactId in $requiredArtifacts.Keys) {

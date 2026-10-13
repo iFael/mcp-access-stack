@@ -1,5 +1,4 @@
 import {createHash} from "node:crypto";
-import {MCP_WINDOWS_SIGNER_CERT_SHA256,verifyMcpWindowsDetachedProof} from "../../../../tooling/release/Verify-McpPublicWindowsProof.mjs";
 import type {OperationContext} from "@vs-code-gpt/shared";
 import type {GitHubWorkflowApiClient} from "../source-control/github-http-client.js";
 
@@ -19,31 +18,22 @@ export interface GitHubPublicDistributionInspection {
   readonly workflowRunId:number;
   /** Independently observed GitHub Release publication, not signature proof. */
   readonly releasePublished:true;
-  /** No cryptographic Authenticode/Sigstore verifier on this host. */
-  readonly signatureVerified:false;
+  /** Authenticated GitHub metadata and SHA-256 sidecars checked. */
+  readonly integrityVerified:true;
   readonly verifiedAssetCount:number;
   readonly assetInventorySha256:string;
-  /** Presence is metadata only, not cryptographic verification. */
-  readonly windowsDetachedProofAvailable:boolean;
-  /** Independent pinned RSA validation of the Windows ZIP digest only. */
-  readonly windowsDetachedProofVerified:boolean;
 }
 
 /** Authenticated GitHub metadata and small checksum sidecars are verified
  * without shell, downloads of unbounded binaries or blind trust in CI status.
- * This does NOT constitute independent signature verification and therefore
- * MUST NOT be supplied as PublicDistributionProof or enable Oracle release.
+ * SHA-256 is a consistency check, not independent evidence of the publisher.
+ * Do not promote this observation to an unconditional Oracle GO.
  */
 export async function inspectGitHubPublicReleaseAssets(
   client:Pick<GitHubWorkflowApiClient,
-    "getWorkflowRun"|"getReleaseByTag"|"getTagRef"|"getReleaseAssetChecksum"|"getReleaseAssetBytes">,
+    "getWorkflowRun"|"getReleaseByTag"|"getTagRef"|"getReleaseAssetChecksum">,
   owner:string,repository:string,runId:number,tag:string,commitSha:string,
   context?:OperationContext,
-  windowsVerifier?:{
-    readonly certificateBytes:Uint8Array;
-    /** Host-only test seam; production uses the fixed pinned verifier. */
-    readonly verify?:typeof verifyMcpWindowsDetachedProof;
-  },
 ):Promise<GitHubPublicDistributionInspection>{
   if(!/^[A-Za-z0-9-]{1,100}$/u.test(owner) ||
     !/^[A-Za-z0-9._-]{1,100}$/u.test(repository) ||
@@ -74,11 +64,7 @@ export async function inspectGitHubPublicReleaseAssets(
     !release.published_at || !Number.isFinite(Date.parse(release.published_at)))
     throw new Error("GITHUB_PUBLIC_INSPECTION_PROVENANCE_UNVERIFIED");
 
-  const baseAssets=ASSET_SUFFIXES.flatMap(suffix=>[tag+"-"+suffix,tag+"-"+suffix+".sha256"]);
-  const proofAssets=[tag+"-windows-x64.proof.json",tag+"-windows-x64.proof.json.sig"];
-  const hasDetachedProof=Array.isArray(release.assets) &&
-    release.assets.length===baseAssets.length+proofAssets.length;
-  const wanted=hasDetachedProof?[...baseAssets,...proofAssets]:baseAssets;
+  const wanted=ASSET_SUFFIXES.flatMap(suffix=>[tag+"-"+suffix,tag+"-"+suffix+".sha256"]);
   if(!Array.isArray(release.assets) || release.assets.length!==wanted.length)
     throw new Error("GITHUB_PUBLIC_INSPECTION_ASSET_SET_INVALID");
   const assetByName=new Map<string,{id:number;name:string;size:number;digest:string;state:string}>();
@@ -117,47 +103,7 @@ export async function inspectGitHubPublicReleaseAssets(
       throw new Error("GITHUB_PUBLIC_INSPECTION_PACKAGE_DIGEST_MISMATCH");
     inventory.push(filename+":"+prefix);
   }
-  if(windowsVerifier && (!hasDetachedProof || !client.getReleaseAssetBytes))
-    throw new Error("GITHUB_PUBLIC_WINDOWS_PROOF_UNAVAILABLE");
-  let windowsDetachedProofVerified=false;
-  if(hasDetachedProof){
-    const proof=assetByName.get(proofAssets[0]!);
-    const signature=assetByName.get(proofAssets[1]!);
-    if(!proof || !signature || proof.size>4096 || signature.size>8192)
-      throw new Error("GITHUB_PUBLIC_INSPECTION_SIGNED_PROOF_ASSET_INVALID");
-    // These metadata digests are included in inventory; only a separate RSA
-    // verification with the pinned public certificate can claim authenticity.
-    inventory.push(proof.name+":"+proof.digest.slice(7));
-    inventory.push(signature.name+":"+signature.digest.slice(7));
-    if(windowsVerifier && client.getReleaseAssetBytes){
-      // Both bytes and metadata are strictly size- and digest-bound before
-      // trust in the signature; a CDN redirect never receives GitHub bearer.
-      const [proofBytes,signatureBytes]=await Promise.all([
-        client.getReleaseAssetBytes(owner,repository,proof.id,4096,context),
-        client.getReleaseAssetBytes(owner,repository,signature.id,8192,context),
-      ]);
-      for(const [asset,body] of [[proof,proofBytes],[signature,signatureBytes]] as const){
-        if(!(body instanceof Uint8Array) || body.byteLength!==asset.size ||
-          createHash("sha256").update(body).digest("hex")!==asset.digest.slice(7))
-          throw new Error("GITHUB_PUBLIC_WINDOWS_PROOF_DIGEST_MISMATCH");
-      }
-      const signed=(windowsVerifier.verify??verifyMcpWindowsDetachedProof)({
-        proofBytes,signatureBytes,certificateBytes:windowsVerifier.certificateBytes,
-        expectedCertificateSha256:MCP_WINDOWS_SIGNER_CERT_SHA256,
-        expectedTag:tag,expectedCommitSha:commitSha,expectedRunId:runId,
-        expectedWindowsAssetSha256:assetByName.get(tag+"-windows-x64.zip")!.digest.slice(7),
-      });
-      if(signed.signatureVerified!==true || signed.workflowRunId!==runId ||
-        signed.releaseTag!==tag || signed.sourceCommitSha!==commitSha ||
-        signed.windowsAssetSha256!==assetByName.get(tag+"-windows-x64.zip")!.digest.slice(7) ||
-        signed.signerCertificateSha256!==MCP_WINDOWS_SIGNER_CERT_SHA256)
-        throw new Error("GITHUB_PUBLIC_WINDOWS_PROOF_RESULT_INVALID");
-      windowsDetachedProofVerified=true;
-    }
-  }
   return {sourceCommitSha:commitSha,releaseTag:tag,workflowRunId:runId,
-    releasePublished:true,signatureVerified:false,verifiedAssetCount:ASSET_SUFFIXES.length,
-    assetInventorySha256:hash(inventory.join("\n")),
-    windowsDetachedProofAvailable:hasDetachedProof,
-    windowsDetachedProofVerified};
+    releasePublished:true,integrityVerified:true,verifiedAssetCount:ASSET_SUFFIXES.length,
+    assetInventorySha256:hash(inventory.join("\n"))};
 }

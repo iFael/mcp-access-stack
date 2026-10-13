@@ -31,7 +31,7 @@ describe("Oracle ledger public signing linked to original bootstrap operation",(
       blueprintVersion:beta80ReleaseBlueprint.version,targetRelease:tag,
       sourceCommitSha:sha,actorId:actor,idempotencyKey:"test-signed-public"}).run;
     const operations:PublicWorkflowRequest[]=[];
-    let dispatches=0,signatureVerified=true,releasePublished=true;
+    let dispatches=0,integrityVerified=true,releasePublished=true;
     const dist={
       workspaceId:"mcp-access-stack",owner:"iFael",repository:"mcp-access-stack",
       authorized:async()=>true,
@@ -47,8 +47,8 @@ describe("Oracle ledger public signing linked to original bootstrap operation",(
         },
         inspectDistribution:async(runId:number):Promise<PublicDistributionProof>=>({
           workflowRunId:runId,sourceCommitSha:sha,releaseTag:tag,
-          signatureVerified,releasePublished,
-          signedManifestSha256:"b".repeat(64),assetDigestSha256:"c".repeat(64),
+          integrityVerified,releasePublished,
+          manifestSha256:"b".repeat(64),assetDigestSha256:"c".repeat(64),
         }),
       },
     };
@@ -75,7 +75,7 @@ describe("Oracle ledger public signing linked to original bootstrap operation",(
     }
     const executor=new ReleaseWorkflowExecutor(orchestrator,capabilities);
     return {run,executor,operations,dispatches:()=>dispatches,
-      setSignature:(value:boolean)=>{signatureVerified=value;},
+      setIntegrity:(value:boolean)=>{integrityVerified=value;},
       setPublished:(value:boolean)=>{releasePublished=value;},dist};
   }
   it("uses two independent UUIDs and never POSTs twice for signature and publication",async()=>{
@@ -104,12 +104,12 @@ describe("Oracle ledger public signing linked to original bootstrap operation",(
     const f=setup();
     await f.executor.advance(f.run.runId,actor);
     await f.executor.advance(f.run.runId,actor);
-    f.setSignature(false);
+    f.setIntegrity(false);
     const waiting=await f.executor.advance(f.run.runId,actor);
     expect(waiting.stop).toBe("outcome_unknown");
     expect(waiting.run.steps[3]?.status).toBe("outcome_unknown");
     expect(f.dispatches()).toBe(1);
-    f.setSignature(true);f.setPublished(false);
+    f.setIntegrity(true);f.setPublished(false);
     await f.executor.advance(f.run.runId,actor);
     const unpublished=await f.executor.advance(f.run.runId,actor);
     expect(unpublished.run.steps[4]?.status).toBe("outcome_unknown");

@@ -16,13 +16,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
-$publicCommonSignature = Get-AuthenticodeSignature -LiteralPath $publicCommonPath
-if (
-    $publicCommonSignature.Status -ne 'Valid' -and
-    -not ($AllowUnsignedDevelopment -and $publicCommonSignature.Status -eq 'NotSigned')
-) {
-    throw "Invalid Authenticode signature for $publicCommonPath. Status=$($publicCommonSignature.Status)"
-}
 . $publicCommonPath
 
 if (-not $Execute) {
@@ -82,7 +75,7 @@ try {
     }
     $packageRoot = Split-Path -Parent $manifestFiles[0].FullName
     $packageCommonPath = Join-Path $packageRoot 'deploy\windows\PublicDistribution.Common.ps1'
-    Assert-McpPublicSignature `
+    Assert-McpPublicFile `
         -Path $packageCommonPath `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     . $packageCommonPath
@@ -110,7 +103,7 @@ try {
     }
 
     $stager = Join-Path $packageRoot 'deploy\windows\Stage-McpWindowsExecutionNodeCandidate.ps1'
-    Assert-McpPublicSignature -Path $stager -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    Assert-McpPublicFile -Path $stager -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     $stageResult = & $stager `
         -DistributionRoot $packageRoot `
         -InstallationRoot $installation `

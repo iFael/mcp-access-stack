@@ -344,7 +344,7 @@ else { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
         platform = 'win32-x64'
         createdAt = '2026-09-19T00:00:00.000Z'
         runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
+        integrityRoot = 'sha256-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
             [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },

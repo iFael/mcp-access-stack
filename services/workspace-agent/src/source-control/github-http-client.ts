@@ -128,8 +128,6 @@ export interface GitHubWorkflowApiClient {
     context?:OperationContext):Promise<GitHubPublicReleaseRecord>;
   getReleaseAssetChecksum?(owner:string,repository:string,assetId:number,
     context?:OperationContext):Promise<string>;
-  getReleaseAssetBytes?(owner:string,repository:string,assetId:number,
-    maxBytes:number,context?:OperationContext):Promise<Uint8Array>;
   dispatchWorkflow(owner: string, repository: string, workflow: string,
     expectedSha: string, inputs: Record<string, string>,
     context?: OperationContext): Promise<void>;
@@ -303,16 +301,7 @@ export class GitHubHttpClient implements GitHubApiClient {
 
   async getReleaseAssetChecksum(owner:string,repository:string,assetId:number,
     context?:OperationContext):Promise<string>{
-    const data=await this.getReleaseAssetBytes(owner,repository,assetId,512,context);
-    return new TextDecoder("utf8",{fatal:true}).decode(data);
-  }
-
-  /** Restricted read of a single existing GitHub Release asset; redirects
-   * only to GitHub's fixed CDN origin, always dropping Authorization. */
-  async getReleaseAssetBytes(owner:string,repository:string,assetId:number,
-    maxBytes:number,context?:OperationContext):Promise<Uint8Array>{
-    if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>8192)
-      throw new AppError("INVALID_ARGUMENT","Release proof size limit is invalid.");
+    const maxBytes=512;
     const signal=context?.signal;
     if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
     const credential=await this.#credentialProvider.getCredential(context);
@@ -363,7 +352,7 @@ export class GitHubHttpClient implements GitHubApiClient {
       const all=new Uint8Array(total);let offset=0;
       for(const chunk of chunks){all.set(chunk,offset);offset+=chunk.byteLength;}
       if(total<1)throw new Error("asset empty");
-      return all;
+      return new TextDecoder("utf8",{fatal:true}).decode(all);
     }catch{
       if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
       throw unavailableError(false);

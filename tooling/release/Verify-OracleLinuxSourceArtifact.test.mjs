@@ -74,10 +74,8 @@ test("Oracle-only workflow enforces existing tag, main CAS and successful CI", (
   assert.match(workflow, /git archive --format=tar/);
   assert.match(workflow, /gzip -n/);
   assert.match(workflow, /Verify-OracleLinuxSourceArtifact\.mjs/);
-  assert.match(workflow, /actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6/);
+  assert.equal(workflow.includes("actions/attest@"),false);
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);
-  assert.match(workflow, /id-token: write/);
-  assert.match(workflow, /attestations: write/);
   assert.match(workflow, /gh release create "\$RELEASE_TAG"/);
   assert.match(workflow, /--verify-tag --prerelease/);
   assert.match(workflow, /^  publish:\n    needs: \[preflight, package\]$/m);

@@ -69,7 +69,6 @@ Assert-ContainsAll -Label 'Public release workflow' -Source $releaseWorkflow -To
     'New-McpWindowsExecutionNodeArtifacts.ps1',
     'New-McpPublicDistribution.ps1',
     'Test-McpWindowsExecutionNodePackage.ps1',
-    '-OfflinePinnedAuthenticode',
     'timeout-minutes: 5'
 )
 Assert-ContainsNone -Label 'Public release workflow' -Source $releaseWorkflow -Tokens @(
@@ -97,16 +96,12 @@ Assert-ContainsAll -Label 'Companion-only workflow' -Source $companionWorkflow -
     'git tag --merged',
     'companion-only-distribution.yml',
     'environment: public-release',
-    'WINDOWS_SIGNING_PFX_BASE64',
-    'WINDOWS_SIGNING_PFX_PASSWORD',
     'New-McpRelease.ps1',
     'New-McpWindowsExecutionNodeArtifacts.ps1',
     'New-McpPublicDistribution.ps1',
     "-WorkflowName 'Companion-only distribution'",
     'Test-McpWindowsExecutionNodePackage.ps1',
-    '-OfflinePinnedAuthenticode',
     'Get-FileHash',
-    'actions/attest@',
     'actions/upload-artifact@',
     'retention-days: 30',
     'workflow_dispatch:',
@@ -192,9 +187,11 @@ Assert-ContainsAll -Label 'Public distribution builder' -Source $distributionBui
     "-Owner 'browser-worker'",
     "-Owner 'shared'",
     'services = @(',
-    'Set-AuthenticodeSignature'
+    'Get-FileHash'
 )
 Assert-ContainsNone -Label 'Public distribution builder' -Source $distributionBuilder -Tokens @(
+    'Set-AuthenticodeSignature',
+    'Import-PfxCertificate',
     'McpHost.exe',
     "-Role 'mcp-host'",
     'Invoke-McpWindowsExecutionNodeTransition.ps1',
@@ -276,7 +273,6 @@ Assert-ContainsAll -Label 'Windows detached cutover handover' -Source $handover 
     'ExpectedRequestSha256',
     'handoverDelaySeconds = 3',
     'Set-McpWindowsScheduledTaskOwnerAccess',
-    "'AllSigned'",
     "status = 'started'",
     'detached = $true'
 )

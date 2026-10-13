@@ -35,15 +35,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 local switch dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -263,7 +259,7 @@ try {
 
     if (-not $alreadyActive) {
         $cutoverScript = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
-        Assert-McpPublicSignature -Path $cutoverScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+        Assert-McpPublicFile -Path $cutoverScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
         $cutover = & $cutoverScript -InstallationRoot $installation -Operation Promote -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
         if ([string]$cutover.status -ne 'cutover-ready' -or [string]$cutover.activeReleaseId -ne $TargetReleaseId) {
             throw 'MCP V3 local release promotion returned unexpected evidence.'
@@ -272,7 +268,7 @@ try {
     }
 
     $taskInstaller = Join-Path $targetReleaseRoot 'deploy\windows\Install-McpV3LocalTask.ps1'
-    Assert-McpPublicSignature -Path $taskInstaller -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    Assert-McpPublicFile -Path $taskInstaller -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     if ($usedZeroGapHandover) {
         $handoverResult = & $taskInstaller `
             -InstallationRoot $installation `

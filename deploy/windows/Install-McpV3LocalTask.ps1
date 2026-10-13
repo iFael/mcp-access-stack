@@ -41,15 +41,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 local task dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -84,11 +80,11 @@ function Resolve-McpV3Artifact {
 $launcherPath = Resolve-McpV3Artifact -Id 'node-host-launcher'
 $nodePath = Resolve-McpV3Artifact -Id 'node-runtime'
 $companionPath = Resolve-McpV3Artifact -Id 'local-companion-runtime'
-$credentialBrokerPath = Resolve-McpV3Artifact -Id 'browser-credential-broker'
+$browserBrokerPath = Resolve-McpV3Artifact -Id 'browser-credential-broker'
 $elevationBrokerPath = Resolve-McpV3Artifact -Id 'elevation-broker'
 
-foreach ($signedPath in @($launcherPath, $credentialBrokerPath, $elevationBrokerPath)) {
-    Assert-McpWindowsExecutionNodeSignature -Path $signedPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+foreach ($artifactPath in @($launcherPath, $browserBrokerPath, $elevationBrokerPath)) {
+    Assert-McpPublicFile -Path $artifactPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 }
 
 $configPath = Join-Path $state 'config.json'
@@ -110,7 +106,7 @@ foreach ($value in @(
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_RELEASE_ROOT=$releaseRoot")),
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_STATE_ROOT=$state")),
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_CONFIG_PATH=$configPath")),
-    '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_CREDENTIAL_BROKER_PATH=$credentialBrokerPath")),
+    '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_CREDENTIAL_BROKER_PATH=$browserBrokerPath")),
     '--env', (Quote-McpV3LocalTaskArgument ("MCP_V3_ELEVATION_BROKER_PATH=$elevationBrokerPath"))
 )) {
     $arguments.Add([string]$value)

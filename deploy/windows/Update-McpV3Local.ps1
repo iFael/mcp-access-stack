@@ -25,15 +25,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 local updater dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -87,7 +83,7 @@ if ($currentReleaseId -eq $expectedReleaseId) {
 }
 
 $genericUpdater = Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1'
-Assert-McpPublicSignature -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $prepared = & $genericUpdater -Repository $Repository -InstallationRoot $installation -Tag $resolvedTag -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $expectedReleaseId) {
@@ -96,7 +92,7 @@ if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $e
 
 $targetReleaseRoot = Join-Path $installation ("releases\$expectedReleaseId")
 $switchScript = Join-Path $targetReleaseRoot 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'
-Assert-McpPublicSignature -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $switchResult = & $switchScript -InstallationRoot $installation -StateRoot $state -TargetReleaseId $expectedReleaseId -TaskName $TaskName -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ([string]$switchResult.status -ne 'active' -or [string]$switchResult.releaseId -ne $expectedReleaseId) {

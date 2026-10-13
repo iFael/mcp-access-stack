@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import {readFile} from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
@@ -1382,26 +1381,14 @@ export class LocalAgent {
     );
   }
 
-  /** Checks the Windows detached RSA proof against the repository's pinned
-   * public certificate after ACL and GitHub asset digest verification.
-   * Still never claims global signed-distribution readiness (Unix unsigned). */
-  async releaseVerifyGitHubWindowsProof(
+  /** Authenticated, audited postcondition for fixed public release assets.
+   * Integrity and publication are checked against authenticated GitHub metadata. */
+  async releaseInspectGitHubPublicDistribution(
     input:GitHubGetRepositoryInput,runId:number,tag:string,commitSha:string,
     context:OperationContext={},
   ):Promise<GitHubPublicDistributionInspection>{
-    return this.releaseInspectGitHubPublicDistribution(
-      input,runId,tag,commitSha,context,true);
-  }
-
-  /** Authenticated, audited postcondition for fixed public release assets.
-   * Integrity and publication only: signatureVerified stays false until an
-   * independent Authenticode / Sigstore verifier is implemented. */
-  async releaseInspectGitHubPublicDistribution(
-    input:GitHubGetRepositoryInput,runId:number,tag:string,commitSha:string,
-    context:OperationContext={},verifyWindowsProof=false,
-  ):Promise<GitHubPublicDistributionInspection>{
     return this.runSourceControlValidatedAudited(
-      verifyWindowsProof?"releaseVerifyGitHubWindowsProof":"releaseInspectGitHubPublicDistribution",githubGetRepositoryInputSchema,
+      "releaseInspectGitHubPublicDistribution",githubGetRepositoryInputSchema,
       input,context,
       async(workspace,parsed,activeContext,metadata)=>{
         const repository=parsed.owner+"/"+parsed.repository;
@@ -1417,12 +1404,8 @@ export class LocalAgent {
           !client.getTagRef || !client.getReleaseAssetChecksum)
           throw new AppError("CAPABILITY_UNSUPPORTED",
             "Authenticated GitHub public release inspection unavailable.");
-        const certificateBytes=verifyWindowsProof
-          ? await readFile(new URL("../../../deploy/windows/mcp-access-stack-code-signing.cer",
-            import.meta.url)) : undefined;
         const observation=await inspectGitHubPublicReleaseAssets(
-          client,parsed.owner,parsed.repository,runId,tag,commitSha,activeContext,
-          certificateBytes===undefined?undefined:{certificateBytes});
+          client,parsed.owner,parsed.repository,runId,tag,commitSha,activeContext);
         metadata.resultSha=observation.assetInventorySha256;
         return observation;
       },

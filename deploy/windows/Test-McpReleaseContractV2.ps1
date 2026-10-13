@@ -119,7 +119,7 @@ try {
     $distributionStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpPublicDistribution.ps1', [StringComparison]::Ordinal)
     if ($releaseStepIndex -lt 0 -or $nativeStepIndex -lt 0 -or $distributionStepIndex -lt 0 -or
         $releaseStepIndex -ge $nativeStepIndex -or $nativeStepIndex -ge $distributionStepIndex) {
-        throw 'Public release workflow must build immutable release, native artifacts, then signed distribution in order.'
+        throw 'Public release workflow must build immutable release, native artifacts, then SHA-256 distribution in order.'
     }
     if ($releaseWorkflow -match 'test\s+"\$\{#run_ids\[@\]\}"\s+-eq\s+1') {
         throw 'Public release workflow rejects valid duplicate successful CI evidence for the same immutable commit.'
@@ -179,7 +179,7 @@ try {
         throw 'Public GitHub Release must depend on the successful Edge contract gate.'
     }
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
-        throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
+        throw 'SHA-256 Windows distribution must be complete before the Edge production mutation begins.'
     }
 
     $breakGlassWorkflowPath = Join-Path $repositoryRoot '.github\workflows\edge-breakglass.yml'
