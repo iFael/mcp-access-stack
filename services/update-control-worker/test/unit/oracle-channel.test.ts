@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
-import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE} from "@mcp-access-stack/update-control-contract";
+import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE,
+  ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -21,6 +22,7 @@ import { createUpdateControlReadOnlyTools } from "../../src/tools.js";
 
 const TOKEN = "oracle-channel-test-token-".padEnd(48, "x");
 const CONTROL_TOKEN="oracle-control-separated-token-".padEnd(48,"y");
+const SOURCE_TOKEN="oracle-source-separated-token-".padEnd(48,"z");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -134,7 +136,8 @@ function createHarness() {
   let channel = new UpdateControlOracleChannel(
     state,
     { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
-      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -173,7 +176,8 @@ function createHarness() {
     channel = new UpdateControlOracleChannel(
       state,
       { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
-      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -222,6 +226,46 @@ function attachOraclePeer(
     void state.flush();
   };
 }
+
+describe("isolated authenticated source provider DO",()=>{
+  it("does not accept the read/control tokens or origins",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=ORACLE_SOURCE_ORIGIN)=>new Request(
+      "https://worker.example"+ORACLE_SOURCE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+    });
+    expect((await h.channel().fetch(connect(TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(CONTROL_TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(SOURCE_TOKEN,ORACLE_CHANNEL_ORIGIN))).status).toBe(403);
+    expect((await h.channel().fetch(connect(SOURCE_TOKEN))).status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_SOURCE_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_CHANNEL_SCOPE)).toHaveLength(0);
+  });
+  it("forwards only fixed GET methods and validates provider response",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_SOURCE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_SOURCE_ORIGIN,
+        authorization:"Bearer "+SOURCE_TOKEN},
+    }));
+    const pair=h.pairs.at(-1)!;
+    const received:unknown[]=[];
+    attachOraclePeer(h.channel(),h.state,pair.client,pair.server,request=>{
+      received.push(request);
+      return "a".repeat(40);
+    });
+    const rpc=(command:unknown)=>h.channel().fetch(new Request(
+      "https://worker.internal"+ORACLE_SOURCE_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(command),
+      }));
+    expect((await rpc({method:"shell",arguments:{}})).status).toBe(400);
+    expect((await rpc({method:"read_main_head",arguments:{repository:"other"}})).status).toBe(400);
+    const result=await rpc({method:"read_main_head",arguments:{}});
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({result:"a".repeat(40)});
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({method:"read_main_head",arguments:{}});
+  });
+});
 
 describe("isolated control mode on existing Oracle channel DO implementation",()=>{
   it("rejects the read token and read origin for the separate control socket",async()=>{

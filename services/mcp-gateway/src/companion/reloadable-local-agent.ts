@@ -10,10 +10,13 @@ import {
   InProcessWorkspaceExecutor,
   LocalAgent,
   type LocalAgentOptions,
+  createOracleReleaseGitHubReadPort,
+  type OracleReleaseGitHubReadConfig,
 } from "@vs-code-gpt/local-agent";
 
 export class ReloadableLocalAgent {
   private current: InProcessWorkspaceExecutor | null = null;
+  private currentAgent:LocalAgent|null=null;
   private generation = 0;
   private readonly options: LocalAgentOptions;
   readonly workspaceExecutor: WorkspaceExecutor;
@@ -49,6 +52,26 @@ export class ReloadableLocalAgent {
     this.sourceControlExecutor = proxy;
   }
 
+  /** Read port follows policy reload and discards observations that finish
+   * after policy revocation. Never capture a stale LocalAgent. */
+  oracleSourceReadPort(config:OracleReleaseGitHubReadConfig){
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const active=this.currentAgent,epoch=this.generation;
+      if(!active)throw new AppError("WORKSPACE_NOT_FOUND","Oracle source host offline.");
+      const result=await operation(active);
+      if(epoch!==this.generation || this.currentAgent!==active){
+        throw new AppError("PERMISSION_DENIED","Oracle source policy changed during read.");
+      }
+      return result;
+    };
+    return createOracleReleaseGitHubReadPort({
+      releaseReadGitHubMainHead:(input,context)=>checked(agent=>
+        agent.releaseReadGitHubMainHead(input,context)),
+      githubGetCommitChecks:(input,context)=>checked(agent=>
+        agent.githubGetCommitChecks(input,context)),
+    },config);
+  }
+
   get ready(): boolean {
     return this.current !== null;
   }
@@ -59,11 +82,13 @@ export class ReloadableLocalAgent {
 
   async reload(policy: PolicyFile | null): Promise<void> {
     if (!policy) {
+      this.currentAgent=null;
       this.current = null;
       this.generation += 1;
       return;
     }
     const agent = await LocalAgent.createFromPolicy(policy, this.options);
+    this.currentAgent=agent;
     this.current = new InProcessWorkspaceExecutor(agent);
     this.generation += 1;
   }

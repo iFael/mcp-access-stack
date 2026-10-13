@@ -1,6 +1,9 @@
 export { ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_SCOPE, ORACLE_CONTROL_ORIGIN, ORACLE_CONTROL_MAX_BODY_BYTES, ORACLE_CONTROL_TIMEOUT_MS, parseOracleControlAdvance, parseOracleControlCommand, parseOracleControlResponse, oracleControlCanonicalBytes, signOracleControlRequest } from "./oracle-control.js";
 export type { OracleControlAdvanceInput, OracleControlPrincipal, OracleControlRpcCommand, OracleControlResponse } from "./oracle-control.js";
 
+export {ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_DISPATCH_PATH,ORACLE_SOURCE_SCOPE,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_MAX_BODY_BYTES,ORACLE_SOURCE_MAX_RESULT_BYTES,ORACLE_SOURCE_TIMEOUT_MS,parseOracleSourceCommand,parseOracleSourceResult,oracleSourceCanonicalBytes,signOracleSourceRequest} from "./oracle-source-read.js";
+export type {OracleSourceReadCommand,OracleSourceReadChecks} from "./oracle-source-read.js";
+
 export const UPDATE_CONTROL_RUN_STATUSES = [
   "planned",
   "running",

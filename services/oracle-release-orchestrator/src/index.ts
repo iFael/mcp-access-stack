@@ -6,6 +6,8 @@ export { bindReleaseVerificationReads } from "./release-verification-capabilitie
 export { bindReleaseEffects } from "./release-effect-capabilities.js";
 export { bindReleasePublicDistribution } from "./release-public-distribution-capability.js";
 export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
+export {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
+export {resolveOracleRemoteSourceReadPort} from "./oracle-source-host-binding.js";
 export { composeReleaseCapabilities } from "./release-capability-registry.js";
 export { createTrustedOracleReleaseHost } from "./release-trusted-host.js";
 export { OracleReleaseControlConnector, validateOracleControlSocketConfig } from "./oracle-control-connector.js";

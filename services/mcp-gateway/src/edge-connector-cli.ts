@@ -17,6 +17,8 @@ import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepos
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import {loadOracleControlBindingFromEnvironment} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
+import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
+import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-provider-host.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
@@ -68,6 +70,9 @@ async function main(): Promise<void> {
     onChanged: reloadPrimaryRuntime,
   });
   await reloadPrimaryRuntime();
+  const sourceOptions=await loadOracleSourceProviderFromEnvironment(process.env,
+    config=>reloadable.oracleSourceReadPort(config));
+  const sourceConnector=sourceOptions===undefined?undefined:new OracleSourceProviderConnector(sourceOptions);
 
   let browserPool: ScopedBrowserWorkerPool | undefined;
   try {
@@ -167,7 +172,19 @@ async function main(): Promise<void> {
   try {
     await assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion);
     writeLog({ event: "edge_connector_loopback_health_passed" });
-    await connector.run(controller.signal);
+    let sourceFailure:unknown;
+    const sourceTask=sourceConnector?.run(controller.signal).catch(error=>{
+      sourceFailure=error;
+      controller.abort();
+      connector.stop();
+    });
+    try{
+      await connector.run(controller.signal);
+      if(sourceFailure!==undefined)throw sourceFailure;
+    }finally{
+      controller.abort();
+      await sourceTask;
+    }
   } finally {
     connector.stop();
     process.removeListener("SIGINT", onSigint);
