@@ -2,7 +2,7 @@ import {chmodSync,mkdtempSync,rmSync,symlinkSync,writeFileSync} from "node:fs";
 import path from "node:path";
 import {tmpdir} from "node:os";
 import {afterEach,describe,expect,it} from "@jest/globals";
-import {resolveOracleRemoteSourceReadPort} from "../../src/oracle-source-host-binding.js";
+import {composeOracleHostReleaseCapabilities,resolveOracleRemoteSourceReadPort} from "../../src/oracle-source-host-binding.js";
 
 let dir:string|undefined;
 afterEach(()=>{if(dir)rmSync(dir,{recursive:true,force:true});dir=undefined;});
@@ -32,6 +32,32 @@ describe("Oracle source read-only host enrollment",()=>{
     expect(port).toBeDefined();
     expect(typeof port?.readMainHead).toBe("function");
     expect(typeof port?.readCommitChecks).toBe("function");
+  });
+  it("registers only real signed source reads, keeps missing effects NO-GO and rechecks host policy",async()=>{
+    let authorized=true;
+    const registry=composeOracleHostReleaseCapabilities(config(),{
+      authorizeRead:async()=>authorized,
+    });
+    expect(registry.ready).toBe(false);
+    expect([...registry.capabilities.keys()]).toEqual([
+      "resolve_main_commit","verify_canonical_ci",
+    ]);
+    expect(registry.missingActions).toContain("deploy_edge");
+    expect(()=>registry.createExecutor(null as never)).toThrow("RELEASE_CAPABILITY_INCOMPLETE");
+    const source=registry.capabilities.get("resolve_main_commit")!;
+    expect(await source.authorize(null as never,null as never)).toBe(true);
+    authorized=false;
+    expect(await source.authorize(null as never,null as never)).toBe(false);
+    const disabled=composeOracleHostReleaseCapabilities({},{});
+    expect(disabled.capabilities.size).toBe(0);
+    expect(disabled.ready).toBe(false);
+  });
+  it("requires a trusted host authorization callback and distinct credential file",()=>{
+    expect(()=>composeOracleHostReleaseCapabilities(config(),{})).toThrow("ORACLE_SOURCE_HOST_AUTH_REQUIRED");
+    const env=config();
+    expect(()=>resolveOracleRemoteSourceReadPort({
+      ...env,UPDATE_CONTROL_ORACLE_CONTROL_TOKEN_FILE:env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_FILE,
+    })).toThrow("ORACLE_SOURCE_HOST_CREDENTIAL_REUSED");
   });
   it("fails closed on wide mode, symlink, invalid key",()=>{
     if(process.platform==="win32")return;
