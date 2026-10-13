@@ -405,7 +405,8 @@ function Assert-McpWindowsExecutionNodeRelease {
         [string]$ExpectedReleaseId,
         [string]$ExpectedCommit,
         [switch]$AllowUnsignedDevelopment,
-        [switch]$RuntimeSmoke
+        [switch]$RuntimeSmoke,
+        [switch]$AllowLegacyInstalledFormat
     )
 
     $release = [System.IO.Path]::GetFullPath($ReleaseRoot)
@@ -438,12 +439,16 @@ function Assert-McpWindowsExecutionNodeRelease {
     $executionManifestPath = Join-Path $release 'execution-node-manifest.json'
     $executionManifest = Read-McpPublicJson -Path $executionManifestPath
     $executionVersion = [int]$executionManifest.version
+    # Only existing active/previous releases may use the old manifest marker.
+    # New candidates must use SHA-256 manifests; both formats still verify every hash.
+    $legacyInstalledFormat = $AllowLegacyInstalledFormat -and
+        [string]$executionManifest.integrityRoot -eq 'signed-distribution-manifest'
     if ($executionVersion -ne 2 -or
         [string]$executionManifest.releaseId -ne $releaseId -or
         [string]$executionManifest.commit -ne $commit -or
         [string]$executionManifest.platform -ne 'win32-x64' -or
         [string]$executionManifest.runtimeMode -ne 'bundled-node' -or
-        [string]$executionManifest.integrityRoot -ne 'sha256-distribution-manifest') {
+        ([string]$executionManifest.integrityRoot -ne 'sha256-distribution-manifest' -and -not $legacyInstalledFormat)) {
         throw 'Execution-node manifest identity, platform or integrity root is invalid.'
     }
 
@@ -514,8 +519,8 @@ function Assert-McpWindowsExecutionNodeRelease {
             if ([string]$entry[0].owner -notin @($serviceId, 'shared')) {
                 throw "Execution-node service entry artifact must be owned by $serviceId or shared"
             }
-            if ($entry[0].authenticodeRequired -ne $false) {
-                throw "Execution-node service entry artifact must use manifest SHA-256: $serviceId"
+            if ($entry[0].authenticodeRequired -ne [bool]$legacyInstalledFormat) {
+                throw "Execution-node service entry artifact integrity contract mismatch: $serviceId"
             }
         }
 
@@ -536,9 +541,12 @@ function Assert-McpWindowsExecutionNodeRelease {
                 throw "Execution-node required artifact is missing or duplicated: $artifactId"
             }
             $expected = $requiredArtifacts[$artifactId]
+            $legacySignedId = $artifactId -in @('edge-host', 'edge-validation-launcher',
+                'node-host-launcher', 'browser-credential-broker', 'elevation-broker')
+            $expectedAuthenticode = [bool]($legacyInstalledFormat -and $legacySignedId)
             if ([string]$record[0].owner -ne [string]$expected[0] -or
                 [string]$record[0].path -ne [string]$expected[1] -or
-                [bool]$record[0].authenticodeRequired -ne [bool]$expected[2]) {
+                [bool]$record[0].authenticodeRequired -ne $expectedAuthenticode) {
                 throw "Execution-node required artifact contract mismatch: $artifactId"
             }
         }
