@@ -52,7 +52,7 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly twelve source-control capabilities", () => {
+  test("publishes exactly fifteen source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
       "git.index.write",
@@ -61,6 +61,9 @@ describe("source-control contracts", () => {
       "git.remote.push",
       "github.repository.read",
       "github.artifact.materialize",
+      "github.workflow.dispatch",
+      "github.workflow.bootstrap",
+      "github.workflow.public_release",
       "github.repository.create",
       "github.pull_request.read",
       "github.pull_request.create",
@@ -88,7 +91,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes nineteen operation names and six confirmable operations", () => {
+  test("publishes twenty operation names and six confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -104,6 +107,7 @@ describe("source-control contracts", () => {
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
       "github_wait_commit_checks_watch",
+      "github_workflow_operation",
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",

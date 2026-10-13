@@ -21,7 +21,7 @@ export async function loadOracleControlBindingFromEnvironment(
   const names = [ENABLE, URL, KEY_FILE, OWNER] as const;
   const configured = names.some(name => environment[name] !== undefined);
   if (!configured) return undefined;
-  if (environment[ENABLE] !== "1" || process.platform !== "linux") {
+  if (environment[ENABLE] !== "1") {
     throw new AppError("CAPABILITY_UNSUPPORTED", "Oracle control enrollment is not authorized on this host.");
   }
   const endpoint = environment[URL]?.trim();
@@ -31,6 +31,9 @@ export async function loadOracleControlBindingFromEnvironment(
       authorizedOwnerScope.length > 256 ||
       !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(authorizedOwnerScope)) {
     throw new AppError("CAPABILITY_UNSUPPORTED", "Oracle control host configuration is incomplete.");
+  }
+  if (process.platform !== "linux") {
+    throw new AppError("CAPABILITY_UNSUPPORTED", "Oracle control enrollment is not authorized on this host.");
   }
   // Both the URL and scope are immutable within this host process. The
   // caller still applies its independent exact HTTPS workers.dev allowlist.

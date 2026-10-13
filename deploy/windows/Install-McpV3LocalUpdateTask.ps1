@@ -68,7 +68,7 @@ $script = @(
     'if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}'
 ) -join '; '
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-$arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+$arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -EncodedCommand $encoded"
 $pwshCommand = Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $pwsh = [IO.Path]::GetFullPath([string]$pwshCommand.Source)
 if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {

@@ -143,7 +143,7 @@ Assert-ContainsAll -Label 'signed Windows distribution selector' -Source $distri
 
 $updateTask = Read-ProjectFile 'deploy\windows\Install-McpV3LocalUpdateTask.ps1'
 Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @(
-    '-ExecutionPolicy Bypass',
+    '-ExecutionPolicy RemoteSigned',
     'state.active.releaseId',
     'Invoke-McpV3LocalUpdateTask.ps1',
     'Get-Command pwsh.exe -CommandType Application -ErrorAction Stop',
