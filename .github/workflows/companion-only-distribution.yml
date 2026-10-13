@@ -78,18 +78,32 @@ jobs:
           prior_runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
             --workflow companion-only-distribution.yml --event workflow_run \
             --limit 100 \
-            --json databaseId,displayTitle,headSha)"
+            --json databaseId,displayTitle,status,conclusion)"
           [[ "$(jq 'length' <<< "$prior_runs")" -lt 100 ]] || {
             echo "Distribution history exceeds bounded duplicate precheck." >&2
             exit 1
           }
-          duplicates="$(jq -r --arg title "companion CI-$CI_RUN_ID @ $EXPECTED_SHA" \
+          # A previous skipped/failed run without artifacts is not a publication.
+          # Still reject live runs, successful runs, or any previously uploaded artifact.
+          matching_runs="$(jq -c --arg title "companion CI-$CI_RUN_ID @ $EXPECTED_SHA" \
             --argjson current "$GITHUB_RUN_ID" \
-            '[.[] | select(.displayTitle == $title and .databaseId != $current)] | length' <<< "$prior_runs")"
-          [[ "$duplicates" == "0" ]] || {
-            echo "A companion distribution already exists for this CI run." >&2
-            exit 1
-          }
+            '.[] | select(.displayTitle == $title and .databaseId != $current)' <<< "$prior_runs")"
+          while IFS= read -r prior; do
+            [[ -n "$prior" ]] || continue
+            prior_id="$(jq -r '.databaseId' <<< "$prior")"
+            prior_status="$(jq -r '.status' <<< "$prior")"
+            prior_conclusion="$(jq -r '.conclusion' <<< "$prior")"
+            [[ "$prior_id" =~ ^[1-9][0-9]*$ ]] || exit 1
+            if [[ "$prior_status" != "completed" || "$prior_conclusion" == "success" ]]; then
+              echo "A companion distribution already exists or is running for this CI run." >&2
+              exit 1
+            fi
+            prior_artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$prior_id/artifacts" --jq '.total_count')"
+            if [[ "$prior_artifacts" != "0" ]]; then
+              echo "A companion distribution already uploaded artifacts for this CI run." >&2
+              exit 1
+            fi
+          done <<< "$matching_runs"
           echo "commit=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
           echo "release-id=$release_id" >> "$GITHUB_OUTPUT"
           echo "canonical-ci-run=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
