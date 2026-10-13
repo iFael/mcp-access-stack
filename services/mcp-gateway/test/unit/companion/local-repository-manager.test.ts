@@ -326,6 +326,22 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     }
   }, 15_000);
 
+  it("automatically exposes WSL alongside PowerShell and CMD on Windows", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+      platform: "win32",
+    });
+    await manager.bindRepositories([repositoryBinding(fixture.repository)]);
+
+    const policy = await manager.buildPolicy();
+    expect(policy?.workspaces[0]?.allowedShells).toEqual(["powershell", "cmd", "wsl"]);
+    const workspaces = await manager.listWorkspaceSummaries();
+    expect(workspaces[0]?.allowedShells).toEqual(["powershell", "cmd", "wsl"]);
+  }, 15_000);
+
   it("advertises native POSIX shells on Linux and macOS", async () => {
     for (const platform of ["linux", "darwin"] as const) {
       const fixture = await createGitFixture();

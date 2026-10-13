@@ -474,7 +474,7 @@ export class LocalRepositoryManager implements RepositoryExecutor {
         allowWrites: ["."],
         allowShell: ["."],
         allowedShells: this.platform === "win32"
-          ? ["powershell" as const, "cmd" as const]
+          ? ["powershell" as const, "cmd" as const, "wsl" as const]
           : ["sh" as const, "bash" as const],
         sourceControl: {
           capabilities: [...LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES],
