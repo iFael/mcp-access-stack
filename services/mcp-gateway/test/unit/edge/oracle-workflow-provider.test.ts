@@ -26,9 +26,9 @@ async function flush(){for(let i=0;i<80;i++)await Promise.resolve();}
 describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
   it("only forwards typed workflow and tag commands and returns validated receipts",async()=>{
     const socket=new Socket();
-    const workflow=jest.fn(async()=>({status:"observed" as const,operationId,runId:77,
+    const workflow=jest.fn(async(_input:unknown)=>({status:"observed" as const,operationId,runId:77,
       state:"completed" as const,conclusion:"success"}));
-    const tag=jest.fn(async()=>true);
+    const tag=jest.fn(async(_tag:string,_commitSha:string)=>true);
     const ctrl=new AbortController();
     const connector=new OracleWorkflowProviderConnector({url,token,port:{
       workflowOperation:workflow,verifyLightweightTag:tag,
