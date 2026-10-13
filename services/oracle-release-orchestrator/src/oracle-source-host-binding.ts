@@ -24,19 +24,14 @@ export function resolveOracleRemoteSourceReadPort(
     environment[name]?.trim() && resolve(environment[name]!)===resolve(file))) {
     throw new Error("ORACLE_SOURCE_HOST_CREDENTIAL_REUSED");
   }
-  const read=()=>readCredentialFromEnvironment(environment,
-    "UPDATE_CONTROL_ORACLE_SOURCE_HMAC_FILE");
-  const key=read();
-  if(!/^[0-9a-f]{64}$/u.test(key))throw new Error("ORACLE_SOURCE_HOST_HMAC_INVALID");
-  const configured=new OracleRemoteSourceReadPort({
-    endpoint:url,
-    key:async()=>{
-      const current=read();
-      if(!/^[0-9a-f]{64}$/u.test(current))throw new Error("ORACLE_SOURCE_HOST_HMAC_INVALID");
-      return current;
-    },
-  });
-  return configured;
+  const readKey=()=>{
+    const value=readCredentialFromEnvironment(environment,
+      "UPDATE_CONTROL_ORACLE_SOURCE_HMAC_FILE");
+    if(!/^[0-9a-f]{64}$/u.test(value))throw new Error("ORACLE_SOURCE_HOST_HMAC_INVALID");
+    return value;
+  };
+  readKey(); // Reject invalid enrollment immediately; revalidate on every request.
+  return new OracleRemoteSourceReadPort({endpoint:url,key:async()=>readKey()});
 }
 
 /** Host-owned composition: source reads use the authenticated reverse bridge,

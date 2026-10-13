@@ -101,6 +101,27 @@ export function bindReleasePublicDistribution(
     if(!publicationOp) return null;
     return workflowRequest(binding,run,publicationOp,bootstrap,"reconcile");
   };
+  // Dispatch is performed once. Both ledger steps reconcile the SAME run,
+  // with publication requiring the additional GitHub Release postcondition.
+  const reconcilePublication=async(action:PublicAction,intent:StepIntent,
+    run:ReleaseRunSnapshot)=>{
+    const request=await common(action,intent,run);
+    if(!request)return {outcome:"still_unknown" as const};
+    try {
+      const observation=await binding.port.workflowOperation(request);
+      if(observation.operationId!==request.operationId || observation.status!=="observed" ||
+        observation.state!=="completed" || observation.conclusion!=="success" ||
+        !Number.isSafeInteger(observation.runId) || observation.runId<1)
+        return {outcome:"still_unknown" as const};
+      const proof=await binding.port.inspectDistribution(
+        observation.runId,run.targetRelease,run.sourceCommitSha);
+      if(!proofIsValid(proof,run,observation.runId) ||
+        (action==="publish_signed_release" && !proof.releasePublished))
+        return {outcome:"still_unknown" as const};
+      return {outcome:"applied" as const,
+        evidence:[evidence(action,run,observation.runId,proof)]};
+    } catch {return {outcome:"still_unknown" as const};}
+  };
   const signing:ReleaseStepCapability={
     action:"build_and_sign_release",executionClass:"external_effect",
     authorize:async(_step,run)=>originalOperation(run,"publish_release_tag")!==null &&
@@ -113,38 +134,14 @@ export function bindReleasePublicDistribution(
       } catch {/* Only reconcile: a lost POST may already have succeeded. */}
       return {state:"outcome_unknown"};
     },
-    reconcile:async(intent,run)=>{
-      const request=await common("build_and_sign_release",intent,run);
-      if(!request)return {outcome:"still_unknown"};
-      try {
-        const observation=await binding.port.workflowOperation(request);
-        if(observation.operationId!==request.operationId || observation.status!=="observed" ||
-          observation.state!=="completed" || observation.conclusion!=="success" ||
-          !Number.isSafeInteger(observation.runId) || observation.runId<1) return {outcome:"still_unknown"};
-        const proof=await binding.port.inspectDistribution(observation.runId,run.targetRelease,run.sourceCommitSha);
-        if(!proofIsValid(proof,run,observation.runId))return {outcome:"still_unknown"};
-        return {outcome:"applied",evidence:[evidence("build_and_sign_release",run,observation.runId,proof)]};
-      } catch {return {outcome:"still_unknown"};}
-    },
+    reconcile:(intent,run)=>reconcilePublication("build_and_sign_release",intent,run),
   };
   const publishing:ReleaseStepCapability={
     action:"publish_signed_release",executionClass:"external_effect",
     authorize:async(_step,run)=>originalOperation(run,"build_and_sign_release")!==null &&
       await binding.authorized("publish_signed_release",run),
     execute:async()=>({state:"outcome_unknown"}),
-    reconcile:async(intent,run)=>{
-      const request=await common("publish_signed_release",intent,run);
-      if(!request)return {outcome:"still_unknown"};
-      try {
-        const observation=await binding.port.workflowOperation(request);
-        if(observation.operationId!==request.operationId || observation.status!=="observed" ||
-          observation.state!=="completed" || observation.conclusion!=="success" ||
-          !Number.isSafeInteger(observation.runId) || observation.runId<1) return {outcome:"still_unknown"};
-        const proof=await binding.port.inspectDistribution(observation.runId,run.targetRelease,run.sourceCommitSha);
-        if(!proofIsValid(proof,run,observation.runId) || !proof.releasePublished)return {outcome:"still_unknown"};
-        return {outcome:"applied",evidence:[evidence("publish_signed_release",run,observation.runId,proof)]};
-      } catch {return {outcome:"still_unknown"};}
-    },
+    reconcile:(intent,run)=>reconcilePublication("publish_signed_release",intent,run),
   };
   return new Map([["build_and_sign_release",signing],["publish_signed_release",publishing]]);
 }
