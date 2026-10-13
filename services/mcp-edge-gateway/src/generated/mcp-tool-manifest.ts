@@ -1841,10 +1841,309 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "taskSupport": "forbidden"
     },
     "inputSchema": {
-      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get_local_state",
+            "advance_oracle"
+          ],
+          "type": "string"
+        },
+        "expectedLastSeq": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "expectedSourceSha": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "workspaceId"
+      ],
       "type": "object"
     },
     "name": "release_orchestrator",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get_local_state",
+            "advance_oracle"
+          ],
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeBootstrap": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cutoverScriptPresent": {
+                      "type": "boolean"
+                    },
+                    "updateScriptPresent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "updateScriptPresent",
+                    "cutoverScriptPresent"
+                  ],
+                  "type": "object"
+                },
+                "installationRoot": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "state": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "candidate": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "previous": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "manifestSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "materializedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "releaseId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "releaseId",
+                            "manifestSha256",
+                            "materializedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "updatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "active",
+                    "candidate",
+                    "previous",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                },
+                "workspaceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspaceId",
+                "installationRoot",
+                "state",
+                "activeBootstrap"
+              ],
+              "type": "object"
+            },
+            {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operationId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "outcome_unknown",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "operationId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operationId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "result": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "lastSeq": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "runId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "planned",
+                            "running",
+                            "paused_outcome_unknown",
+                            "failed",
+                            "succeeded"
+                          ],
+                          "type": "string"
+                        },
+                        "stop": {
+                          "enum": [
+                            "outcome_unknown",
+                            "succeeded",
+                            "step_limit",
+                            "blocked_gate",
+                            "blocked_missing_capability",
+                            "blocked_unauthorized",
+                            "operation_in_progress",
+                            "reconciled_not_applied",
+                            "failed"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "runId",
+                        "lastSeq",
+                        "status",
+                        "stop"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "const": "observed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "operationId",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "result"
+      ],
+      "type": "object"
+    },
     "title": "Release lifecycle orchestrator"
   },
   {
@@ -11721,6 +12020,53 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "name": "github_workflow_operation",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "outcome_unknown",
+            "observed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operationId"
+      ],
+      "type": "object"
+    },
     "title": "Run or reconcile guarded release workflow"
   },
   {
@@ -21999,13 +22345,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ce3a0733faa582929fa53e2813f94f3253636df73058a05449d222ecc5a14a59",
-  "serverVersion": "0.4.0-catalog.cce3a0733faa5.sa95bdb31158c",
+  "contractRevision": "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1",
+  "serverVersion": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c",
   "toolCount": 99,
   "toolSetRevision": "a95bdb31158cf1e4fe47b0d96d8039bf9b59ca72f1b1e5eb9f9628447c13bba6"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cce3a0733faa5.sa95bdb31158c"
+  "version": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c"
 } as const;
