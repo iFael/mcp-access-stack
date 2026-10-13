@@ -23,6 +23,10 @@ import {
   ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_TIMEOUT_MS,ORACLE_SOURCE_MAX_RESULT_BYTES,
   parseOracleSourceCommand,parseOracleSourceResult,
   type OracleSourceReadCommand,
+  ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_SCOPE,
+  ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_TIMEOUT_MS,ORACLE_WORKFLOW_MAX_RESULT_BYTES,
+  parseOracleWorkflowCommand,parseOracleWorkflowResult,
+  type OracleWorkflowCommand,
 } from "@mcp-access-stack/update-control-contract";
 
 export {
@@ -56,6 +60,7 @@ export interface OracleChannelEnvironment {
   readonly UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN?: string;
   readonly UPDATE_CONTROL_ORACLE_CONTROL_TOKEN?: string;
   readonly UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN?: string;
 }
 
 export interface OracleChannelNamespace {
@@ -75,6 +80,7 @@ interface PendingRpc {
   readonly requestId: string;
   readonly socket: WebSocket;
   readonly sourceMethod?: OracleSourceReadCommand["method"];
+  readonly workflowMethod?: OracleWorkflowCommand["method"];
   readonly resolve: (response: Response) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -101,11 +107,15 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    if ([ORACLE_CHANNEL_CONNECT_PATH,ORACLE_CONTROL_CONNECT_PATH,ORACLE_SOURCE_CONNECT_PATH].includes(url.pathname)) {
-      return this.connectOracle(request,url,url.pathname===ORACLE_CONTROL_CONNECT_PATH,url.pathname===ORACLE_SOURCE_CONNECT_PATH);
+    if ([ORACLE_CHANNEL_CONNECT_PATH,ORACLE_CONTROL_CONNECT_PATH,ORACLE_SOURCE_CONNECT_PATH,
+      ORACLE_WORKFLOW_CONNECT_PATH].includes(url.pathname)) {
+      return this.connectOracle(request,url,url.pathname===ORACLE_CONTROL_CONNECT_PATH,
+        url.pathname===ORACLE_SOURCE_CONNECT_PATH,url.pathname===ORACLE_WORKFLOW_CONNECT_PATH);
     }
-    if ([ORACLE_CHANNEL_RPC_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_SOURCE_RPC_PATH].includes(url.pathname)) {
-      return this.handleRpc(request,url,url.pathname===ORACLE_CONTROL_RPC_PATH,url.pathname===ORACLE_SOURCE_RPC_PATH);
+    if ([ORACLE_CHANNEL_RPC_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_SOURCE_RPC_PATH,
+      ORACLE_WORKFLOW_RPC_PATH].includes(url.pathname)) {
+      return this.handleRpc(request,url,url.pathname===ORACLE_CONTROL_RPC_PATH,
+        url.pathname===ORACLE_SOURCE_RPC_PATH,url.pathname===ORACLE_WORKFLOW_RPC_PATH);
     }
     return jsonResponse({ error: "not_found" }, 404);
   }
@@ -122,7 +132,9 @@ export class UpdateControlOracleChannel {
       }
       const control=this.state.getWebSockets(ORACLE_CONTROL_SCOPE).includes(socket);
       const source=this.state.getWebSockets(ORACLE_SOURCE_SCOPE).includes(socket);
-      const active = this.state.getWebSockets(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:ORACLE_CHANNEL_SCOPE);
+      const workflow=this.state.getWebSockets(ORACLE_WORKFLOW_SCOPE).includes(socket);
+      const active = this.state.getWebSockets(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
+        workflow?ORACLE_WORKFLOW_SCOPE:ORACLE_CHANNEL_SCOPE);
       if (!active.includes(socket)) {
         this.protocolViolation(socket, 1008, "inactive Oracle connection");
         return;
@@ -146,9 +158,11 @@ export class UpdateControlOracleChannel {
       }
       if (frame.outcome === "success") {
         const responseBody = JSON.stringify({ result: frame.result });
-        if (utf8ByteLength(responseBody) > (source?ORACLE_SOURCE_MAX_RESULT_BYTES:ORACLE_CHANNEL_MAX_FRAME_BYTES) ||
+        if (utf8ByteLength(responseBody) > (source?ORACLE_SOURCE_MAX_RESULT_BYTES:
+          workflow?ORACLE_WORKFLOW_MAX_RESULT_BYTES:ORACLE_CHANNEL_MAX_FRAME_BYTES) ||
             (control && !validControlResult(frame.result)) ||
-            (source && (!pending.sourceMethod || !validSourceResult(pending.sourceMethod,frame.result)))) {
+            (source && (!pending.sourceMethod || !validSourceResult(pending.sourceMethod,frame.result))) ||
+            (workflow && (!pending.workflowMethod || !validWorkflowResult(pending.workflowMethod,frame.result)))) {
           this.finish(pending, jsonResponse({ error: "invalid_oracle_response" }, 502));
           return;
         }
@@ -175,10 +189,11 @@ export class UpdateControlOracleChannel {
     this.failPendingForSocket(socket);
   }
 
-  private async connectOracle(request: Request, url: URL, control=false, source=false): Promise<Response> {
+  private async connectOracle(request: Request, url: URL, control=false, source=false, workflow=false): Promise<Response> {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
-        url.pathname !== (control?ORACLE_CONTROL_CONNECT_PATH:source?ORACLE_SOURCE_CONNECT_PATH:ORACLE_CHANNEL_CONNECT_PATH)) {
+        url.pathname !== (control?ORACLE_CONTROL_CONNECT_PATH:source?ORACLE_SOURCE_CONNECT_PATH:
+          workflow?ORACLE_WORKFLOW_CONNECT_PATH:ORACLE_CHANNEL_CONNECT_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if (url.href.length > MAX_URL_LENGTH || !headersWithinBounds(request.headers)) {
@@ -187,13 +202,18 @@ export class UpdateControlOracleChannel {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse({ error: "websocket_required" }, 426);
     }
-    if (request.headers.get("origin") !== (control?ORACLE_CONTROL_ORIGIN:source?ORACLE_SOURCE_ORIGIN:ORACLE_CHANNEL_ORIGIN)) {
+    if (request.headers.get("origin") !== (control?ORACLE_CONTROL_ORIGIN:source?ORACLE_SOURCE_ORIGIN:
+      workflow?ORACLE_WORKFLOW_ORIGIN:ORACLE_CHANNEL_ORIGIN)) {
       return jsonResponse({ error: "invalid_origin" }, 403);
     }
 
-    const expected = control?this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:source?this.env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN;
+    const expected = control?this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:source?this.env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:
+      workflow?this.env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN;
     if ((control && expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN) ||
-       (source && (expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN || expected===this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN)))
+       (source && (expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN || expected===this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN)) ||
+       (workflow && (expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN ||
+        expected===this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN ||
+        expected===this.env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN)))
       return jsonResponse({error:"oracle_channel_not_configured"},503);
     if (typeof expected !== "string" || expected.length < TOKEN_MIN_LENGTH ||
         expected.length > TOKEN_MAX_LENGTH || /[\r\n\0]/u.test(expected)) {
@@ -210,7 +230,8 @@ export class UpdateControlOracleChannel {
     }
 
     try {
-      const scope=control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:ORACLE_CHANNEL_SCOPE;
+      const scope=control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
+        workflow?ORACLE_WORKFLOW_SCOPE:ORACLE_CHANNEL_SCOPE;
       for (const previous of this.state.getWebSockets(scope)) {
         this.failPendingForSocket(previous);
         previous.close(1012, "Oracle connection replaced");
@@ -223,9 +244,10 @@ export class UpdateControlOracleChannel {
     }
   }
 
-  private async handleRpc(request: Request, url: URL, control=false, source=false): Promise<Response> {
+  private async handleRpc(request: Request, url: URL, control=false, source=false, workflow=false): Promise<Response> {
     if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "POST" });
-    if (url.search || url.hash || url.pathname !== (control?ORACLE_CONTROL_RPC_PATH:source?ORACLE_SOURCE_RPC_PATH:ORACLE_CHANNEL_RPC_PATH)) {
+    if (url.search || url.hash || url.pathname !== (control?ORACLE_CONTROL_RPC_PATH:source?ORACLE_SOURCE_RPC_PATH:
+      workflow?ORACLE_WORKFLOW_RPC_PATH:ORACLE_CHANNEL_RPC_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if ((request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
@@ -248,9 +270,10 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    let command: ReadCommand | OracleControlRpcCommand | OracleSourceReadCommand;
+    let command: ReadCommand | OracleControlRpcCommand | OracleSourceReadCommand | OracleWorkflowCommand;
     try {
-      command = control?parseOracleControlCommand(value):source?parseOracleSourceCommand(value):parseReadCommand(value);
+      command = control?parseOracleControlCommand(value):source?parseOracleSourceCommand(value):
+        workflow?parseOracleWorkflowCommand(value):parseReadCommand(value);
     } catch (error) {
       if (error instanceof UpdateControlInputError || error instanceof InvalidRpcCommandError) {
         return jsonResponse({ error: "invalid_request" }, 400);
@@ -258,7 +281,8 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    const socket = this.getActiveOracleSocket(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:ORACLE_CHANNEL_SCOPE);
+    const socket = this.getActiveOracleSocket(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
+      workflow?ORACLE_WORKFLOW_SCOPE:ORACLE_CHANNEL_SCOPE);
     if (!socket) return jsonResponse({ error: "oracle_unavailable" }, 503);
     if (this.pending.size >= ORACLE_CHANNEL_MAX_IN_FLIGHT) {
       return jsonResponse({ error: "oracle_channel_busy" }, 503);
@@ -285,10 +309,12 @@ export class UpdateControlOracleChannel {
         requestId,
         socket,
         ...(source?{sourceMethod:(command as OracleSourceReadCommand).method}:{}),
+        ...(workflow?{workflowMethod:(command as OracleWorkflowCommand).method}:{}),
         resolve,
         timer: setTimeout(() => {
           this.finish(pending, jsonResponse({ error: "transport_timeout" }, 504));
-        }, control?ORACLE_CONTROL_TIMEOUT_MS:source?ORACLE_SOURCE_TIMEOUT_MS:rpcTimeoutFor(command as ReadCommand)),
+        }, control?ORACLE_CONTROL_TIMEOUT_MS:source?ORACLE_SOURCE_TIMEOUT_MS:
+          workflow?ORACLE_WORKFLOW_TIMEOUT_MS:rpcTimeoutFor(command as ReadCommand)),
       };
       this.pending.set(requestId, pending);
       try {
@@ -336,6 +362,9 @@ export class UpdateControlOracleChannel {
   }
 }
 
+function validWorkflowResult(method:OracleWorkflowCommand["method"],value:unknown):boolean {
+  try{parseOracleWorkflowResult(method,value);return true;}catch{return false;}
+}
 function validSourceResult(method:OracleSourceReadCommand["method"],value:unknown):boolean {
   try{parseOracleSourceResult(method,value);return true;}catch{return false;}
 }

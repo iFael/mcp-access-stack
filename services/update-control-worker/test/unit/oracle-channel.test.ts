@@ -1,7 +1,8 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE,
-  ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_SCOPE} from "@mcp-access-stack/update-control-contract";
+  ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_SCOPE,
+  ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -23,6 +24,7 @@ import { createUpdateControlReadOnlyTools } from "../../src/tools.js";
 const TOKEN = "oracle-channel-test-token-".padEnd(48, "x");
 const CONTROL_TOKEN="oracle-control-separated-token-".padEnd(48,"y");
 const SOURCE_TOKEN="oracle-source-separated-token-".padEnd(48,"z");
+const WORKFLOW_TOKEN="oracle-workflow-separated-token-".padEnd(48,"w");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -137,7 +139,8 @@ function createHarness() {
     state,
     { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
       UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
-      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -177,7 +180,8 @@ function createHarness() {
       state,
       { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
       UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
-      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -264,6 +268,46 @@ describe("isolated authenticated source provider DO",()=>{
     expect(await result.json()).toEqual({result:"a".repeat(40)});
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({method:"read_main_head",arguments:{}});
+  });
+});
+
+describe("domain-isolated workflow RPC channel",()=>{
+  it("refuses source/control bearer tokens and accepts only bounded typed workflow requests",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=ORACLE_WORKFLOW_ORIGIN)=>h.channel().fetch(new Request(
+      "https://worker.example"+ORACLE_WORKFLOW_CONNECT_PATH,{
+        method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+      }));
+    expect((await connect(SOURCE_TOKEN)).status).toBe(401);
+    expect((await connect(CONTROL_TOKEN)).status).toBe(401);
+    expect((await connect(WORKFLOW_TOKEN,ORACLE_SOURCE_ORIGIN)).status).toBe(403);
+    expect((await connect(WORKFLOW_TOKEN)).status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_WORKFLOW_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_SOURCE_SCOPE)).toHaveLength(0);
+    const pair=h.pairs.at(-1)!;
+    const operationId="11111111-2222-4333-8444-555555555555";
+    const request={method:"workflow_operation",arguments:{
+      workflow:"release-tag-bootstrap.yml",mode:"reconcile",tag:"v1.1.0-beta.90",
+      expectedMainSha:"a".repeat(40),operationId,
+    }};
+    const requests:unknown[]=[];
+    attachOraclePeer(h.channel(),h.state,pair.client,pair.server,frame=>{
+      requests.push(frame);
+      return {status:"observed",operationId,runId:4,state:"completed",conclusion:"success"};
+    });
+    const rpc=(value:unknown)=>h.channel().fetch(new Request(
+      "https://oracle-workflow.internal"+ORACLE_WORKFLOW_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value),
+      }));
+    expect((await rpc({...request,arguments:{...request.arguments,owner:"attacker"}})).status).toBe(400);
+    expect((await rpc({method:"shell",arguments:{}})).status).toBe(400);
+    const response=await rpc(request);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({result:{
+      status:"observed",operationId,runId:4,state:"completed",conclusion:"success",
+    }});
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject(request);
   });
 });
 
