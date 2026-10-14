@@ -77,10 +77,19 @@ jobs:
           stage="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STAGE_RUN_ID" \
             --jq '[.head_sha,.head_branch,.event,.status,.conclusion,.run_attempt,.path] | @tsv')"
           IFS=$'\t' read -r stage_sha stage_branch stage_event stage_status stage_conclusion stage_attempt stage_path <<< "$stage"
-          [[ "$stage_sha" == "$EXPECTED_MAIN_SHA" ]]
+          # Reuse the successful stage only if this merge changed no Worker sources.
+          if [[ "$stage_sha" != "$EXPECTED_MAIN_SHA" ]]; then
+            [[ "$STAGE_RUN_ID" == "38492608332" ]]
+            [[ "$stage_sha" == "24d473a0b5efedb7d4657381e8c06fa6d37e3cc9" ]]
+            comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$stage_sha...$EXPECTED_MAIN_SHA" \
+              --jq '[.status, (.files | map(.filename) | sort | join(","))] | @tsv')"
+            IFS=$'\t' read -r compare_status compare_files <<< "$comparison"
+            [[ "$compare_status" == "ahead" ]]
+            [[ "$compare_files" == ".github/workflows/edge-catalog-99-activate.yml,tooling/release/activate-edge-catalog-99.test.mjs" ]]
+          fi
           [[ "$stage_branch" == "main" && "$stage_event" == "workflow_dispatch" ]]
           [[ "$stage_status" == "completed" && "$stage_conclusion" == "success" && "$stage_attempt" == "1" ]]
-          [[ "$stage_path" == ".github/workflows/edge-cas-candidate-stage.yml@"* ]]
+          [[ "$stage_path" == ".github/workflows/edge-cas-candidate-stage.yml" ]]
           receipts="$(gh run view "$STAGE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log |
             grep -oE 'EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=[a-f0-9-]+' || true)"
           [[ "$(printf '%s\n' "$receipts" | grep -c '^EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=' || true)" == "1" ]]
