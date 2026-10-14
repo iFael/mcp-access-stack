@@ -25,9 +25,6 @@
   },
   "bin": {
     "mcp-edge-connector": "./dist/edge-connector-cli.js",
-    "mcp-v3-local": "./dist/companion-cli.js",
-    "mcp-v3-connector99-admin": "./dist/admin/candidate-admin-cli.js",
-    "mcp-v3-connector99-admin-http": "./dist/admin/candidate-admin-http-cli.js",
-    "mcp-v3-connector99-admin-oauth-ingress": "./dist/admin/candidate-admin-oauth-ingress-cli.js"
+    "mcp-v3-local": "./dist/companion-cli.js"
   }
 }
