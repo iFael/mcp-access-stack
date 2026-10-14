@@ -2,6 +2,7 @@
 // Separate local stdio MCP endpoint. Never imported by the public Edge createMcpServer.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { CandidateServiceAdmin, candidateProvisionInputSchema } from "./candidate-service.js";
 
 export function createCandidateAdminServer(admin = new CandidateServiceAdmin()) {
@@ -19,6 +20,19 @@ export function createCandidateAdminServer(admin = new CandidateServiceAdmin()) 
       return { content: [{ type: "text", text: "Candidate service state reconciled." }], structuredContent };
     } catch {
       return { isError: true, content: [{ type: "text", text: "PRIVATE_SERVICE_STATUS_UNAVAILABLE" }] };
+    }
+  });
+  server.registerTool("candidate_operation_status", {
+    title: "Reconcile one private candidate operation",
+    description: "Read the durable local operation receipt by exact operationId; never retries execution.",
+    inputSchema: { operationId: z.uuid() },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  }, async ({ operationId }) => {
+    try {
+      const structuredContent = await admin.operationStatus(operationId);
+      return { content: [{ type: "text", text: "Private operation state reconciled." }], structuredContent };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "PRIVATE_OPERATION_STATUS_UNAVAILABLE" }] };
     }
   });
   server.registerTool("provision_candidate_service", {
