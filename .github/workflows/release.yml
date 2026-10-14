@@ -38,8 +38,8 @@ concurrency:
 
 jobs:
   signing-preflight:
-    # Oracle-only and Companion-only tags must never trigger public Edge deploy.
-    if: ${{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') }}
+    # Reserved Oracle/Companion tags are excluded; connector tags run only via typed build_publish.
+    if: ${{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') && ((!contains(github.ref_name, '-connector.') && !contains(inputs.tag, '-connector.')) || (github.event_name == 'workflow_dispatch' && inputs.release_mode == 'build_publish' && inputs.operation_id != '')) }}
     runs-on: ubuntu-latest
     environment: public-release
     steps:

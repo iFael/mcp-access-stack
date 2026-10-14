@@ -117,9 +117,15 @@ test("typed public signing phase is isolated from Edge mutation and legacy full 
 
 test("reserved Oracle-only tags cannot invoke the existing public Edge release jobs", () => {
   const release = readFileSync(".github/workflows/release.yml", "utf8").replace(/\r\n/g, "\n");
-  const guard = "if: " + "$" +
-    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') }}";
-  assert.ok(release.includes(guard), "public release must fail closed for Oracle-only and Companion-only tags");
+  const reserved = "if: " + "$" +
+    "{{ !contains(github.ref_name, '-oracle.') && !contains(inputs.tag, '-oracle.') && !contains(github.ref_name, '-companion.') && !contains(inputs.tag, '-companion.') && ";
+  assert.ok(release.includes(reserved), "Oracle-only and Companion-only tags must remain excluded");
+  const connectorGate = "((!contains(github.ref_name, '-connector.') && !contains(inputs.tag, '-connector.')) || " +
+    "(github.event_name == 'workflow_dispatch' && inputs.release_mode == 'build_publish' && inputs.operation_id != '')) }}";
+  assert.ok(release.includes(reserved + connectorGate),
+    "connector-only tags must skip push-triggered deployment and permit only typed build_publish");
+  assert.ok(release.includes('  push:\n    tags:\n      - "v*"'));
+  assert.ok(release.includes("github.event_name != 'workflow_dispatch' || inputs.release_mode != 'build_publish'"));
   assert.match(release, /metadata:\n\s+needs: signing-preflight/);
   assert.match(release, /edge:\n\s+needs:/);
   assert.match(release, /publish:\n\s+needs:/);
