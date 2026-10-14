@@ -219,6 +219,39 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await noStaging(path.join(root, "nested"));
   });
 
+  test("staging-directory symlink swap cannot redirect destructive rename outside workspace", async () => {
+    if (process.platform !== "linux") return;
+    const { root } = await setup();
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "external");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(undefined, async (directory) => {
+      await rename(directory, directory + "-parked");
+      await symlink(fixture!.basePath, directory, "dir");
+      return open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    });
+    await expect(service.deleteFile(workspace, input)).rejects.toThrow();
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("external");
+  });
+
+  test("staging-directory relocation after opening its descriptor fails closed", async () => {
+    if (process.platform !== "linux") return;
+    const { root } = await setup();
+    await writeWorkspaceFile(fixture!.basePath, "remove.txt", "external");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(undefined, async (directory) => {
+      const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      await rename(directory, directory + "-parked");
+      await symlink(fixture!.basePath, directory, "dir");
+      return handle;
+    });
+    await expect(service.deleteFile(workspace, input)).rejects.toThrow();
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
+    await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
+      .resolves.toBe("external");
+  });
+
   test("destructive mode rejects a replacement after opening the original inode", async () => {
     if (process.platform !== "linux") return;
     const { root } = await setup();

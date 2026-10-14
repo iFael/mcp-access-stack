@@ -36,8 +36,12 @@ import {
 } from "./text-file.js";
 
 export class FileService {
-  constructor(private readonly openReadHandle: (target: string) => Promise<FileHandle> =
-    (target) => open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))) {}
+  constructor(
+    private readonly openReadHandle: (target: string) => Promise<FileHandle> =
+      (target) => open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)),
+    private readonly openStageDirectory: (target: string) => Promise<FileHandle> =
+      (target) => open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW),
+  ) {}
 
   async listFiles(
     workspace: ResolvedWorkspace,
@@ -256,9 +260,22 @@ export class FileService {
         security.authorizeWriteLogical(path.posix.join(relativeParent, stagingName));
         const stagingDirectory = path.join(pinnedParent, stagingName);
         await mkdir(stagingDirectory, { mode: 0o700 });
-        const staged = path.join(stagingDirectory, path.basename(authorized.canonicalPath));
         let moved = false;
+        let stageHandle: FileHandle | undefined;
         try {
+          // Reopen with O_NOFOLLOW and pin the staging directory itself.
+          // A replacement symlink must never redirect the staged rename.
+          stageHandle = await this.openStageDirectory(stagingDirectory);
+          const stageInfo = await stageHandle.stat();
+          if (!stageInfo.isDirectory() ||
+              stageInfo.uid !== process.getuid?.() ||
+              (stageInfo.mode & 0o077) !== 0 ||
+              await realpath(`/proc/self/fd/${stageHandle.fd}`) !==
+                path.join(parentPath, stagingName)) {
+            throw new AppError("INVALID_ARGUMENT", "Deletion staging directory was redirected.");
+          }
+          const staged = path.join(`/proc/self/fd/${stageHandle.fd}`,
+            path.basename(authorized.canonicalPath));
           if (await realpath(pinnedParent) !== parentPath ||
               !sameIdentity(await lstat(source))) {
             throw new AppError("INVALID_ARGUMENT", "Deletion parent or target changed before staging.");
@@ -274,10 +291,12 @@ export class FileService {
           await unlink(staged);
           moved = false;
         } catch (error) {
-          if (moved) {
+          if (moved && stageHandle) {
             // Link restoration never overwrites a concurrent replacement.
             // If the original name is occupied, preserve the quarantined entry
             // for manual reconciliation instead of deleting the wrong inode.
+            const staged = path.join(`/proc/self/fd/${stageHandle.fd}`,
+              path.basename(authorized.canonicalPath));
             try {
               await link(staged, source);
               await unlink(staged);
@@ -288,6 +307,7 @@ export class FileService {
           }
           throw error;
         } finally {
+          await stageHandle?.close();
           if (!moved) await rmdir(stagingDirectory);
         }
       } finally {
