@@ -197,6 +197,12 @@ test("workflow isolates CI/Stage identity, Environment and Cloudflare mutation",
   assert.match(source,/GITHUB_RUN_ATTEMPT.*"1"/);
   assert.match(source,/actions\/runs\/\$STAGE_RUN_ID/);
   assert.match(source,/EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=/);
+  assert.ok(source.includes('[[ "$stage_path" == ".github/workflows/edge-cas-candidate-stage.yml" ]]'));
+  assert.match(source, /STAGE_RUN_ID" == "38492608332"/);
+  assert.match(source, /stage_sha" == "24d473a0b5efedb7d4657381e8c06fa6d37e3cc9"/);
+  assert.ok(source.includes("compare/$stage_sha...$EXPECTED_MAIN_SHA"));
+  assert.match(source, /compare_status" == "ahead"/);
+  assert.match(source, /compare_files".*edge-catalog-99-activate/);
   const steps=workflow.jobs.publish.steps;
   const names=steps.map(s=>s.name);
   const pre=names.findIndex(s=>s.startsWith("Read-only dual"));
