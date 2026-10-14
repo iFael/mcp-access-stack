@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, realpath, rename, rmdir, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   abortSignalError,
@@ -180,15 +180,11 @@ export class FileService {
     const authorized = await security.authorizeExisting(input.path, "file");
     security.authorizeWriteLogical(authorized.canonicalRelativePath);
 
-    // Path-based rename/unlink cannot bind the mutation to the object validated
-    // above: a directory ancestor may be replaced between checks and rename.
-    // Until a handle-relative, cross-platform deletion primitive is available,
-    // no destructive operation or staging write is permitted.
-    if (input.dryRun !== true) {
-      throw new AppError(
-        "PERMISSION_DENIED",
-        "Destructive delete_file is unavailable until handle-bound deletion is supported.",
-      );
+    // Linux can anchor a staging rename to an opened parent directory via procfs.
+    // Other platforms remain fail-closed until they have an equivalent primitive.
+    if (input.dryRun !== true && (process.platform !== "linux" ||
+      constants.O_DIRECTORY === undefined || constants.O_NOFOLLOW === undefined)) {
+      throw new AppError("PERMISSION_DENIED", "Safe file deletion is unavailable on this platform.");
     }
 
     // Advisory, read-only validation: re-resolve after authorization and check
@@ -235,7 +231,69 @@ export class FileService {
       if (currentHash !== input.expectedSha256.toLowerCase()) {
         throw new AppError("INVALID_ARGUMENT", "File changed after it was read; refresh SHA-256 before deletion.");
       }
-      return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun: true };
+      if (input.dryRun === true) {
+        return { path: logicalPath, sha256Before: currentHash, deleted: false, dryRun: true };
+      }
+
+      // Stage using the *opened parent directory*, never a pathname which may
+      // have been redirected. Verify the moved inode against the validated file
+      // descriptor before unlinking anything. An unexpected inode is preserved.
+      const parentPath = path.dirname(authorized.canonicalPath);
+      const parent = await open(parentPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try {
+        const pinnedParent = `/proc/self/fd/${parent.fd}`;
+        if (await realpath(pinnedParent) !== parentPath ||
+            await realpath(parentPath) !== parentPath) {
+          throw new AppError("INVALID_ARGUMENT", "Deletion parent changed after authorization.");
+        }
+        const source = path.join(pinnedParent, path.basename(authorized.canonicalPath));
+        if (!sameIdentity(await lstat(source)) ||
+            await realpath(source) !== authorized.canonicalPath) {
+          throw new AppError("INVALID_ARGUMENT", "Deletion target changed after validation.");
+        }
+        const stagingName = `.mcp-delete-${randomBytes(16).toString("hex")}`;
+        const relativeParent = path.posix.dirname(authorized.canonicalRelativePath);
+        security.authorizeWriteLogical(path.posix.join(relativeParent, stagingName));
+        const stagingDirectory = path.join(pinnedParent, stagingName);
+        await mkdir(stagingDirectory, { mode: 0o700 });
+        const staged = path.join(stagingDirectory, path.basename(authorized.canonicalPath));
+        let moved = false;
+        try {
+          if (await realpath(pinnedParent) !== parentPath ||
+              !sameIdentity(await lstat(source))) {
+            throw new AppError("INVALID_ARGUMENT", "Deletion parent or target changed before staging.");
+          }
+          await rename(source, staged);
+          moved = true;
+          if (!sameIdentity(await lstat(staged)) ||
+              !sameIdentity(await handle.stat()) ||
+              hashBuffer(await readFile(staged)) !== currentHash ||
+              await realpath(pinnedParent) !== parentPath) {
+            throw new AppError("INVALID_ARGUMENT", "Staged inode is not the authorized file.");
+          }
+          await unlink(staged);
+          moved = false;
+        } catch (error) {
+          if (moved) {
+            // Link restoration never overwrites a concurrent replacement.
+            // If the original name is occupied, preserve the quarantined entry
+            // for manual reconciliation instead of deleting the wrong inode.
+            try {
+              await link(staged, source);
+              await unlink(staged);
+              moved = false;
+            } catch {
+              throw new AppError("INVALID_ARGUMENT", "Deletion requires staging reconciliation.");
+            }
+          }
+          throw error;
+        } finally {
+          if (!moved) await rmdir(stagingDirectory);
+        }
+      } finally {
+        await parent.close();
+      }
+      return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun: false };
     } finally {
       await handle.close();
     }

@@ -45,16 +45,21 @@ const noStaging = async (root: string) => {
   expect((await readdir(root)).filter((name) => name.startsWith(".mcp-delete-"))).toEqual([]);
 };
 
-describe("typed file deletion (destructive mode fail-closed)", () => {
-  test("dry-run validates SHA but destructive deletion is disabled without file mutation", async () => {
+describe("typed file deletion (pinned parent and staged inode validation)", () => {
+  test("dry-run preserves the file, while Linux deletes only the SHA-matched inode", async () => {
     const { agent, root } = await setup();
     await expect(agent.deleteFile({ ...input, dryRun: true })).resolves.toEqual({
       path: "remove.txt", sha256Before: input.expectedSha256, deleted: false, dryRun: true,
     });
-    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
-    await expect(agent.deleteFile({ ...input, dryRun: false }))
-      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
-    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
+    if (process.platform === "linux") {
+      await expect(agent.deleteFile(input)).resolves.toEqual({
+        path: "remove.txt", sha256Before: input.expectedSha256, deleted: true, dryRun: false,
+      });
+      await expect(lstat(path.join(root, "remove.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+      await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("expected");
+    }
     await noStaging(root);
   });
 
@@ -66,6 +71,16 @@ describe("typed file deletion (destructive mode fail-closed)", () => {
     await expect(agent.deleteFile({ ...input, dryRun: true }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("changed");
+  });
+
+  test("a stale SHA never deletes or stages the target", async () => {
+    const { agent, root } = await setup();
+    await writeWorkspaceFile(root, "remove.txt", "changed");
+    await expect(agent.deleteFile(input)).rejects.toMatchObject({
+      code: process.platform === "linux" ? "INVALID_ARGUMENT" : "PERMISSION_DENIED",
+    });
+    await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("changed");
+    await noStaging(root);
   });
 
   test("rejects directories, traversal and symlink targets", async () => {
@@ -110,11 +125,19 @@ describe("typed file deletion (destructive mode fail-closed)", () => {
     await writeWorkspaceFile(root, "nested/remove.txt", "expected");
     await expect(agent.deleteFile({ ...input, path: "nested/remove.txt", dryRun: true }))
       .resolves.toMatchObject({ deleted: false, dryRun: true });
-    await expect(agent.deleteFile({ ...input, path: "nested/remove.txt" }))
-      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
-    await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
-      .resolves.toBe("expected");
+    if (process.platform === "linux") {
+      await expect(agent.deleteFile({ ...input, path: "nested/remove.txt" }))
+        .resolves.toMatchObject({ deleted: true });
+      await expect(lstat(path.join(root, "nested/remove.txt")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(agent.deleteFile({ ...input, path: "nested/remove.txt" }))
+        .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+      await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
+        .resolves.toBe("expected");
+    }
     await noStaging(root);
+    await noStaging(path.join(root, "nested"));
   });
 
   test("ancestor redirect after authorization never moves or removes outside file", async () => {
@@ -133,8 +156,13 @@ describe("typed file deletion (destructive mode fail-closed)", () => {
         return authorized;
       });
     try {
-      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
-        .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+      if (process.platform === "linux") {
+        await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+          .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      } else {
+        await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+          .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+      }
       await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
         .resolves.toBe("expected");
       await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
@@ -176,12 +204,37 @@ describe("typed file deletion (destructive mode fail-closed)", () => {
     await writeWorkspaceFile(root, "nested/remove.txt", "expected");
     await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
     const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
-      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    if (process.platform === "linux") {
+      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+        .resolves.toMatchObject({ deleted: true });
+      await expect(lstat(path.join(root, "nested/remove.txt")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
+        .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    }
     await expect(readFile(path.join(fixture!.basePath, "remove.txt"), "utf8"))
       .resolves.toBe("expected");
-    await expect(readFile(path.join(root, "nested/remove.txt"), "utf8"))
-      .resolves.toBe("expected");
+    await noStaging(root);
+    await noStaging(path.join(root, "nested"));
+  });
+
+  test("destructive mode rejects a replacement after opening the original inode", async () => {
+    if (process.platform !== "linux") return;
+    const { root } = await setup();
+    const original = path.join(root, "remove.txt");
+    const parked = path.join(root, "parked.txt");
+    const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
+    const service = new FileService(async (target) => {
+      const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      await rename(original, parked);
+      await writeFile(original, "replacement");
+      return handle;
+    });
+    await expect(service.deleteFile(workspace, input))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(readFile(parked, "utf8")).resolves.toBe("expected");
+    await expect(readFile(original, "utf8")).resolves.toBe("replacement");
     await noStaging(root);
   });
 
