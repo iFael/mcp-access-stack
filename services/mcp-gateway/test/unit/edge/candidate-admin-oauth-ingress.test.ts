@@ -111,7 +111,10 @@ describe("candidate99 private HTTPS/OAuth ingress code-only", () => {
     const result = await post("tools/list", { token: ACCESS_TOKEN });
     expect(result.status).toBe(200);
     expect(lastForward).toMatchObject({ method: "tools/list" });
-    expect((await result.json()).result.tools).toHaveLength(2);
+    const payload = await result.json() as { result: { tools: Array<{ name: string }> } };
+    expect(payload.result.tools.map(tool => tool.name)).toEqual([
+      "candidate_service_status", "candidate_operation_status",
+    ]);
   });
   it("rejects mutation and unknown tool names even with valid OAuth token", async () => {
     claims = allowed();
