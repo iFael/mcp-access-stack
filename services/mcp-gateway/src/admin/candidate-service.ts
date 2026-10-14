@@ -11,6 +11,7 @@ export type CandidateProvisionInput = z.infer<typeof candidateProvisionInputSche
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { CandidateAdminLedger } from "./candidate-admin-ledger.js";
 
 const PROVISIONER = fileURLToPath(new URL("../../../../deploy/linux/Provision-McpConnectorCandidateService.sh", import.meta.url));
 const INSTALLATION_ROOT = "/var/lib/mcp-access-stack";
@@ -24,6 +25,7 @@ export class CandidateServiceAdmin {
   constructor(
     private readonly run: FixedRunner = fixedRun,
     private readonly authorize: () => Promise<void> = assertOwner,
+    private readonly ledger = new CandidateAdminLedger(),
   ) {}
 
   async provision(input: CandidateProvisionInput) {
@@ -37,18 +39,34 @@ export class CandidateServiceAdmin {
       "--expected-active-pid", String(value.expectedActivePid),
       ...(value.execute ? ["--execute"] : []),
     ];
-    const result = await this.run("/usr/bin/bash", args, 45_000);
-    // Partial systemd changes on failure must be reconciled, never retried blindly.
-    if (result.timedOut || result.exitCode !== 0) throw Error("PROVISION_OUTCOME_REQUIRES_RECONCILIATION");
+    // Claim the fixed operation ID durably before any host mutation. A duplicate is never retried.
+    if (value.execute) await this.ledger.claim(value);
+    let result: CommandReceipt;
+    try {
+      result = await this.run("/usr/bin/bash", args, 45_000);
+    } catch {
+      if (value.execute) await this.ledger.finish(value.operationId, "outcome_unknown");
+      throw Error("PROVISION_OUTCOME_REQUIRES_RECONCILIATION");
+    }
+    if (result.timedOut || result.exitCode !== 0) {
+      if (value.execute) await this.ledger.finish(value.operationId, "outcome_unknown");
+      throw Error("PROVISION_OUTCOME_REQUIRES_RECONCILIATION");
+    }
     const output = result.stdout;
     const status = value.execute ? "provisioned" : "validated";
     if (!output.includes("status=" + status + "\n") ||
         !output.includes("operationId=" + value.operationId + "\n") ||
         !output.includes("candidateRelease=" + value.candidateReleaseId + "\n") ||
         !output.includes("activeServicePreserved=true\n")) {
+      if (value.execute) await this.ledger.finish(value.operationId, "outcome_unknown");
       throw Error("PROVISION_RECEIPT_REQUIRES_RECONCILIATION");
     }
+    if (value.execute) await this.ledger.finish(value.operationId, "succeeded");
     return { status, operationId: value.operationId, releaseId: value.candidateReleaseId };
+  }
+  async operationStatus(operationId: string) {
+    await this.authorize();
+    return this.ledger.reconcile(operationId);
   }
   async status() {
     await this.authorize();
