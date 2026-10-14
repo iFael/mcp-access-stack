@@ -5,7 +5,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { CandidateServiceAdmin, candidateProvisionInputSchema } from "./candidate-service.js";
 
-export function createCandidateAdminServer(admin = new CandidateServiceAdmin()) {
+export function createCandidateAdminServer(
+  admin = new CandidateServiceAdmin(),
+  options: { includeProvision?: boolean } = {},
+) {
   const server = new McpServer(
     { name: "mcp-v3-connector99-private-admin", version: "1.0.0" },
     { capabilities: { tools: {} } },
@@ -35,7 +38,7 @@ export function createCandidateAdminServer(admin = new CandidateServiceAdmin()) 
       return { isError: true, content: [{ type: "text", text: "PRIVATE_OPERATION_STATUS_UNAVAILABLE" }] };
     }
   });
-  server.registerTool("provision_candidate_service", {
+  if (options.includeProvision !== false) server.registerTool("provision_candidate_service", {
     title: "Provision fixed connector 99 candidate service",
     description: "Local operator-only; exact candidate ID, SHA/CAS, active PID and explicit execute flag. Reconcile status on uncertain outcomes.",
     inputSchema: candidateProvisionInputSchema,
