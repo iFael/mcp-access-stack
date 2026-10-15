@@ -326,7 +326,7 @@ describe("GitRepositoryService fast-forward merge", () => {
     expect(head()).toBe(sourceSha);
   });
 
-  it("blocks protected main and dirty/non-fast-forward merge preconditions", async () => {
+  it("enforces dirty/non-fast-forward guards and permits exact fast-forward to main", async () => {
     const { service, targetSha, sourceSha } = await prepareFastForward();
     await writeWorkspaceFile(fixture!.workspacePath, "base.txt", "dirty\n");
     await expect(
@@ -352,14 +352,29 @@ describe("GitRepositoryService fast-forward merge", () => {
     ).rejects.toMatchObject({ code: "GIT_MERGE_NOT_FAST_FORWARD" });
 
     git(fixture!.workspacePath, ["checkout", "main"]);
-    await expect(
-      service.mergeBranch({
-        workspaceId: "test",
-        sourceBranch: "feature/source",
-        expectedTargetHeadSha: head(),
-        expectedSourceHeadSha: sourceSha,
-      }),
-    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
+    const mainSha = head();
+    await expect(service.mergeBranch({
+      workspaceId: "test",
+      sourceBranch: "feature/source",
+      expectedTargetHeadSha: "f".repeat(40),
+      expectedSourceHeadSha: sourceSha,
+    })).rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+
+    const merged = await service.mergeBranch({
+      workspaceId: "test",
+      sourceBranch: "feature/source",
+      expectedTargetHeadSha: mainSha,
+      expectedSourceHeadSha: sourceSha,
+    });
+    expect(merged).toEqual({
+      root: ".",
+      branch: "main",
+      previousHeadSha: mainSha,
+      headSha: sourceSha,
+      sourceHeadSha: sourceSha,
+      fastForwarded: true,
+    });
+    expect(head()).toBe(sourceSha);
   });
 });
 

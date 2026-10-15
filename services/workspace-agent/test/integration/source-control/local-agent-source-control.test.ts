@@ -445,7 +445,7 @@ describe("LocalAgent typed source-control authorization", () => {
     expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
   });
 
-  it("blocks direct commit, merge and push on protected main", async () => {
+  it("blocks direct commit/push but permits audited idempotent local fast-forward on main", async () => {
     const { agent, gitExecutor } = await setupAgent({
       capabilities: ["git.branch.write", "git.commit.write", "git.merge.write", "git.remote.push"],
       branch: "main",
@@ -459,14 +459,20 @@ describe("LocalAgent typed source-control authorization", () => {
         expectedIndexTreeSha: SHA_B,
       }),
     ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
-    await expect(
-      (agent as any).gitMergeBranch({
-        workspaceId: "test",
-        sourceBranch: "feature/source",
-        expectedTargetHeadSha: SHA_A,
-        expectedSourceHeadSha: SHA_B,
-      }),
-    ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
+    const mergeInput = {
+      workspaceId: "test",
+      sourceBranch: "feature/source",
+      expectedTargetHeadSha: SHA_A,
+      expectedSourceHeadSha: SHA_B,
+    };
+    const merged = await (agent as any).gitMergeBranch(mergeInput, {
+      idempotencyKey: "main-ff-exact-sha",
+    });
+    expect(merged).toMatchObject({ headSha: SHA_B, previousHeadSha: SHA_A, fastForwarded: true });
+    const replayed = await (agent as any).gitMergeBranch(mergeInput, {
+      idempotencyKey: "main-ff-exact-sha",
+    });
+    expect(replayed).toEqual(merged);
 
     await expect(
       (agent as any).gitPushBranch(
@@ -479,7 +485,7 @@ describe("LocalAgent typed source-control authorization", () => {
       ),
     ).rejects.toMatchObject({ code: "GIT_PROTECTED_BRANCH" });
     expect(gitExecutor.commit).not.toHaveBeenCalled();
-    expect(gitExecutor.mergeBranch).not.toHaveBeenCalled();
+    expect(gitExecutor.mergeBranch).toHaveBeenCalledTimes(1);
     expect(gitExecutor.pushBranch).not.toHaveBeenCalled();
 
     await expect(
