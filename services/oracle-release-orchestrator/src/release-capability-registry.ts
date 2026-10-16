@@ -7,6 +7,7 @@ import { bindReleaseVerificationReads, type ReleaseVerificationBinding } from ".
 import { bindReleaseEffects, type ReleaseEffectBinding } from "./release-effect-capabilities.js";
 import { bindReleasePublicDistribution, type PublicDistributionBinding } from "./release-public-distribution-capability.js";
 import { bindReleaseSourceControlReads, type ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
+import {bindReleaseAssetsVerification,type ReleaseAssetVerificationBinding} from "./release-assets-verification-capability.js";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 
 /**
@@ -21,6 +22,7 @@ export interface ReleaseCapabilityComposition {
   readonly verifications?: ReleaseVerificationBinding;
   readonly effects?: ReleaseEffectBinding;
   readonly publicDistribution?: PublicDistributionBinding;
+  readonly assetVerification?: ReleaseAssetVerificationBinding;
   readonly other?: readonly ReleaseStepCapability[];
 }
 
@@ -52,6 +54,7 @@ export function composeReleaseCapabilities(input: ReleaseCapabilityComposition):
     }
   }
   if (input.cleanup) install(bindReleasePruneCleanup(input.cleanup));
+  if (input.assetVerification) install(bindReleaseAssetsVerification(input.assetVerification));
   if (input.tagBootstrap) install(bindReleaseTagBootstrap(input.tagBootstrap));
   if (input.verifications) for (const binding of bindReleaseVerificationReads(input.verifications).values()) install(binding);
   if (input.effects) for (const binding of bindReleaseEffects(input.effects).values()) install(binding);

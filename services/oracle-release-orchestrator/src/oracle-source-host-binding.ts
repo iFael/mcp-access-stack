@@ -41,6 +41,8 @@ export function resolveOracleRemoteSourceReadPort(
 export interface OracleHostReleaseBindings
   extends Omit<ReleaseCapabilityComposition,"sourceControl"|"other"> {
   readonly authorizeRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  /** Independently authorizes real GitHub asset reads, not workflow dispatch. */
+  readonly authorizeAssetVerification?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   readonly authorizeWorkflow?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   /** Separate host release policy, re-evaluated per signing/publication step. */
   readonly authorizePublicDistribution?: (action:"build_and_sign_release"|"publish_signed_release",run:ReleaseRunSnapshot)=>Promise<boolean>;
@@ -60,6 +62,10 @@ export function composeOracleHostReleaseCapabilities(
   if(workflow && typeof bindings.authorizePublicDistribution!=="function") {
     throw new Error("ORACLE_DISTRIBUTION_HOST_AUTH_REQUIRED");
   }
+  if(bindings.authorizeAssetVerification && (!source || !workflow))
+    throw new Error("ORACLE_ASSET_PROOF_HOST_INCOMPLETE");
+  if(workflow && bindings.assetVerification)
+    throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_ASSET_PROOF");
   if(workflow && bindings.publicDistribution) {
     throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_DISTRIBUTION");
   }
@@ -69,6 +75,11 @@ export function composeOracleHostReleaseCapabilities(
   return composeReleaseCapabilities({
     ...(source ? {sourceControl:{port:source,authorizeRead:bindings.authorizeRead!}} : {}),
     ...(bindings.cleanup ? {cleanup:bindings.cleanup} : {}),
+    ...(source && workflow && bindings.authorizeAssetVerification ?
+      {assetVerification:{workspaceId:workflow.workspaceId,
+        owner:workflow.owner,repository:workflow.repository,
+        workflow,source,authorize:bindings.authorizeAssetVerification}} :
+      bindings.assetVerification ? {assetVerification:bindings.assetVerification} : {}),
     ...(workflow ? {tagBootstrap:{workspaceId:workflow.workspaceId,
       owner:workflow.owner,repository:workflow.repository,port:workflow,
       authorized:bindings.authorizeWorkflow!}} :
