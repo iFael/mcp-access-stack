@@ -25,6 +25,11 @@ const intent: StepIntent={
   action:"cleanup_known_temporary_residue",executionClass:"external_effect",
   operationId,idempotencyKey:"cleanup-1",attemptNumber:1,
 };
+const activeRun:ReleaseRunSnapshot={...run,steps:run.steps.map(step=>
+  step.action==="cleanup_known_temporary_residue" ? {
+    ...step,status:"outcome_unknown",attemptCount:1,operationId,idempotencyKey:"cleanup-1",
+  } : step),
+};
 function setup() {
   const calls: Array<{operationId:string;dryRun:boolean;selection?:string;reconcile?:boolean}>=[];
   const remaining=Array.from({length:6},(_,i)=>"1.1.0-beta."+String(60+i));
@@ -32,6 +37,7 @@ function setup() {
   const prune: TypedReleasePrunePort={
     pruneReleases: async input => {
       calls.push(input);
+      if(input.dryRun && !input.reconcile)afterPreview?.();
       if(input.reconcile){
         const result=receipts.get(input.operationId);
         if(!result) throw new Error("no durable receipt");
@@ -50,13 +56,15 @@ function setup() {
     },
   };
   let allowed=true;
+  let afterPreview:(()=>void)|undefined;
   const binding=bindReleasePruneCleanup({
     workspaceId:"mcp-access-stack",prune,authorized:async()=>allowed,
   });
   return {binding,calls,dropFirstReceipt(){
     const first=receipts.keys().next().value;
     if(first) receipts.delete(first);
-  },setAllowed(value:boolean){allowed=value;}};
+  },setAllowed(value:boolean){allowed=value;},
+    afterPreview(callback:()=>void){afterPreview=callback;}};
 }
 
 describe("typed canonical prune capability for the Oracle release ledger",()=>{
@@ -72,8 +80,8 @@ describe("typed canonical prune capability for the Oracle release ledger",()=>{
 
   it("drains six releases in three bounded batches, with durable deterministic IDs",async()=>{
     const {binding,calls}=setup();
-    expect(await binding.reconcile(intent,run)).toEqual({outcome:"still_unknown"});
-    const observed=await binding.execute(intent,run);
+    expect(await binding.reconcile(intent,activeRun)).toEqual({outcome:"still_unknown"});
+    const observed=await binding.execute(intent,activeRun);
     expect(observed.state).toBe("succeeded");
     if(observed.state!=="succeeded") throw new Error("expected success");
     expect(observed.evidence[0]?.kind).toBe("cleanup_receipt");
@@ -88,7 +96,9 @@ describe("typed canonical prune capability for the Oracle release ledger",()=>{
       ids.add(preview.operationId);
     }
     expect(ids.size).toBe(3);
-    const recovered=await binding.reconcile(intent,run);
+    const recovered=await binding.reconcile(intent,{
+      ...activeRun,status:"paused_outcome_unknown",
+    });
     expect(recovered.outcome).toBe("applied");
     expect(calls).toHaveLength(10);
     expect(calls.slice(7).map(c=>c.operationId)).toEqual([...ids]);
@@ -97,15 +107,38 @@ describe("typed canonical prune capability for the Oracle release ledger",()=>{
 
   it("never infers completion when one batch receipt is missing",async()=>{
     const {binding,dropFirstReceipt}=setup();
-    expect((await binding.execute(intent,run)).state).toBe("succeeded");
+    expect((await binding.execute(intent,activeRun)).state).toBe("succeeded");
     dropFirstReceipt();
-    expect(await binding.reconcile(intent,run)).toEqual({outcome:"still_unknown"});
+    expect(await binding.reconcile(intent,activeRun)).toEqual({outcome:"still_unknown"});
+  });
+
+  it("rechecks host authorization after preview before the first destructive batch",async()=>{
+    const {binding,calls,setAllowed,afterPreview}=setup();
+    afterPreview(()=>setAllowed(false));
+    const result=await binding.execute(intent,activeRun);
+    expect(result.state).toBe("outcome_unknown");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({dryRun:true,selection:"eligible"});
+  });
+
+  it("refuses a mismatched or revoked original operation during reconciliation",async()=>{
+    const {binding,calls,setAllowed}=setup();
+    const invalid={...intent,operationId:"123e4567-e89b-42d3-a456-426614174112"};
+    expect(await binding.execute(invalid,activeRun)).toMatchObject({state:"outcome_unknown"});
+    expect(await binding.reconcile(invalid,activeRun)).toEqual({outcome:"still_unknown"});
+    setAllowed(false);
+    expect(await binding.reconcile(intent,activeRun)).toEqual({outcome:"still_unknown"});
+    expect(calls).toHaveLength(0);
+    setAllowed(true);
+    expect(await binding.execute(intent,{...activeRun,gates:[]}))
+      .toMatchObject({state:"outcome_unknown"});
+    expect(calls).toHaveLength(0);
   });
 
   it("refuses unauthorized execution without any prune request",async()=>{
     const {binding,setAllowed,calls}=setup();
     setAllowed(false);
-    const outcome=await binding.execute(intent,run);
+    const outcome=await binding.execute(intent,activeRun);
     expect(outcome.state).toBe("outcome_unknown");
     expect(calls).toHaveLength(0);
   });
