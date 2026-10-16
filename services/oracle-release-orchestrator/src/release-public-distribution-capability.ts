@@ -34,8 +34,9 @@ export interface PublicDistributionProof {
   readonly workflowRunId: number;
   readonly integrityVerified: boolean;
   readonly releasePublished: boolean;
-  readonly manifestSha256: string;
-  readonly assetDigestSha256: string;
+  /** Digest of the exact authenticated GitHub asset/checksum inventory. */
+  readonly assetInventorySha256: string;
+  readonly verifiedAssetCount: number;
 }
 export interface TypedPublicDistributionPort {
   workflowOperation(input:PublicWorkflowRequest):Promise<PublicWorkflowObservation>;
@@ -69,13 +70,13 @@ function workflowRequest(input:PublicDistributionBinding,
 function proofIsValid(p:PublicDistributionProof,run:ReleaseRunSnapshot,runId:number):boolean {
   return p.sourceCommitSha===run.sourceCommitSha &&
     p.releaseTag===run.targetRelease && p.workflowRunId===runId &&
-    p.integrityVerified===true && DIGEST.test(p.manifestSha256) &&
-    DIGEST.test(p.assetDigestSha256);
+    p.integrityVerified===true &&
+    p.verifiedAssetCount===5 && DIGEST.test(p.assetInventorySha256);
 }
 function evidence(action:PublicAction,run:ReleaseRunSnapshot,runId:number,
   p:PublicDistributionProof):EvidenceInput {
   const body={action,runId,tag:run.targetRelease,sha:run.sourceCommitSha,
-    manifestSha256:p.manifestSha256,assetDigestSha256:p.assetDigestSha256};
+    assetInventorySha256:p.assetInventorySha256,verifiedAssetCount:p.verifiedAssetCount};
   return {kind:action==="build_and_sign_release"?"signed_build_receipt":"release_publication_receipt",
     source:"mcp_v3_verified_github_release",
     sha256:createHash("sha256").update(JSON.stringify(body)).digest("hex"),

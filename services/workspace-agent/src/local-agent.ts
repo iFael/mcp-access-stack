@@ -1401,7 +1401,7 @@ export class LocalAgent {
         );
         const client=await this.getGitHubWorkflowApiClient();
         if(!client.getWorkflowRun || !client.getReleaseByTag ||
-          !client.getTagRef || !client.getReleaseAssetChecksum)
+          !client.getTagRef || !client.getReleaseAssetChecksum || !client.getReleaseAssetSha256)
           throw new AppError("CAPABILITY_UNSUPPORTED",
             "Authenticated GitHub public release inspection unavailable.");
         const observation=await inspectGitHubPublicReleaseAssets(

@@ -33,6 +33,7 @@ function client(overrides:{
     getTagRef:jest.fn(async()=>overrides.ref??{
       ref:"refs/tags/"+tag,object:{type:"commit",sha},
     }),
+    getReleaseAssetSha256:jest.fn(async()=> "a".repeat(64)),
     getReleaseAssetChecksum:jest.fn(async(_owner:string,_repo:string,id:number)=>{
       const asset=assets.find(a=>a.id===id)!;
       return overrides.checksum??checksum(asset.name.slice(0,-7));
@@ -49,6 +50,7 @@ describe("authenticated GitHub release asset integrity inspector",()=>{
       verifiedAssetCount:5});
     expect(proof.assetInventorySha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(api.getReleaseAssetChecksum).toHaveBeenCalledTimes(5);
+    expect(api.getReleaseAssetSha256).toHaveBeenCalledTimes(5);
   });
   it.each([
     ["wrong sha",{run:{head_sha:"b".repeat(40)}}],

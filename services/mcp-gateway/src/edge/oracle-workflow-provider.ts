@@ -4,6 +4,7 @@ import {
   ORACLE_WORKFLOW_MAX_RESULT_BYTES,
   parseOracleWorkflowCommand,parseOracleWorkflowResult,
   type OracleWorkflowCommand, type OracleWorkflowObservation,
+  type OracleDistributionInspection,
 } from "@mcp-access-stack/update-control-contract";
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
@@ -11,6 +12,7 @@ export interface OracleWorkflowProviderPort {
   workflowOperation(input:Extract<OracleWorkflowCommand,{method:"workflow_operation"}>["arguments"]):
     Promise<OracleWorkflowObservation>;
   verifyLightweightTag(tag:string,commitSha:string):Promise<boolean>;
+  inspectDistribution(runId:number,tag:string,commitSha:string):Promise<OracleDistributionInspection>;
 }
 export interface OracleWorkflowProviderOptions {
   readonly url:URL;
@@ -28,7 +30,8 @@ export function validateOracleWorkflowProviderOptions(options:OracleWorkflowProv
     (u.port!=="" && u.port!=="443") || u.pathname!==ORACLE_WORKFLOW_CONNECT_PATH ||
     !/^[A-Za-z0-9_.-]{32,256}$/u.test(options.token) ||
     !options.port || typeof options.port.workflowOperation!=="function" ||
-    typeof options.port.verifyLightweightTag!=="function")
+    typeof options.port.verifyLightweightTag!=="function" ||
+    typeof options.port.inspectDistribution!=="function")
     throw new Error("ORACLE_WORKFLOW_PROVIDER_CONFIG_INVALID");
 }
 /** Outbound workflow-only socket. No repository identity, shell, policy
@@ -105,16 +108,19 @@ export class OracleWorkflowProviderConnector {
         }catch{socket.close(1008,"invalid request");return;}
         const id=(value as {requestId:string}).requestId;
         inFlight.add(id);
-        const action=Promise.resolve().then(async():Promise<OracleWorkflowObservation|boolean>=>{
+        const action=Promise.resolve().then(async():Promise<OracleWorkflowObservation|boolean|OracleDistributionInspection>=>{
           if(command.method==="workflow_operation"){
             return await this.options.port.workflowOperation(command.arguments);
           }
-          return await this.options.port.verifyLightweightTag(command.arguments.tag,command.arguments.commitSha);
+          if(command.method==="verify_lightweight_tag")
+            return await this.options.port.verifyLightweightTag(command.arguments.tag,command.arguments.commitSha);
+          return await this.options.port.inspectDistribution(command.arguments.runId,command.arguments.tag,command.arguments.commitSha);
         });
         void action.then(result=>{
           const validated=parseOracleWorkflowResult(command.method,result);
           if(command.method==="workflow_operation" &&
-            (typeof validated!=="object" || validated.operationId!==command.arguments.operationId))
+            (typeof validated!=="object" || validated===null || !("operationId" in validated) ||
+             validated.operationId!==command.arguments.operationId))
             throw new Error("ORACLE_WORKFLOW_RECEIPT_MISMATCH");
           send({version:1,type:"response",requestId:id,outcome:"success",result:validated});
         }).catch(()=>{

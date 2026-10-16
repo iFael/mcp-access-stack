@@ -55,6 +55,7 @@ export async function loadOracleWorkflowProviderFromEnvironment(
     authorizeWorkflow:async input=>env[PREFIX+"ENABLED"]==="1" &&
       (input.mode==="reconcile" || env[PREFIX+"DISPATCH_ENABLED"]==="1"),
     authorizeTagRead:async()=>env[PREFIX+"ENABLED"]==="1",
+    authorizeDistribution:async()=>env[PREFIX+"ENABLED"]==="1",
   };
   const port=makePort(config,policy);
   return {url,token,port};

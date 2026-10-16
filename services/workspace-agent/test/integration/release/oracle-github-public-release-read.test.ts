@@ -49,6 +49,7 @@ describe("audited MCP GitHub distribution inspection",()=>{
     });
     workflowClient.getTagRef=async()=>({ref:"refs/tags/"+tag,
       object:{sha,type:"commit"}});
+    workflowClient.getReleaseAssetSha256=async()=> "a".repeat(64);
     workflowClient.getReleaseAssetChecksum=async(_owner,_repository,id)=>{
       const found=assets.find(a=>a.id===id)!;
       return checksum(found.name.slice(0,-7));

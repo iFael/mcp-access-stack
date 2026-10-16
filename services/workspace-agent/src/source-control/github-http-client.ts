@@ -1,3 +1,4 @@
+import {createHash} from "node:crypto";
 import {
   abortSignalError,
   AppError,
@@ -128,6 +129,8 @@ export interface GitHubWorkflowApiClient {
     context?:OperationContext):Promise<GitHubPublicReleaseRecord>;
   getReleaseAssetChecksum?(owner:string,repository:string,assetId:number,
     context?:OperationContext):Promise<string>;
+  getReleaseAssetSha256?(owner:string,repository:string,assetId:number,
+    expectedSize:number,context?:OperationContext):Promise<string>;
   dispatchWorkflow(owner: string, repository: string, workflow: string,
     expectedSha: string, inputs: Record<string, string>,
     context?: OperationContext): Promise<void>;
@@ -354,6 +357,66 @@ export class GitHubHttpClient implements GitHubApiClient {
       if(total<1)throw new Error("asset empty");
       return new TextDecoder("utf8",{fatal:true}).decode(all);
     }catch{
+      if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+      throw unavailableError(false);
+    }
+  }
+
+  /** Bounded streaming verification of actual published package bytes.
+   * Tokens never follow GitHub asset redirects to a different origin. */
+  async getReleaseAssetSha256(owner:string,repository:string,assetId:number,
+    expectedSize:number,context?:OperationContext):Promise<string>{
+    const MAX_BYTES=384*1024*1024;
+    if(!Number.isSafeInteger(expectedSize) || expectedSize<1 ||
+      expectedSize>MAX_BYTES) throw new AppError("INVALID_ARGUMENT","Asset size invalid.");
+    const signal=context?.signal;
+    if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+    const credential=await this.#credentialProvider.getCredential(context);
+    if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
+    const path=`/repos/${segment(owner)}/${segment(repository)}/releases/assets/${positiveInteger(assetId)}`;
+    const timeout=AbortSignal.timeout(120_000);
+    const bounded=signal?AbortSignal.any([signal,timeout]):timeout;
+    let response:Response;
+    try {
+      response=await this.#fetchImpl(GITHUB_API_BASE_URL+path,{
+        method:"GET",cache:"no-store",redirect:"manual",signal:bounded,
+        headers:{Accept:"application/octet-stream",
+          "X-GitHub-Api-Version":GITHUB_API_VERSION,
+          Authorization:`Bearer ${credential.token}`},
+      });
+      if(response.status===302){
+        const location=response.headers.get("location");
+        await discardBody(response);
+        if(!location || location.length>8192)throw new Error("untrusted asset redirect");
+        const url=new URL(location);
+        if(url.protocol!=="https:" || url.hostname!=="release-assets.githubusercontent.com" ||
+          url.username || url.password || url.hash || (url.port!=="" && url.port!=="443"))
+          throw new Error("untrusted asset redirect");
+        response=await this.#fetchImpl(url.href,{
+          method:"GET",redirect:"error",cache:"no-store",signal:bounded,
+        });
+      }
+      if(response.status!==200 || !response.body)throw new Error("asset unavailable");
+      const len=response.headers.get("content-length");
+      if(len!==null && (!/^\d+$/u.test(len) || Number(len)!==expectedSize))
+        throw new Error("asset length mismatch");
+      const reader=response.body.getReader();
+      const hash=createHash("sha256");
+      let total=0;
+      try {
+        while(true){
+          const part=await reader.read();
+          if(part.done)break;
+          total+=part.value.byteLength;
+          if(total>expectedSize || total>MAX_BYTES){
+            await reader.cancel();throw new Error("asset exceeds bound");
+          }
+          hash.update(part.value);
+        }
+      } finally {reader.releaseLock();}
+      if(total!==expectedSize)throw new Error("asset size mismatch");
+      return hash.digest("hex");
+    } catch {
       if(signal?.aborted)throw abortSignalError(signal,"GitHub request was cancelled.");
       throw unavailableError(false);
     }

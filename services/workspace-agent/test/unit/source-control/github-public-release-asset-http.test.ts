@@ -1,3 +1,4 @@
+import {createHash} from "node:crypto";
 import {describe,expect,it,jest} from "@jest/globals";
 import {GitHubHttpClient} from "../../../src/source-control/github-http-client.js";
 import type {GitHubCredentialProvider} from "../../../src/source-control/github-credential-provider.js";
@@ -22,6 +23,23 @@ describe("bounded authenticated release checksum download",()=>{
     expect(seen[0]!.init.redirect).toBe("manual");
     expect((seen[1]!.init.headers as Record<string,string>|undefined)?.Authorization).toBeUndefined();
     expect(seen[1]!.init.redirect).toBe("error");
+  });
+  it("streams actual package bytes and verifies exact size without forwarding bearer",async()=>{
+    const body=Buffer.from("real-package-contents");
+    const seen:Array<{url:string;init:RequestInit}>=[];
+    const fetchImpl=jest.fn(async(url:string,init:RequestInit)=>{
+      seen.push({url,init});
+      if(seen.length===1)return new Response(null,{status:302,headers:{
+        location:"https://release-assets.githubusercontent.com/packages/download?sig=opaque",
+      }});
+      return new Response(body,{status:200,headers:{"content-length":String(body.length)}});
+    });
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    expect(await client.getReleaseAssetSha256("octo","repo",43,body.length)).toBe(
+      createHash("sha256").update(body).digest("hex"));
+    expect((seen[0]!.init.headers as Record<string,string>).Authorization).toBeDefined();
+    expect(seen[1]!.init.headers).toBeUndefined();
+    await expect(client.getReleaseAssetSha256("octo","repo",43,body.length+1)).rejects.toThrow();
   });
   it("refuses untrusted redirects, missing data and oversized bodies",async()=>{
     const evil=jest.fn(async()=>new Response(null,{status:302,headers:{
