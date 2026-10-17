@@ -80,9 +80,12 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
     expect(readState).toHaveBeenCalledTimes(1);
   });
   it("rejects the generic getReleaseState as an active policy substitute",async()=>{
-    const read=jest.fn(async()=>({state:{
-      version:1,active:null,previous:null,candidate:null,
-    }}));
+    const read=jest.fn(async()=>({
+      workspaceId:"mcp-access-stack",installationRoot:"/unused",
+      state:{version:1 as const,active:null,previous:null,candidate:null,
+        updatedAt:"2026-10-17T00:00:00Z"},
+      activeBootstrap:{updateScriptPresent:false,cutoverScriptPresent:false},
+    }));
     const {reloadable}=harness({
       oracleInspectActive:async()=>receipt,getReleaseState:read,
     } as Partial<LocalAgent>);
