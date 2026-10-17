@@ -9,6 +9,7 @@ const tag="v1.1.0-beta.90",sourceCommitSha="a".repeat(40);
 const sha="b".repeat(64);
 const receipt:WindowsCandidateReceipt={
   platform:"windows",releaseTag:tag,sourceCommitSha,runId,operationId,
+  prepareOperationId:preparedId,
   manifestSha256:sha,verifiedArtifactCount:13,
 };
 const state={active:{releaseId:"1.1.0-beta.89",manifestSha256:"c".repeat(64)},
@@ -23,7 +24,7 @@ const run={runId,targetRelease:tag,sourceCommitSha,status:"running",
 const intent={runId,operationId,stepId:"validate_windows_candidate",
   action:"validate_windows_candidate",executionClass:"read_only"} as unknown as StepIntent;
 function fixture(){
-  const inspectCandidate=jest.fn(async(_tag:string,_sha:string,_run:string,_op:string)=>receipt);
+  const inspectCandidate=jest.fn(async(_tag:string,_sha:string,_run:string,_op:string,_prepare:string)=>receipt);
   const getState=jest.fn(async()=>state);
   let allowed=true;
   return {
@@ -38,7 +39,7 @@ describe("Windows independently attested candidate and original prepare receipt"
     expect(await f.cap.execute(intent,run)).toMatchObject({state:"succeeded",
       evidence:[{kind:"windows_candidate_manifest",
         source:"mcp_v3_verified_windows",sha256:sha}]});
-    expect(f.inspectCandidate).toHaveBeenCalledWith(tag,sourceCommitSha,runId,operationId);
+    expect(f.inspectCandidate).toHaveBeenCalledWith(tag,sourceCommitSha,runId,operationId,preparedId);
     expect(f.inspectCandidate).toHaveBeenCalledTimes(2);
     expect(f.getState).toHaveBeenCalledTimes(2);
     expect(await f.cap.reconcile(intent,{...run,status:"paused_outcome_unknown"}))
@@ -59,6 +60,7 @@ describe("Windows independently attested candidate and original prepare receipt"
     const cases=[
       {receipt:{...receipt,platform:"oracle" as "windows"}},
       {receipt:{...receipt,runId:operationId}},
+      {receipt:{...receipt,prepareOperationId:operationId}},
       {receipt:{...receipt,sourceCommitSha:"e".repeat(40)}},
       {receipt:{...receipt,verifiedArtifactCount:0}},
       {state:{...state,candidate:{...state.candidate,manifestSha256:"f".repeat(64)}}},

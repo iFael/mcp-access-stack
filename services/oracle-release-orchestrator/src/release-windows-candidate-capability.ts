@@ -12,6 +12,7 @@ export interface WindowsCandidateReceipt {
   readonly sourceCommitSha:string;
   readonly runId:string;
   readonly operationId:string;
+  readonly prepareOperationId:string;
   readonly manifestSha256:string;
   readonly verifiedArtifactCount:number;
 }
@@ -19,7 +20,7 @@ export interface WindowsCandidateBinding {
   /** A separately authenticated Windows source; never user-supplied paths. */
   readonly port:{
     inspectCandidate(tag:string,commitSha:string,runId:string,
-      operationId:string):Promise<WindowsCandidateReceipt>;
+      operationId:string,prepareOperationId:string):Promise<WindowsCandidateReceipt>;
     getState():Promise<ExecutionNodePointerState>;
   };
   readonly authorize:(run:ReleaseRunSnapshot)=>Promise<boolean>;
@@ -40,13 +41,14 @@ function bound(intent:StepIntent,run:ReleaseRunSnapshot):boolean{
 }
 function verify(receipt:WindowsCandidateReceipt,
   state:ExecutionNodePointerState,run:ReleaseRunSnapshot,
-  intent:StepIntent):boolean{
+  intent:StepIntent,prepareOperationId:string):boolean{
   const expected=run.targetRelease.slice(1);
   return receipt.platform==="windows" &&
     receipt.releaseTag===run.targetRelease &&
     receipt.sourceCommitSha===run.sourceCommitSha &&
     receipt.runId===run.runId &&
     receipt.operationId===intent.operationId &&
+    receipt.prepareOperationId===prepareOperationId &&
     DIGEST.test(receipt.manifestSha256) &&
     Number.isSafeInteger(receipt.verifiedArtifactCount) &&
     receipt.verifiedArtifactCount>0 && receipt.verifiedArtifactCount<=64 &&
@@ -70,18 +72,20 @@ export function bindWindowsCandidate(
     throw new Error("WINDOWS_CANDIDATE_HOST_INVALID");
   const check=async(intent:StepIntent,run:ReleaseRunSnapshot)=>{
     if(!bound(intent,run) || !await options.authorize(run))return null;
+    const prepareOperationId=run.steps.find(s=>s.action==="prepare_windows")!.operationId!;
     try{
       let fingerprint:string|null=null,digest:string|null=null;
       for(let i=0;i<2;i++){
         const [receipt,state]=await Promise.all([
           options.port.inspectCandidate(run.targetRelease,
-            run.sourceCommitSha,run.runId,intent.operationId),
+            run.sourceCommitSha,run.runId,intent.operationId,prepareOperationId),
           options.port.getState(),
         ]);
-        if(!verify(receipt,state,run,intent))return null;
+        if(!verify(receipt,state,run,intent,prepareOperationId))return null;
         const observed=JSON.stringify({
           releaseTag:receipt.releaseTag,commit:receipt.sourceCommitSha,
           manifestSha256:receipt.manifestSha256,
+          prepareOperationId:receipt.prepareOperationId,
           artifactCount:receipt.verifiedArtifactCount,
           active:state.active,previous:state.previous,candidate:state.candidate,
         });
