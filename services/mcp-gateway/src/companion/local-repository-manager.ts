@@ -85,6 +85,7 @@ export interface LocalRepositoryManagerOptions {
   gitExecutable?: string;
   gitEnvironment?: NodeJS.ProcessEnv;
   githubAccountOwners?: readonly string[];
+  approvedDiscoveryRoots?: readonly string[];
   onChanged?: () => Promise<void>;
 }
 
@@ -138,6 +139,7 @@ export class LocalRepositoryManager implements RepositoryExecutor {
   readonly stateDirectory: string;
   readonly managedRoot: string;
   private readonly homeDirectory: string;
+  private readonly approvedDiscoveryRoots: readonly string[];
   private readonly platform: NodeJS.Platform;
   private readonly gitExecutable: string;
   private readonly statePath: string;
@@ -146,6 +148,17 @@ export class LocalRepositoryManager implements RepositoryExecutor {
   private constructor(private readonly options: LocalRepositoryManagerOptions) {
     this.platform = options.platform ?? process.platform;
     this.homeDirectory = path.resolve(options.homeDirectory ?? os.homedir());
+    const roots = options.approvedDiscoveryRoots ?? [];
+    if (roots.length > 16 || roots.some((root) =>
+      typeof root !== "string" || root.length === 0 || root.length > 4_096 ||
+      /[\u0000-\u001f]/u.test(root) || !path.isAbsolute(root) ||
+      path.resolve(root) === path.parse(path.resolve(root)).root
+    ) || new Set(roots.map((root) =>
+      this.platform === "win32" ? path.resolve(root).toLocaleLowerCase("en-US") : path.resolve(root)
+    )).size !== roots.length) {
+      throw new AppError("POLICY_INVALID", "Approved discovery roots must be distinct absolute directories.");
+    }
+    this.approvedDiscoveryRoots = [...roots];
     this.stateDirectory = path.resolve(options.stateDirectory ?? defaultStateDirectory(this.platform));
     this.managedRoot = path.resolve(options.managedRoot ?? path.join(this.homeDirectory, "MCP V3", "Repositórios"));
     this.gitExecutable = options.gitExecutable ?? "git";
@@ -217,6 +230,12 @@ export class LocalRepositoryManager implements RepositoryExecutor {
         throw new AppError("INVALID_ARGUMENT", "Repository id is invalid.");
       }
       const inspected = await this.inspectRepository(binding.path, signal);
+      const alreadyBoundHere = next.some((entry) =>
+        entry.repositoryId === binding.repositoryId && samePath(entry.path, inspected.path, this.platform)
+      );
+      if (!alreadyBoundHere && !isInside(this.managedRoot, inspected.path, this.platform)) {
+        await this.resolveDiscoveryRoot(inspected.path);
+      }
       let canonicalPath = inspected.path;
       let managed = binding.managed ?? isInside(this.managedRoot, canonicalPath, this.platform);
 
@@ -674,10 +693,23 @@ export class LocalRepositoryManager implements RepositoryExecutor {
       throw new AppError("INVALID_PATH", "Repository discovery root was not found.", { cause: error });
     }
     if (!isInside(this.homeDirectory, canonical, this.platform)) {
-      throw new AppError(
-        "PATH_OUTSIDE_ALLOWED_ROOTS",
-        "Repository discovery is limited to the current user's home directory until an external location is explicitly approved by the MCP V3 app.",
-      );
+      let approved = false;
+      for (const configuredRoot of this.approvedDiscoveryRoots) {
+        try {
+          if (samePath(await realpath(configuredRoot), canonical, this.platform)) {
+            approved = true;
+            break;
+          }
+        } catch {
+          // Unmounted or inaccessible approved paths confer no access.
+        }
+      }
+      if (!approved) {
+        throw new AppError(
+          "PATH_OUTSIDE_ALLOWED_ROOTS",
+          "Repository discovery outside the home directory requires an exact root approved in the local companion configuration.",
+        );
+      }
     }
     return canonical;
   }

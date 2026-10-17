@@ -23,6 +23,7 @@ type CompanionConfigFile = {
   version: 1;
   edgeBaseUrl: string;
   displayName?: string;
+  approvedDiscoveryRoots?: string[];
 };
 
 type CompanionRuntimeConfig = {
@@ -32,6 +33,7 @@ type CompanionRuntimeConfig = {
   stateRoot: string;
   privateDirectory: string;
   managedRoot: string;
+  approvedDiscoveryRoots: readonly string[];
   credentialBrokerPath: string;
   elevationBrokerPath: string;
 };
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
     stateDirectory: path.join(runtime.stateRoot, "state"),
     managedRoot: runtime.managedRoot,
     homeDirectory: os.homedir(),
+    approvedDiscoveryRoots: runtime.approvedDiscoveryRoots,
     githubAccountOwners: parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS),
     onChanged: reloadLocalRuntime,
   });
@@ -278,6 +281,7 @@ async function loadCompanionRuntimeConfig(
   return {
     edgeBaseUrl,
     releaseRoot,
+    approvedDiscoveryRoots: fileConfig?.approvedDiscoveryRoots ?? [],
     ...(environment.MCP_V3_DEVICE_NAME?.trim()
       ? { displayName: environment.MCP_V3_DEVICE_NAME.trim() }
       : fileConfig?.displayName
@@ -315,13 +319,19 @@ async function readOptionalConfig(filePath: string): Promise<CompanionConfigFile
     throw new AppError("POLICY_INVALID", "MCP V3 local configuration contains invalid JSON.", { cause: error });
   }
   if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.edgeBaseUrl !== "string" ||
-      (parsed.displayName !== undefined && typeof parsed.displayName !== "string")) {
+      (parsed.displayName !== undefined && typeof parsed.displayName !== "string") ||
+      (parsed.approvedDiscoveryRoots !== undefined &&
+        (!Array.isArray(parsed.approvedDiscoveryRoots) ||
+          parsed.approvedDiscoveryRoots.some((root) => typeof root !== "string")))) {
     throw new AppError("POLICY_INVALID", "MCP V3 local configuration is invalid.");
   }
   return {
     version: 1,
     edgeBaseUrl: parsed.edgeBaseUrl,
     ...(parsed.displayName === undefined ? {} : { displayName: parsed.displayName }),
+    ...(parsed.approvedDiscoveryRoots === undefined ? {} : {
+      approvedDiscoveryRoots: parsed.approvedDiscoveryRoots as string[],
+    }),
   };
 }
 
