@@ -5,7 +5,7 @@ const tag="v1.1.0-beta.90",sha="a".repeat(40),digest="b".repeat(64);
 const config={workspaceId:"mcp-access-stack" as const,ownerScope:"trusted:oracle-candidate-read"};
 describe("private execution-node Oracle candidate read port",()=>{
   it("calls the typed audited local-agent method with a pinned host identity",async()=>{
-    const read=jest.fn(async()=>({releaseTag:tag,sourceCommitSha:sha,
+    const read=jest.fn(async(_input:unknown,_context:unknown)=>({releaseTag:tag,sourceCommitSha:sha,
       manifestSha256:digest,verifiedArtifactCount:13}));
     const port=createOracleCandidateReadPort({
       oracleInspectCandidate:read,
