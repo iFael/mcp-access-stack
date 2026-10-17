@@ -21,6 +21,8 @@ export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } fr
 export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
 export type { TypedTagBootstrapPort, ReleaseTagBootstrapBinding } from "./release-tag-bootstrap-capability.js";
 export type { TypedReleaseVerificationPort, ReleaseVerificationBinding, ReleaseVerificationReceipt } from "./release-verification-capabilities.js";
+export {bindOracleLocalCandidate} from "./oracle-local-candidate-capability.js";
+export type {OracleLocalCandidateBinding} from "./oracle-local-candidate-capability.js";
 export {bindReleaseAssetsVerification} from "./release-assets-verification-capability.js";
 export type {ReleaseAssetVerificationBinding} from "./release-assets-verification-capability.js";
 export type { TypedReleaseEffectPort, ReleaseEffectBinding, ReleaseEffectRequest, ReleaseEffectReceipt } from "./release-effect-capabilities.js";

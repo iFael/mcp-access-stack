@@ -85,6 +85,7 @@ export function composeOracleHostReleaseCapabilities(
       authorized:bindings.authorizeWorkflow!}} :
       bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
     ...(bindings.verifications ? {verifications:bindings.verifications} : {}),
+    ...(bindings.oracleCandidate ? {oracleCandidate:bindings.oracleCandidate} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
     ...(workflow && bindings.authorizeWorkflow ? {publicDistribution:{
       workspaceId:workflow.workspaceId,owner:workflow.owner,repository:workflow.repository,
