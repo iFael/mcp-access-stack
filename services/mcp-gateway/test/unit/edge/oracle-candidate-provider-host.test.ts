@@ -37,7 +37,7 @@ describe("Oracle candidate provider distinct enrollment",()=>{
   it("pins host ownership and rejects reusing source or workflow credential",async()=>{
     if(process.platform!=="linux")return;
     const options=config();
-    const create=jest.fn(()=>port);
+    const create=jest.fn((_config:unknown)=>port);
     const loaded=await loadOracleCandidateProviderFromEnvironment(options,create);
     expect(loaded?.token).toBe(token);
     expect(create).toHaveBeenCalledWith({workspaceId:"mcp-access-stack",
