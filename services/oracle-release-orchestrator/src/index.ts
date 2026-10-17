@@ -29,6 +29,8 @@ export {bindCatalogSmoke} from "./release-catalog-smoke-capability.js";
 export type {CatalogSmokeBinding,CatalogListReceipt} from "./release-catalog-smoke-capability.js";
 export {bindReleasePointerReconciliation} from "./release-pointer-reconciliation-capability.js";
 export type {ReleasePointerReconciliationBinding,ExecutionNodePointerState} from "./release-pointer-reconciliation-capability.js";
+export {bindReleaseNodeActiveHealth} from "./release-node-active-health-capability.js";
+export type {ReleaseNodeActiveHealthBinding,VerifiedActiveManifest,NodeRuntimeHealth,NodeHealthPlatform} from "./release-node-active-health-capability.js";
 export {bindEdgeHealth} from "./release-edge-health-capability.js";
 export type {EdgeHealthBinding} from "./release-edge-health-capability.js";
 export {bindOracleLocalCandidate} from "./oracle-local-candidate-capability.js";

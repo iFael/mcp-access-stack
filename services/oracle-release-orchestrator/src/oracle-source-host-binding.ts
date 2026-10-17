@@ -99,6 +99,8 @@ export function composeOracleHostReleaseCapabilities(
     ...(bindings.edgeHealth ? {edgeHealth:bindings.edgeHealth} : {}),
     ...(bindings.pointerReconciliation ? {pointerReconciliation:bindings.pointerReconciliation} : {}),
     ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),
+    ...(bindings.oracleActiveHealth ? {oracleActiveHealth:bindings.oracleActiveHealth} : {}),
+    ...(bindings.windowsActiveHealth ? {windowsActiveHealth:bindings.windowsActiveHealth} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
     ...(workflow && bindings.authorizeWorkflow ? {publicDistribution:{
       workspaceId:workflow.workspaceId,owner:workflow.owner,repository:workflow.repository,
