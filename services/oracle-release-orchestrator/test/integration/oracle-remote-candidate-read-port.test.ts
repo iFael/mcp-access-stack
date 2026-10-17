@@ -14,7 +14,7 @@ const success=(result:unknown)=>new Response(JSON.stringify({result}),{
 });
 describe("Oracle read-only candidate bridge with independent HMAC",()=>{
   it("sends one signed operation-bound request and validates the complete receipt",async()=>{
-    const send=jest.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{
+    const send=jest.fn(async(_url:string|URL|Request,init?:RequestInit)=>{
       expect(init?.headers).toMatchObject({
         authorization:expect.stringMatching(/^HMAC-SHA256 candidate-v1=/u),
       });
