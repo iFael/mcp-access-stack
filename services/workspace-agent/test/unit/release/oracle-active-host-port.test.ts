@@ -13,7 +13,7 @@ describe("private audited active-artifact host port",()=>{
       releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
       verifiedArtifactCount:13,
     }));
-    const stateReader=jest.fn(async()=>({state:pointers}));
+    const stateReader=jest.fn(async(_input:unknown,_context:unknown)=>({state:pointers}));
     const port=createOracleActiveReadPort({
       oracleInspectActive:reader,getReleaseState:stateReader,
     } as unknown as ActiveHost,config);
@@ -35,7 +35,7 @@ describe("private audited active-artifact host port",()=>{
       releaseTag:tag,sourceCommitSha:sha,
       manifestSha256:"invalid",verifiedArtifactCount:13,
     }));
-    const stateReader=jest.fn(async()=>({state:pointers}));
+    const stateReader=jest.fn(async(_input:unknown,_context:unknown)=>({state:pointers}));
     const port=createOracleActiveReadPort({
       oracleInspectActive:reader,getReleaseState:stateReader,
     } as unknown as ActiveHost,config);
