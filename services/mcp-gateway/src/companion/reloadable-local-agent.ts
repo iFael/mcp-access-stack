@@ -12,6 +12,9 @@ import {
   LocalAgent,
   type LocalAgentOptions,
   createOracleReleaseGitHubReadPort,
+  createOracleCandidateReadPort,
+  type OracleCandidateHostConfig,
+  type OracleCandidateReadResult,
   createOracleReleaseGitHubWorkflowPort,
   type OracleReleaseGitHubWorkflowPolicy,
   type OracleReleaseGitHubReadConfig,
@@ -72,6 +75,25 @@ export class ReloadableLocalAgent {
         agent.releaseReadGitHubMainHead(input,context)),
       githubGetCommitChecks:(input,context)=>checked(agent=>
         agent.githubGetCommitChecks(input,context)),
+    },config);
+  }
+
+  /** Confidential read-only candidate port. No WSS or public MCP exposure;
+   * discard a receipt if policy reloads before its read finishes. */
+  oracleCandidateReadPort(config:OracleCandidateHostConfig):{
+    readCandidate(tag:string,commitSha:string):Promise<OracleCandidateReadResult>;
+  }{
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const agent=this.currentAgent,epoch=this.generation;
+      if(!agent)throw new AppError("WORKSPACE_NOT_FOUND","Oracle candidate host offline.");
+      const value=await operation(agent);
+      if(epoch!==this.generation || agent!==this.currentAgent)
+        throw new AppError("PERMISSION_DENIED","Oracle candidate policy changed during read.");
+      return value;
+    };
+    return createOracleCandidateReadPort({
+      oracleInspectCandidate:(input,context)=>checked(agent=>
+        agent.oracleInspectCandidate(input,context)),
     },config);
   }
 
