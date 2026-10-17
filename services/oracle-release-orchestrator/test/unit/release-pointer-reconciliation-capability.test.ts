@@ -60,7 +60,7 @@ describe("dual execution-node pointer reconciliation",()=>{
   it("refuses health gates not yet complete, tampered operation and revoked authorization",async()=>{
     const f=fixture();
     const missing={...run,steps:run.steps.map(s=>s.action==="verify_windows_health"?
-      {...s,status:"outcome_unknown"}:s)};
+      {...s,status:"outcome_unknown" as const}:s)};
     expect((await f.cap.execute(intent,missing)).state).toBe("outcome_unknown");
     expect((await f.cap.execute({...intent,operationId:
       "11111111-2222-4333-8444-555555555550"},run)).state).toBe("outcome_unknown");

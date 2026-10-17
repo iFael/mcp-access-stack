@@ -59,7 +59,7 @@ describe("Oracle independent authenticated tool catalog smoke",()=>{
   it("requires completed final pointers, original operation and host authorization",async()=>{
     const f=fixture();
     const pending={...run,steps:run.steps.map(s=>
-      s.action==="reconcile_final_pointers"?{...s,status:"outcome_unknown"}:s)};
+      s.action==="reconcile_final_pointers"?{...s,status:"outcome_unknown" as const}:s)};
     expect((await f.cap.execute(intent,pending)).state).toBe("outcome_unknown");
     expect((await f.cap.execute({...intent,operationId:
       "11111111-2222-4333-8444-555555555558"},run)).state)
