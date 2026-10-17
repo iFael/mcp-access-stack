@@ -59,6 +59,23 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
     await expect(operation).rejects.toThrow("policy changed");
     expect(read).toHaveBeenCalledTimes(1);
   });
+  it("discards native pointer observations after a policy reload",async()=>{
+    let settle!: (value:unknown)=>void;
+    const pending=new Promise<unknown>(resolve=>{settle=resolve;});
+    const readState=jest.fn(async()=>pending);
+    const {reloadable,state}=harness({
+      oracleInspectActive:async()=>receipt,getReleaseState:readState,
+    } as Partial<LocalAgent>);
+    const port=reloadable.oracleActiveReadPort({
+      workspaceId:"mcp-access-stack",ownerScope:"trusted:oracle-active",
+    });
+    const operation=port.getState();
+    await Promise.resolve();
+    state.currentAgent=null;state.generation++;
+    settle({state:{version:1,active:null,previous:null,candidate:null}});
+    await expect(operation).rejects.toThrow("policy changed");
+    expect(readState).toHaveBeenCalledTimes(1);
+  });
   it("does not inherit candidate-read permission when its host is absent",async()=>{
     const {reloadable}=harness({oracleInspectCandidate:async()=>receipt} as Partial<LocalAgent>);
     await expect(reloadable.oracleActiveReadPort({

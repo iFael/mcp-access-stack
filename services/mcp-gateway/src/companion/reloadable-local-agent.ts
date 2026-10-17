@@ -99,9 +99,7 @@ export class ReloadableLocalAgent {
   }
 
   /** Separately scoped active-release manifest inspection. */
-  oracleActiveReadPort(config:OracleCandidateHostConfig):{
-    inspectActive(tag:string,commitSha:string):Promise<OracleCandidateReadResult>;
-  }{
+  oracleActiveReadPort(config:OracleCandidateHostConfig){
     const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
       const agent=this.currentAgent,epoch=this.generation;
       if(!agent)throw new AppError("WORKSPACE_NOT_FOUND","Oracle active host offline.");
@@ -113,6 +111,8 @@ export class ReloadableLocalAgent {
     return createOracleActiveReadPort({
       oracleInspectActive:(input,context)=>checked(agent=>
         agent.oracleInspectActive(input,context)),
+      getReleaseState:(input,context)=>checked(agent=>
+        agent.getReleaseState(input,context)),
     },config);
   }
 
