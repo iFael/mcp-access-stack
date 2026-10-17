@@ -101,6 +101,7 @@ export function composeOracleHostReleaseCapabilities(
     ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),
     ...(bindings.oracleActiveHealth ? {oracleActiveHealth:bindings.oracleActiveHealth} : {}),
     ...(bindings.windowsActiveHealth ? {windowsActiveHealth:bindings.windowsActiveHealth} : {}),
+    ...(bindings.windowsCandidate ? {windowsCandidate:bindings.windowsCandidate} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
     ...(workflow && bindings.authorizeWorkflow ? {publicDistribution:{
       workspaceId:workflow.workspaceId,owner:workflow.owner,repository:workflow.repository,

@@ -14,6 +14,7 @@ import {bindEdgeHealth,type EdgeHealthBinding} from "./release-edge-health-capab
 import {bindReleasePointerReconciliation,type ReleasePointerReconciliationBinding} from "./release-pointer-reconciliation-capability.js";
 import {bindCatalogSmoke,type CatalogSmokeBinding} from "./release-catalog-smoke-capability.js";
 import {bindReleaseNodeActiveHealth,type ReleaseNodeActiveHealthBinding} from "./release-node-active-health-capability.js";
+import {bindWindowsCandidate,type WindowsCandidateBinding} from "./release-windows-candidate-capability.js";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 
 /**
@@ -36,6 +37,7 @@ export interface ReleaseCapabilityComposition {
   readonly catalogSmoke?: CatalogSmokeBinding;
   readonly oracleActiveHealth?: Omit<ReleaseNodeActiveHealthBinding,"platform">;
   readonly windowsActiveHealth?: Omit<ReleaseNodeActiveHealthBinding,"platform">;
+  readonly windowsCandidate?: WindowsCandidateBinding;
   readonly other?: readonly ReleaseStepCapability[];
 }
 
@@ -75,6 +77,7 @@ export function composeReleaseCapabilities(input: ReleaseCapabilityComposition):
   if (input.catalogSmoke) install(bindCatalogSmoke(input.catalogSmoke));
   if (input.oracleActiveHealth) install(bindReleaseNodeActiveHealth({...input.oracleActiveHealth,platform:"oracle"}));
   if (input.windowsActiveHealth) install(bindReleaseNodeActiveHealth({...input.windowsActiveHealth,platform:"windows"}));
+  if (input.windowsCandidate) install(bindWindowsCandidate(input.windowsCandidate));
   if (input.tagBootstrap) install(bindReleaseTagBootstrap(input.tagBootstrap));
   if (input.verifications) for (const binding of bindReleaseVerificationReads(input.verifications).values()) install(binding);
   if (input.effects) for (const binding of bindReleaseEffects(input.effects).values()) install(binding);
