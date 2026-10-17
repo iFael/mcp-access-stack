@@ -86,6 +86,9 @@ export function composeOracleHostReleaseCapabilities(
       bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
     ...(bindings.verifications ? {verifications:bindings.verifications} : {}),
     ...(bindings.oracleCandidate ? {oracleCandidate:bindings.oracleCandidate} : {}),
+    ...(bindings.edgeHealth ? {edgeHealth:bindings.edgeHealth} : {}),
+    ...(bindings.pointerReconciliation ? {pointerReconciliation:bindings.pointerReconciliation} : {}),
+    ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
     ...(workflow && bindings.authorizeWorkflow ? {publicDistribution:{
       workspaceId:workflow.workspaceId,owner:workflow.owner,repository:workflow.repository,
