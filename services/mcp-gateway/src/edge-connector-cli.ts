@@ -22,6 +22,7 @@ import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-prov
 import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
 import {loadOracleWorkflowProviderFromEnvironment} from "./edge/oracle-workflow-provider-host.js";
 import {loadOracleCandidateReadEnrollment} from "./edge/oracle-candidate-read-host.js";
+import {loadOracleActiveReadEnrollment} from "./edge/oracle-active-read-host.js";
 import {OracleCandidateProviderConnector} from "./edge/oracle-candidate-provider.js";
 import {loadOracleCandidateProviderFromEnvironment} from "./edge/oracle-candidate-provider-host.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
@@ -61,9 +62,11 @@ async function main(): Promise<void> {
   const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
   const candidateRead=loadOracleCandidateReadEnrollment(process.env);
+  const activeRead=loadOracleActiveReadEnrollment(process.env);
   const reloadable = new ReloadableLocalAgent({
     ...(oracleControl ? {oracleControl} : {}),
     ...(candidateRead ? {oracleCandidateRead:candidateRead.policy} : {}),
+    ...(activeRead ? {oracleActiveRead:activeRead.policy} : {}),
   });
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {

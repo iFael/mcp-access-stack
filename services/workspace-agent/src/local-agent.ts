@@ -246,6 +246,8 @@ export interface LocalAgentOptions {
   oracleControl?: OracleControlCallerBinding;
   /** Independent opt-in policy for confidential Oracle candidate inspection. */
   oracleCandidateRead?: {authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>};
+  /** Separate opt-in host policy: active release bytes require a distinct authority. */
+  oracleActiveRead?: {authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>};
 }
 
 function backgroundTaskAccess(
@@ -265,6 +267,7 @@ export class LocalAgent {
   private readonly releaseLifecycleService: ReleaseLifecycleService;
   private readonly oracleControlCaller: OracleControlCaller | undefined;
   private readonly oracleCandidateReadPolicy: LocalAgentOptions["oracleCandidateRead"];
+  private readonly oracleActiveReadPolicy: LocalAgentOptions["oracleActiveRead"];
   private readonly serviceControlService = new LinuxServiceControlService();
   private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
@@ -318,6 +321,7 @@ export class LocalAgent {
       },
     });
     this.oracleCandidateReadPolicy=options.oracleCandidateRead;
+    this.oracleActiveReadPolicy=options.oracleActiveRead;
     this.oracleControlCaller = options.oracleControl === undefined
       ? undefined : new OracleControlCaller(options.oracleControl);
     this.releaseLifecycleService = new ReleaseLifecycleService(
@@ -574,6 +578,46 @@ export class LocalAgent {
           workspace,parsed.tag,parsed.commitSha);
         if(!await authorize(parsed.tag,parsed.commitSha,context.ownerScope))
           throw new AppError("PERMISSION_DENIED","Oracle candidate permission changed.");
+        return result;
+      },
+    );
+  }
+
+  /** Internal, audited active-artifact attestation; distinct from candidate-read scope. */
+  async oracleInspectActive(
+    input:{workspaceId:string;tag:string;commitSha:string},
+    context:OperationContext={},
+  ):Promise<OracleCandidateReadResult>{
+    const schema={safeParse:(value:unknown)=>{
+      if(!value || typeof value!=="object" || Array.isArray(value))
+        return {success:false as const};
+      const v=value as Record<string,unknown>;
+      if(Object.keys(v).length!==3 || v.workspaceId!=="mcp-access-stack" ||
+        typeof v.tag!=="string" ||
+        !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?$/u.test(v.tag) ||
+        v.tag.includes("..") || typeof v.commitSha!=="string" ||
+        !/^[a-f0-9]{40}$/u.test(v.commitSha))
+        return {success:false as const};
+      return {success:true as const,data:{
+        workspaceId:v.workspaceId,tag:v.tag,commitSha:v.commitSha,
+      }};
+    }};
+    return this.runValidatedAudited(
+      "oracleInspectActive","read",schema,input,context,
+      parsed=>({targetResource:"oracle:active:"+parsed.tag,
+        expectedSha:parsed.commitSha}),
+      async(workspace,parsed)=>{
+        const authorize=this.oracleActiveReadPolicy?.authorize;
+        if(workspace.id!=="mcp-access-stack" ||
+          workspace.permissionProfile!=="full-repo-write" ||
+          workspace.confirmationMode!=="trusted-workspace" ||
+          !authorize || !context.ownerScope ||
+          !await authorize(parsed.tag,parsed.commitSha,context.ownerScope))
+          throw new AppError("PERMISSION_DENIED","Oracle active inspection is not enrolled.");
+        const result=await this.releaseLifecycleService.inspectOracleActive(
+          workspace,parsed.tag,parsed.commitSha);
+        if(!await authorize(parsed.tag,parsed.commitSha,context.ownerScope))
+          throw new AppError("PERMISSION_DENIED","Oracle active permission changed.");
         return result;
       },
     );

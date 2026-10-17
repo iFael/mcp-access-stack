@@ -13,6 +13,7 @@ import {
   type LocalAgentOptions,
   createOracleReleaseGitHubReadPort,
   createOracleCandidateReadPort,
+  createOracleActiveReadPort,
   type OracleCandidateHostConfig,
   type OracleCandidateReadResult,
   createOracleReleaseGitHubWorkflowPort,
@@ -94,6 +95,24 @@ export class ReloadableLocalAgent {
     return createOracleCandidateReadPort({
       oracleInspectCandidate:(input,context)=>checked(agent=>
         agent.oracleInspectCandidate(input,context)),
+    },config);
+  }
+
+  /** Separately scoped active-release manifest inspection. */
+  oracleActiveReadPort(config:OracleCandidateHostConfig):{
+    inspectActive(tag:string,commitSha:string):Promise<OracleCandidateReadResult>;
+  }{
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const agent=this.currentAgent,epoch=this.generation;
+      if(!agent)throw new AppError("WORKSPACE_NOT_FOUND","Oracle active host offline.");
+      const value=await operation(agent);
+      if(epoch!==this.generation || agent!==this.currentAgent)
+        throw new AppError("PERMISSION_DENIED","Oracle active policy changed during read.");
+      return value;
+    };
+    return createOracleActiveReadPort({
+      oracleInspectActive:(input,context)=>checked(agent=>
+        agent.oracleInspectActive(input,context)),
     },config);
   }
 

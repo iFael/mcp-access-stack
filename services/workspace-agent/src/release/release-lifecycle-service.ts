@@ -31,7 +31,7 @@ import { PathSecurity } from "../path-security.js";
 import type { ShellService } from "../shell/service.js";
 import type { BackgroundTaskManager } from "../tasks/background-task-manager.js";
 import { ReleasePruneService } from "./release-prune-service.js";
-import {inspectExecutionNodeCandidate,type OracleCandidateReadResult} from "./oracle-candidate-read.js";
+import {inspectExecutionNodeCandidate,inspectExecutionNodeActive,type OracleCandidateReadResult} from "./oracle-candidate-read.js";
 
 interface ReleaseShellService {
   authorizeBackgroundCommand: ShellService["authorizeBackgroundCommand"];
@@ -109,6 +109,15 @@ export class ReleaseLifecycleService {
       throw new AppError("CAPABILITY_UNSUPPORTED","Oracle candidate reader requires Linux.");
     assertReleaseWorkspace(workspace,this.platform);
     return inspectExecutionNodeCandidate(resolveInstallationRoot(),tag,commitSha);
+  }
+
+  async inspectOracleActive(
+    workspace:ResolvedWorkspace,tag:string,commitSha:string,
+  ):Promise<OracleCandidateReadResult>{
+    if(this.platform!=="linux")
+      throw new AppError("CAPABILITY_UNSUPPORTED","Oracle active reader requires Linux.");
+    assertReleaseWorkspace(workspace,this.platform);
+    return inspectExecutionNodeActive(resolveInstallationRoot(),tag,commitSha);
   }
 
   async getState(workspace: ResolvedWorkspace): Promise<GetReleaseStateResult> {

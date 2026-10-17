@@ -51,11 +51,11 @@ export interface OracleCandidateReadResult {
   readonly manifestSha256:string;
   readonly verifiedArtifactCount:number;
 }
-/** Executes only in the installed MCP execution-node's authorized identity.
- * The caller provides a tag and SHA, never a path, command, URL or workspace root.
- * Privilege separation from the Oracle SQLite ledger is preserved. */
-export async function inspectExecutionNodeCandidate(
+/** Both slots use the same bounded file and artifact verification; only the
+ * trusted host selects the slot. Caller never supplies paths or arbitrary slots. */
+async function inspectExecutionNodeRelease(
   installationRoot:string,releaseTag:string,sourceCommitSha:string,
+  slot:"candidate"|"active",
 ):Promise<OracleCandidateReadResult>{
   if(process.platform!=="linux" || !isAbsolute(installationRoot) || !TAG.test(releaseTag) ||
     releaseTag.includes("..") || !SHA.test(sourceCommitSha))
@@ -73,17 +73,27 @@ export async function inspectExecutionNodeCandidate(
     throw new Error("ORACLE_CANDIDATE_STATE_SYMLINK");
   const before=await readBounded(statePath,MAX_STATE);
   const state:unknown=JSON.parse(before.toString("utf8"));
-  if(!record(state) || state.version!==1 || !record(state.candidate) ||
-    state.candidate.releaseId!==releaseId ||
-    typeof state.candidate.manifestSha256!=="string" ||
-    !DIGEST.test(state.candidate.manifestSha256))
+  if(!record(state) || state.version!==1 || !record(state[slot]) ||
+    state[slot].releaseId!==releaseId ||
+    typeof state[slot].manifestSha256!=="string" ||
+    !DIGEST.test(state[slot].manifestSha256) ||
+    (slot==="active" && (
+      state.candidate!==null || !record(state.previous) ||
+      state.previous.releaseId===releaseId ||
+      typeof state.previous.manifestSha256!=="string" ||
+      !DIGEST.test(state.previous.manifestSha256))))
     throw new Error("ORACLE_CANDIDATE_STATE_MISMATCH");
+  if(slot==="active"){
+    const current=resolve(root,"current");
+    if(!inside(root,current) || await realpath(current)!==folder)
+      throw new Error("ORACLE_ACTIVE_POINTER_MISMATCH");
+  }
   const manifestPath=resolve(folder,"linux-release-manifest.json");
   if(!inside(folder,manifestPath) || await realpath(manifestPath)!==manifestPath)
     throw new Error("ORACLE_CANDIDATE_MANIFEST_SYMLINK");
   const manifestBytes=await readBounded(manifestPath,MAX_MANIFEST);
   const digest=createHash("sha256").update(manifestBytes).digest("hex");
-  if(state.candidate.manifestSha256!==digest)
+  if(state[slot].manifestSha256!==digest)
     throw new Error("ORACLE_CANDIDATE_MANIFEST_DIGEST_MISMATCH");
   const manifest:unknown=JSON.parse(manifestBytes.toString("utf8"));
   if(!record(manifest) || manifest.releaseId!==releaseId ||
@@ -108,6 +118,23 @@ export async function inspectExecutionNodeCandidate(
   const after=await readBounded(statePath,MAX_STATE);
   if(!before.equals(after))
     throw new Error("ORACLE_CANDIDATE_STATE_CHANGED");
+  if(slot==="active" && await realpath(resolve(root,"current"))!==folder)
+    throw new Error("ORACLE_ACTIVE_POINTER_CHANGED");
   return {releaseTag,sourceCommitSha,manifestSha256:digest,
     verifiedArtifactCount:paths.size};
+}
+
+/** Candidate inspect does not accept active releases as candidates. */
+export function inspectExecutionNodeCandidate(
+  installationRoot:string,releaseTag:string,sourceCommitSha:string,
+):Promise<OracleCandidateReadResult>{
+  return inspectExecutionNodeRelease(installationRoot,releaseTag,sourceCommitSha,"candidate");
+}
+
+/** Confirms actual active manifest+every artifact, rollback state, no pending
+ * candidate, the deployed current symlink and an unchanged lifecycle state. */
+export function inspectExecutionNodeActive(
+  installationRoot:string,releaseTag:string,sourceCommitSha:string,
+):Promise<OracleCandidateReadResult>{
+  return inspectExecutionNodeRelease(installationRoot,releaseTag,sourceCommitSha,"active");
 }
