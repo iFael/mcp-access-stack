@@ -4,7 +4,7 @@ import type {OracleCandidateReadResult} from "./oracle-candidate-read.js";
 
 const DIGEST=/^[a-f0-9]{64}$/u;
 const RELEASE_ID=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-type ActiveHost=Pick<LocalAgent,"oracleInspectActive"|"getReleaseState">;
+type ActiveHost=Pick<LocalAgent,"oracleInspectActive"|"oracleInspectActiveState">;
 function validSlot(value:unknown):boolean{
   if(value===null)return true;
   if(!value || typeof value!=="object" || Array.isArray(value))return false;
@@ -23,7 +23,7 @@ export function createOracleActiveReadPort(
 ){
   if(config.workspaceId!=="mcp-access-stack" || !SCOPE.test(config.ownerScope) ||
     typeof host.oracleInspectActive!=="function" ||
-    typeof host.getReleaseState!=="function")
+    typeof host.oracleInspectActiveState!=="function")
     throw new Error("ORACLE_ACTIVE_HOST_INVALID");
   return {
     async inspectActive(tag:string,commitSha:string):Promise<OracleCandidateReadResult>{
@@ -42,7 +42,7 @@ export function createOracleActiveReadPort(
     /** Typed native pointer read, pinned to the same audited owner scope.
      * The caller does not select the host, workspace, path or release slot. */
     async getState(){
-      const result=await host.getReleaseState(
+      const result=await host.oracleInspectActiveState(
         {workspaceId:config.workspaceId},{ownerScope:config.ownerScope});
       const state=result.state;
       if(state?.version!==1 || !validSlot(state.active) ||

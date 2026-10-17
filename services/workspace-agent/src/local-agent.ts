@@ -247,7 +247,10 @@ export interface LocalAgentOptions {
   /** Independent opt-in policy for confidential Oracle candidate inspection. */
   oracleCandidateRead?: {authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>};
   /** Separate opt-in host policy: active release bytes require a distinct authority. */
-  oracleActiveRead?: {authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>};
+  oracleActiveRead?: {
+    authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>;
+    authorizeState(ownerScope:string):Promise<boolean>;
+  };
 }
 
 function backgroundTaskAccess(
@@ -619,6 +622,34 @@ export class LocalAgent {
         if(!await authorize(parsed.tag,parsed.commitSha,context.ownerScope))
           throw new AppError("PERMISSION_DENIED","Oracle active permission changed.");
         return result;
+      },
+    );
+  }
+
+  /** Private Oracle active-pointer read. The generic getReleaseState permission
+   * does not authorize the isolated active-reader principal. */
+  async oracleInspectActiveState(
+    input:GetReleaseStateInput,
+    context:OperationContext={},
+  ):Promise<GetReleaseStateResult>{
+    return this.runValidatedAudited(
+      "oracleInspectActiveState","read",getReleaseStateInputSchema,input,context,
+      ()=>({targetResource:"oracle:active:state"}),
+      async(workspace,parsed)=>{
+        const authorize=this.oracleActiveReadPolicy?.authorizeState;
+        if(workspace.id!=="mcp-access-stack" ||
+          workspace.permissionProfile!=="full-repo-write" ||
+          workspace.confirmationMode!=="trusted-workspace" ||
+          !authorize || !context.ownerScope ||
+          !await authorize(context.ownerScope))
+          throw new AppError("PERMISSION_DENIED",
+            "Oracle active state inspection is not enrolled.");
+        const state=await this.releaseLifecycleService.getState(workspace);
+        if(state.workspaceId!==parsed.workspaceId ||
+          !await authorize(context.ownerScope))
+          throw new AppError("PERMISSION_DENIED",
+            "Oracle active state permission changed.");
+        return state;
       },
     );
   }

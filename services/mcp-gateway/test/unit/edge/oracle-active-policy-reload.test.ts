@@ -40,7 +40,10 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
       .toBe(false);
     expect(await policy.policy.authorize("../etc",sha,policy.host.ownerScope))
       .toBe(false);
+    expect(await policy.policy.authorizeState(policy.host.ownerScope)).toBe(true);
+    expect(await policy.policy.authorizeState("trusted:oracle-candidate")).toBe(false);
     env.MCP_V3_ORACLE_ACTIVE_READ_ENABLED="0";
+    expect(await policy.policy.authorizeState(policy.host.ownerScope)).toBe(false);
     expect(await policy.policy.authorize(tag,sha,policy.host.ownerScope))
       .toBe(false);
   });
@@ -64,7 +67,7 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
     const pending=new Promise<unknown>(resolve=>{settle=resolve;});
     const readState=jest.fn(async()=>pending);
     const {reloadable,state}=harness({
-      oracleInspectActive:async()=>receipt,getReleaseState:readState,
+      oracleInspectActive:async()=>receipt,oracleInspectActiveState:readState,
     } as Partial<LocalAgent>);
     const port=reloadable.oracleActiveReadPort({
       workspaceId:"mcp-access-stack",ownerScope:"trusted:oracle-active",
@@ -75,6 +78,18 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
     settle({state:{version:1,active:null,previous:null,candidate:null}});
     await expect(operation).rejects.toThrow("policy changed");
     expect(readState).toHaveBeenCalledTimes(1);
+  });
+  it("rejects the generic getReleaseState as an active policy substitute",async()=>{
+    const read=jest.fn(async()=>({state:{
+      version:1,active:null,previous:null,candidate:null,
+    }}));
+    const {reloadable}=harness({
+      oracleInspectActive:async()=>receipt,getReleaseState:read,
+    } as Partial<LocalAgent>);
+    await expect(reloadable.oracleActiveReadPort({
+      workspaceId:"mcp-access-stack",ownerScope:"trusted:oracle-active",
+    }).getState()).rejects.toThrow();
+    expect(read).not.toHaveBeenCalled();
   });
   it("does not inherit candidate-read permission when its host is absent",async()=>{
     const {reloadable}=harness({oracleInspectCandidate:async()=>receipt} as Partial<LocalAgent>);

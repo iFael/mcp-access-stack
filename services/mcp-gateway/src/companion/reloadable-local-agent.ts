@@ -111,8 +111,8 @@ export class ReloadableLocalAgent {
     return createOracleActiveReadPort({
       oracleInspectActive:(input,context)=>checked(agent=>
         agent.oracleInspectActive(input,context)),
-      getReleaseState:(input,context)=>checked(agent=>
-        agent.getReleaseState(input,context)),
+      oracleInspectActiveState:(input,context)=>checked(agent=>
+        agent.oracleInspectActiveState(input,context)),
     },config);
   }
 
