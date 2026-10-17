@@ -22,6 +22,8 @@ import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-prov
 import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
 import {loadOracleWorkflowProviderFromEnvironment} from "./edge/oracle-workflow-provider-host.js";
 import {loadOracleCandidateReadEnrollment} from "./edge/oracle-candidate-read-host.js";
+import {OracleCandidateProviderConnector} from "./edge/oracle-candidate-provider.js";
+import {loadOracleCandidateProviderFromEnvironment} from "./edge/oracle-candidate-provider-host.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
@@ -84,6 +86,10 @@ async function main(): Promise<void> {
     (config,policy)=>reloadable.oracleWorkflowPort(config,policy));
   const workflowConnector=workflowOptions===undefined?undefined:
     new OracleWorkflowProviderConnector(workflowOptions);
+  const candidateOptions=await loadOracleCandidateProviderFromEnvironment(process.env,
+    config=>reloadable.oracleCandidateReadPort(config));
+  const candidateConnector=candidateOptions===undefined?undefined:
+    new OracleCandidateProviderConnector(candidateOptions);
 
   let browserPool: ScopedBrowserWorkerPool | undefined;
   try {
@@ -191,11 +197,12 @@ async function main(): Promise<void> {
     };
     const sourceTask=sourceConnector?.run(controller.signal).catch(providerFailed);
     const workflowTask=workflowConnector?.run(controller.signal).catch(providerFailed);
+    const candidateTask=candidateConnector?.run(controller.signal).catch(providerFailed);
     try{
       await connector.run(controller.signal);
     }finally{
       controller.abort();
-      await Promise.all([sourceTask,workflowTask]);
+      await Promise.all([sourceTask,workflowTask,candidateTask]);
     }
     if(providerFailure!==undefined)throw providerFailure;
   } finally {

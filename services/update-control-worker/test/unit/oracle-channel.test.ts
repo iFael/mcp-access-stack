@@ -2,7 +2,9 @@ import { describe, expect, it, jest } from "@jest/globals";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE,
   ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_SCOPE,
-  ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_SCOPE} from "@mcp-access-stack/update-control-contract";
+  ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_SCOPE,
+  ORACLE_CANDIDATE_CONNECT_PATH,ORACLE_CANDIDATE_RPC_PATH,
+  ORACLE_CANDIDATE_ORIGIN,ORACLE_CANDIDATE_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -25,6 +27,7 @@ const TOKEN = "oracle-channel-test-token-".padEnd(48, "x");
 const CONTROL_TOKEN="oracle-control-separated-token-".padEnd(48,"y");
 const SOURCE_TOKEN="oracle-source-separated-token-".padEnd(48,"z");
 const WORKFLOW_TOKEN="oracle-workflow-separated-token-".padEnd(48,"w");
+const CANDIDATE_TOKEN="oracle-candidate-separated-token-".padEnd(48,"c");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -140,7 +143,8 @@ function createHarness() {
     { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
       UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
       UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
-      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN,
+      UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN:CANDIDATE_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -181,7 +185,8 @@ function createHarness() {
       { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
       UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
       UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
-      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN,
+      UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN:CANDIDATE_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -230,6 +235,76 @@ function attachOraclePeer(
     void state.flush();
   };
 }
+
+describe("candidate provider isolation in the existing Oracle DO",()=>{
+  it("accepts only its own token+origin, never source, workflow or control",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=ORACLE_CANDIDATE_ORIGIN)=>new Request(
+      "https://worker.example"+ORACLE_CANDIDATE_CONNECT_PATH,{
+        method:"GET",headers:{upgrade:"websocket",origin,
+          authorization:"Bearer "+token},
+      });
+    expect((await h.channel().fetch(connect(SOURCE_TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(WORKFLOW_TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(CANDIDATE_TOKEN,ORACLE_SOURCE_ORIGIN))).status)
+      .toBe(403);
+    expect((await h.channel().fetch(connect(CANDIDATE_TOKEN))).status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_CANDIDATE_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_SOURCE_SCOPE)).toHaveLength(0);
+    expect(h.state.getWebSockets(ORACLE_WORKFLOW_SCOPE)).toHaveLength(0);
+  });
+  it("forwards a run-bound read and rejects a forged candidate reply",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_CANDIDATE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_CANDIDATE_ORIGIN,
+        authorization:"Bearer "+CANDIDATE_TOKEN},
+    }));
+    const peer=h.pairs.at(-1)!;
+    const runId="11111111-2222-4333-8444-555555555555";
+    const operationId="11111111-2222-4333-8444-555555555556";
+    const args={tag:"v1.1.0-beta.90",commitSha:"a".repeat(40),runId,operationId};
+    attachOraclePeer(h.channel(),h.state,peer.client,peer.server,()=>({
+      releaseTag:args.tag,sourceCommitSha:args.commitSha,
+      manifestSha256:"b".repeat(64),verifiedArtifactCount:5,runId,operationId,
+    }));
+    const rpc=(command:unknown)=>h.channel().fetch(new Request(
+      "https://worker.internal"+ORACLE_CANDIDATE_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify(command),
+      }));
+    expect((await rpc({method:"shell",arguments:{}})).status).toBe(400);
+    expect((await rpc({method:"read_candidate",arguments:{...args,path:"etc/passwd"}})).status)
+      .toBe(400);
+    const result=await rpc({method:"read_candidate",arguments:args});
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({
+      result:{releaseTag:args.tag,manifestSha256:"b".repeat(64),runId,operationId},
+    });
+  });
+  it("rejects a syntactically valid candidate receipt from the wrong operation",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_CANDIDATE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_CANDIDATE_ORIGIN,
+        authorization:"Bearer "+CANDIDATE_TOKEN},
+    }));
+    const peer=h.pairs.at(-1)!;
+    const runId="11111111-2222-4333-8444-555555555555";
+    const operationId="11111111-2222-4333-8444-555555555556";
+    attachOraclePeer(h.channel(),h.state,peer.client,peer.server,()=>({
+      releaseTag:"v1.1.0-beta.90",sourceCommitSha:"a".repeat(40),
+      manifestSha256:"b".repeat(64),verifiedArtifactCount:5,
+      runId,operationId:"11111111-2222-4333-8444-555555555557",
+    }));
+    const result=await h.channel().fetch(new Request(
+      "https://worker.internal"+ORACLE_CANDIDATE_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({method:"read_candidate",arguments:{
+          tag:"v1.1.0-beta.90",commitSha:"a".repeat(40),runId,operationId,
+        }}),
+      }));
+    expect(result.status).toBe(502);
+  });
+});
 
 describe("isolated authenticated source provider DO",()=>{
   it("does not accept the read/control tokens or origins",async()=>{

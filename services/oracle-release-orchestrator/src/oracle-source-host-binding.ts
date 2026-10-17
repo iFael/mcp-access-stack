@@ -3,6 +3,7 @@ import {readCredentialFromEnvironment} from "./oracle-channel-connector.js";
 import {composeReleaseCapabilities, type ReleaseCapabilityComposition, type ReleaseCapabilityRegistry} from "./release-capability-registry.js";
 import type {ReleaseRunSnapshot} from "./types.js";
 import {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
+import {resolveOracleRemoteCandidatePort} from "./oracle-candidate-host-binding.js";
 import {resolveOracleRemoteWorkflowPort} from "./oracle-workflow-host-binding.js";
 
 /** Opt-in host-owned read capability. Never part of the Oracle GET-only API.
@@ -41,6 +42,7 @@ export function resolveOracleRemoteSourceReadPort(
 export interface OracleHostReleaseBindings
   extends Omit<ReleaseCapabilityComposition,"sourceControl"|"other"> {
   readonly authorizeRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  readonly authorizeCandidateRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   /** Independently authorizes real GitHub asset reads, not workflow dispatch. */
   readonly authorizeAssetVerification?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   readonly authorizeWorkflow?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
@@ -56,6 +58,11 @@ export function composeOracleHostReleaseCapabilities(
     throw new Error("ORACLE_SOURCE_HOST_AUTH_REQUIRED");
   }
   const workflow=resolveOracleRemoteWorkflowPort(environment);
+  const candidate=resolveOracleRemoteCandidatePort(environment);
+  if(candidate && typeof bindings.authorizeCandidateRead!=="function")
+    throw new Error("ORACLE_CANDIDATE_HOST_AUTH_REQUIRED");
+  if(candidate && (bindings.oracleCandidate || bindings.remoteCandidate))
+    throw new Error("ORACLE_CANDIDATE_DUPLICATE_HOST");
   if(workflow && typeof bindings.authorizeWorkflow!=="function") {
     throw new Error("ORACLE_WORKFLOW_HOST_AUTH_REQUIRED");
   }
@@ -85,7 +92,10 @@ export function composeOracleHostReleaseCapabilities(
       authorized:bindings.authorizeWorkflow!}} :
       bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
     ...(bindings.verifications ? {verifications:bindings.verifications} : {}),
-    ...(bindings.oracleCandidate ? {oracleCandidate:bindings.oracleCandidate} : {}),
+    ...(candidate ? {remoteCandidate:{port:candidate,
+      authorize:bindings.authorizeCandidateRead!}} :
+      bindings.remoteCandidate ? {remoteCandidate:bindings.remoteCandidate} :
+      bindings.oracleCandidate ? {oracleCandidate:bindings.oracleCandidate} : {}),
     ...(bindings.edgeHealth ? {edgeHealth:bindings.edgeHealth} : {}),
     ...(bindings.pointerReconciliation ? {pointerReconciliation:bindings.pointerReconciliation} : {}),
     ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),

@@ -15,7 +15,7 @@ function harness(fake:Partial<LocalAgent>|null){
 }
 describe("Oracle candidate read port follows exact host policy generation",()=>{
   it("never exposes candidate bytes or caller-chosen workspace/scope",async()=>{
-    const inspect=jest.fn(async()=>receipt);
+    const inspect=jest.fn(async(_input:unknown,_context:unknown)=>receipt);
     const {reloadable}=harness({oracleInspectCandidate:inspect} as Partial<LocalAgent>);
     expect(await reloadable.oracleCandidateReadPort(host).readCandidate(tag,sha))
       .toEqual(receipt);
@@ -29,7 +29,7 @@ describe("Oracle candidate read port follows exact host policy generation",()=>{
     await expect(port.readCandidate(tag,sha)).rejects.toThrow("offline");
     let finish!: (value:typeof receipt)=>void;
     const pending=new Promise<typeof receipt>(resolve=>{finish=resolve;});
-    const inspect=jest.fn(async()=>pending);
+    const inspect=jest.fn(async(_input:unknown,_context:unknown)=>pending);
     state.currentAgent={oracleInspectCandidate:inspect} as unknown as LocalAgent;
     const result=port.readCandidate(tag,sha);
     await Promise.resolve();
@@ -39,7 +39,7 @@ describe("Oracle candidate read port follows exact host policy generation",()=>{
     expect(inspect).toHaveBeenCalledTimes(1);
   });
   it("fails closed when a receipt is forged or the caller input is malformed",async()=>{
-    const inspect=jest.fn(async()=>({...receipt,manifestSha256:"invalid"}));
+    const inspect=jest.fn(async(_input:unknown,_context:unknown)=>({...receipt,manifestSha256:"invalid"}));
     const {reloadable}=harness({oracleInspectCandidate:inspect} as Partial<LocalAgent>);
     const port=reloadable.oracleCandidateReadPort(host);
     await expect(port.readCandidate(tag,sha)).rejects.toThrow("RECEIPT_INVALID");

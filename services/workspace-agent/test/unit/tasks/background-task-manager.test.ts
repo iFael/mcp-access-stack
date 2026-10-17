@@ -447,6 +447,8 @@ describe("BackgroundTaskManager", () => {
     const manager = new BackgroundTaskManager({
       stateDirectory,
       runner: new ControlledRunner(),
+      // This test checks legacy owner scoping, not the 30-day retention policy.
+      now:()=>new Date("2026-09-18T20:00:00.000Z"),
     });
     expect(await manager.get_background_task(id)).toMatchObject({
       id,

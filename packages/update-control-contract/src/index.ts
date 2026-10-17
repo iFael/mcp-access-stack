@@ -4,6 +4,9 @@ export type { OracleControlAdvanceInput, OracleControlPrincipal, OracleControlRp
 export {ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_DISPATCH_PATH,ORACLE_SOURCE_SCOPE,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_MAX_BODY_BYTES,ORACLE_SOURCE_MAX_RESULT_BYTES,ORACLE_SOURCE_TIMEOUT_MS,parseOracleSourceCommand,parseOracleSourceResult,oracleSourceCanonicalBytes,signOracleSourceRequest} from "./oracle-source-read.js";
 export type {OracleSourceReadCommand,OracleSourceReadChecks} from "./oracle-source-read.js";
 
+export {ORACLE_CANDIDATE_CONNECT_PATH,ORACLE_CANDIDATE_RPC_PATH,ORACLE_CANDIDATE_DISPATCH_PATH,ORACLE_CANDIDATE_SCOPE,ORACLE_CANDIDATE_ORIGIN,ORACLE_CANDIDATE_MAX_BODY_BYTES,ORACLE_CANDIDATE_MAX_RESULT_BYTES,ORACLE_CANDIDATE_TIMEOUT_MS,parseOracleCandidateCommand,parseOracleCandidateReceipt,oracleCandidateCanonicalBytes,signOracleCandidateRequest} from "./oracle-candidate-read.js";
+export type {OracleCandidateReadCommand,OracleCandidateReadReceipt} from "./oracle-candidate-read.js";
+
 export {ORACLE_WORKFLOW_DISPATCH_PATH,ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_SCOPE,ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_MAX_BODY_BYTES,ORACLE_WORKFLOW_MAX_RESULT_BYTES,ORACLE_WORKFLOW_TIMEOUT_MS,parseOracleWorkflowCommand,parseOracleWorkflowResult,oracleWorkflowCanonicalBytes,signOracleWorkflowRequest} from "./oracle-workflow.js";
 export type {OracleWorkflowCommand,OracleWorkflowObservation,OracleDistributionInspection} from "./oracle-workflow.js";
 
