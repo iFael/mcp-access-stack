@@ -28,6 +28,7 @@ export interface ReleaseCleanupBinding {
 }
 
 const SHA = /^[a-f0-9]{64}$/u;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const MAX_BATCHES = 20;
 type PruneReceipt = Awaited<ReturnType<TypedReleasePrunePort["pruneReleases"]>>;
 function batchOperationId(original: string, index: number): string {
@@ -55,21 +56,31 @@ function receiptEvidence(receipts: readonly PruneReceipt[]): EvidenceInput {
  */
 export function bindReleasePruneCleanup(options: ReleaseCleanupBinding): ReleaseStepCapability {
   if (!options.workspaceId.trim()) throw new Error("RELEASE_CLEANUP_WORKSPACE_INVALID");
+  const authorized = async (run:ReleaseRunSnapshot,reconcile=false):Promise<boolean> =>
+    (run.status === "running" || (reconcile && run.status === "paused_outcome_unknown")) &&
+    run.steps.filter(step => step.action !== "cleanup_known_temporary_residue")
+      .every(step => step.status === "succeeded") &&
+    run.gates.length > 0 && run.gates.every(gate => gate.status === "passed") &&
+    await options.authorized(run);
+  const bound = (intent:StepIntent,run:ReleaseRunSnapshot):boolean =>
+    intent.action === "cleanup_known_temporary_residue" &&
+    intent.executionClass === "external_effect" && intent.runId === run.runId &&
+    UUID.test(intent.operationId) &&
+    run.steps.some(step =>
+      step.action === intent.action && step.stepId === intent.stepId &&
+      step.operationId === intent.operationId &&
+      (step.status === "in_progress" || step.status === "outcome_unknown"));
   return {
     action: "cleanup_known_temporary_residue", executionClass: "external_effect",
-    authorize: async (_step, run) =>
-      run.status === "running" &&
-      run.steps.filter(step => step.action !== "cleanup_known_temporary_residue")
-        .every(step => step.status === "succeeded") &&
-      run.gates.length > 0 && run.gates.every(gate => gate.status === "passed") &&
-      await options.authorized(run),
+    authorize: async (_step, run) => authorized(run),
     execute: async (intent: StepIntent, run) => {
-      if (intent.action !== "cleanup_known_temporary_residue" ||
-          run.status !== "running" || !await options.authorized(run)) {
+      if (!bound(intent,run) || !await authorized(run)) {
         return {state:"outcome_unknown"};
       }
       const receipts: PruneReceipt[] = [];
       for (let index = 0; index < MAX_BATCHES; index++) {
+        // Host permission can be revoked between independently destructive batches.
+        if (!await authorized(run)) return {state:"outcome_unknown"};
         const operationId = batchOperationId(intent.operationId, index);
         const preview = await options.prune.pruneReleases({
           workspaceId:options.workspaceId, operationId, dryRun:true,selection:"eligible",
@@ -79,6 +90,8 @@ export function bindReleasePruneCleanup(options: ReleaseCleanupBinding): Release
             preview.items.length > 5 || preview.items.some(item => item.status !== "eligible")) {
           return {state:"outcome_unknown"};
         }
+        // Re-check after the preview: revocation must prevent a DELETE.
+        if (!await authorized(run)) return {state:"outcome_unknown"};
         const done = await options.prune.pruneReleases({
           workspaceId:options.workspaceId,operationId,
           dryRun:false,selection:"eligible",expectedStateSha256:preview.stateSha256,
@@ -96,8 +109,8 @@ export function bindReleasePruneCleanup(options: ReleaseCleanupBinding): Release
       }
       return {state:"outcome_unknown"};
     },
-    reconcile: async intent => {
-      if (intent.action !== "cleanup_known_temporary_residue") return {outcome:"still_unknown"};
+    reconcile: async (intent,run) => {
+      if (!bound(intent,run) || !await authorized(run,true)) return {outcome:"still_unknown"};
       const receipts: PruneReceipt[] = [];
       for (let index = 0; index < MAX_BATCHES; index++) {
         const operationId = batchOperationId(intent.operationId, index);

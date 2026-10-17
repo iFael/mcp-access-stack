@@ -21,6 +21,16 @@ export type { ReleaseSourceControlReadPort, ReleaseSourceControlReadBinding } fr
 export type { TypedReleasePrunePort, ReleaseCleanupBinding } from "./release-prune-capability.js";
 export type { TypedTagBootstrapPort, ReleaseTagBootstrapBinding } from "./release-tag-bootstrap-capability.js";
 export type { TypedReleaseVerificationPort, ReleaseVerificationBinding, ReleaseVerificationReceipt } from "./release-verification-capabilities.js";
+export {bindCatalogSmoke} from "./release-catalog-smoke-capability.js";
+export type {CatalogSmokeBinding,CatalogListReceipt} from "./release-catalog-smoke-capability.js";
+export {bindReleasePointerReconciliation} from "./release-pointer-reconciliation-capability.js";
+export type {ReleasePointerReconciliationBinding,ExecutionNodePointerState} from "./release-pointer-reconciliation-capability.js";
+export {bindEdgeHealth} from "./release-edge-health-capability.js";
+export type {EdgeHealthBinding} from "./release-edge-health-capability.js";
+export {bindOracleLocalCandidate} from "./oracle-local-candidate-capability.js";
+export type {OracleLocalCandidateBinding} from "./oracle-local-candidate-capability.js";
+export {bindReleaseAssetsVerification} from "./release-assets-verification-capability.js";
+export type {ReleaseAssetVerificationBinding} from "./release-assets-verification-capability.js";
 export type { TypedReleaseEffectPort, ReleaseEffectBinding, ReleaseEffectRequest, ReleaseEffectReceipt } from "./release-effect-capabilities.js";
 export type { TypedPublicDistributionPort, PublicDistributionBinding, PublicDistributionProof } from "./release-public-distribution-capability.js";
 export type { ReleaseStepCapability, ReleaseStepObservation, ReleaseReconciliation, ReleaseExecutionResult, ReleasePollingOptions, ReleasePollingResult } from "./release-workflow-executor.js";

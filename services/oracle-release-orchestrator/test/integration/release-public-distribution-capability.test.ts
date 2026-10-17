@@ -48,7 +48,7 @@ describe("Oracle ledger public signing linked to original bootstrap operation",(
         inspectDistribution:async(runId:number):Promise<PublicDistributionProof>=>({
           workflowRunId:runId,sourceCommitSha:sha,releaseTag:tag,
           integrityVerified,releasePublished,
-          manifestSha256:"b".repeat(64),assetDigestSha256:"c".repeat(64),
+          assetInventorySha256:"c".repeat(64),verifiedAssetCount:5,
         }),
       },
     };

@@ -7,6 +7,11 @@ import { bindReleaseVerificationReads, type ReleaseVerificationBinding } from ".
 import { bindReleaseEffects, type ReleaseEffectBinding } from "./release-effect-capabilities.js";
 import { bindReleasePublicDistribution, type PublicDistributionBinding } from "./release-public-distribution-capability.js";
 import { bindReleaseSourceControlReads, type ReleaseSourceControlReadBinding } from "./release-source-control-read-capabilities.js";
+import {bindReleaseAssetsVerification,type ReleaseAssetVerificationBinding} from "./release-assets-verification-capability.js";
+import {bindOracleLocalCandidate,type OracleLocalCandidateBinding} from "./oracle-local-candidate-capability.js";
+import {bindEdgeHealth,type EdgeHealthBinding} from "./release-edge-health-capability.js";
+import {bindReleasePointerReconciliation,type ReleasePointerReconciliationBinding} from "./release-pointer-reconciliation-capability.js";
+import {bindCatalogSmoke,type CatalogSmokeBinding} from "./release-catalog-smoke-capability.js";
 import type { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 
 /**
@@ -21,6 +26,11 @@ export interface ReleaseCapabilityComposition {
   readonly verifications?: ReleaseVerificationBinding;
   readonly effects?: ReleaseEffectBinding;
   readonly publicDistribution?: PublicDistributionBinding;
+  readonly assetVerification?: ReleaseAssetVerificationBinding;
+  readonly oracleCandidate?: OracleLocalCandidateBinding;
+  readonly edgeHealth?: EdgeHealthBinding;
+  readonly pointerReconciliation?: ReleasePointerReconciliationBinding;
+  readonly catalogSmoke?: CatalogSmokeBinding;
   readonly other?: readonly ReleaseStepCapability[];
 }
 
@@ -52,6 +62,11 @@ export function composeReleaseCapabilities(input: ReleaseCapabilityComposition):
     }
   }
   if (input.cleanup) install(bindReleasePruneCleanup(input.cleanup));
+  if (input.assetVerification) install(bindReleaseAssetsVerification(input.assetVerification));
+  if (input.oracleCandidate) install(bindOracleLocalCandidate(input.oracleCandidate));
+  if (input.edgeHealth) install(bindEdgeHealth(input.edgeHealth));
+  if (input.pointerReconciliation) install(bindReleasePointerReconciliation(input.pointerReconciliation));
+  if (input.catalogSmoke) install(bindCatalogSmoke(input.catalogSmoke));
   if (input.tagBootstrap) install(bindReleaseTagBootstrap(input.tagBootstrap));
   if (input.verifications) for (const binding of bindReleaseVerificationReads(input.verifications).values()) install(binding);
   if (input.effects) for (const binding of bindReleaseEffects(input.effects).values()) install(binding);

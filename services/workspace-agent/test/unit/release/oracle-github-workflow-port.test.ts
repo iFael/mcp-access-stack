@@ -18,11 +18,11 @@ describe("host-owned typed Oracle GitHub workflow adapter",()=>{
     const verify=jest.fn(async(_repo:{workspaceId:string;owner:string;repository:string},
       _tag:string,_sha:string,_context:{ownerScope:string})=>true);
     const host={githubWorkflowOperation:operation,
-      releaseVerifyGitHubLightweightTag:verify} as unknown as Pick<LocalAgent,
-      "githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag">;
+      releaseVerifyGitHubLightweightTag:verify,releaseInspectGitHubPublicDistribution:async(_repo:unknown,runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true,releasePublished:true,verifiedAssetCount:5,assetInventorySha256:"c".repeat(64)})} as unknown as Pick<LocalAgent,
+      "githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag"|"releaseInspectGitHubPublicDistribution">;
     let authorized=true;
     const policy={authorizeWorkflow:jest.fn(async()=>authorized),
-      authorizeTagRead:jest.fn(async()=>authorized)};
+      authorizeTagRead:jest.fn(async()=>authorized),authorizeDistribution:jest.fn(async()=>authorized)};
     return {port:createOracleReleaseGitHubWorkflowPort(host,config,policy),operation,verify,
       setAuthorized:(value:boolean)=>{authorized=value;},policy,host};
   }
@@ -38,6 +38,7 @@ describe("host-owned typed Oracle GitHub workflow adapter",()=>{
     await f.port.workflowOperation(publish);
     expect(f.operation).toHaveBeenCalledWith(publish,{ownerScope:config.ownerScope});
     expect(await f.port.verifyLightweightTag(base.tag,sha)).toBe(true);
+    expect(await f.port.inspectDistribution(123,base.tag,sha)).toMatchObject({assetInventorySha256:"c".repeat(64)});
     expect(f.verify).toHaveBeenCalledWith({
       workspaceId:config.workspaceId,owner:config.owner,repository:config.repository,
     },base.tag,sha,{ownerScope:config.ownerScope});
@@ -64,6 +65,7 @@ describe("host-owned typed Oracle GitHub workflow adapter",()=>{
     const op={...base,workflow:"release-tag-bootstrap.yml" as const,mode:"dispatch" as const};
     await expect(f.port.workflowOperation(op)).rejects.toThrow("NOT_AUTHORIZED");
     await expect(f.port.verifyLightweightTag(base.tag,sha)).rejects.toThrow("NOT_AUTHORIZED");
+    await expect(f.port.inspectDistribution(123,base.tag,sha)).rejects.toThrow("NOT_AUTHORIZED");
     expect(f.operation).not.toHaveBeenCalled();
     expect(f.verify).not.toHaveBeenCalled();
     f.setAuthorized(true);
@@ -83,8 +85,8 @@ describe("host-owned typed Oracle GitHub workflow adapter",()=>{
     await expect(f.port.workflowOperation({...base,workflow:"release-tag-bootstrap.yml",
       mode:"reconcile"})).rejects.toThrow("MISMATCH");
     const host={githubWorkflowOperation:f.operation,
-      releaseVerifyGitHubLightweightTag:f.verify} as unknown as Pick<LocalAgent,
-      "githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag">;
+      releaseVerifyGitHubLightweightTag:f.verify,releaseInspectGitHubPublicDistribution:async()=>({})} as unknown as Pick<LocalAgent,
+      "githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag"|"releaseInspectGitHubPublicDistribution">;
     expect(()=>createOracleReleaseGitHubWorkflowPort(host,{...config,ownerScope:"\nspoofed"},
       f.policy)).toThrow();
   });

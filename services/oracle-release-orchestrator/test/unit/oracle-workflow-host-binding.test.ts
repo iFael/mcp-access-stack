@@ -39,11 +39,12 @@ describe("trusted Oracle workflow HMAC host binding",()=>{
     expect(port).toBeDefined();
     const registry=composeOracleHostReleaseCapabilities(env,{
       authorizeWorkflow:async()=>true,
+      authorizePublicDistribution:async()=>true,
     });
     expect(registry.ready).toBe(false);
-    expect([...registry.capabilities.keys()]).toEqual(["publish_release_tag"]);
-    expect(registry.missingActions).toContain("publish_signed_release");
-    expect(registry.missingActions).toContain("build_and_sign_release");
+    expect([...registry.capabilities.keys()]).toEqual(["publish_release_tag","build_and_sign_release","publish_signed_release"]);
+    expect(registry.missingActions).toContain("deploy_edge");
+    expect(registry.missingActions).not.toContain("build_and_sign_release");
     expect(()=>registry.createExecutor(null as never)).toThrow("RELEASE_CAPABILITY_INCOMPLETE");
     expect(()=>composeOracleHostReleaseCapabilities(env,{})).toThrow(
       "ORACLE_WORKFLOW_HOST_AUTH_REQUIRED");
@@ -60,11 +61,21 @@ describe("trusted Oracle workflow HMAC host binding",()=>{
     const registry=composeOracleHostReleaseCapabilities(joined,{
       authorizeRead:async()=>false,
       authorizeWorkflow:async()=>canDispatch,
+      authorizePublicDistribution:async()=>canDispatch,
     });
     expect([...registry.capabilities.keys()]).toEqual([
       "resolve_main_commit","verify_canonical_ci","publish_release_tag",
+      "build_and_sign_release","publish_signed_release",
     ]);
     expect(registry.ready).toBe(false);
+    const completeReads=composeOracleHostReleaseCapabilities(joined,{
+      authorizeRead:async()=>true,
+      authorizeWorkflow:async()=>true,
+      authorizePublicDistribution:async()=>true,
+      authorizeAssetVerification:async()=>true,
+    });
+    expect(completeReads.capabilities.has("verify_release_assets")).toBe(true);
+    expect(completeReads.missingActions).not.toContain("verify_release_assets");
     const bootstrap=registry.capabilities.get("publish_release_tag")!;
     const run={status:"running",sourceCommitSha:"a".repeat(40),
       targetRelease:"v1.1.0-beta.90"} as never;

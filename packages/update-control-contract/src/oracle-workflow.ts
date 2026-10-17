@@ -32,11 +32,25 @@ export type OracleWorkflowCommand=
  }}
  | {readonly method:"verify_lightweight_tag";readonly arguments:{
     readonly tag:string;readonly commitSha:string;
+ }}
+ | {readonly method:"inspect_distribution";readonly arguments:{
+    readonly runId:number;readonly tag:string;readonly commitSha:string;
  }};
 export type OracleWorkflowObservation=
  | {readonly status:"submitted"|"outcome_unknown";readonly operationId:string}
  | {readonly status:"observed";readonly operationId:string;readonly runId:number;
     readonly state:"queued"|"in_progress"|"completed";readonly conclusion:string|null};
+
+/** Bounded, independently inspected GitHub release inventory; NOT a package signature. */
+export interface OracleDistributionInspection {
+  readonly sourceCommitSha:string;
+  readonly releaseTag:string;
+  readonly workflowRunId:number;
+  readonly integrityVerified:true;
+  readonly releasePublished:true;
+  readonly verifiedAssetCount:number;
+  readonly assetInventorySha256:string;
+}
 
 export function parseOracleWorkflowCommand(value:unknown):OracleWorkflowCommand {
   if(!record(value) || !keys(value,["method","arguments"]) || !record(value.arguments))
@@ -45,6 +59,13 @@ export function parseOracleWorkflowCommand(value:unknown):OracleWorkflowCommand 
   if(value.method==="verify_lightweight_tag" && keys(a,["tag","commitSha"]) &&
     validTag(a.tag) && typeof a.commitSha==="string" && SHA.test(a.commitSha)){
     return {method:"verify_lightweight_tag",arguments:{tag:a.tag,commitSha:a.commitSha}};
+  }
+  if(value.method==="inspect_distribution" &&
+    keys(a,["runId","tag","commitSha"]) &&
+    Number.isSafeInteger(a.runId) && (a.runId as number)>0 &&
+    validTag(a.tag) && typeof a.commitSha==="string" && SHA.test(a.commitSha)){
+    return {method:"inspect_distribution",arguments:{
+      runId:a.runId as number,tag:a.tag,commitSha:a.commitSha}};
   }
   if(value.method==="workflow_operation" &&
     (keys(a,["workflow","mode","tag","expectedMainSha","operationId"]) ||
@@ -67,7 +88,21 @@ export function parseOracleWorkflowCommand(value:unknown):OracleWorkflowCommand 
 }
 
 export function parseOracleWorkflowResult(method:OracleWorkflowCommand["method"],value:unknown):
-  OracleWorkflowObservation|boolean {
+  OracleWorkflowObservation|boolean|OracleDistributionInspection {
+  if(method==="inspect_distribution"){
+    if(!record(value) || !keys(value,["sourceCommitSha","releaseTag","workflowRunId",
+      "integrityVerified","releasePublished","verifiedAssetCount","assetInventorySha256"]) ||
+      typeof value.sourceCommitSha!=="string" || !SHA.test(value.sourceCommitSha) ||
+      !validTag(value.releaseTag) || !Number.isSafeInteger(value.workflowRunId) ||
+      (value.workflowRunId as number)<1 ||
+      value.integrityVerified!==true || value.releasePublished!==true ||
+      value.verifiedAssetCount!==5 ||
+      typeof value.assetInventorySha256!=="string" || !DIGEST.test(value.assetInventorySha256))
+      throw new Error("ORACLE_WORKFLOW_DISTRIBUTION_PROOF_INVALID");
+    return {sourceCommitSha:value.sourceCommitSha,releaseTag:value.releaseTag,
+      workflowRunId:value.workflowRunId as number,integrityVerified:true,
+      releasePublished:true,verifiedAssetCount:5,assetInventorySha256:value.assetInventorySha256};
+  }
   if(method==="verify_lightweight_tag"){
     if(typeof value!=="boolean")throw new Error("ORACLE_WORKFLOW_RESULT_INVALID");
     return value;

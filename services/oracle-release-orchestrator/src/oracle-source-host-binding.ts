@@ -41,7 +41,11 @@ export function resolveOracleRemoteSourceReadPort(
 export interface OracleHostReleaseBindings
   extends Omit<ReleaseCapabilityComposition,"sourceControl"|"other"> {
   readonly authorizeRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  /** Independently authorizes real GitHub asset reads, not workflow dispatch. */
+  readonly authorizeAssetVerification?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   readonly authorizeWorkflow?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  /** Separate host release policy, re-evaluated per signing/publication step. */
+  readonly authorizePublicDistribution?: (action:"build_and_sign_release"|"publish_signed_release",run:ReleaseRunSnapshot)=>Promise<boolean>;
 }
 export function composeOracleHostReleaseCapabilities(
   environment:Readonly<Record<string,string|undefined>>,
@@ -55,18 +59,40 @@ export function composeOracleHostReleaseCapabilities(
   if(workflow && typeof bindings.authorizeWorkflow!=="function") {
     throw new Error("ORACLE_WORKFLOW_HOST_AUTH_REQUIRED");
   }
+  if(workflow && typeof bindings.authorizePublicDistribution!=="function") {
+    throw new Error("ORACLE_DISTRIBUTION_HOST_AUTH_REQUIRED");
+  }
+  if(bindings.authorizeAssetVerification && (!source || !workflow))
+    throw new Error("ORACLE_ASSET_PROOF_HOST_INCOMPLETE");
+  if(workflow && bindings.assetVerification)
+    throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_ASSET_PROOF");
+  if(workflow && bindings.publicDistribution) {
+    throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_DISTRIBUTION");
+  }
   if(workflow && bindings.tagBootstrap) {
     throw new Error("ORACLE_WORKFLOW_HOST_DUPLICATE_BOOTSTRAP");
   }
   return composeReleaseCapabilities({
     ...(source ? {sourceControl:{port:source,authorizeRead:bindings.authorizeRead!}} : {}),
     ...(bindings.cleanup ? {cleanup:bindings.cleanup} : {}),
+    ...(source && workflow && bindings.authorizeAssetVerification ?
+      {assetVerification:{workspaceId:workflow.workspaceId,
+        owner:workflow.owner,repository:workflow.repository,
+        workflow,source,authorize:bindings.authorizeAssetVerification}} :
+      bindings.assetVerification ? {assetVerification:bindings.assetVerification} : {}),
     ...(workflow ? {tagBootstrap:{workspaceId:workflow.workspaceId,
       owner:workflow.owner,repository:workflow.repository,port:workflow,
       authorized:bindings.authorizeWorkflow!}} :
       bindings.tagBootstrap ? {tagBootstrap:bindings.tagBootstrap} : {}),
     ...(bindings.verifications ? {verifications:bindings.verifications} : {}),
+    ...(bindings.oracleCandidate ? {oracleCandidate:bindings.oracleCandidate} : {}),
+    ...(bindings.edgeHealth ? {edgeHealth:bindings.edgeHealth} : {}),
+    ...(bindings.pointerReconciliation ? {pointerReconciliation:bindings.pointerReconciliation} : {}),
+    ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),
-    ...(bindings.publicDistribution ? {publicDistribution:bindings.publicDistribution} : {}),
+    ...(workflow && bindings.authorizeWorkflow ? {publicDistribution:{
+      workspaceId:workflow.workspaceId,owner:workflow.owner,repository:workflow.repository,
+      port:workflow,authorized:async(action,run)=>bindings.authorizePublicDistribution!(action,run),
+    }} : bindings.publicDistribution ? {publicDistribution:bindings.publicDistribution} : {}),
   });
 }

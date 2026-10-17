@@ -1,3 +1,4 @@
+import type {OracleWorkflowProviderPort} from "../edge/oracle-workflow-provider.js";
 import {
   AppError,
   TypedConfirmationRegistry,
@@ -78,7 +79,7 @@ export class ReloadableLocalAgent {
    * generation. If reload races an in-flight dispatch, the result is
    * outcome_unknown; never issue the request again under a new generation. */
   oracleWorkflowPort(config:OracleReleaseGitHubReadConfig,
-    policy:OracleReleaseGitHubWorkflowPolicy) {
+    policy:OracleReleaseGitHubWorkflowPolicy):OracleWorkflowProviderPort {
     const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
       const active=this.currentAgent,epoch=this.generation;
       if(!active)throw new AppError("WORKSPACE_NOT_FOUND","Oracle workflow host offline.");
@@ -93,9 +94,12 @@ export class ReloadableLocalAgent {
         agent.githubWorkflowOperation(input,context)),
       releaseVerifyGitHubLightweightTag:(input,tag,sha,context)=>checked(agent=>
         agent.releaseVerifyGitHubLightweightTag(input,tag,sha,context)),
+      releaseInspectGitHubPublicDistribution:(input,runId,tag,sha,context)=>checked(agent=>
+        agent.releaseInspectGitHubPublicDistribution(input,runId,tag,sha,context)),
     },config,{
       authorizeWorkflow:input=>checked(async()=>policy.authorizeWorkflow(input)),
       authorizeTagRead:(tag,sha)=>checked(async()=>policy.authorizeTagRead(tag,sha)),
+      authorizeDistribution:(runId,tag,sha)=>checked(async()=>policy.authorizeDistribution(runId,tag,sha)),
     });
     // A workflow frame can never select the GitHub account, repository, scope
     // or workspace: these exist only in the trusted host enrollment.
@@ -106,6 +110,7 @@ export class ReloadableLocalAgent {
           repository:config.repository,
         }),
       verifyLightweightTag:(tag:string,sha:string)=>pinned.verifyLightweightTag(tag,sha),
+      inspectDistribution:(runId:number,tag:string,sha:string)=>pinned.inspectDistribution(runId,tag,sha),
     };
   }
 
