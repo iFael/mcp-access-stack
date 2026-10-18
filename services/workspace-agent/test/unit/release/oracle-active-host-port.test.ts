@@ -56,6 +56,21 @@ describe("private audited active-artifact host port",()=>{
       oracleInspectActive:inspect,
     } as unknown as ActiveHost,config)).toThrow("ORACLE_ACTIVE_HOST_INVALID");
   });
+  it("projects native pointer metadata to an exact, non-sensitive wire state",async()=>{
+    const host={oracleInspectActive:async()=>({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:2,
+    }),oracleInspectActiveState:async()=>({state:{
+      ...pointers,
+      active:{...pointers.active,materializedAt:"2026-10-17T00:00:00Z",
+        privatePath:"/private/release"},
+      previous:{...pointers.previous,materializedAt:"2026-10-16T00:00:00Z"},
+    }})} as unknown as ActiveHost;
+    const wire=await createOracleActiveReadPort(host,config).getState();
+    expect(wire).toEqual({active:pointers.active,previous:pointers.previous,candidate:null});
+    expect(JSON.stringify(wire)).not.toContain("private");
+    expect(JSON.stringify(wire)).not.toContain("materializedAt");
+  });
   it("does not accept the generic lifecycle reader in place of active policy",()=>{
     const host={oracleInspectActive:async()=>({
       releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,

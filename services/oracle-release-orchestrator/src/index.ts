@@ -8,6 +8,8 @@ export { bindReleasePublicDistribution } from "./release-public-distribution-cap
 export { bindReleaseSourceControlReads } from "./release-source-control-read-capabilities.js";
 export {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
 export {OracleRemoteCandidateReadPort} from "./oracle-remote-candidate-read-port.js";
+export {OracleRemoteActiveReadPort} from "./oracle-remote-active-read-port.js";
+export {resolveOracleRemoteActivePort} from "./oracle-active-host-binding.js";
 export {resolveOracleRemoteCandidatePort} from "./oracle-candidate-host-binding.js";
 export {bindReleaseRemoteCandidate} from "./release-remote-candidate-capability.js";
 export type {ReleaseRemoteCandidateBinding} from "./release-remote-candidate-capability.js";

@@ -48,8 +48,13 @@ export function createOracleActiveReadPort(
       if(state?.version!==1 || !validSlot(state.active) ||
         !validSlot(state.previous) || !validSlot(state.candidate))
         throw new Error("ORACLE_ACTIVE_STATE_INVALID");
-      return {active:state.active,previous:state.previous,
-        candidate:state.candidate};
+      // Never leak materialization timestamps or any new native slot fields
+      // into the signed cross-node receipt; keep the wire schema exact.
+      const project=(slot:typeof state.active)=>slot===null?null:{
+        releaseId:slot.releaseId,manifestSha256:slot.manifestSha256,
+      };
+      return {active:project(state.active),previous:project(state.previous),
+        candidate:project(state.candidate)};
     },
   };
 }
