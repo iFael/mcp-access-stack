@@ -409,6 +409,121 @@ try {
     }
     catch { $legacyTamperRejected = $_.Exception.Message -like '*hash*' }
     if (-not $legacyTamperRejected) { throw 'Legacy compatibility accepted altered release bytes.' }
+
+    # The new operation identity is accepted only DURING the original staging
+    # transaction. A legacy candidate cannot be assigned an arbitrary later ID.
+    $runId = '11111111-2222-4333-8444-555555555550'
+    $operationId = '11111111-2222-4333-8444-555555555551'
+    $wrongOperationId = '11111111-2222-4333-8444-555555555552'
+    $rebindRejected = $false
+    try {
+        & $stager -DistributionRoot $distribution -InstallationRoot $installation `
+            -Execute -AllowUnsignedDevelopment -RunId $runId `
+            -PrepareOperationId $operationId | Out-Null
+    }
+    catch { $rebindRejected = $_.Exception.Message -like '*pre-existing candidate*' }
+    if (-not $rebindRejected) {
+        throw 'Legacy staging candidate was incorrectly rebound to a new prepareOperationId.'
+    }
+
+    $trackedDist = Join-Path $testRoot 'tracked-distribution'
+    $trackedInstall = Join-Path $testRoot 'tracked-install'
+    $trackedId = '1.2.8-tracked'
+    New-TestDistribution -Root $trackedDist -ReleaseId $trackedId -Commit ('f' * 40)
+    $firstTracked = & $stager -DistributionRoot $trackedDist `
+        -InstallationRoot $trackedInstall -ExpectedReleaseId $trackedId `
+        -RunId $runId -PrepareOperationId $operationId `
+        -Execute -AllowUnsignedDevelopment | ConvertFrom-Json
+    if ($firstTracked.alreadyPrepared -ne $false -or
+        $firstTracked.localPrepareObserved -ne $true) {
+        throw 'Tracked Windows staging did not persist its exact operation identity.'
+    }
+    $journalPath = Join-Path $trackedInstall 'state\candidate-prepare-witness.v1.json'
+    $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+    if ($journal.kind -ne 'local_candidate_prepare' -or
+        $journal.runId -ne $runId -or
+        $journal.prepareOperationId -ne $operationId -or
+        $journal.releaseId -ne $trackedId) {
+        throw 'Persisted Windows prepare witness mismatches the original request.'
+    }
+    $trackedRead = & $reader -InstallationRoot $trackedInstall -Mode Candidate `
+        -ExpectedTag ("v" + $trackedId) -ExpectedCommit ('f' * 40) `
+        -ExpectedRunId $runId -ExpectedPrepareOperationId $operationId |
+        ConvertFrom-Json
+    if ($trackedRead.scope -ne 'local_hash_integrity_only' -or
+        $trackedRead.localPrepareWitness.prepareOperationId -ne $operationId) {
+        throw 'Windows candidate read did not preserve local operation correlation.'
+    }
+    $journalHash = (Get-FileHash -LiteralPath $journalPath -Algorithm SHA256).Hash
+    $replayed = & $stager -DistributionRoot $trackedDist `
+        -InstallationRoot $trackedInstall -RunId $runId `
+        -PrepareOperationId $operationId -Execute -AllowUnsignedDevelopment |
+        ConvertFrom-Json
+    if ($replayed.alreadyPrepared -ne $true -or
+        $replayed.localPrepareObserved -ne $true -or
+        (Get-FileHash -LiteralPath $journalPath -Algorithm SHA256).Hash -ne $journalHash) {
+        throw 'Idempotent Windows prepare replay changed the durable identity.'
+    }
+    $conflictRejected = $false
+    try {
+        & $stager -DistributionRoot $trackedDist -InstallationRoot $trackedInstall `
+            -RunId $runId -PrepareOperationId $wrongOperationId `
+            -Execute -AllowUnsignedDevelopment | Out-Null
+    }
+    catch { $conflictRejected = $_.Exception.Message -like '*identity conflict*' }
+    if (-not $conflictRejected) {
+        throw 'Conflicting prepareOperationId was accepted for the existing candidate.'
+    }
+    $partialIdentityRejected = $false
+    try {
+        & $stager -DistributionRoot $trackedDist -InstallationRoot $trackedInstall `
+            -RunId $runId -Execute -AllowUnsignedDevelopment | Out-Null
+    }
+    catch { $partialIdentityRejected = $_.Exception.Message -like '*must be supplied together*' }
+    if (-not $partialIdentityRejected) {
+        throw 'A partial Windows operation correlation was accepted.'
+    }
+    $wrongRunRejected = $false
+    try {
+        & $reader -InstallationRoot $trackedInstall -Mode Candidate `
+            -ExpectedTag ("v" + $trackedId) -ExpectedCommit ('f' * 40) `
+            -ExpectedRunId $wrongOperationId -ExpectedPrepareOperationId $operationId |
+            Out-Null
+    }
+    catch { $wrongRunRejected = $true }
+    if (-not $wrongRunRejected) {
+        throw 'Windows witness accepted another runId.'
+    }
+    $wrongReadRejected = $false
+    try {
+        & $reader -InstallationRoot $trackedInstall -Mode Candidate `
+            -ExpectedTag ("v" + $trackedId) -ExpectedCommit ('f' * 40) `
+            -ExpectedRunId $runId -ExpectedPrepareOperationId $wrongOperationId |
+            Out-Null
+    }
+    catch { $wrongReadRejected = $true }
+    if (-not $wrongReadRejected) {
+        throw 'Read-only Windows witness accepted a foreign prepareOperationId.'
+    }
+    $tamperedWitness = Get-Content -LiteralPath $journalPath -Raw
+    try {
+        $forged = $tamperedWitness | ConvertFrom-Json
+        $forged.prepareOperationId = $wrongOperationId
+        [IO.File]::WriteAllText($journalPath,($forged | ConvertTo-Json -Compress))
+        $forgedReadRejected = $false
+        try {
+            & $reader -InstallationRoot $trackedInstall -Mode Candidate `
+                -ExpectedTag ("v" + $trackedId) -ExpectedCommit ('f' * 40) `
+                -ExpectedRunId $runId -ExpectedPrepareOperationId $operationId |
+                Out-Null
+        }
+        catch { $forgedReadRejected = $true }
+        if (-not $forgedReadRejected) {
+            throw 'Tampering with operation journal was not rejected.'
+        }
+    }
+    finally { [IO.File]::WriteAllText($journalPath,$tamperedWitness) }
+
     Write-Output 'Execution-node staging, historical manifest migration and rollback gates passed.'
 }
 finally {

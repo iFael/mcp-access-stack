@@ -5,7 +5,11 @@ param(
     [ValidateSet('State', 'Candidate', 'Active')][string]$Mode,
     [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?$')]
     [string]$ExpectedTag,
-    [ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedCommit
+    [ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedCommit,
+    [ValidatePattern('^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$')]
+    [string]$ExpectedRunId,
+    [ValidatePattern('^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$')]
+    [string]$ExpectedPrepareOperationId
 )
 
 Set-StrictMode -Version Latest
@@ -40,6 +44,10 @@ $state = Read-McpWindowsExecutionNodeState -Path $statePath
 if ($null -eq $state) { throw 'Windows execution-node state is missing.' }
 if ($Mode -eq 'State' -and ($ExpectedTag -or $ExpectedCommit)) {
     throw 'Windows state-only read does not accept a release identity.'
+}
+if ([bool]$ExpectedRunId -ne [bool]$ExpectedPrepareOperationId -or
+    ($ExpectedRunId -and $Mode -ne 'Candidate')) {
+    throw 'Windows operation-bound observation requires candidate mode and both IDs.'
 }
 
 function Get-ProjectedPointer {
@@ -160,10 +168,37 @@ if ($Mode -ne 'State') {
     $evidence['sourceCommitSha'] = $ExpectedCommit
     $evidence['manifestSha256'] = $manifestDigest
     $evidence['verifiedArtifactCount'] = $artifacts.Count
+    if ($Mode -eq 'Candidate' -and $ExpectedRunId) {
+        $witnessPath = Get-McpWindowsCandidatePrepareWitnessPath -InstallationRoot $root
+        $witness = Read-McpWindowsCandidatePrepareWitness -Path $witnessPath
+        if ($null -eq $witness -or
+            [string]$witness.runId -cne $ExpectedRunId -or
+            [string]$witness.prepareOperationId -cne $ExpectedPrepareOperationId -or
+            [string]$witness.releaseId -cne $releaseId -or
+            [string]$witness.sourceCommitSha -cne $ExpectedCommit -or
+            [string]$witness.manifestSha256 -cne $manifestDigest) {
+            throw 'Windows candidate prepare operation witness does not match the original intent.'
+        }
+        $beforeWitnessDigest = (Get-FileHash -LiteralPath $witnessPath -Algorithm SHA256).Hash
+        # Local correlation only: no claim that IDs originated from Oracle.
+        $evidence['localPrepareWitness'] = [ordered]@{
+            kind = 'local_candidate_prepare'
+            runId = [string]$witness.runId
+            prepareOperationId = [string]$witness.prepareOperationId
+            releaseId = [string]$witness.releaseId
+            manifestSha256 = [string]$witness.manifestSha256
+        }
+    }
 }
 $afterHash = (Get-FileHash -LiteralPath $statePath -Algorithm SHA256).Hash
 if ($beforeHash -cne $afterHash) {
     throw 'Windows lifecycle state changed during read.'
+}
+if ($Mode -eq 'Candidate' -and $ExpectedRunId) {
+    $afterWitnessDigest = (Get-FileHash -LiteralPath $witnessPath -Algorithm SHA256).Hash
+    if ($beforeWitnessDigest -cne $afterWitnessDigest) {
+        throw 'Windows candidate prepare witness changed during the read.'
+    }
 }
 if ($Mode -ne 'State') {
     $afterManifest = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()

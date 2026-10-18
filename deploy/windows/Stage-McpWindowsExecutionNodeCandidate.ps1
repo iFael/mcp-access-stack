@@ -9,6 +9,12 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')]
     [string]$ExpectedReleaseId,
 
+    [ValidatePattern('^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$')]
+    [string]$RunId,
+
+    [ValidatePattern('^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$')]
+    [string]$PrepareOperationId,
+
     [switch]$Execute,
     [switch]$AllowUnsignedDevelopment
 )
@@ -19,6 +25,10 @@ $ErrorActionPreference = 'Stop'
 if (-not $Execute) {
     throw 'Execution-node candidate staging is intentionally gated. Re-run with -Execute.'
 }
+if ([bool]$RunId -ne [bool]$PrepareOperationId) {
+    throw 'RunId and PrepareOperationId must be supplied together.'
+}
+$trackedPrepare = [bool]$RunId
 
 $publicCommonPath = Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1'
 $executionCommonPath = Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1'
@@ -170,6 +180,33 @@ try {
     }
 
     $state = Read-McpWindowsExecutionNodeState -Path $statePath
+    $witnessPath = Get-McpWindowsCandidatePrepareWitnessPath -InstallationRoot $installationRoot
+    $existingWitness = Read-McpWindowsCandidatePrepareWitness -Path $witnessPath
+    $candidateBefore = if ($null -eq $state) { $null } else { $state.candidate }
+    if ($trackedPrepare) {
+        $sameCandidate = ($null -ne $candidateBefore -and
+            [string]$candidateBefore.releaseId -ceq $releaseId -and
+            [string]$candidateBefore.manifestSha256 -ceq
+                [string]$sourceVerification.executionManifestSha256)
+        if ($sameCandidate -and $null -eq $existingWitness) {
+            throw 'An untracked, pre-existing candidate cannot be rebound to a prepare operation.'
+        }
+        if ($sameCandidate -and (
+            [string]$existingWitness.runId -cne $RunId -or
+            [string]$existingWitness.prepareOperationId -cne $PrepareOperationId -or
+            [string]$existingWitness.releaseId -cne $releaseId -or
+            [string]$existingWitness.sourceCommitSha -cne $distributionCommit -or
+            [string]$existingWitness.manifestSha256 -cne
+                [string]$sourceVerification.executionManifestSha256)) {
+            throw 'Windows candidate prepareOperationId identity conflict.'
+        }
+        if ($null -ne $existingWitness -and $null -ne $candidateBefore -and
+            [string]$candidateBefore.releaseId -ceq [string]$existingWitness.releaseId -and
+            [string]$candidateBefore.manifestSha256 -ceq [string]$existingWitness.manifestSha256 -and
+            -not $sameCandidate) {
+            throw 'Cannot supersede an attributed candidate before a lifecycle transition.'
+        }
+    }
     if ($null -ne $state -and $null -ne $state.active -and
         [string]$state.active.releaseId -eq $releaseId) {
         throw 'Candidate staging cannot target the currently active execution-node release.'
@@ -243,6 +280,7 @@ try {
             alreadyPrepared = $true
             materialized = $materialized
             activeChanged = $false
+            localPrepareObserved = ($trackedPrepare -and $null -ne $existingWitness)
         } | ConvertTo-Json -Compress
         return
     }
@@ -261,7 +299,25 @@ try {
         updatedAt = $now
     }
     Write-McpWindowsExecutionNodeState -Path $statePath -Value $nextState
-    Read-McpWindowsExecutionNodeState -Path $statePath | Out-Null
+    $persistedState = Read-McpWindowsExecutionNodeState -Path $statePath
+    if ([string]$persistedState.candidate.releaseId -cne $releaseId -or
+        [string]$persistedState.candidate.manifestSha256 -cne $manifestSha256) {
+        throw 'Windows candidate pointer failed verification after staging.'
+    }
+    if ($trackedPrepare) {
+        # The local journal is a CAS/idempotency witness, not a remote auth
+        # receipt. Only a trusted future effect host may assign these IDs.
+        Write-McpWindowsCandidatePrepareWitness -Path $witnessPath -Witness ([ordered]@{
+            version = 1
+            kind = 'local_candidate_prepare'
+            runId = $RunId
+            prepareOperationId = $PrepareOperationId
+            releaseId = $releaseId
+            sourceCommitSha = $distributionCommit
+            manifestSha256 = $manifestSha256
+            preparedAt = $now
+        })
+    }
 
     [pscustomobject]@{
         status = 'ready'
@@ -270,6 +326,7 @@ try {
         alreadyPrepared = $false
         materialized = $materialized
         activeChanged = $false
+        localPrepareObserved = $trackedPrepare
     } | ConvertTo-Json -Compress
 }
 finally {
