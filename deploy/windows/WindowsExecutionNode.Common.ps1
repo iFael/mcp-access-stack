@@ -702,6 +702,12 @@ function Read-McpWindowsCandidatePrepareWitness {
     $expected = @('version', 'kind', 'runId', 'prepareOperationId',
         'releaseId', 'sourceCommitSha', 'manifestSha256', 'preparedAt')
     $names = @($record.PSObject.Properties.Name)
+    # ConvertFrom-Json may parse ISO timestamps into a DateTime object, whose
+    # default string cast is locale-dependent. Canonicalize before validation.
+    $time = $record.preparedAt
+    $canonicalTime = if ($time -is [DateTime] -or $time -is [DateTimeOffset]) {
+        $time.ToString('O', [Globalization.CultureInfo]::InvariantCulture)
+    } else { [string]$time }
     if ($names.Count -ne $expected.Count -or
         @($names | Where-Object { $_ -cnotin $expected }).Count -ne 0 -or
         [int]$record.version -ne 1 -or
@@ -711,10 +717,10 @@ function Read-McpWindowsCandidatePrepareWitness {
         [string]$record.releaseId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or
         [string]$record.sourceCommitSha -cnotmatch '^[a-f0-9]{40}$' -or
         [string]$record.manifestSha256 -cnotmatch '^[a-f0-9]{64}$' -or
-        [string]$record.preparedAt -cnotmatch '^\d{4}-\d{2}-\d{2}T') {
+        $canonicalTime -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T') {
         throw 'Windows prepare witness contract invalid.'
     }
-    try { $null = [DateTimeOffset]::Parse([string]$record.preparedAt) }
+    try { $null = [DateTimeOffset]::Parse($canonicalTime, [Globalization.CultureInfo]::InvariantCulture) }
     catch { throw 'Windows prepare witness timestamp invalid.' }
     return $record
 }
