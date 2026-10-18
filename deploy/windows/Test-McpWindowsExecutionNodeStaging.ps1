@@ -237,6 +237,41 @@ try {
         throw 'Candidate staging changed active or failed to persist candidate.'
     }
 
+    # Read-only Windows evidence must be derived from the actual staged bytes
+    # and lifecycle pointer. It is NOT a prepareOperationId receipt.
+    $reader = Join-Path $PSScriptRoot 'Get-McpWindowsExecutionNodeReadEvidence.ps1'
+    $candidateRead = & $reader -InstallationRoot $installation -Mode Candidate `
+        -ExpectedTag ("v" + $releaseId) -ExpectedCommit ('a' * 40) | ConvertFrom-Json
+    if ($candidateRead.platform -ne 'windows' -or
+        $candidateRead.kind -ne 'candidate' -or
+        $candidateRead.scope -ne 'local_hash_integrity_only' -or
+        $candidateRead.verifiedArtifactCount -ne 9 -or
+        $candidateRead.state.candidate.releaseId -ne $releaseId -or
+        $candidateRead.PSObject.Properties['prepareOperationId']) {
+        throw 'Read-only candidate evidence was malformed or claimed an operation receipt.'
+    }
+    $stateRead = & $reader -InstallationRoot $installation -Mode State | ConvertFrom-Json
+    if ($stateRead.kind -ne 'state' -or
+        $stateRead.state.candidate.releaseId -ne $releaseId -or
+        $stateRead.PSObject.Properties['releaseTag']) {
+        throw 'Read-only Windows state leaked an invalid release identity.'
+    }
+    $tamperPath = Join-Path $installation (
+        "releases\$releaseId\node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js"
+    )
+    $originalBytes = [IO.File]::ReadAllBytes($tamperPath)
+    try {
+        [IO.File]::AppendAllText($tamperPath, 'tampered')
+        $readRejected = $false
+        try {
+            & $reader -InstallationRoot $installation -Mode Candidate `
+                -ExpectedTag ("v" + $releaseId) -ExpectedCommit ('a' * 40) | Out-Null
+        }
+        catch { $readRejected = $true }
+        if (-not $readRejected) { throw 'Windows reader accepted altered candidate bytes.' }
+    }
+    finally { [IO.File]::WriteAllBytes($tamperPath, $originalBytes) }
+
     $second = Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $installation
     if ($second.alreadyPrepared -ne $true -or $second.activeChanged -ne $false) {
         throw 'Candidate staging is not idempotent.'
@@ -352,6 +387,16 @@ try {
     $promoted = & $cutover -InstallationRoot $crossVersionInstall -Operation Promote -Execute | ConvertFrom-Json
     if ($promoted.activeReleaseId -ne $modernId -or $promoted.previousReleaseId -ne $legacyId) {
         throw 'Promotion from legacy active to checksummed candidate failed.'
+    }
+    $activeRead = & $reader -InstallationRoot $crossVersionInstall -Mode Active `
+        -ExpectedTag ("v" + $modernId) -ExpectedCommit ('e' * 40) | ConvertFrom-Json
+    if ($activeRead.kind -ne 'active' -or
+        $activeRead.releaseTag -ne ("v" + $modernId) -or
+        $activeRead.state.active.releaseId -ne $modernId -or
+        $activeRead.state.previous.releaseId -ne $legacyId -or
+        $null -ne $activeRead.state.candidate -or
+        $activeRead.verifiedArtifactCount -ne 9) {
+        throw 'Read-only active evidence did not match the actual promoted release.'
     }
     $rolledBack = & $cutover -InstallationRoot $crossVersionInstall -Operation Rollback -Execute | ConvertFrom-Json
     if ($rolledBack.activeReleaseId -ne $legacyId -or $rolledBack.candidateReleaseId -ne $modernId) {
