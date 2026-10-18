@@ -65,10 +65,14 @@ async function main(): Promise<void> {
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
   const candidateRead=loadOracleCandidateReadEnrollment(process.env);
   const activeRead=loadOracleActiveReadEnrollment(process.env);
+  let activeRuntimeReady=false;
   const reloadable = new ReloadableLocalAgent({
     ...(oracleControl ? {oracleControl} : {}),
     ...(candidateRead ? {oracleCandidateRead:candidateRead.policy} : {}),
-    ...(activeRead ? {oracleActiveRead:activeRead.policy} : {}),
+    ...(activeRead ? {oracleActiveRead:{...activeRead.policy,
+      authorizeHealth:async(scope:string)=>activeRuntimeReady &&
+        activeRead.policy.authorizeHealth(scope),
+    }} : {}),
   });
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
@@ -173,6 +177,7 @@ async function main(): Promise<void> {
   const controller = new AbortController();
   const stop = (signal: NodeJS.Signals) => {
     writeLog({ event: "edge_connector_process_signal", signal });
+    activeRuntimeReady=false;
     controller.abort();
     connector.stop();
   };
@@ -197,6 +202,7 @@ async function main(): Promise<void> {
 
   try {
     await assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion);
+    activeRuntimeReady=true;
     writeLog({ event: "edge_connector_loopback_health_passed" });
     let providerFailure:unknown;
     const providerFailed=(error:unknown)=>{
@@ -216,6 +222,7 @@ async function main(): Promise<void> {
     }
     if(providerFailure!==undefined)throw providerFailure;
   } finally {
+    activeRuntimeReady=false;
     connector.stop();
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);

@@ -4,7 +4,7 @@ import type {OracleCandidateReadResult} from "./oracle-candidate-read.js";
 
 const DIGEST=/^[a-f0-9]{64}$/u;
 const RELEASE_ID=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-type ActiveHost=Pick<LocalAgent,"oracleInspectActive"|"oracleInspectActiveState">;
+type ActiveHost=Pick<LocalAgent,"oracleInspectActive"|"oracleInspectActiveState"|"oracleInspectActiveHealth">;
 function validSlot(value:unknown):boolean{
   if(value===null)return true;
   if(!value || typeof value!=="object" || Array.isArray(value))return false;
@@ -23,7 +23,8 @@ export function createOracleActiveReadPort(
 ){
   if(config.workspaceId!=="mcp-access-stack" || !SCOPE.test(config.ownerScope) ||
     typeof host.oracleInspectActive!=="function" ||
-    typeof host.oracleInspectActiveState!=="function")
+    typeof host.oracleInspectActiveState!=="function" ||
+    typeof host.oracleInspectActiveHealth!=="function")
     throw new Error("ORACLE_ACTIVE_HOST_INVALID");
   return {
     async inspectActive(tag:string,commitSha:string):Promise<OracleCandidateReadResult>{
@@ -41,6 +42,22 @@ export function createOracleActiveReadPort(
     },
     /** Typed native pointer read, pinned to the same audited owner scope.
      * The caller does not select the host, workspace, path or release slot. */
+    async getHealth(){
+      const result=await host.oracleInspectActiveHealth(
+        {workspaceId:config.workspaceId},{ownerScope:config.ownerScope});
+      if(result.status!=="healthy" ||
+        typeof result.releaseId!=="string" ||
+        !RELEASE_ID.test(result.releaseId) ||
+        typeof result.manifestSha256!=="string" ||
+        !DIGEST.test(result.manifestSha256) ||
+        !Number.isSafeInteger(result.processId) || result.processId<=0 ||
+        typeof result.observedAt!=="string" ||
+        !Number.isFinite(Date.parse(result.observedAt)))
+        throw new Error("ORACLE_ACTIVE_HEALTH_INVALID");
+      return {status:result.status,releaseId:result.releaseId,
+        manifestSha256:result.manifestSha256,processId:result.processId,
+        observedAt:result.observedAt};
+    },
     async getState(){
       const result=await host.oracleInspectActiveState(
         {workspaceId:config.workspaceId},{ownerScope:config.ownerScope});

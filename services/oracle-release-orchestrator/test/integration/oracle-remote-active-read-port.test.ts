@@ -9,6 +9,8 @@ const manifest={releaseTag:tag,sourceCommitSha:sha,
   manifestSha256:"b".repeat(64),verifiedArtifactCount:7};
 const state={active:{releaseId:"1.1.0-beta.90",manifestSha256:"b".repeat(64)},
   previous:{releaseId:"1.1.0-beta.89",manifestSha256:"c".repeat(64)},candidate:null};
+const health={status:"healthy",releaseId:"1.1.0-beta.90",manifestSha256:"b".repeat(64),
+  processId:1234,observedAt:"2026-10-18T04:00:00.000Z"};
 const response=(result:unknown)=>new Response(JSON.stringify({result}),{
   status:200,headers:{"content-type":"application/json"},
 });
@@ -21,13 +23,32 @@ describe("isolated ACTIVE read-only Oracle HMAC transport",()=>{
       const command=parseOracleActiveCommand(JSON.parse(String(init?.body)) as unknown);
       return response(command.method==="inspect_active"
         ? {method:command.method,requestId:command.arguments.requestId,manifest}
-        : {method:command.method,requestId:command.arguments.requestId,state});
+        : command.method==="get_state"
+        ? {method:command.method,requestId:command.arguments.requestId,state}
+        : {method:command.method,requestId:command.arguments.requestId,health});
     });
     const port=new OracleRemoteActiveReadPort({endpoint:url,
       key:async()=>"c".repeat(64),fetchImpl:send as unknown as typeof fetch});
     expect(await port.inspectActive(tag,sha)).toEqual(manifest);
     expect(await port.getState()).toEqual(state);
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(await port.getHealth()).toEqual(health);
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+  it("refuses fake health, missing PID and unexpected fields",async()=>{
+    const fake=new OracleRemoteActiveReadPort({endpoint:url,key:async()=>"c".repeat(64),
+      fetchImpl:async(_url,init)=>{
+        const command=parseOracleActiveCommand(JSON.parse(String(init?.body)));
+        return response({method:"get_health",requestId:command.arguments.requestId,
+          health:{...health,processId:0}});
+      }});
+    await expect(fake.getHealth()).rejects.toThrow("HEALTH_INVALID");
+    const extra=new OracleRemoteActiveReadPort({endpoint:url,key:async()=>"c".repeat(64),
+      fetchImpl:async(_url,init)=>{
+        const command=parseOracleActiveCommand(JSON.parse(String(init?.body)));
+        return response({method:"get_health",requestId:command.arguments.requestId,
+          health:{...health,privatePath:"/secret"}});
+      }});
+    await expect(extra.getHealth()).rejects.toThrow("HEALTH_INVALID");
   });
   it("rejects mismatched signed reply, oversized result and malicious endpoint",async()=>{
     expect(()=>new OracleRemoteActiveReadPort({

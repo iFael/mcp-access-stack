@@ -36,5 +36,7 @@ export function loadOracleActiveReadEnrollment(
       TAG.test(tag) && !tag.includes("..") && SHA.test(commitSha),
     authorizeState:async(ownerScope)=>
       env[PREFIX+"ENABLED"]==="1" && ownerScope===host.ownerScope,
+    authorizeHealth:async(ownerScope)=>
+      env[PREFIX+"ENABLED"]==="1" && ownerScope===host.ownerScope,
   }};
 }

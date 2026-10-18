@@ -32,6 +32,8 @@ import type { ShellService } from "../shell/service.js";
 import type { BackgroundTaskManager } from "../tasks/background-task-manager.js";
 import { ReleasePruneService } from "./release-prune-service.js";
 import {inspectExecutionNodeCandidate,inspectExecutionNodeActive,type OracleCandidateReadResult} from "./oracle-candidate-read.js";
+import {inspectOracleActiveRuntimeHealth,type OracleNativeRuntimeHealth}
+  from "./oracle-active-runtime-health.js";
 
 interface ReleaseShellService {
   authorizeBackgroundCommand: ShellService["authorizeBackgroundCommand"];
@@ -118,6 +120,17 @@ export class ReleaseLifecycleService {
       throw new AppError("CAPABILITY_UNSUPPORTED","Oracle active reader requires Linux.");
     assertReleaseWorkspace(workspace,this.platform);
     return inspectExecutionNodeActive(resolveInstallationRoot(),tag,commitSha);
+  }
+
+  /** Native process identity tied to an installed, currently active release.
+   * Does not infer health from a generic read-API heartbeat. */
+  async inspectOracleActiveRuntimeHealth(workspace:ResolvedWorkspace)
+    :Promise<OracleNativeRuntimeHealth>{
+    if(this.platform!=="linux")
+      throw new AppError("CAPABILITY_UNSUPPORTED","Oracle active runtime requires Linux.");
+    assertReleaseWorkspace(workspace,this.platform);
+    return inspectOracleActiveRuntimeHealth(resolveInstallationRoot(),
+      process.argv[1],process.pid);
   }
 
   async getState(workspace: ResolvedWorkspace): Promise<GetReleaseStateResult> {

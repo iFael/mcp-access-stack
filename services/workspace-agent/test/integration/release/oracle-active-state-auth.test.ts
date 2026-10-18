@@ -20,19 +20,43 @@ async function harness(enabled:boolean,trusted=true){
   }),id:"mcp-access-stack",allowShell:["."]};
   await writePolicy(fixture.policyPath,[workspace]);
   const authorizeState=jest.fn(async(owner:string)=>enabled && owner===scope);
+  const authorizeHealth=jest.fn(async(owner:string)=>enabled && owner===scope);
   const audit=await LocalAgent.create(fixture.policyPath,{
     oracleActiveRead:{
       authorize:async()=>false,
       authorizeState,
+      authorizeHealth,
     },
   });
   const getState=jest.fn(async()=>state);
   (audit as unknown as {releaseLifecycleService:{getState:typeof getState}})
     .releaseLifecycleService.getState=getState;
-  return {audit,authorizeState,getState};
+  const getHealth=jest.fn(async()=>({status:"healthy" as const,
+    releaseId:"1.1.0-beta.90",manifestSha256:"b".repeat(64),
+    processId:1234,observedAt:"2026-10-18T04:00:00.000Z"}));
+  (audit as unknown as {releaseLifecycleService:{
+    inspectOracleActiveRuntimeHealth:typeof getHealth
+  }}).releaseLifecycleService.inspectOracleActiveRuntimeHealth=getHealth;
+  return {audit,authorizeState,authorizeHealth,getState,getHealth};
 }
 
 describe("isolated authenticated Oracle active state reader",()=>{
+  it("health fails closed without an independent permission",async()=>{
+    const h=await harness(false);
+    await expect(h.audit.oracleInspectActiveHealth(input,{ownerScope:scope}))
+      .rejects.toThrow();
+    expect(h.getHealth).not.toHaveBeenCalled();
+  });
+  it("health confirms native identity and rejects revoked permission",async()=>{
+    const h=await harness(true);
+    expect(await h.audit.oracleInspectActiveHealth(input,{ownerScope:scope}))
+      .toMatchObject({status:"healthy",processId:1234});
+    expect(h.authorizeHealth).toHaveBeenCalledTimes(2);
+    h.authorizeHealth.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(h.audit.oracleInspectActiveHealth(input,{ownerScope:scope}))
+      .rejects.toThrow();
+    expect(h.getHealth).toHaveBeenCalledTimes(2);
+  });
   it("rejects missing or foreign scope without touching native state",async()=>{
     const h=await harness(true);
     await expect(h.audit.oracleInspectActiveState(input,{})).rejects.toThrow();

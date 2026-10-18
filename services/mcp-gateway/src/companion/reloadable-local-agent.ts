@@ -113,6 +113,8 @@ export class ReloadableLocalAgent {
         agent.oracleInspectActive(input,context)),
       oracleInspectActiveState:(input,context)=>checked(agent=>
         agent.oracleInspectActiveState(input,context)),
+      oracleInspectActiveHealth:(input,context)=>checked(agent=>
+        agent.oracleInspectActiveHealth(input,context)),
     },config);
   }
 

@@ -16,7 +16,8 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]
 export type OracleActiveReadCommand =
   | {readonly method:"inspect_active";readonly arguments:{
       readonly tag:string;readonly commitSha:string;readonly requestId:string}}
-  | {readonly method:"get_state";readonly arguments:{readonly requestId:string}};
+  | {readonly method:"get_state";readonly arguments:{readonly requestId:string}}
+  | {readonly method:"get_health";readonly arguments:{readonly requestId:string}};
 export interface OracleActiveManifest {
   readonly releaseTag:string;
   readonly sourceCommitSha:string;
@@ -31,11 +32,20 @@ export interface OracleActiveState {
   readonly previous:OracleActivePointer|null;
   readonly candidate:OracleActivePointer|null;
 }
+export interface OracleActiveRuntimeHealth {
+  readonly status:"healthy"|"unhealthy";
+  readonly releaseId:string;
+  readonly manifestSha256:string;
+  readonly processId:number;
+  readonly observedAt:string;
+}
 export type OracleActiveReadResult =
   | {readonly method:"inspect_active";readonly requestId:string;
       readonly manifest:OracleActiveManifest}
   | {readonly method:"get_state";readonly requestId:string;
-      readonly state:OracleActiveState};
+      readonly state:OracleActiveState}
+  | {readonly method:"get_health";readonly requestId:string;
+      readonly health:OracleActiveRuntimeHealth};
 function object(x:unknown):x is Record<string,unknown>{
   return !!x && typeof x==="object" && !Array.isArray(x);
 }
@@ -71,6 +81,8 @@ export function parseOracleActiveCommand(value:unknown):OracleActiveReadCommand{
     !UUID.test(value.arguments.requestId))throw new Error("ORACLE_ACTIVE_COMMAND_INVALID");
   if(value.method==="get_state" && keys(value.arguments,["requestId"]))
     return {method:"get_state",arguments:{requestId:value.arguments.requestId}};
+  if(value.method==="get_health" && keys(value.arguments,["requestId"]))
+    return {method:"get_health",arguments:{requestId:value.arguments.requestId}};
   if(value.method==="inspect_active" &&
     keys(value.arguments,["tag","commitSha","requestId"]) &&
     typeof value.arguments.tag==="string" && TAG.test(value.arguments.tag) &&
@@ -96,6 +108,26 @@ export function parseOracleActiveResult(method:OracleActiveReadCommand["method"]
       state.active.releaseId===state.candidate?.releaseId))
       throw new Error("ORACLE_ACTIVE_STATE_CONFLICT");
     return {method,requestId:value.requestId,state};
+  }
+  if(method==="get_health"){
+    if(!keys(value,["method","requestId","health"]) ||
+      !object(value.health) || !keys(value.health,
+        ["status","releaseId","manifestSha256","processId","observedAt"]))
+      throw new Error("ORACLE_ACTIVE_HEALTH_INVALID");
+    const health=value.health;
+    const observed=typeof health.observedAt==="string"
+      ? Date.parse(health.observedAt):NaN;
+    if(health.status==="healthy" && typeof health.releaseId==="string" &&
+      ID.test(health.releaseId) && !health.releaseId.includes("..") &&
+      typeof health.manifestSha256==="string" &&
+      DIGEST.test(health.manifestSha256) &&
+      typeof health.processId==="number" &&
+      Number.isSafeInteger(health.processId) && health.processId>0 &&
+      typeof health.observedAt==="string" && Number.isFinite(observed) &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(health.observedAt))
+      return {method,requestId:value.requestId,
+        health:health as unknown as OracleActiveRuntimeHealth};
+    throw new Error("ORACLE_ACTIVE_HEALTH_INVALID");
   }
   throw new Error("ORACLE_ACTIVE_RESULT_INVALID");
 }

@@ -12,17 +12,20 @@ const cmd={method:"inspect_active" as const,arguments:{
   tag:"v1.1.0-beta.90",commitSha:"c".repeat(40),requestId,
 }};
 const stateCmd={method:"get_state" as const,arguments:{requestId}};
+const healthCmd={method:"get_health" as const,arguments:{requestId}};
 const manifest={releaseTag:cmd.arguments.tag,sourceCommitSha:cmd.arguments.commitSha,
   manifestSha256:"d".repeat(64),verifiedArtifactCount:7};
 const receipt={method:"inspect_active",requestId,manifest};
 const state={active:{releaseId:"1.1.0-beta.90",manifestSha256:"d".repeat(64)},
   previous:{releaseId:"1.1.0-beta.89",manifestSha256:"e".repeat(64)},candidate:null};
+const health={status:"healthy",releaseId:"1.1.0-beta.90",manifestSha256:"d".repeat(64),
+  processId:1234,observedAt:"2026-10-18T04:00:00.000Z"};
 const req=(body:string,authorization:string,path=url)=>new Request(path,{
   method:"POST",headers:{"content-type":"application/json",authorization},body,
 });
 describe("isolated Oracle ACTIVE signed read-only realm",()=>{
   it("signs only typed manifest/state reads and rejects tampering, replay and paths",async()=>{
-    for(const command of [cmd,stateCmd]){
+    for(const command of [cmd,stateCmd,healthCmd]){
       const signed=await signOracleActiveRequest(command,key);
       expect(await verifyOracleActiveRequest(req(signed.body,signed.authorization),key))
         .toEqual(command);
@@ -40,6 +43,8 @@ describe("isolated Oracle ACTIVE signed read-only realm",()=>{
     expect(()=>parseOracleActiveCommand({method:"run_command",arguments:{}})).toThrow();
     expect(()=>parseOracleActiveCommand({...stateCmd,
       arguments:{...stateCmd.arguments,operation:"promote"}})).toThrow();
+    expect(()=>parseOracleActiveCommand({...healthCmd,
+      arguments:{...healthCmd.arguments,pid:1234}})).toThrow();
     expect(()=>parseOracleActiveCommand({...cmd,
       arguments:{...cmd.arguments,path:"/etc/shadow"}})).toThrow();
   });
@@ -55,6 +60,12 @@ describe("isolated Oracle ACTIVE signed read-only realm",()=>{
       state:{...state,active:{...state.active,materializedAt:"2026"}}})).toThrow();
     expect(()=>parseOracleActiveResult("get_state",{method:"get_state",requestId,
       state:{...state,candidate:{releaseId:"../../secret",manifestSha256:"e".repeat(64)}}})).toThrow();
+    expect(parseOracleActiveResult("get_health",{method:"get_health",requestId,health}))
+      .toMatchObject({health});
+    expect(()=>parseOracleActiveResult("get_health",{method:"get_health",requestId,
+      health:{...health,processId:0}})).toThrow();
+    expect(()=>parseOracleActiveResult("get_health",{method:"get_health",requestId,
+      health:{...health,callerPath:"/etc/shadow"}})).toThrow();
   });
   it("routes only to active DO, never candidate or control",async()=>{
     const forwarded:Request[]=[];
@@ -67,20 +78,21 @@ describe("isolated Oracle ACTIVE signed read-only realm",()=>{
           forwarded.push(input);
           const parsed=await input.json() as {method:string};
           const result=parsed.method==="inspect_active"?receipt:
-            {method:"get_state",requestId,state};
+            parsed.method==="get_state"?{method:"get_state",requestId,state}:
+            {method:"get_health",requestId,health};
           return new Response(JSON.stringify({result}),
             {status:200,headers:{"content-type":"application/json"}});
         }}),
       }};
-    for(const command of [cmd,stateCmd]){
+    for(const command of [cmd,stateCmd,healthCmd]){
       const signed=await signOracleActiveRequest(command,key);
       const result=await worker.fetch(req(signed.body,signed.authorization),
         env as never);
       expect(result.status).toBe(200);
     }
-    expect(scopeNames).toEqual([ORACLE_ACTIVE_SCOPE,ORACLE_ACTIVE_SCOPE]);
+    expect(scopeNames).toEqual([ORACLE_ACTIVE_SCOPE,ORACLE_ACTIVE_SCOPE,ORACLE_ACTIVE_SCOPE]);
     expect(scopeNames).not.toContain(ORACLE_CANDIDATE_SCOPE);
-    expect(forwarded).toHaveLength(2);
+    expect(forwarded).toHaveLength(3);
   });
   it("rejects key reuse across candidate and administrative realms before DO dispatch",async()=>{
     const signed=await signOracleActiveRequest(cmd,key);

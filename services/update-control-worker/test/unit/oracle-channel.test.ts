@@ -256,6 +256,31 @@ describe("ACTIVE-only Oracle Durable Object isolation",()=>{
     expect(h.state.getWebSockets(ORACLE_ACTIVE_SCOPE)).toHaveLength(1);
     expect(h.state.getWebSockets(ORACLE_CANDIDATE_SCOPE)).toHaveLength(0);
   });
+  it("rejects a forged live process health report before forwarding",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_ACTIVE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_ACTIVE_ORIGIN,
+        authorization:"Bearer "+ACTIVE_TOKEN},
+    }));
+    const peer=h.pairs.at(-1)!;
+    const requestId="11111111-2222-4333-8444-555555555550";
+    const health={status:"healthy",releaseId:"1.1.0-beta.90",
+      manifestSha256:"b".repeat(64),processId:1234,
+      observedAt:"2026-10-18T04:00:00.000Z"};
+    let fake=false;
+    attachOraclePeer(h.channel(),h.state,peer.client,peer.server,()=>({
+      method:"get_health",requestId,health:{
+        ...health,...(fake?{privatePath:"/etc/secret"}:{}),
+      },
+    }));
+    const rpc=()=>h.channel().fetch(new Request("https://worker.internal"+ORACLE_ACTIVE_RPC_PATH,{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({method:"get_health",arguments:{requestId}}),
+    }));
+    expect((await rpc()).status).toBe(200);
+    fake=true;
+    expect((await rpc()).status).toBe(502);
+  });
   it("accepts only correlated ACTIVE responses and refuses forged state",async()=>{
     const h=createHarness();
     await h.channel().fetch(new Request("https://worker.example"+ORACLE_ACTIVE_CONNECT_PATH,{

@@ -29,6 +29,9 @@ const port={
     manifestSha256:"b".repeat(64),verifiedArtifactCount:1,
   }),
   getState:async()=>({active:null,previous:null,candidate:null}),
+  getHealth:async()=>({status:"healthy" as const,releaseId:"1.1.0-beta.90",
+    manifestSha256:"b".repeat(64),processId:1234,
+    observedAt:"2026-10-18T04:00:00.000Z"}),
 };
 describe("Oracle active provider distinct enrollment",()=>{
   it("is absent unless configured and refuses partial setup",async()=>{

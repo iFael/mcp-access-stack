@@ -4,6 +4,7 @@ import {tmpdir} from "node:os";
 import {afterEach,describe,expect,it} from "@jest/globals";
 import {ORACLE_ACTIVE_DISPATCH_PATH} from "@mcp-access-stack/update-control-contract";
 import {resolveOracleRemoteActivePort} from "../../src/oracle-active-host-binding.js";
+import {composeOracleHostReleaseCapabilities} from "../../src/oracle-source-host-binding.js";
 let folder:string|undefined;
 afterEach(()=>{if(folder)rmSync(folder,{recursive:true,force:true});folder=undefined;});
 function env(){
@@ -28,7 +29,25 @@ describe("dedicated protected Oracle ACTIVE HMAC credential",()=>{
     const port=resolveOracleRemoteActivePort(env())!;
     expect(typeof port.inspectActive).toBe("function");
     expect(typeof port.getState).toBe("function");
+    expect(typeof port.getHealth).toBe("function");
     expect("promote" in port).toBe(false);
+  });
+  it("enrolls only with independent release authorization; incomplete registry remains NO-GO",()=>{
+    const active=env();
+    expect(()=>composeOracleHostReleaseCapabilities(active,{}))
+      .toThrow("ORACLE_ACTIVE_HOST_AUTH_REQUIRED");
+    const registry=composeOracleHostReleaseCapabilities(active,{
+      authorizeActiveHealth:async()=>true,
+    });
+    expect(registry.ready).toBe(false);
+    expect(registry.capabilities.has("verify_oracle_health")).toBe(true);
+    expect(registry.missingActions).toContain("verify_windows_health");
+    expect(()=>registry.createExecutor(null as never))
+      .toThrow("RELEASE_CAPABILITY_INCOMPLETE");
+    expect(()=>composeOracleHostReleaseCapabilities(active,{
+      authorizeActiveHealth:async()=>true,
+      oracleActiveHealth:{port:null as never,authorize:async()=>true},
+    })).toThrow("ORACLE_ACTIVE_DUPLICATE_HOST");
   });
   it("rejects credential reuse, symlinks, wide modes and invalid HMAC",()=>{
     if(process.platform==="win32")return;

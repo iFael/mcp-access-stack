@@ -4,6 +4,7 @@ import {composeReleaseCapabilities, type ReleaseCapabilityComposition, type Rele
 import type {ReleaseRunSnapshot} from "./types.js";
 import {OracleRemoteSourceReadPort} from "./oracle-remote-source-read-port.js";
 import {resolveOracleRemoteCandidatePort} from "./oracle-candidate-host-binding.js";
+import {resolveOracleRemoteActivePort} from "./oracle-active-host-binding.js";
 import {resolveOracleRemoteWorkflowPort} from "./oracle-workflow-host-binding.js";
 
 /** Opt-in host-owned read capability. Never part of the Oracle GET-only API.
@@ -43,6 +44,7 @@ export interface OracleHostReleaseBindings
   extends Omit<ReleaseCapabilityComposition,"sourceControl"|"other"> {
   readonly authorizeRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   readonly authorizeCandidateRead?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
+  readonly authorizeActiveHealth?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   /** Independently authorizes real GitHub asset reads, not workflow dispatch. */
   readonly authorizeAssetVerification?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
   readonly authorizeWorkflow?: (run:ReleaseRunSnapshot)=>Promise<boolean>;
@@ -59,6 +61,11 @@ export function composeOracleHostReleaseCapabilities(
   }
   const workflow=resolveOracleRemoteWorkflowPort(environment);
   const candidate=resolveOracleRemoteCandidatePort(environment);
+  const active=resolveOracleRemoteActivePort(environment);
+  if(active && typeof bindings.authorizeActiveHealth!=="function")
+    throw new Error("ORACLE_ACTIVE_HOST_AUTH_REQUIRED");
+  if(active && bindings.oracleActiveHealth)
+    throw new Error("ORACLE_ACTIVE_DUPLICATE_HOST");
   if(candidate && typeof bindings.authorizeCandidateRead!=="function")
     throw new Error("ORACLE_CANDIDATE_HOST_AUTH_REQUIRED");
   if(candidate && (bindings.oracleCandidate || bindings.remoteCandidate))
@@ -99,7 +106,9 @@ export function composeOracleHostReleaseCapabilities(
     ...(bindings.edgeHealth ? {edgeHealth:bindings.edgeHealth} : {}),
     ...(bindings.pointerReconciliation ? {pointerReconciliation:bindings.pointerReconciliation} : {}),
     ...(bindings.catalogSmoke ? {catalogSmoke:bindings.catalogSmoke} : {}),
-    ...(bindings.oracleActiveHealth ? {oracleActiveHealth:bindings.oracleActiveHealth} : {}),
+    ...(active ? {oracleActiveHealth:{port:active,
+      authorize:bindings.authorizeActiveHealth!}} :
+      bindings.oracleActiveHealth ? {oracleActiveHealth:bindings.oracleActiveHealth} : {}),
     ...(bindings.windowsActiveHealth ? {windowsActiveHealth:bindings.windowsActiveHealth} : {}),
     ...(bindings.windowsCandidate ? {windowsCandidate:bindings.windowsCandidate} : {}),
     ...(bindings.effects ? {effects:bindings.effects} : {}),

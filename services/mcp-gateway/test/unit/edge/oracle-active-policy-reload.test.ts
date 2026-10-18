@@ -40,9 +40,12 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
       .toBe(false);
     expect(await policy.policy.authorize("../etc",sha,policy.host.ownerScope))
       .toBe(false);
+    expect(await policy.policy.authorizeHealth(policy.host.ownerScope)).toBe(true);
+    expect(await policy.policy.authorizeHealth("trusted:oracle-candidate")).toBe(false);
     expect(await policy.policy.authorizeState(policy.host.ownerScope)).toBe(true);
     expect(await policy.policy.authorizeState("trusted:oracle-candidate")).toBe(false);
     env.MCP_V3_ORACLE_ACTIVE_READ_ENABLED="0";
+    expect(await policy.policy.authorizeHealth(policy.host.ownerScope)).toBe(false);
     expect(await policy.policy.authorizeState(policy.host.ownerScope)).toBe(false);
     expect(await policy.policy.authorize(tag,sha,policy.host.ownerScope))
       .toBe(false);
@@ -78,6 +81,22 @@ describe("Oracle active-artifact host requires independent enrollment",()=>{
     settle({state:{version:1,active:null,previous:null,candidate:null}});
     await expect(operation).rejects.toThrow("policy changed");
     expect(readState).toHaveBeenCalledTimes(1);
+  });
+  it("discards process observations after policy reload",async()=>{
+    let resolve!: (v:unknown)=>void;
+    const pending=new Promise<unknown>(r=>{resolve=r;});
+    const health=jest.fn(async()=>pending);
+    const {reloadable,state}=harness({oracleInspectActiveHealth:health} as unknown as Partial<LocalAgent>);
+    const reading=reloadable.oracleActiveReadPort({
+      workspaceId:"mcp-access-stack",ownerScope:"trusted:oracle-active",
+    }).getHealth();
+    await Promise.resolve();
+    state.currentAgent=null;state.generation++;
+    resolve({status:"healthy",releaseId:"1.1.0-beta.90",
+      manifestSha256:"b".repeat(64),processId:1234,
+      observedAt:"2026-10-18T04:00:00.000Z"});
+    await expect(reading).rejects.toThrow("policy changed");
+    expect(health).toHaveBeenCalledTimes(1);
   });
   it("rejects the generic getReleaseState as an active policy substitute",async()=>{
     const read=jest.fn(async()=>({

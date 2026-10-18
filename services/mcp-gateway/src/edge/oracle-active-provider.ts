@@ -4,12 +4,13 @@ import {
   ORACLE_ACTIVE_MAX_RESULT_BYTES,
   parseOracleActiveCommand,parseOracleActiveResult,
   type OracleActiveReadCommand,
-  type OracleActiveManifest,type OracleActiveState,
+  type OracleActiveManifest,type OracleActiveState,type OracleActiveRuntimeHealth,
 } from "@mcp-access-stack/update-control-contract";
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 export interface OracleActiveProviderPort {
   inspectActive(tag:string,commitSha:string):Promise<OracleActiveManifest>;
   getState():Promise<OracleActiveState>;
+  getHealth():Promise<OracleActiveRuntimeHealth>;
 }
 export interface OracleActiveProviderOptions {
   readonly url:URL;readonly token:string;readonly port:OracleActiveProviderPort;
@@ -25,7 +26,8 @@ export function validateOracleActiveProviderOptions(options:OracleActiveProvider
     (u.port!=="" && u.port!=="443") || u.pathname!==ORACLE_ACTIVE_CONNECT_PATH ||
     !/^[A-Za-z0-9_.-]{32,256}$/u.test(options.token) ||
     (typeof options.port?.inspectActive!=="function" ||
-      typeof options.port?.getState!=="function"))
+      typeof options.port?.getState!=="function" ||
+      typeof options.port?.getHealth!=="function"))
     throw new Error("ORACLE_ACTIVE_PROVIDER_CONFIG_INVALID");
 }
 /** Dedicated bearer-isolated read-only WSS port; never returns file bytes.
@@ -108,8 +110,11 @@ export class OracleActiveProviderConnector {
             ? {method:"inspect_active" as const,requestId:args.requestId,
                 manifest:await this.options.port.inspectActive(
                   command.arguments.tag,command.arguments.commitSha)}
-            : {method:"get_state" as const,requestId:args.requestId,
-                state:await this.options.port.getState()};
+            : command.method==="get_state"
+            ? {method:"get_state" as const,requestId:args.requestId,
+                state:await this.options.port.getState()}
+            : {method:"get_health" as const,requestId:args.requestId,
+                health:await this.options.port.getHealth()};
           const parsed=parseOracleActiveResult(command.method,result);
           if(parsed.requestId!==args.requestId)throw new Error("ORACLE_ACTIVE_IDENTITY_MISMATCH");
           if(command.method==="inspect_active" &&

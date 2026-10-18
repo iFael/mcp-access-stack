@@ -14,6 +14,8 @@ const manifest={releaseTag:tag,sourceCommitSha:sha,
   manifestSha256:"b".repeat(64),verifiedArtifactCount:5};
 const state={active:{releaseId:"1.1.0-beta.90",manifestSha256:"b".repeat(64)},
   previous:{releaseId:"1.1.0-beta.89",manifestSha256:"c".repeat(64)},candidate:null};
+const health={status:"healthy" as const,releaseId:"1.1.0-beta.90",manifestSha256:"b".repeat(64),
+  processId:1234,observedAt:"2026-10-18T04:00:00.000Z"};
 class Socket extends EventEmitter{
   readyState=1;sent:string[]=[];closeCode:number|undefined;
   send(value:string){this.sent.push(value);}
@@ -27,8 +29,9 @@ describe("segregated ACTIVE-only Oracle provider",()=>{
     const socket=new Socket();
     const inspectActive=jest.fn(async(_tag:string,_sha:string)=>manifest);
     const getState=jest.fn(async()=>state);
+    const getHealth=jest.fn(async()=>health);
     const abort=new AbortController();
-    const connector=new OracleActiveProviderConnector({url,token,port:{inspectActive,getState}},
+    const connector=new OracleActiveProviderConnector({url,token,port:{inspectActive,getState,getHealth}},
       {socketFactory:(_url,opts)=>{
         expect(opts.origin).toBe(ORACLE_ACTIVE_ORIGIN);
         expect(opts.headers).toEqual({authorization:"Bearer "+token});
@@ -52,14 +55,23 @@ describe("segregated ACTIVE-only Oracle provider",()=>{
     expect(JSON.parse(socket.sent[1]!)).toMatchObject({
       outcome:"success",result:{method:"get_state",requestId,state},
     });
+    socket.feed({version:1,type:"request",
+      requestId:"11111111-2222-4333-8444-555555555553",
+      method:"get_health",arguments:{requestId}});
+    await flush();
+    expect(getHealth).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(socket.sent[2]!)).toMatchObject({
+      outcome:"success",result:{method:"get_health",requestId,health},
+    });
     abort.abort();await task;
   });
   it("refuses caller-selected paths and never invokes a native reader",async()=>{
     const socket=new Socket();
     const inspectActive=jest.fn(async()=>manifest);
     const getState=jest.fn(async()=>state);
+    const getHealth=jest.fn(async()=>health);
     const abort=new AbortController();
-    const connector=new OracleActiveProviderConnector({url,token,port:{inspectActive,getState}},
+    const connector=new OracleActiveProviderConnector({url,token,port:{inspectActive,getState,getHealth}},
       {socketFactory:()=>{queueMicrotask(()=>socket.emit("open"));
         return socket as unknown as WebSocket;}});
     const task=connector.run(abort.signal);await flush();
@@ -72,7 +84,7 @@ describe("segregated ACTIVE-only Oracle provider",()=>{
     abort.abort();await task;
   });
   it("rejects weak/foreign credentials and unsupported ports",()=>{
-    const port={inspectActive:async()=>manifest,getState:async()=>state};
+    const port={inspectActive:async()=>manifest,getState:async()=>state,getHealth:async()=>health};
     expect(()=>validateOracleActiveProviderOptions({url,token:"weak",port})).toThrow();
     expect(()=>validateOracleActiveProviderOptions({
       url:new URL("wss://evil.example"+ORACLE_ACTIVE_CONNECT_PATH),token,port,

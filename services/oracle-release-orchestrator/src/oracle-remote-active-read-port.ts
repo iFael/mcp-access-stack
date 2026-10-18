@@ -2,7 +2,7 @@ import {randomUUID} from "node:crypto";
 import {ORACLE_ACTIVE_DISPATCH_PATH,ORACLE_ACTIVE_MAX_RESULT_BYTES,
   parseOracleActiveResult,signOracleActiveRequest,
   type OracleActiveReadCommand,type OracleActiveReadResult,
-  type OracleActiveManifest,type OracleActiveState}
+  type OracleActiveManifest,type OracleActiveState,type OracleActiveRuntimeHealth}
   from "@mcp-access-stack/update-control-contract";
 const TAG=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?$/u;
 const SHA=/^[a-f0-9]{40}$/u;
@@ -73,6 +73,13 @@ export class OracleRemoteActiveReadPort{
       response.manifest.sourceCommitSha!==commitSha)
       throw new Error("ORACLE_ACTIVE_INSPECT_MISMATCH");
     return response.manifest;
+  }
+  async getHealth():Promise<OracleActiveRuntimeHealth>{
+    const response=await this.read({method:"get_health",
+      arguments:{requestId:randomUUID()}});
+    if(response.method!=="get_health")
+      throw new Error("ORACLE_ACTIVE_HEALTH_MISMATCH");
+    return response.health;
   }
   async getState():Promise<OracleActiveState>{
     const response=await this.read({method:"get_state",

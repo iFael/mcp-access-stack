@@ -250,6 +250,7 @@ export interface LocalAgentOptions {
   oracleActiveRead?: {
     authorize(tag:string,commitSha:string,ownerScope:string):Promise<boolean>;
     authorizeState(ownerScope:string):Promise<boolean>;
+    authorizeHealth(ownerScope:string):Promise<boolean>;
   };
 }
 
@@ -650,6 +651,33 @@ export class LocalAgent {
           throw new AppError("PERMISSION_DENIED",
             "Oracle active state permission changed.");
         return state;
+      },
+    );
+  }
+
+  /** Audited private native process health for the Oracle active-reader
+   * principal. Never exposed through the public MCP tool catalog. */
+  async oracleInspectActiveHealth(
+    input:GetReleaseStateInput,
+    context:OperationContext={},
+  ){
+    return this.runValidatedAudited(
+      "oracleInspectActiveHealth","read",getReleaseStateInputSchema,input,context,
+      ()=>({targetResource:"oracle:active:runtime-health"}),
+      async(workspace)=>{
+        const authorize=this.oracleActiveReadPolicy?.authorizeHealth;
+        if(workspace.id!=="mcp-access-stack" ||
+          workspace.permissionProfile!=="full-repo-write" ||
+          workspace.confirmationMode!=="trusted-workspace" ||
+          !authorize || !context.ownerScope ||
+          !await authorize(context.ownerScope))
+          throw new AppError("PERMISSION_DENIED",
+            "Oracle active health is not independently enrolled.");
+        const result=await this.releaseLifecycleService.inspectOracleActiveRuntimeHealth(workspace);
+        if(!await authorize(context.ownerScope))
+          throw new AppError("PERMISSION_DENIED",
+            "Oracle active health permission changed.");
+        return result;
       },
     );
   }
