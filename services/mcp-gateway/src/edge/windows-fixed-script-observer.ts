@@ -1,6 +1,6 @@
 import {execFile as execFileCallback} from "node:child_process";
 import {createHash} from "node:crypto";
-import {readFile,lstat,realpath} from "node:fs/promises";
+import {readFile,lstat} from "node:fs/promises";
 import {isAbsolute,join,resolve,sep,parse} from "node:path";
 import {promisify} from "node:util";
 import type {WindowsNativeReadInvoker} from "./windows-read-native-port.js";
@@ -85,8 +85,8 @@ export function createWindowsFixedScriptInvoker(config:WindowsFixedScriptConfig,
     allowed(input);
     await noReparseAncestors(root);
     await noReparseAncestors(installation);
-    if(await realpath(root)!==root)
-      throw new Error("WINDOWS_READER_SCRIPT_UNTRUSTED");
+    // Windows realpath() can change case without changing the target.
+    // noReparseAncestors() has already checked every directory component.
     // The read-only script dot-sources these two helpers; pin all three files
     // to the trusted release inventory rather than only the primary script.
     const pinned:ReadonlyArray<readonly [string,string]>=[
@@ -97,8 +97,7 @@ export function createWindowsFixedScriptInvoker(config:WindowsFixedScriptConfig,
       const target=join(root,filename);
       const stat=await lstat(target);
       if(!stat.isFile() || stat.isSymbolicLink() ||
-        stat.size<128 || stat.size>131072 ||
-        await realpath(target)!==target)
+        stat.size<128 || stat.size>131072)
         throw new Error("WINDOWS_READER_SCRIPT_UNTRUSTED");
       const bytes=await readFile(target);
       const after=await lstat(target);
@@ -118,9 +117,9 @@ export function createWindowsFixedScriptInvoker(config:WindowsFixedScriptConfig,
           "-ExpectedPrepareOperationId",input.expectedPrepareOperationId!);
     }
     if(!dependencies.execute){
+      await noReparseAncestors(resolve(binary,".."));
       const runtime=await lstat(binary);
-      if(!runtime.isFile() || runtime.isSymbolicLink() ||
-        await realpath(binary)!==resolve(binary))
+      if(!runtime.isFile() || runtime.isSymbolicLink())
         throw new Error("WINDOWS_POWERSHELL_UNTRUSTED");
     }
     const result=await execute(binary,args);
