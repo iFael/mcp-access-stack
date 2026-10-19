@@ -19,7 +19,7 @@ function response(result:unknown){
 }
 describe("disabled Windows remote HMAC reader",()=>{
   it("authenticates the exact candidate intent but returns only local proof",async()=>{
-    const fetchImpl=jest.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{
+    const fetchImpl=jest.fn(async(_url:string|URL|Request,init?:RequestInit)=>{
       const raw=JSON.parse(String(init?.body)) as unknown;
       const command=parseWindowsReadCommand(raw);
       expect(init?.method).toBe("POST");
