@@ -395,8 +395,9 @@ export class EdgeOwnerOAuth {
         }
         return jsonResponse(await this.issueTokens(clientId, requested, record.resource, record.userId, rotatedToken, undefined, false));
       }
-      const response = await this.issueTokens(clientId, requested, record.resource, record.userId, rotatedToken, key);
+      // Retire the old token before issuing its successor; failed writes remain fail-closed.
       await this.storage.put(key, { ...record, scopes: requested, rotatedAtMs: Date.now() } satisfies RefreshTokenRecord);
+      const response = await this.issueTokens(clientId, requested, record.resource, record.userId, rotatedToken, key);
       if (record.previousRefreshKey) await this.storage.delete(record.previousRefreshKey);
       return jsonResponse(response);
     }
