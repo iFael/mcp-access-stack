@@ -6,7 +6,9 @@ import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGI
   ORACLE_CANDIDATE_CONNECT_PATH,ORACLE_CANDIDATE_RPC_PATH,
   ORACLE_CANDIDATE_ORIGIN,ORACLE_CANDIDATE_SCOPE,
   ORACLE_ACTIVE_CONNECT_PATH,ORACLE_ACTIVE_RPC_PATH,
-  ORACLE_ACTIVE_ORIGIN,ORACLE_ACTIVE_SCOPE} from "@mcp-access-stack/update-control-contract";
+  ORACLE_ACTIVE_ORIGIN,ORACLE_ACTIVE_SCOPE,
+  WINDOWS_READ_CONNECT_PATH,WINDOWS_READ_RPC_PATH,
+  WINDOWS_READ_ORIGIN,WINDOWS_READ_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -31,6 +33,7 @@ const SOURCE_TOKEN="oracle-source-separated-token-".padEnd(48,"z");
 const WORKFLOW_TOKEN="oracle-workflow-separated-token-".padEnd(48,"w");
 const CANDIDATE_TOKEN="oracle-candidate-separated-token-".padEnd(48,"c");
 const ACTIVE_TOKEN="oracle-active-separated-token-".padEnd(48,"a");
+const WINDOWS_TOKEN="windows-read-separated-token-".padEnd(48,"v");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -148,7 +151,8 @@ function createHarness() {
       UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
       UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN,
       UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN:CANDIDATE_TOKEN,
-      UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN:ACTIVE_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN:ACTIVE_TOKEN,
+      UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN:WINDOWS_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -191,7 +195,8 @@ function createHarness() {
       UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
       UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN,
       UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN:CANDIDATE_TOKEN,
-      UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN:ACTIVE_TOKEN } satisfies OracleChannelEnvironment,
+      UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN:ACTIVE_TOKEN,
+      UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN:WINDOWS_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -240,6 +245,66 @@ function attachOraclePeer(
     void state.flush();
   };
 }
+
+describe("Windows-only Durable Object read realm",()=>{
+  it("requires a separate WSS token and origin, with its own scope",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=WINDOWS_READ_ORIGIN)=>new Request(
+      "https://worker.example"+WINDOWS_READ_CONNECT_PATH,{
+        method:"GET",headers:{upgrade:"websocket",origin,
+          authorization:"Bearer "+token},
+      });
+    expect((await h.channel().fetch(connect(ACTIVE_TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(WINDOWS_TOKEN,ORACLE_ACTIVE_ORIGIN))).status).toBe(403);
+    expect((await h.channel().fetch(connect(WINDOWS_TOKEN))).status).toBe(200);
+    expect(h.state.getWebSockets(WINDOWS_READ_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_ACTIVE_SCOPE)).toHaveLength(0);
+  });
+  it("correlates original candidate intent and rejects extra data or forged operation",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+WINDOWS_READ_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:WINDOWS_READ_ORIGIN,
+        authorization:"Bearer "+WINDOWS_TOKEN},
+    }));
+    const peer=h.pairs.at(-1)!;
+    const args={
+      requestId:"11111111-2222-4333-8444-555555555550",
+      tag:"v1.1.0-beta.90",commitSha:"a".repeat(40),
+      runId:"11111111-2222-4333-8444-555555555551",
+      operationId:"11111111-2222-4333-8444-555555555552",
+      prepareOperationId:"11111111-2222-4333-8444-555555555553",
+    };
+    const candidate={releaseId:args.tag.slice(1),manifestSha256:"b".repeat(64)};
+    const proof={scope:"local_hash_integrity_only",
+      releaseTag:args.tag,sourceCommitSha:args.commitSha,
+      manifestSha256:candidate.manifestSha256,verifiedArtifactCount:9,
+      state:{active:null,previous:null,candidate},
+      localPrepareWitness:{kind:"local_candidate_prepare",
+        runId:args.runId,prepareOperationId:args.prepareOperationId,
+        releaseId:candidate.releaseId,manifestSha256:candidate.manifestSha256},
+    };
+    let forge=false;
+    attachOraclePeer(h.channel(),h.state,peer.client,peer.server,()=>({
+      method:"inspect_candidate",requestId:args.requestId,
+      proof:{...proof,...(forge?{externalEffectReceipt:"trusted"}:{})},
+    }));
+    const rpc=(argumentsValue:unknown)=>h.channel().fetch(new Request(
+      "https://worker.internal"+WINDOWS_READ_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({method:"inspect_candidate",arguments:argumentsValue}),
+      }));
+    expect((await rpc({...args,path:"C:\\\\secrets"})).status).toBe(400);
+    const good=await rpc(args);
+    expect(good.status).toBe(200);
+    expect(await good.json()).toMatchObject({
+      result:{method:"inspect_candidate",
+        proof:{scope:"local_hash_integrity_only"}}});
+    forge=true;
+    expect((await rpc(args)).status).toBe(502);
+    expect(h.state.getWebSockets(WINDOWS_READ_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_ACTIVE_SCOPE)).toHaveLength(0);
+  });
+});
 
 describe("ACTIVE-only Oracle Durable Object isolation",()=>{
   it("requires its distinct bearer and origin, never borrowing candidate",async()=>{

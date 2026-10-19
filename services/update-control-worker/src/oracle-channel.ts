@@ -35,6 +35,10 @@ import {
   ORACLE_ACTIVE_ORIGIN,ORACLE_ACTIVE_TIMEOUT_MS,ORACLE_ACTIVE_MAX_RESULT_BYTES,
   parseOracleActiveCommand,parseOracleActiveResult,
   type OracleActiveReadCommand,
+  WINDOWS_READ_CONNECT_PATH,WINDOWS_READ_RPC_PATH,WINDOWS_READ_SCOPE,
+  WINDOWS_READ_ORIGIN,WINDOWS_READ_TIMEOUT_MS,WINDOWS_READ_MAX_RESULT_BYTES,
+  parseWindowsReadCommand,parseWindowsReadResult,
+  type WindowsReadCommand,
 } from "@mcp-access-stack/update-control-contract";
 
 export {
@@ -71,6 +75,7 @@ export interface OracleChannelEnvironment {
   readonly UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN?: string;
   readonly UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN?: string;
   readonly UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN?: string;
 }
 
 export interface OracleChannelNamespace {
@@ -94,6 +99,7 @@ interface PendingRpc {
   readonly candidateMethod?: OracleCandidateReadCommand["method"];
   readonly candidateArgs?: OracleCandidateReadCommand["arguments"];
   readonly activeCommand?: OracleActiveReadCommand;
+  readonly windowsCommand?: WindowsReadCommand;
   readonly resolve: (response: Response) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -122,19 +128,21 @@ export class UpdateControlOracleChannel {
 
     if ([ORACLE_CHANNEL_CONNECT_PATH,ORACLE_CONTROL_CONNECT_PATH,ORACLE_SOURCE_CONNECT_PATH,
       ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_CANDIDATE_CONNECT_PATH,
-      ORACLE_ACTIVE_CONNECT_PATH].includes(url.pathname)) {
+      ORACLE_ACTIVE_CONNECT_PATH,WINDOWS_READ_CONNECT_PATH].includes(url.pathname)) {
       return this.connectOracle(request,url,url.pathname===ORACLE_CONTROL_CONNECT_PATH,
         url.pathname===ORACLE_SOURCE_CONNECT_PATH,url.pathname===ORACLE_WORKFLOW_CONNECT_PATH,
         url.pathname===ORACLE_CANDIDATE_CONNECT_PATH,
-        url.pathname===ORACLE_ACTIVE_CONNECT_PATH);
+        url.pathname===ORACLE_ACTIVE_CONNECT_PATH,
+        url.pathname===WINDOWS_READ_CONNECT_PATH);
     }
     if ([ORACLE_CHANNEL_RPC_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_SOURCE_RPC_PATH,
       ORACLE_WORKFLOW_RPC_PATH,ORACLE_CANDIDATE_RPC_PATH,
-      ORACLE_ACTIVE_RPC_PATH].includes(url.pathname)) {
+      ORACLE_ACTIVE_RPC_PATH,WINDOWS_READ_RPC_PATH].includes(url.pathname)) {
       return this.handleRpc(request,url,url.pathname===ORACLE_CONTROL_RPC_PATH,
         url.pathname===ORACLE_SOURCE_RPC_PATH,url.pathname===ORACLE_WORKFLOW_RPC_PATH,
         url.pathname===ORACLE_CANDIDATE_RPC_PATH,
-        url.pathname===ORACLE_ACTIVE_RPC_PATH);
+        url.pathname===ORACLE_ACTIVE_RPC_PATH,
+        url.pathname===WINDOWS_READ_RPC_PATH);
     }
     return jsonResponse({ error: "not_found" }, 404);
   }
@@ -154,9 +162,10 @@ export class UpdateControlOracleChannel {
       const workflow=this.state.getWebSockets(ORACLE_WORKFLOW_SCOPE).includes(socket);
       const candidate=this.state.getWebSockets(ORACLE_CANDIDATE_SCOPE).includes(socket);
       const activeRead=this.state.getWebSockets(ORACLE_ACTIVE_SCOPE).includes(socket);
+      const windowsRead=this.state.getWebSockets(WINDOWS_READ_SCOPE).includes(socket);
       const active = this.state.getWebSockets(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
         workflow?ORACLE_WORKFLOW_SCOPE:candidate?ORACLE_CANDIDATE_SCOPE:
-          activeRead?ORACLE_ACTIVE_SCOPE:ORACLE_CHANNEL_SCOPE);
+          activeRead?ORACLE_ACTIVE_SCOPE:windowsRead?WINDOWS_READ_SCOPE:ORACLE_CHANNEL_SCOPE);
       if (!active.includes(socket)) {
         this.protocolViolation(socket, 1008, "inactive Oracle connection");
         return;
@@ -183,13 +192,16 @@ export class UpdateControlOracleChannel {
         if (utf8ByteLength(responseBody) > (source?ORACLE_SOURCE_MAX_RESULT_BYTES:
           workflow?ORACLE_WORKFLOW_MAX_RESULT_BYTES:
           candidate?ORACLE_CANDIDATE_MAX_RESULT_BYTES:
-          activeRead?ORACLE_ACTIVE_MAX_RESULT_BYTES:ORACLE_CHANNEL_MAX_FRAME_BYTES) ||
+          activeRead?ORACLE_ACTIVE_MAX_RESULT_BYTES:
+          windowsRead?WINDOWS_READ_MAX_RESULT_BYTES:ORACLE_CHANNEL_MAX_FRAME_BYTES) ||
             (control && !validControlResult(frame.result)) ||
             (source && (!pending.sourceMethod || !validSourceResult(pending.sourceMethod,frame.result))) ||
             (workflow && (!pending.workflowMethod || !validWorkflowResult(pending.workflowMethod,frame.result))) ||
             (candidate && (!pending.candidateArgs || !validCandidateResult(frame.result,pending.candidateArgs))) ||
             (activeRead && (!pending.activeCommand ||
-              !validActiveResult(frame.result,pending.activeCommand)))) {
+              !validActiveResult(frame.result,pending.activeCommand))) ||
+            (windowsRead && (!pending.windowsCommand ||
+              !validWindowsResult(frame.result,pending.windowsCommand)))) {
           this.finish(pending, jsonResponse({ error: "invalid_oracle_response" }, 502));
           return;
         }
@@ -216,12 +228,13 @@ export class UpdateControlOracleChannel {
     this.failPendingForSocket(socket);
   }
 
-  private async connectOracle(request: Request, url: URL, control=false, source=false, workflow=false, candidate=false, activeRead=false): Promise<Response> {
+  private async connectOracle(request: Request, url: URL, control=false, source=false, workflow=false, candidate=false, activeRead=false, windowsRead=false): Promise<Response> {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
         url.pathname !== (control?ORACLE_CONTROL_CONNECT_PATH:source?ORACLE_SOURCE_CONNECT_PATH:
           workflow?ORACLE_WORKFLOW_CONNECT_PATH:candidate?ORACLE_CANDIDATE_CONNECT_PATH:
-            activeRead?ORACLE_ACTIVE_CONNECT_PATH:ORACLE_CHANNEL_CONNECT_PATH)) {
+            activeRead?ORACLE_ACTIVE_CONNECT_PATH:
+              windowsRead?WINDOWS_READ_CONNECT_PATH:ORACLE_CHANNEL_CONNECT_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if (url.href.length > MAX_URL_LENGTH || !headersWithinBounds(request.headers)) {
@@ -232,7 +245,8 @@ export class UpdateControlOracleChannel {
     }
     if (request.headers.get("origin") !== (control?ORACLE_CONTROL_ORIGIN:source?ORACLE_SOURCE_ORIGIN:
       workflow?ORACLE_WORKFLOW_ORIGIN:candidate?ORACLE_CANDIDATE_ORIGIN:
-        activeRead?ORACLE_ACTIVE_ORIGIN:ORACLE_CHANNEL_ORIGIN)) {
+        activeRead?ORACLE_ACTIVE_ORIGIN:
+          windowsRead?WINDOWS_READ_ORIGIN:ORACLE_CHANNEL_ORIGIN)) {
       return jsonResponse({ error: "invalid_origin" }, 403);
     }
 
@@ -240,6 +254,7 @@ export class UpdateControlOracleChannel {
       workflow?this.env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:
       candidate?this.env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN:
       activeRead?this.env.UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN:
+      windowsRead?this.env.UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN:
         this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN;
     if ((control && expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN) ||
        (source && (expected===this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN || expected===this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN)) ||
@@ -259,6 +274,15 @@ export class UpdateControlOracleChannel {
       this.env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN,
       this.env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN].some(other=>other===expected))
       return jsonResponse({error:"oracle_channel_not_configured"},503);
+    if (windowsRead && [
+      this.env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN,
+      this.env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN,
+      this.env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN,
+      this.env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN,
+      this.env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN,
+      this.env.UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN,
+    ].some(other=>other===expected))
+      return jsonResponse({error:"windows_read_not_configured"},503);
     if (typeof expected !== "string" || expected.length < TOKEN_MIN_LENGTH ||
         expected.length > TOKEN_MAX_LENGTH || /[\r\n\0]/u.test(expected)) {
       return jsonResponse({ error: "oracle_channel_not_configured" }, 503);
@@ -276,7 +300,8 @@ export class UpdateControlOracleChannel {
     try {
       const scope=control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
         workflow?ORACLE_WORKFLOW_SCOPE:candidate?ORACLE_CANDIDATE_SCOPE:
-          activeRead?ORACLE_ACTIVE_SCOPE:ORACLE_CHANNEL_SCOPE;
+          activeRead?ORACLE_ACTIVE_SCOPE:
+          windowsRead?WINDOWS_READ_SCOPE:ORACLE_CHANNEL_SCOPE;
       for (const previous of this.state.getWebSockets(scope)) {
         this.failPendingForSocket(previous);
         previous.close(1012, "Oracle connection replaced");
@@ -289,11 +314,12 @@ export class UpdateControlOracleChannel {
     }
   }
 
-  private async handleRpc(request: Request, url: URL, control=false, source=false, workflow=false, candidate=false, activeRead=false): Promise<Response> {
+  private async handleRpc(request: Request, url: URL, control=false, source=false, workflow=false, candidate=false, activeRead=false, windowsRead=false): Promise<Response> {
     if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "POST" });
     if (url.search || url.hash || url.pathname !== (control?ORACLE_CONTROL_RPC_PATH:source?ORACLE_SOURCE_RPC_PATH:
       workflow?ORACLE_WORKFLOW_RPC_PATH:candidate?ORACLE_CANDIDATE_RPC_PATH:
-        activeRead?ORACLE_ACTIVE_RPC_PATH:ORACLE_CHANNEL_RPC_PATH)) {
+        activeRead?ORACLE_ACTIVE_RPC_PATH:
+        windowsRead?WINDOWS_READ_RPC_PATH:ORACLE_CHANNEL_RPC_PATH)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if ((request.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
@@ -316,11 +342,12 @@ export class UpdateControlOracleChannel {
       return jsonResponse({ error: "invalid_request" }, 400);
     }
 
-    let command: ReadCommand | OracleControlRpcCommand | OracleSourceReadCommand | OracleWorkflowCommand | OracleCandidateReadCommand | OracleActiveReadCommand;
+    let command: ReadCommand | OracleControlRpcCommand | OracleSourceReadCommand | OracleWorkflowCommand | OracleCandidateReadCommand | OracleActiveReadCommand | WindowsReadCommand;
     try {
       command = control?parseOracleControlCommand(value):source?parseOracleSourceCommand(value):
         workflow?parseOracleWorkflowCommand(value):candidate?parseOracleCandidateCommand(value):
-          activeRead?parseOracleActiveCommand(value):parseReadCommand(value);
+          activeRead?parseOracleActiveCommand(value):
+          windowsRead?parseWindowsReadCommand(value):parseReadCommand(value);
     } catch (error) {
       if (error instanceof UpdateControlInputError || error instanceof InvalidRpcCommandError) {
         return jsonResponse({ error: "invalid_request" }, 400);
@@ -330,7 +357,8 @@ export class UpdateControlOracleChannel {
 
     const socket = this.getActiveOracleSocket(control?ORACLE_CONTROL_SCOPE:source?ORACLE_SOURCE_SCOPE:
       workflow?ORACLE_WORKFLOW_SCOPE:candidate?ORACLE_CANDIDATE_SCOPE:
-        activeRead?ORACLE_ACTIVE_SCOPE:ORACLE_CHANNEL_SCOPE);
+        activeRead?ORACLE_ACTIVE_SCOPE:
+        windowsRead?WINDOWS_READ_SCOPE:ORACLE_CHANNEL_SCOPE);
     if (!socket) return jsonResponse({ error: "oracle_unavailable" }, 503);
     if (this.pending.size >= ORACLE_CHANNEL_MAX_IN_FLIGHT) {
       return jsonResponse({ error: "oracle_channel_busy" }, 503);
@@ -361,12 +389,14 @@ export class UpdateControlOracleChannel {
         ...(candidate?{candidateMethod:(command as OracleCandidateReadCommand).method,
           candidateArgs:(command as OracleCandidateReadCommand).arguments}:{}),
         ...(activeRead?{activeCommand:command as OracleActiveReadCommand}:{}),
+        ...(windowsRead?{windowsCommand:command as WindowsReadCommand}:{}),
         resolve,
         timer: setTimeout(() => {
           this.finish(pending, jsonResponse({ error: "transport_timeout" }, 504));
         }, control?ORACLE_CONTROL_TIMEOUT_MS:source?ORACLE_SOURCE_TIMEOUT_MS:
           workflow?ORACLE_WORKFLOW_TIMEOUT_MS:candidate?ORACLE_CANDIDATE_TIMEOUT_MS:
           activeRead?ORACLE_ACTIVE_TIMEOUT_MS:
+          windowsRead?WINDOWS_READ_TIMEOUT_MS:
             rpcTimeoutFor(command as ReadCommand)),
       };
       this.pending.set(requestId, pending);
@@ -415,6 +445,9 @@ export class UpdateControlOracleChannel {
   }
 }
 
+function validWindowsResult(value:unknown,command:WindowsReadCommand):boolean{
+  try{parseWindowsReadResult(command,value);return true;}catch{return false;}
+}
 function validActiveResult(value:unknown,command:OracleActiveReadCommand):boolean{
   try{
     const result=parseOracleActiveResult(command.method,value);
