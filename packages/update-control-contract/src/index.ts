@@ -7,6 +7,9 @@ export type {OracleSourceReadCommand,OracleSourceReadChecks} from "./oracle-sour
 export {ORACLE_CANDIDATE_CONNECT_PATH,ORACLE_CANDIDATE_RPC_PATH,ORACLE_CANDIDATE_DISPATCH_PATH,ORACLE_CANDIDATE_SCOPE,ORACLE_CANDIDATE_ORIGIN,ORACLE_CANDIDATE_MAX_BODY_BYTES,ORACLE_CANDIDATE_MAX_RESULT_BYTES,ORACLE_CANDIDATE_TIMEOUT_MS,parseOracleCandidateCommand,parseOracleCandidateReceipt,oracleCandidateCanonicalBytes,signOracleCandidateRequest} from "./oracle-candidate-read.js";
 export type {OracleCandidateReadCommand,OracleCandidateReadReceipt} from "./oracle-candidate-read.js";
 
+export {WINDOWS_READ_CONNECT_PATH,WINDOWS_READ_RPC_PATH,WINDOWS_READ_DISPATCH_PATH,WINDOWS_READ_SCOPE,WINDOWS_READ_ORIGIN,WINDOWS_READ_MAX_BODY_BYTES,WINDOWS_READ_MAX_RESULT_BYTES,WINDOWS_READ_TIMEOUT_MS,parseWindowsReadCommand,parseWindowsReadResult,windowsReadCanonicalBytes,signWindowsReadRequest} from "./windows-read.js";
+export type {WindowsReadCommand,WindowsReadResult,WindowsReadState,WindowsReadSlot,WindowsReadProof} from "./windows-read.js";
+
 export {ORACLE_ACTIVE_CONNECT_PATH,ORACLE_ACTIVE_RPC_PATH,ORACLE_ACTIVE_DISPATCH_PATH,ORACLE_ACTIVE_SCOPE,ORACLE_ACTIVE_ORIGIN,ORACLE_ACTIVE_MAX_BODY_BYTES,ORACLE_ACTIVE_MAX_RESULT_BYTES,ORACLE_ACTIVE_TIMEOUT_MS,parseOracleActiveCommand,parseOracleActiveResult,oracleActiveCanonicalBytes,signOracleActiveRequest} from "./oracle-active-read.js";
 export type {OracleActiveReadCommand,OracleActiveReadResult,OracleActiveManifest,OracleActiveState,OracleActivePointer,OracleActiveRuntimeHealth} from "./oracle-active-read.js";
 
