@@ -48,7 +48,8 @@ export function resolveWindowsRemoteReadPort(
       return hex;
     }catch{throw new Error("WINDOWS_READ_HOST_CREDENTIAL_INVALID");}
   };
-  key();
-  return new WindowsRemoteReadPort({endpoint,key:async()=>key(),
+  const port=new WindowsRemoteReadPort({endpoint,key:async()=>key(),
     ...(fetchImpl?{fetchImpl}:{})});
+  key();
+  return port;
 }
