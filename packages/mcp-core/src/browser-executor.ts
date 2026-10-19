@@ -1,6 +1,8 @@
 import type {
   BrowserActionResult,
   BrowserClickInput,
+  BrowserHoverInput,
+  BrowserScrollInput,
   BrowserCloseTabInput,
   BrowserConnectInput,
   BrowserConnectResult,
@@ -77,6 +79,8 @@ export interface BrowserExecutor {
   navigate(input: BrowserNavigateInput, context?: OperationContext): Promise<BrowserTabResult>;
   snapshot(input: BrowserSnapshotInput, context?: OperationContext): Promise<BrowserSnapshotResult>;
   click(input: BrowserClickInput, context?: OperationContext): Promise<BrowserActionResult>;
+  hover(input: BrowserHoverInput, context?: OperationContext): Promise<BrowserActionResult>;
+  scroll(input: BrowserScrollInput, context?: OperationContext): Promise<BrowserActionResult>;
   fill(input: BrowserFillInput, context?: OperationContext): Promise<BrowserActionResult>;
   press(input: BrowserPressInput, context?: OperationContext): Promise<BrowserActionResult>;
   wait(input: BrowserWaitInput, context?: OperationContext): Promise<BrowserActionResult>;

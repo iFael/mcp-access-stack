@@ -14,7 +14,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "navigate", "click", "fill", "press", "sequence",
+  "open", "navigate", "click", "hover", "scroll", "fill", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -24,13 +24,18 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "navigate",
   "snapshot",
   "click",
+  "hover",
+  "scroll",
   "fill",
   "press",
   "wait",
   "extract",
   "sequence",
   "screenshot",
+  "goBack",
+  "goForward",
   "tabGroups",
+  "guardedActionsV1",
   "closeTab",
   "finishTask",
 ] as const;
@@ -204,6 +209,8 @@ async function perform(operation, input, signal, timing) {
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
     case "click": return click(input, signal);
+    case "hover": return hover(input, signal);
+    case "scroll": return scroll(input, signal);
     case "fill": return fill(input, signal);
     case "press": return press(input, signal);
     case "wait": return wait(input, signal);
@@ -351,39 +358,201 @@ async function snapshot(input) {
   };
 }
 
-async function click(input) {
+async function click(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  const [result] = await chrome.scripting.executeScript({
+  throwIfAborted(signal, "click", false);
+  if (!input.guard || input.guard.ref !== input.ref) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome interaction requires a bound element guard.");
+  }
+  const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
-    func: clickRef,
-    args: [input.ref],
+    func: probeGuardedElement,
+    args: [input.ref, input.guard, false],
   });
-  if (!result?.result) throw coded("LOCATOR_NOT_FOUND", "The personal browser element ref was not found.");
-  return { tabId: input.tabId, completed: true };
+  const point = injection?.result;
+  if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    throwIfAborted(signal, "click", false);
+    const button = input.button ?? "left";
+    const clickCount = input.clickCount ?? 1;
+    const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
+    const modifiers = (input.modifiers ?? []).reduce((mask, part) => mask | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[part] ?? 0), 0);
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: point.x, y: point.y, modifiers,
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: point.x, y: point.y, button, buttons, clickCount, modifiers,
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, clickCount, modifiers,
+    });
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
 }
 
-async function fill(input) {
+async function hover(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  const [result] = await chrome.scripting.executeScript({
+  if (!input.guard || input.guard.ref !== input.ref) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Hover requires a guard from the current snapshot.");
+  }
+  const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
-    func: fillRef,
-    args: [input.ref, input.value],
+    func: probeGuardedElement,
+    args: [input.ref, input.guard, false],
   });
-  if (!result?.result) throw coded("LOCATOR_NOT_FOUND", "The personal browser field ref was not found.");
-  return { tabId: input.tabId, completed: true };
+  const point = injection?.result;
+  if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Hover reference is stale or obscured.");
+  throwIfAborted(signal, "hover", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: point.x, y: point.y, button: "none",
+    });
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
 }
 
-async function press(input) {
+async function scroll(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  await chrome.scripting.executeScript({
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || tab.url !== input.guard.url || (input.ref && input.guard.ref !== input.ref)) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll requires a guard from the current page.");
+  }
+  let point;
+  if (input.ref) {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probeGuardedElement,
+      args: [input.ref, input.guard, false],
+    });
+    point = injection?.result;
+    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll target is stale or obscured.");
+  } else {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: () => ({ x: Math.floor(innerWidth / 2), y: Math.floor(innerHeight / 2) }),
+    });
+    point = injection?.result;
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome viewport is unavailable.");
+    }
+  }
+  throwIfAborted(signal, "scroll", false);
+  const deltaX = input.direction === "left" ? -input.amount : input.direction === "right" ? input.amount : 0;
+  const deltaY = input.direction === "up" ? -input.amount : input.direction === "down" ? input.amount : 0;
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseWheel", x: point.x, y: point.y, deltaX, deltaY,
+    });
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function fill(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  if (!input.guard || input.guard.ref !== input.ref) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome field input requires a bound element guard.");
+  }
+  const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
-    func: pressKey,
-    args: [input.key],
+    func: probeGuardedElement,
+    args: [input.ref, input.guard, true],
   });
-  return { tabId: input.tabId, completed: true };
+  if (!injection?.result || injection.result.error) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The field changed since the personal browser snapshot.");
+  }
+  throwIfAborted(signal, "fill", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    // Select the focused field's existing content using trusted keyboard input.
+    for (const event of [
+      { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 },
+      { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 },
+      { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
+      { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
+    ]) await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", event);
+    await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function press(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome keyboard input requires the original page URL.");
+  }
+  const keys = String(input.key).trim().split(/\s+/u).map(parseChromeKey);
+  const repeat = input.repeat ?? 1;
+  if (keys.length * repeat > 100) throw coded("LIMIT_EXCEEDED", "Chrome key sequence exceeds 100 inputs.");
+  if (repeat > 1 && keys.some((key) => key.key === "Enter")) throw coded("ACTION_BLOCKED_BY_POLICY", "Repeating Enter can submit multiple forms.");
+  throwIfAborted(signal, "press", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    for (let n = 0; n < repeat; n += 1) {
+      for (const key of keys) {
+        throwIfAborted(signal, "press", true);
+        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          type: "keyDown", key: key.key, code: key.code,
+          windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
+          modifiers: key.modifiers, ...(key.text ? { text: key.text } : {}),
+        });
+        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          type: "keyUp", key: key.key, code: key.code,
+          windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
+          modifiers: key.modifiers,
+        });
+      }
+    }
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
 }
 
 async function wait(input, signal) {
@@ -431,9 +600,9 @@ async function sequence(input, signal, timing) {
     const step = input.steps[index];
     let value;
     if (step.action === "navigate") value = await navigate({ tabId: input.tabId, url: step.url }, signal);
-    else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref }, signal);
-    else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value }, signal);
-    else if (step.action === "press") value = await press({ tabId: input.tabId, key: step.key }, signal);
+    else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref, guard: step.guard, button: step.button, clickCount: step.clickCount, modifiers: step.modifiers }, signal);
+    else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value, guard: step.guard }, signal);
+    else if (step.action === "press") value = await press({ tabId: input.tabId, key: step.key, repeat: step.repeat, guard: step.guard }, signal);
     else if (step.action === "wait") value = await wait({ tabId: input.tabId, timeoutMs: step.timeoutMs, text: step.text, ref: step.ref }, signal);
     else if (step.action === "extract") value = await extract({ tabId: input.tabId, ref: step.ref, selector: step.selector, format: step.format }, signal);
     results.push({
@@ -549,7 +718,7 @@ async function goForward(input, signal) {
 
 async function closeTab(input) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
-  const metadata = await requireOwnedMetadata(chromeTabId);
+  const metadata = await requireOwnedMetadata(chromeTabId, true);
   if (metadata.protected || metadata.sticky) {
     throw coded("TAB_PROTECTED", "The personal browser tab is protected and cannot be closed directly.");
   }
@@ -634,7 +803,7 @@ async function assignMcpTaskGroup(chromeTabId, taskId, owned) {
   return groupId;
 }
 
-async function requireOwnedMetadata(chromeTabId) {
+async function requireOwnedMetadata(chromeTabId, forCleanup = false) {
   return withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     const metadata = owned[String(chromeTabId)];
@@ -645,6 +814,9 @@ async function requireOwnedMetadata(chromeTabId) {
       await writeOwnedTabs(owned);
       throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
     }
+    // Page-initiated navigation and redirects must not turn an authorized
+    // public tab into an implicit private-site grant.
+    if (!forCleanup) assertPersonalNavigationTarget(tab.url);
     return { ...metadata };
   });
 }
@@ -752,6 +924,8 @@ function snapshotPage(generation) {
     "[contenteditable='true']",
   ].join(",");
   const refs = [];
+  const liveRefs = new Map();
+  globalThis.__mcpV3OwnedRefElements = liveRefs;
   const refLines = [];
   const elements = Array.from(document.querySelectorAll(selector)).slice(0, 2000);
   for (let index = 0; index < elements.length; index += 1) {
@@ -760,7 +934,7 @@ function snapshotPage(generation) {
     const rect = element.getBoundingClientRect();
     if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) continue;
     const ref = "p-" + generation + "-" + (refs.length + 1);
-    element.setAttribute("data-mcp-v3-ref", ref);
+    liveRefs.set(ref, element);
     const role = element.getAttribute("role") || defaultRole(element);
     const name = normalizeText(accessibleName(element)).slice(0, 500);
     const states = semanticStates(element, role);
@@ -771,7 +945,7 @@ function snapshotPage(generation) {
       (states.length ? " " + states.map((state) => "[" + state + "]").join(" ") : "") +
       " [ref=" + ref + "]",
     );
-    if (refs.length >= 1000) break;
+    if (refs.length >= 2000) break;
   }
   const pageText = (document.body?.innerText || "").slice(0, 180000);
   const refText = refLines.join("\\n");
@@ -866,58 +1040,90 @@ function snapshotPage(generation) {
   }
 }
 
-function clickRef(ref) {
-  const element = document.querySelector("[data-mcp-v3-ref='" + CSS.escape(ref) + "']");
-  if (!element) return false;
+
+function probeGuardedElement(ref, guard, focus) {
+  if (!guard || guard.url !== location.href || guard.ref !== ref) return { error: "stale_page" };
+  const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
+  if (!element || !element.isConnected) return { error: "stale_ref" };
+  const tag = element.tagName.toLowerCase();
+  const type = String(element.getAttribute("type") || "").toLowerCase();
+  const role = element.getAttribute("role") ||
+    (tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
+      tag === "textarea" ? "textbox" : tag === "select" ? element.multiple ? "listbox" : "combobox" :
+      tag === "input" ? ["button","submit","reset","image","file"].includes(type) ? "button" :
+        type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
+        type === "range" ? "slider" : type === "number" ? "spinbutton" : "textbox" : "generic");
+  const labelledBy = element.getAttribute("aria-labelledby");
+  const labelledByText = labelledBy ? labelledBy.split(/\\s+/u)
+    .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+    .filter(Boolean).join(" ") : "";
+  const labelsText = Array.from(element.labels || []).map((label) => label.innerText || label.textContent || "").filter(Boolean).join(" ");
+  const safeButtonValue = tag === "input" && ["button","submit","reset"].includes(type) ? String(element.value || "") : "";
+  const name = String(element.getAttribute("aria-label") || labelledByText || labelsText ||
+    element.getAttribute("placeholder") || element.getAttribute("title") || safeButtonValue ||
+    element.innerText || element.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
+  if (guard.role !== role || guard.name !== name) return { error: "target_changed" };
+  if (focus && !(element instanceof HTMLInputElement && !["checkbox", "radio", "file", "button", "submit", "reset", "hidden"].includes(type)) &&
+      !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement && element.isContentEditable)) {
+    return { error: "not_editable" };
+  }
   element.scrollIntoView({ block: "center", inline: "center" });
-  element.focus?.();
-  element.click();
-  return true;
+  if (focus) element.focus?.();
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const top = document.elementFromPoint(x, y);
+  if (!top || (top !== element && !element.contains(top))) return { error: "obscured" };
+  return { x, y };
 }
 
-function fillRef(ref, value) {
-  const element = document.querySelector("[data-mcp-v3-ref='" + CSS.escape(ref) + "']");
-  if (!element) return false;
-  element.scrollIntoView({ block: "center", inline: "center" });
-  element.focus?.();
-  if (element instanceof HTMLInputElement) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    setter?.call(element, value);
-  } else if (element instanceof HTMLTextAreaElement) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-    setter?.call(element, value);
-  } else if (element instanceof HTMLElement && element.isContentEditable) {
-    element.textContent = value;
-  } else {
-    return false;
+function parseChromeKey(input) {
+  const pieces = String(input).split("+").map((part) => part.trim()).filter(Boolean);
+  if (pieces.length < 1 || pieces.length > 5) throw coded("INVALID_ARGUMENT", "Invalid Chrome key combination.");
+  let modifiers = 0;
+  for (const raw of pieces.slice(0, -1)) {
+    const part = raw.toLowerCase();
+    const bit = part === "ctrl" || part === "control" ? 2 :
+      part === "alt" || part === "option" ? 1 :
+      part === "meta" || part === "cmd" || part === "command" ? 4 :
+      part === "shift" ? 8 : 0;
+    if (!bit || (modifiers & bit)) throw coded("INVALID_ARGUMENT", "Invalid Chrome keyboard modifier.");
+    modifiers |= bit;
   }
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
-  return true;
-}
-
-function pressKey(key) {
-  const target = document.activeElement || document.body;
-  const options = { key, code: key, bubbles: true, cancelable: true };
-  target.dispatchEvent(new KeyboardEvent("keydown", options));
-  target.dispatchEvent(new KeyboardEvent("keypress", options));
-  target.dispatchEvent(new KeyboardEvent("keyup", options));
-  if (key === "Enter" && target instanceof HTMLElement) {
-    const form = target.closest("form");
-    if (form instanceof HTMLFormElement) form.requestSubmit?.();
+  const name = pieces[pieces.length - 1];
+  const lookup = {
+    Enter: ["Enter", 13], Return: ["Enter", 13], Tab: ["Tab", 9],
+    Escape: ["Escape", 27], Backspace: ["Backspace", 8], Delete: ["Delete", 46],
+    ArrowUp: ["ArrowUp", 38], ArrowDown: ["ArrowDown", 40],
+    ArrowLeft: ["ArrowLeft", 37], ArrowRight: ["ArrowRight", 39],
+    Space: ["Space", 32],
+  };
+  const knownName = Object.keys(lookup).find((value) => value.toLowerCase() === name.toLowerCase());
+  if (knownName) {
+    const [code, keyCode] = lookup[knownName];
+    return { key: knownName === "Return" ? "Enter" : knownName === "Space" ? " " : knownName,
+      code, keyCode, modifiers, ...(name.toLowerCase() === "enter" && !modifiers ? { text: "\\r" } : {}) };
   }
-  return true;
+  if (!/^[a-z0-9]$/iu.test(name)) throw coded("INVALID_ARGUMENT", "Unsupported Chrome key.");
+  const upper = name.toUpperCase();
+  const isDigit = /^[0-9]$/u.test(name);
+  return { key: modifiers & 8 ? upper : name.toLowerCase(),
+    code: (isDigit ? "Digit" : "Key") + upper,
+    keyCode: upper.charCodeAt(0), modifiers,
+    ...(!modifiers ? { text: name } : {}),
+  };
 }
 
 function waitProbe(text, ref) {
-  if (typeof ref === "string" && !document.querySelector("[data-mcp-v3-ref='" + CSS.escape(ref) + "']")) return false;
+  if (typeof ref === "string" && !globalThis.__mcpV3OwnedRefElements?.get(ref)?.isConnected) return false;
   if (typeof text === "string" && !(document.body?.innerText || "").includes(text)) return false;
   return true;
 }
 
 function extractPage(ref, selector, format) {
   let target = document.body;
-  if (typeof ref === "string") target = document.querySelector("[data-mcp-v3-ref='" + CSS.escape(ref) + "']");
+  if (typeof ref === "string") target = globalThis.__mcpV3OwnedRefElements?.get(ref);
   else if (typeof selector === "string") target = document.querySelector(selector);
   if (!target) return { found: false };
   if (format === "html") return { found: true, value: target.outerHTML || target.innerHTML || "" };

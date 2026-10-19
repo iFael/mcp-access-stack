@@ -179,6 +179,7 @@ export const browserStatusResultSchema = z
         profile: z.literal("personal"),
         protocolVersion: z.number().int().positive(),
         extensionVersion: z.string().min(1).max(100).optional(),
+        expectedExtensionVersion: z.string().min(1).max(100).optional(),
         capabilities: z.array(z.string().min(1).max(64)).max(64),
       })
       .strict()
@@ -395,11 +396,30 @@ export const browserClickInputSchema = z
   .object({
     tabId: tabIdSchema,
     ref: z.string().min(1).max(128),
+    button: z.enum(["left", "right", "middle"]).optional(),
+    clickCount: z.number().int().min(1).max(3).optional(),
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
   })
   .strict();
 export type BrowserClickInput = z.infer<typeof browserClickInputSchema>;
+
+export const browserHoverInputSchema = z.object({
+  tabId: tabIdSchema,
+  ref: z.string().min(1).max(128),
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserHoverInput = z.infer<typeof browserHoverInputSchema>;
+
+export const browserScrollInputSchema = z.object({
+  tabId: tabIdSchema,
+  direction: z.enum(["up", "down", "left", "right"]),
+  amount: z.number().int().min(1).max(10000),
+  ref: z.string().min(1).max(128).optional(),
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserScrollInput = z.infer<typeof browserScrollInputSchema>;
 
 export const browserFillInputSchema = z
   .object({
@@ -416,6 +436,7 @@ export const browserPressInputSchema = z
   .object({
     tabId: tabIdSchema,
     key: z.string().min(1).max(100),
+    repeat: z.number().int().min(1).max(100).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
   })
@@ -503,6 +524,9 @@ const browserSequenceStepSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("click"),
     ref: z.string().min(1).max(128),
+    button: z.enum(["left", "right", "middle"]).optional(),
+    clickCount: z.number().int().min(1).max(3).optional(),
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
   }).strict(),
   z.object({
@@ -513,6 +537,7 @@ const browserSequenceStepSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("press"),
     key: z.string().min(1).max(100),
+    repeat: z.number().int().min(1).max(100).optional(),
     confirmationId: confirmationIdSchema,
   }).strict(),
   z.object({
@@ -1024,6 +1049,8 @@ export const browserOperationSchema = z.enum([
   "navigate",
   "snapshot",
   "click",
+  "hover",
+  "scroll",
   "fill",
   "press",
   "wait",
@@ -1094,6 +1121,8 @@ export const browserOperationInputSchemas = {
   navigate: browserNavigateInputSchema,
   snapshot: browserSnapshotInputSchema,
   click: browserClickInputSchema,
+  hover: browserHoverInputSchema,
+  scroll: browserScrollInputSchema,
   fill: browserFillInputSchema,
   press: browserPressInputSchema,
   wait: browserWaitInputSchema,
@@ -1133,6 +1162,8 @@ export const browserOperationResultSchemas = {
   navigate: browserTabResultSchema,
   snapshot: browserSnapshotResultSchema,
   click: browserActionResultSchema,
+  hover: browserActionResultSchema,
+  scroll: browserActionResultSchema,
   fill: browserActionResultSchema,
   press: browserActionResultSchema,
   wait: browserActionResultSchema,

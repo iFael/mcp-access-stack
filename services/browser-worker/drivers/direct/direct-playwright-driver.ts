@@ -49,6 +49,8 @@ import {
   type BrowserDriverTab,
   type BrowserEvaluateRequest,
   type BrowserFillRequest,
+  type BrowserHoverRequest,
+  type BrowserScrollRequest,
   type BrowserNavigateRequest,
   type BrowserPressRequest,
   type BrowserScreenshotRequest,
@@ -466,7 +468,40 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       await showActionPointer(target);
       await target.click({
         timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
+        ...(input.button ? { button: input.button } : {}),
+        ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+        ...(input.modifiers ? { modifiers: input.modifiers } : {}),
       });
+      return this.pageResponse(page);
+    });
+  }
+
+  async hover(
+    input: BrowserHoverRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("hover", options, async (page) => {
+      const target = this.refLocator(page, input.target);
+      await target.hover({ timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      return this.pageResponse(page);
+    });
+  }
+
+  async scroll(
+    input: BrowserScrollRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("scroll", options, async (page) => {
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await target.scrollIntoViewIfNeeded();
+        const bounds = await target.boundingBox();
+        if (!bounds) throw new AppError("LOCATOR_NOT_FOUND", "Scroll target is not visible.");
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      }
+      const x = input.direction === "left" ? -input.amount : input.direction === "right" ? input.amount : 0;
+      const y = input.direction === "up" ? -input.amount : input.direction === "down" ? input.amount : 0;
+      await page.mouse.wheel(x, y);
       return this.pageResponse(page);
     });
   }
@@ -491,7 +526,10 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("press", options, async (page) => {
-      await page.keyboard.press(input.key);
+      const chords = input.key.trim().split(/\s+/u);
+      for (let i = 0; i < (input.repeat ?? 1); i += 1) {
+        for (const chord of chords) await page.keyboard.press(chord);
+      }
       return this.pageResponse(page);
     });
   }

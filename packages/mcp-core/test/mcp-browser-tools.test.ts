@@ -6,6 +6,10 @@ import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
+  browserHoverInputSchema,
+  browserScrollInputSchema,
+  browserClickInputSchema,
+  browserPressInputSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserUploadFileSchema,
@@ -40,6 +44,22 @@ describe("browser mode contract", () => {
     expect(browserFinishTaskInputSchema.safeParse({
       keepOpen: true,
     }).success).toBe(false);
+  });
+});
+
+describe("browser interaction parity contracts", () => {
+  it("validates bounded hover, scroll, click and repeat keyboard arguments", () => {
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1" }).success).toBe(true);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450 }).success).toBe(true);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: -1 }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "diagonal", amount: 5 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({
+      tabId: "personal:1", ref: "p-1", button: "right", clickCount: 3, modifiers: ["Control"],
+    }).success).toBe(true);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", clickCount: 4 }).success).toBe(false);
+    expect(browserPressInputSchema.safeParse({ tabId: "personal:1", key: "Ctrl+A", repeat: 100 }).success).toBe(true);
+    expect(browserPressInputSchema.safeParse({ tabId: "personal:1", key: "Tab", repeat: 101 }).success).toBe(false);
   });
 });
 

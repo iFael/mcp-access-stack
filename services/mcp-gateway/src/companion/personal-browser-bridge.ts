@@ -21,7 +21,9 @@ import {
   PERSONAL_BROWSER_REQUIRED_CAPABILITIES,
   PERSONAL_BROWSER_MUTATING_OPERATIONS,
   PERSONAL_BROWSER_PROTOCOL_VERSION,
+  PERSONAL_BROWSER_EXTENSION_VERSION,
 } from "./personal-browser-extension-assets.js";
+import { PersonalBrowserActionPolicy } from "./personal-browser-action-policy.js";
 
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -52,6 +54,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   readonly port: number;
 
   private readonly pending = new Map<string, PendingCall>();
+  private readonly actions = new PersonalBrowserActionPolicy();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -88,6 +91,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       return {
         ...this.peerInfo,
         capabilities: [...this.peerInfo.capabilities],
+        expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
       };
     }
     return {
@@ -96,6 +100,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       profile: "personal",
       protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
       capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+      expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
     };
   }
 
@@ -105,6 +110,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.socket = undefined;
     this.socketGeneration = 0;
     this.peerInfo = undefined;
+    this.actions.clear();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -129,8 +135,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("tabs", args[0], args[1]);
   }
 
-  open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
-    return this.call("open", args[0], args[1]);
+  async open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
+    const result = await this.call("open", args[0], args[1]);
+    this.actions.observeTab(result.tab);
+    return result;
   }
 
   openAuthorizedSite(
@@ -139,24 +147,48 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     throw unsupported("browser_open_authorized_site");
   }
 
-  navigate(...args: Parameters<BrowserExecutor["navigate"]>): ReturnType<BrowserExecutor["navigate"]> {
-    return this.call("navigate", args[0], args[1]);
+  async navigate(...args: Parameters<BrowserExecutor["navigate"]>): ReturnType<BrowserExecutor["navigate"]> {
+    const result = await this.call("navigate", args[0], args[1]);
+    this.actions.discard([args[0].tabId]);
+    this.actions.observeTab(result.tab);
+    return result;
   }
 
-  snapshot(...args: Parameters<BrowserExecutor["snapshot"]>): ReturnType<BrowserExecutor["snapshot"]> {
-    return this.call("snapshot", args[0], args[1]);
+  async snapshot(...args: Parameters<BrowserExecutor["snapshot"]>): ReturnType<BrowserExecutor["snapshot"]> {
+    const result = await this.call("snapshot", args[0], args[1]);
+    this.actions.observeSnapshot(result);
+    return result;
   }
 
-  click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
-    return this.call("click", args[0], args[1]);
+  async click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardClick(args[0]);
+    return this.call("click", { ...args[0], guard }, args[1]);
   }
 
-  fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
-    return this.call("fill", args[0], args[1]);
+  async hover(...args: Parameters<BrowserExecutor["hover"]>): ReturnType<BrowserExecutor["hover"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardReference(args[0].tabId, args[0].ref);
+    return this.call("hover", { ...args[0], guard }, args[1]);
   }
 
-  press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {
-    return this.call("press", args[0], args[1]);
+  async scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
+    const guard = args[0].ref
+      ? this.actions.guardReference(args[0].tabId, args[0].ref)
+      : this.actions.guardPage(args[0].tabId);
+    return this.call("scroll", { ...args[0], guard }, args[1]);
+  }
+
+  async fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardFill(args[0]);
+    return this.call("fill", { ...args[0], guard }, args[1]);
+  }
+
+  async press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardPress(args[0]);
+    return this.call("press", { ...args[0], guard }, args[1]);
   }
 
   wait(...args: Parameters<BrowserExecutor["wait"]>): ReturnType<BrowserExecutor["wait"]> {
@@ -167,8 +199,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("extract", args[0], args[1]);
   }
 
-  sequence(...args: Parameters<BrowserExecutor["sequence"]>): ReturnType<BrowserExecutor["sequence"]> {
-    return this.call("sequence", args[0], args[1]);
+  async sequence(...args: Parameters<BrowserExecutor["sequence"]>): ReturnType<BrowserExecutor["sequence"]> {
+    this.requireGuardedActions();
+    const steps = this.actions.guardSequence(args[0]);
+    return this.call("sequence", { ...args[0], steps }, args[1]);
   }
 
   frameExtract(
@@ -255,24 +289,34 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     };
   }
 
-  goBack(...args: Parameters<BrowserExecutor["goBack"]>): ReturnType<BrowserExecutor["goBack"]> {
-    return this.call("goBack", args[0], args[1]);
+  async goBack(...args: Parameters<BrowserExecutor["goBack"]>): ReturnType<BrowserExecutor["goBack"]> {
+    const result = await this.call("goBack", args[0], args[1]);
+    this.actions.discard([args[0].tabId]);
+    this.actions.observeTab(result.tab);
+    return result;
   }
 
-  goForward(
+  async goForward(
     ...args: Parameters<BrowserExecutor["goForward"]>
   ): ReturnType<BrowserExecutor["goForward"]> {
-    return this.call("goForward", args[0], args[1]);
+    const result = await this.call("goForward", args[0], args[1]);
+    this.actions.discard([args[0].tabId]);
+    this.actions.observeTab(result.tab);
+    return result;
   }
 
-  closeTab(...args: Parameters<BrowserExecutor["closeTab"]>): ReturnType<BrowserExecutor["closeTab"]> {
-    return this.call("closeTab", args[0], args[1]);
+  async closeTab(...args: Parameters<BrowserExecutor["closeTab"]>): ReturnType<BrowserExecutor["closeTab"]> {
+    const result = await this.call("closeTab", args[0], args[1]);
+    this.actions.discard([args[0].tabId]);
+    return result;
   }
 
-  finishTask(
+  async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
-    return this.call("finishTask", args[0], args[1]);
+    const result = await this.call("finishTask", args[0], args[1]);
+    this.actions.finish(args[0].taskId);
+    return result;
   }
 
   download(
@@ -408,6 +452,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.socket = socket;
           this.socketGeneration = generation;
           this.peerInfo = peerInfo;
+          this.actions.clear();
           if (previous && previous !== socket) {
             this.rejectPendingForGeneration(
               previousGeneration,
@@ -537,6 +582,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       ? error.message.trim()
       : "Personal browser operation failed.";
     pending.reject(new AppError(code as (typeof errorCodes)[number], text));
+  }
+
+  private requireGuardedActions(): void {
+    if (!this.peerInfo?.capabilities.includes("guardedActionsV1")) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
+        `The personal Chrome extension ${this.peerInfo?.extensionVersion ?? "unknown"} must be reloaded with guardedActionsV1 before interaction.`);
+    }
   }
 
   private call<T extends BrowserOperation>(

@@ -13917,7 +13917,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "additionalProperties": false,
       "properties": {
         "autoLaunch": {
-          "const": true,
           "type": "boolean"
         },
         "browser": {
@@ -14042,6 +14041,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "connected": {
               "type": "boolean"
             },
+            "expectedExtensionVersion": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
             "extensionVersion": {
               "maxLength": 100,
               "minLength": 1,
@@ -14074,7 +14078,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "profile": {
           "enum": [
             "default",
-            "dedicated-persistent"
+            "dedicated-persistent",
+            "personal"
           ],
           "type": "string"
         },
@@ -14232,7 +14237,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "additionalProperties": false,
       "properties": {
         "autoLaunch": {
-          "const": true,
           "type": "boolean"
         },
         "browser": {
@@ -14357,6 +14361,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "connected": {
               "type": "boolean"
             },
+            "expectedExtensionVersion": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
             "extensionVersion": {
               "maxLength": 100,
               "minLength": 1,
@@ -14389,7 +14398,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "profile": {
           "enum": [
             "default",
-            "dedicated-persistent"
+            "dedicated-persistent",
+            "personal"
           ],
           "type": "string"
         },
@@ -14663,7 +14673,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Opens or safely reuses an MCP-owned browser tab. browserMode defaults to managed; browserMode=personal opens the URL in the user's connected personal Chrome profile through the MCP V3 extension. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
+    "description": "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -15803,6 +15813,19 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "button": {
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "type": "string"
+        },
+        "clickCount": {
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        },
         "confirmationId": {
           "maxLength": 128,
           "minLength": 1,
@@ -15816,6 +15839,19 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer"
+        },
+        "modifiers": {
+          "items": {
+            "enum": [
+              "Alt",
+              "Control",
+              "Meta",
+              "Shift"
+            ],
+            "type": "string"
+          },
+          "maxItems": 4,
+          "type": "array"
         },
         "ref": {
           "maxLength": 128,
@@ -15981,6 +16017,419 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_click"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Moves the pointer over an element ref in an MCP-owned tab without clicking. Returns updated state.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "knownRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "tabId",
+        "ref"
+      ],
+      "type": "object"
+    },
+    "name": "browser_hover",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "maximum": 999,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "console",
+                      "pageerror",
+                      "request",
+                      "response",
+                      "requestfailed",
+                      "dialog",
+                      "download",
+                      "filechooser"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "type",
+                  "timestamp"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timing": {
+          "additionalProperties": false,
+          "properties": {
+            "actionMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "queueMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "snapshotMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalMs": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "actionMs",
+            "snapshotMs",
+            "totalMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tabId",
+        "completed"
+      ],
+      "type": "object"
+    },
+    "title": "browser_hover"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Scrolls by CSS pixels, optionally over an element ref, without clicking. Returns updated state.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string"
+        },
+        "knownRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "tabId",
+        "direction",
+        "amount"
+      ],
+      "type": "object"
+    },
+    "name": "browser_scroll",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "maximum": 999,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "console",
+                      "pageerror",
+                      "request",
+                      "response",
+                      "requestfailed",
+                      "dialog",
+                      "download",
+                      "filechooser"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "type",
+                  "timestamp"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timing": {
+          "additionalProperties": false,
+          "properties": {
+            "actionMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "queueMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "snapshotMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalMs": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "actionMs",
+            "snapshotMs",
+            "totalMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tabId",
+        "completed"
+      ],
+      "type": "object"
+    },
+    "title": "browser_scroll"
   },
   {
     "_meta": {
@@ -16233,6 +16682,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "knownRevision": {
           "maximum": 9007199254740991,
           "minimum": 0,
+          "type": "integer"
+        },
+        "repeat": {
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         },
         "runtimeId": {
@@ -16844,10 +17298,36 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "const": "click",
                     "type": "string"
                   },
+                  "button": {
+                    "enum": [
+                      "left",
+                      "right",
+                      "middle"
+                    ],
+                    "type": "string"
+                  },
+                  "clickCount": {
+                    "maximum": 3,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
                   "confirmationId": {
                     "maxLength": 128,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "modifiers": {
+                    "items": {
+                      "enum": [
+                        "Alt",
+                        "Control",
+                        "Meta",
+                        "Shift"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   },
                   "ref": {
                     "maxLength": 128,
@@ -16901,6 +17381,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "maxLength": 100,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "repeat": {
+                    "maximum": 100,
+                    "minimum": 1,
+                    "type": "integer"
                   }
                 },
                 "required": [
@@ -22345,13 +22830,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1",
-  "serverVersion": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c",
-  "toolCount": 99,
-  "toolSetRevision": "a95bdb31158cf1e4fe47b0d96d8039bf9b59ca72f1b1e5eb9f9628447c13bba6"
+  "contractRevision": "13be793df5e7ea0a4168c590587fd7004cd987ea50778a4cf6d85c66bc671259",
+  "serverVersion": "0.4.0-catalog.c13be793df5e7.s9d54d9adc6e7",
+  "toolCount": 101,
+  "toolSetRevision": "9d54d9adc6e7598020fd8abd1dcb77ac26d3513b097603e61bd152ea98000102"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c6c8f2d03a166.sa95bdb31158c"
+  "version": "0.4.0-catalog.c13be793df5e7.s9d54d9adc6e7"
 } as const;

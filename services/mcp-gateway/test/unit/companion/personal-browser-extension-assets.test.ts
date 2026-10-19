@@ -54,6 +54,88 @@ describe("personal browser extension assets", () => {
     );
   });
 
+  it("dispatches guarded click, fill and keyboard through Chrome CDP rather than synthetic DOM events", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let attachCount = 0;
+    let detachCount = 0;
+    const context = vm.createContext({
+      Number, String, RegExp, Object, Array,
+      chromeTabIdFrom: () => 7,
+      probeGuardedElement: () => ({ x: 30, y: 40 }),
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 30, y: 40 } }] },
+        debugger: {
+          attach: async () => { attachCount += 1; },
+          detach: async () => { detachCount += 1; },
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            commands.push({ method, params });
+          },
+        },
+      },
+    });
+    for (const fn of ["parseChromeKey", "click", "fill", "press"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const guardedClick = vm.runInContext("click", context) as (arg: unknown) => Promise<unknown>;
+    const guardedFill = vm.runInContext("fill", context) as (arg: unknown) => Promise<unknown>;
+    const guardedPress = vm.runInContext("press", context) as (arg: unknown) => Promise<unknown>;
+    await guardedClick({ tabId: "personal:7", ref: "target", guard: { url: "https://example.com/", ref: "target" } });
+    await guardedFill({ tabId: "personal:7", ref: "target", value: "secret", guard: { url: "https://example.com/", ref: "target" } });
+    await guardedPress({ tabId: "personal:7", key: "Ctrl+A", guard: { url: "https://example.com/" } });
+    expect(commands.map((entry) => entry.method)).toEqual([
+      "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+      "Input.insertText", "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+    ]);
+    expect(commands[1]).toMatchObject({ params: { type: "mousePressed", button: "left", x: 30, y: 40 } });
+    expect(commands[7]).toMatchObject({ params: { text: "secret" } });
+    expect(commands[8]).toMatchObject({ params: { key: "a", modifiers: 2 } });
+    expect(attachCount).toBe(3);
+    expect(detachCount).toBe(3);
+    await expect(guardedClick({ tabId: "personal:7", ref: "target" })).rejects.toMatchObject({
+      code: "BROWSER_CONFIRMATION_INVALID",
+    });
+    expect(attachCount).toBe(3);
+  });
+
+  it("uses guarded CDP movement and wheel events for hover and scroll", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const methods: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      Number, Math,
+      chromeTabIdFrom: () => 7,
+      probeGuardedElement: () => ({ x: 20, y: 25 }),
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: {
+          attach: async () => undefined,
+          detach: async () => undefined,
+          sendCommand: async (_: unknown, method: string, params: Record<string, unknown>) => { methods.push({ method, params }); },
+        },
+      },
+    });
+    for (const fn of ["hover", "scroll"]) vm.runInContext(extractFunction(serviceWorker, fn), context);
+    const hover = vm.runInContext("hover", context) as (input: unknown) => Promise<unknown>;
+    const scroll = vm.runInContext("scroll", context) as (input: unknown) => Promise<unknown>;
+    await hover({ tabId: "personal:7", ref: "target", guard: { url: "https://example.com/", ref: "target" } });
+    await scroll({ tabId: "personal:7", direction: "up", amount: 350, guard: { url: "https://example.com/" } });
+    expect(methods.map((entry) => entry.method)).toEqual(["Input.dispatchMouseEvent", "Input.dispatchMouseEvent"]);
+    expect(methods[0]).toMatchObject({ params: { type: "mouseMoved", x: 20, y: 25 } });
+    expect(methods[1]).toMatchObject({ params: { type: "mouseWheel", deltaX: 0, deltaY: -350 } });
+    await expect(hover({ tabId: "personal:7", ref: "target" })).rejects.toMatchObject({
+      code: "BROWSER_CONFIRMATION_INVALID",
+    });
+  });
+
   it("announces a versioned capability handshake and blocks private navigation targets", () => {
     const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
       "x".repeat(43),
@@ -61,7 +143,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.3.1");
+    expect(parsedManifest.version).toBe("0.4.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
@@ -109,6 +191,28 @@ describe("personal browser extension assets", () => {
         expect((error as { code?: string }).code).toBe("NAVIGATION_BLOCKED");
       }
     }
+  });
+
+  it("blocks page-driven redirects to private sites but still permits task cleanup", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361, ["https://internal.example.test"]);
+    const context = vm.createContext({
+      URL, String, Number, Object, Array, Set,
+      chrome: {
+        tabs: { get: async () => ({ id: 7, url: "https://internal.example.test/dashboard" }) },
+      },
+      readOwnedTabs: async () => ({ "7": { tabId: "personal:7" } }),
+      writeOwnedTabs: async () => undefined,
+      withOwnershipLock: async (fn: () => Promise<unknown>) => fn(),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+    });
+    vm.runInContext('const BLOCKED_PRIVATE_ORIGINS = new Set(["https://internal.example.test"]);', context);
+    for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "requireOwnedMetadata"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const requireOwnedMetadata = vm.runInContext("requireOwnedMetadata", context) as
+      (tabId: number, forCleanup?: boolean) => Promise<Record<string, unknown>>;
+    await expect(requireOwnedMetadata(7)).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
+    await expect(requireOwnedMetadata(7, true)).resolves.toMatchObject({ tabId: "personal:7" });
   });
 
   it("keeps private ownership metadata out of public tab responses", () => {
@@ -198,7 +302,7 @@ describe("personal browser extension assets", () => {
   it("invalidates refs from an older snapshot generation", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const snapshotPageSource = extractFunction(serviceWorker, "snapshotPage");
-    const clickRefSource = extractFunction(serviceWorker, "clickRef");
+    // References live only in Chrome's isolated extension world, never as DOM attributes.
 
     const first = fakeElement({ tagName: "BUTTON", text: "First" });
     const second = fakeElement({ tagName: "BUTTON", text: "Second" });
@@ -209,8 +313,8 @@ describe("personal browser extension assets", () => {
     ) as (generation: string) => {
       refs: Array<{ ref: string; role: string; name: string }>;
     };
-    const clickRef = vm.runInContext(
-      `(${clickRefSource})`,
+    const hasRef = vm.runInContext(
+      `(ref) => globalThis.__mcpV3OwnedRefElements.has(ref)`,
       dom.context,
     ) as (ref: string) => boolean;
 
@@ -222,10 +326,12 @@ describe("personal browser extension assets", () => {
     const currentRef = secondSnapshot.refs[0]!.ref;
 
     expect(staleRef).not.toBe(currentRef);
-    expect(clickRef(staleRef)).toBe(false);
+    expect(hasRef(staleRef)).toBe(false);
+    expect(hasRef(currentRef)).toBe(true);
+    expect(first.getAttribute("data-mcp-v3-ref")).toBeNull();
+    expect(second.getAttribute("data-mcp-v3-ref")).toBeNull();
     expect(first.clickCount).toBe(0);
-    expect(clickRef(currentRef)).toBe(true);
-    expect(second.clickCount).toBe(1);
+    expect(second.clickCount).toBe(0);
   });
 
   it("groups only explicit MCP-created tab ids for the same task", async () => {

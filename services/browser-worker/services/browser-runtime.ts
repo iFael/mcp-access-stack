@@ -3,9 +3,14 @@ import path from "node:path";
 import {
   abortSignalError,
   AppError,
+  clickAuthorizationAction,
+  containsBrowserEnterKey,
+  validateBrowserKeySequence,
   remainingOperationTimeMs,
   type BrowserActionResult,
   type BrowserClickInput,
+  type BrowserHoverInput,
+  type BrowserScrollInput,
   type BrowserCloseTabInput,
   type BrowserConnectInput,
   type BrowserConnectResult,
@@ -867,7 +872,7 @@ export class BrowserRuntime implements BrowserExecutor {
     const authorization = this.interactionContext.prepareDangerousAction(
       tab,
       reference,
-      "click",
+      clickAuthorizationAction(input),
     );
     if (authorization) {
       this.authorizeAction(input.confirmationId, authorization);
@@ -877,12 +882,47 @@ export class BrowserRuntime implements BrowserExecutor {
     const response = await this.driver.click({
       target: reference.ref,
       element: reference.name || reference.role,
+      ...(input.button ? { button: input.button } : {}),
+      ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+      ...(input.modifiers ? { modifiers: input.modifiers } : {}),
     });
     const actionMs = elapsedMs(actionStarted);
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
     await this.checkpoint();
     return this.withActionState(tab.tabId, input.knownRevision, actionMs, context);
+  }
+
+  async hover(
+    input: BrowserHoverInput,
+    context: OperationContext = {},
+  ): Promise<BrowserActionResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    await this.selectTab(tab);
+    const reference = this.interactionContext.requireReference(tab.tabId, input.ref);
+    if (!this.driver.hover) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support hover.");
+    const started = performance.now();
+    const response = await this.driver.hover({ target: reference.ref });
+    this.updateSelectedTab(tab.tabId, response);
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
+  }
+
+  async scroll(
+    input: BrowserScrollInput,
+    context: OperationContext = {},
+  ): Promise<BrowserActionResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    await this.selectTab(tab);
+    const target = input.ref ? this.interactionContext.requireReference(tab.tabId, input.ref).ref : undefined;
+    if (!this.driver.scroll) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support scroll.");
+    const started = performance.now();
+    const response = await this.driver.scroll({
+      direction: input.direction,
+      amount: input.amount,
+      ...(target ? { target } : {}),
+    });
+    this.updateSelectedTab(tab.tabId, response);
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
   }
 
   async fill(
@@ -913,9 +953,10 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    validateBrowserKeySequence(input.key, input.repeat);
     this.assertBusinessReadOnlyKey(tab, input.key, "press");
     await this.selectTab(tab);
-    if (input.key.toLowerCase() === "enter") {
+    if (containsBrowserEnterKey(input.key)) {
       this.authorizeAction(
         input.confirmationId,
         this.interactionContext.prepareConfirmation(
@@ -928,7 +969,7 @@ export class BrowserRuntime implements BrowserExecutor {
       await this.beginNavigation(tab.tabId, "press");
     }
     const actionStarted = performance.now();
-    const response = await this.driver.press({ key: input.key });
+    const response = await this.driver.press({ key: input.key, ...(input.repeat ? { repeat: input.repeat } : {}) });
     const actionMs = elapsedMs(actionStarted);
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
@@ -1008,7 +1049,7 @@ export class BrowserRuntime implements BrowserExecutor {
             const authorization = this.interactionContext.prepareDangerousAction(
               tab,
               reference,
-              "click",
+              clickAuthorizationAction(step),
             );
             if (authorization) {
               this.authorizeAction(step.confirmationId, authorization);
@@ -1017,6 +1058,9 @@ export class BrowserRuntime implements BrowserExecutor {
             const response = await this.driver.click({
               target: reference.ref,
               element: reference.name || reference.role,
+              ...(step.button ? { button: step.button } : {}),
+              ...(step.clickCount ? { clickCount: step.clickCount } : {}),
+              ...(step.modifiers ? { modifiers: step.modifiers } : {}),
             });
             this.updateSelectedTab(tab.tabId, response);
             this.updateRequestedUrl(tab.tabId);
@@ -1038,7 +1082,8 @@ export class BrowserRuntime implements BrowserExecutor {
             break;
           }
           case "press": {
-            if (step.key.toLowerCase() === "enter") {
+            validateBrowserKeySequence(step.key, step.repeat);
+            if (containsBrowserEnterKey(step.key)) {
               this.authorizeAction(
                 step.confirmationId,
                 this.interactionContext.prepareConfirmation(
@@ -1050,7 +1095,7 @@ export class BrowserRuntime implements BrowserExecutor {
               );
               await this.beginNavigation(tab.tabId, "press", undefined, false);
             }
-            const response = await this.driver.press({ key: step.key });
+            const response = await this.driver.press({ key: step.key, ...(step.repeat ? { repeat: step.repeat } : {}) });
             this.updateSelectedTab(tab.tabId, response);
             this.updateRequestedUrl(tab.tabId);
             break;
@@ -2379,7 +2424,7 @@ export class BrowserRuntime implements BrowserExecutor {
     action: string,
   ): void {
     if (!this.isBusinessReadOnlyTab(tab)) return;
-    if (!["enter", "numpadenter"].includes(key.toLocaleLowerCase("en-US"))) {
+    if (!containsBrowserEnterKey(key)) {
       return;
     }
     throw new AppError(

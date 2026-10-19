@@ -6,6 +6,7 @@ export interface PersonalBrowserConnectionInfo {
   profile: "personal";
   protocolVersion: number;
   extensionVersion?: string;
+  expectedExtensionVersion?: string;
   capabilities: string[];
 }
 
@@ -148,6 +149,14 @@ export class BrowserModeRouter implements BrowserExecutor {
 
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.forTab(args[0].tabId).click(...args);
+  }
+
+  hover(...args: Parameters<BrowserExecutor["hover"]>): ReturnType<BrowserExecutor["hover"]> {
+    return this.forTab(args[0].tabId).hover(...args);
+  }
+
+  scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
+    return this.forTab(args[0].tabId).scroll(...args);
   }
 
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {

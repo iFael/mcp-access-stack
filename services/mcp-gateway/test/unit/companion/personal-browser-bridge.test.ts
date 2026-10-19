@@ -26,6 +26,8 @@ describe("PersonalBrowserBridge", () => {
   it("logs a safe peer error code with a terminal but never its private message", async () => {
     const events: Record<string, unknown>[]=[];
     const { bridge,extension,close }=await startAuthenticatedBridge(e => events.push(e));
+    await primeReference(bridge, extension, "personal:1");
+    events.length = 0;
     extension.on("message", data => { const m=JSON.parse(data.toString()) as WireMessage; if(m.type==="request") extension.send(JSON.stringify({ type:"response",id:m.id,ok:false,error:{code:"LOCATOR_NOT_FOUND",message:"secret-user-message"} })); });
     try {
       await expect(bridge.fill({tabId:"personal:1",ref:"ref",value:"secret-fill"})).rejects.toMatchObject({code:"LOCATOR_NOT_FOUND"});
@@ -38,6 +40,9 @@ describe("PersonalBrowserBridge", () => {
     const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
     const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
     const requests: WireMessage[] = [];
+    await primeReference(bridge, extension, "personal:1");
+    await primeReference(bridge, extension, "personal:2");
+    events.length = 0;
     extension.on("message", data => {
       const m = JSON.parse(data.toString()) as WireMessage;
       if (m.type !== "request") return;
@@ -75,6 +80,8 @@ describe("PersonalBrowserBridge", () => {
     const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
     const controller = new AbortController();
     try {
+      await primeReference(bridge, extension, "personal:7");
+      events.length = 0;
       const dispatched = nextWireMessage(extension, m => m.type === "request");
       const result = bridge.fill({ tabId: "personal:7", ref: "ref", value: "secret" }, { signal: controller.signal });
       const rejection = expect(result).rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN" });
@@ -352,6 +359,19 @@ describe("PersonalBrowserBridge", () => {
         id: readRequest.id,
       });
 
+      extension.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (message.type !== "request" || message.operation !== "snapshot") return;
+        extension.send(JSON.stringify({
+          type: "response", id: message.id, ok: true,
+          result: {
+            tabId: "personal:1", url: "https://example.com/",
+            content: '- button "Read help" [ref=p-generation-1]',
+            refs: [{ ref: "p-generation-1", role: "button", name: "Read help" }],
+          },
+        }));
+      });
+      await bridge.snapshot({ tabId: "personal:1" });
       const mutationController = new AbortController();
       const mutationRequestPromise = nextWireMessage(
         extension,
@@ -445,6 +465,29 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 });
+
+async function primeReference(
+  bridge: PersonalBrowserBridge,
+  extension: WebSocket,
+  tabId: string,
+  ref = "ref",
+): Promise<void> {
+  const respond = (data: WebSocket.RawData) => {
+    const message = JSON.parse(data.toString()) as WireMessage;
+    if (message.type !== "request" || message.operation !== "snapshot") return;
+    extension.send(JSON.stringify({
+      type: "response", id: message.id, ok: true,
+      result: {
+        tabId, url: "https://example.com/",
+        content: '- textbox "Test" [ref=' + ref + ']',
+        refs: [{ ref, role: "textbox", name: "Test" }],
+      },
+    }));
+  };
+  extension.on("message", respond);
+  try { await bridge.snapshot({ tabId }); }
+  finally { extension.off("message", respond); }
+}
 
 interface WireMessage {
   type?: string;

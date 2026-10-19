@@ -13,6 +13,8 @@ import {
   browserOperationResponseSchema,
   browserOperationResultSchemas,
   type BrowserClickInput,
+  type BrowserHoverInput,
+  type BrowserScrollInput,
   type BrowserCloseTabInput,
   type BrowserConnectInput,
   type BrowserConsoleInput,
@@ -127,6 +129,14 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   click(input: BrowserClickInput, context?: OperationContext) {
     return this.call("click", input, context);
+  }
+
+  hover(input: BrowserHoverInput, context?: OperationContext) {
+    return this.call("hover", input, context);
+  }
+
+  scroll(input: BrowserScrollInput, context?: OperationContext) {
+    return this.call("scroll", input, context);
   }
 
   fill(input: BrowserFillInput, context?: OperationContext) {

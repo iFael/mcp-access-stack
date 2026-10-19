@@ -86,6 +86,8 @@ function runBrowserDriverContract(
         "goForward",
         "snapshot",
         "click",
+        "hover",
+        "scroll",
         "fill",
         "press",
         "wait",

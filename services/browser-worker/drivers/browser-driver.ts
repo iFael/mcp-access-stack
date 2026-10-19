@@ -39,6 +39,19 @@ export interface BrowserNavigateRequest {
 export interface BrowserClickRequest {
   target: string;
   element?: string;
+  button?: "left" | "right" | "middle";
+  clickCount?: number;
+  modifiers?: Array<"Alt" | "Control" | "Meta" | "Shift">;
+}
+
+export interface BrowserHoverRequest {
+  target: string;
+}
+
+export interface BrowserScrollRequest {
+  direction: "up" | "down" | "left" | "right";
+  amount: number;
+  target?: string;
 }
 
 export interface BrowserFillRequest {
@@ -51,6 +64,7 @@ export interface BrowserFillRequest {
 
 export interface BrowserPressRequest {
   key: string;
+  repeat?: number;
 }
 
 export interface BrowserWaitRequest {
@@ -135,6 +149,8 @@ export interface BrowserDriver {
     input: BrowserClickRequest,
     options?: BrowserDriverCallOptions,
   ): Promise<BrowserDriverResponse>;
+  hover?(input: BrowserHoverRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  scroll?(input: BrowserScrollRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   fill(
     input: BrowserFillRequest,
     options?: BrowserDriverCallOptions,

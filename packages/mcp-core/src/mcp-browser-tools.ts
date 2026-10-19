@@ -21,7 +21,7 @@ import {
 export const BROWSER_TOOL_NAMES = [
   "browser_status", "browser_connect", "browser_tabs", "browser_open",
   "browser_open_authorized_site",
-  "browser_navigate", "browser_snapshot", "browser_click", "browser_fill",
+  "browser_navigate", "browser_snapshot", "browser_click", "browser_hover", "browser_scroll", "browser_fill",
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
@@ -374,6 +374,16 @@ function definitions(
       context,
       () => e.click(assumeParsed(v)),
       (activeContext) => e.click(assumeParsed(v), activeContext),
+    )),
+    d("browser_hover", "Moves the pointer over an element ref in an MCP-owned tab without clicking. Returns updated state.", c.browserHoverInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.hover(assumeParsed(v)),
+      (activeContext) => e.hover(assumeParsed(v), activeContext),
+    )),
+    d("browser_scroll", "Scrolls by CSS pixels, optionally over an element ref, without clicking. Returns updated state.", c.browserScrollInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.scroll(assumeParsed(v)),
+      (activeContext) => e.scroll(assumeParsed(v), activeContext),
     )),
     d("browser_fill", "Fills a field without logging its value and returns updated semantic state. Do not request a second snapshot when state is present. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserFillInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
