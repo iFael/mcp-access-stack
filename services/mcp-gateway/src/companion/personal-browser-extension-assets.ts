@@ -9,6 +9,15 @@ export interface PersonalBrowserExtensionAssets {
 
 export const PERSONAL_BROWSER_PROTOCOL_VERSION = 1;
 export const PERSONAL_BROWSER_EXTENSION_VERSION = HANDOFF_EXTENSION_VERSION;
+export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
+  "tabs", "open", "navigate", "snapshot", "click", "fill", "press", "closeTab", "finishTask",
+] as const;
+
+export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
+  "open", "navigate", "click", "fill", "press", "sequence",
+  "goBack", "goForward", "closeTab", "finishTask",
+] as const;
+
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
   "open",
@@ -61,18 +70,7 @@ const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs"; // gitleaks:allow -- public storage slot identifier, not a credential
 const MAX_SCREENSHOT_BASE64_CHARS = 3000000;
 const MAX_FULL_PAGE_PIXELS = 40000000;
-const MUTATING_OPERATIONS = new Set([
-  "open",
-  "navigate",
-  "click",
-  "fill",
-  "press",
-  "sequence",
-  "goBack",
-  "goForward",
-  "closeTab",
-  "finishTask",
-]);
+const MUTATING_OPERATIONS = new Set(${JSON.stringify(PERSONAL_BROWSER_MUTATING_OPERATIONS)});
 
 let socket;
 let reconnectTimer;

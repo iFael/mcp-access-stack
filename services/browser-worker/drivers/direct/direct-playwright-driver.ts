@@ -75,6 +75,7 @@ import {
   jpegFrameDimensions,
   type BrowserLiveFrame,
 } from "../../services/browser-live-frame-mailbox.js";
+import { hasBrowserCaptchaChallenge } from "../../services/browser-captcha-detector.js";
 import {
   BrowserPageStabilizationService,
   type BrowserDocumentReadyState,
@@ -807,7 +808,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
           const legacy = await captureLegacySummary(page);
           if (legacy) content = `${content}\n\n### Legacy DOM summary\n${legacy}`.trim();
         }
-        if (/\b(?:captcha|recaptcha|hcaptcha)\b/i.test(content)) {
+        if (hasBrowserCaptchaChallenge(content, page.frames().map((frame) => frame.url()))) {
           throw new AppError(
             "CAPTCHA_DETECTED",
             "A CAPTCHA requires manual completion in Chromium.",
@@ -827,16 +828,20 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
               }
               catch {
                 this.incrementalSnapshots = false;
-                return {
-                  content: await page.ariaSnapshot({ mode: "ai" }),
-                  kind: "full" as const,
-                };
+                const fallbackContent = await page.ariaSnapshot({ mode: "ai" });
+                if (hasBrowserCaptchaChallenge(fallbackContent, page.frames().map((frame) => frame.url()))) {
+                  throw new AppError("CAPTCHA_DETECTED", "A CAPTCHA requires manual completion in Chromium.");
+                }
+                return { content: fallbackContent, kind: "full" as const };
               }
               if (this.legacySnapshotPages.has(page)) {
                 const legacy = await captureLegacySummary(page);
                 if (legacy) {
                   content = `${content}\n\n### Legacy DOM summary\n${legacy}`.trim();
                 }
+              }
+              if (hasBrowserCaptchaChallenge(content, page.frames().map((frame) => frame.url()))) {
+                throw new AppError("CAPTCHA_DETECTED", "A CAPTCHA requires manual completion in Chromium.");
               }
               return { content, kind: "delta" as const };
             },

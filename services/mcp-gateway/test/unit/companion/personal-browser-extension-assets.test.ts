@@ -1,6 +1,6 @@
 import vm from "node:vm";
 import { describe, expect, it } from "@jest/globals";
-import { buildPersonalBrowserExtensionAssets } from "../../../src/companion/personal-browser-extension-assets.js";
+import { buildPersonalBrowserExtensionAssets, PERSONAL_BROWSER_MUTATING_OPERATIONS } from "../../../src/companion/personal-browser-extension-assets.js";
 
 type FakeElement = ReturnType<typeof fakeElement>;
 
@@ -45,6 +45,13 @@ describe("personal browser extension assets", () => {
     const timing = { snapshotMs: 0 };
     await sequence({ tabId: "personal:1", steps: [{ action: "fill", value: "secret-fill" }], finalSnapshot: true }, undefined, timing);
     expect(timing.snapshotMs).toBe(7);
+  });
+
+  it("generates the extension mutation queue from the shared mutation contract", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    expect(serviceWorker).toContain(
+      `const MUTATING_OPERATIONS = new Set(${JSON.stringify(PERSONAL_BROWSER_MUTATING_OPERATIONS)});`,
+    );
   });
 
   it("announces a versioned capability handshake and blocks private navigation targets", () => {

@@ -18,6 +18,8 @@ import type {
 import {
   buildPersonalBrowserExtensionAssets,
   PERSONAL_BROWSER_CAPABILITIES,
+  PERSONAL_BROWSER_REQUIRED_CAPABILITIES,
+  PERSONAL_BROWSER_MUTATING_OPERATIONS,
   PERSONAL_BROWSER_PROTOCOL_VERSION,
 } from "./personal-browser-extension-assets.js";
 
@@ -568,7 +570,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       );
     }
     if (!peerInfo.capabilities.includes(operation)) {
-      return Promise.reject(fail(unsupported(`browser_${operation}`)));
+      return Promise.reject(fail(new AppError(
+        "BROWSER_CAPABILITY_UNSUPPORTED",
+        `browser_${operation} requires capability ${operation}; personal Chrome extension ${peerInfo.extensionVersion ?? "unknown"} does not offer it.`,
+      )));
     }
     if (context?.signal?.aborted) {
       return Promise.reject(
@@ -714,11 +719,12 @@ function parsePersonalBrowserHello(raw: string): PersonalBrowserConnectionInfo |
   if (capabilities.length !== message.capabilities.length) return undefined;
   const uniqueCapabilities = new Set(capabilities);
   if (uniqueCapabilities.size !== capabilities.length) return undefined;
-  const expected = new Set<string>(PERSONAL_BROWSER_CAPABILITIES);
-  if (uniqueCapabilities.size !== expected.size ||
-      [...uniqueCapabilities].some((capability) => !expected.has(capability))) {
-    return undefined;
-  }
+  // Capability negotiation is additive: an older extension may lack optional
+  // operations, and a newer extension may advertise capabilities unknown here.
+  // Only the stable core is mandatory; unsupported calls fail individually.
+  if (PERSONAL_BROWSER_REQUIRED_CAPABILITIES.some(
+    (capability) => !uniqueCapabilities.has(capability),
+  )) return undefined;
   return {
     connected: true,
     browser: "chrome",
@@ -839,19 +845,10 @@ function sendCancel(socket: WebSocket, id: string): void {
   }
 }
 
+const PERSONAL_MUTATIONS: ReadonlySet<BrowserOperation> = new Set(PERSONAL_BROWSER_MUTATING_OPERATIONS);
+
 function isMutatingOperation(operation: BrowserOperation): boolean {
-  return new Set<BrowserOperation>([
-    "open",
-    "navigate",
-    "click",
-    "fill",
-    "press",
-    "sequence",
-    "goBack",
-    "goForward",
-    "closeTab",
-    "finishTask",
-  ]).has(operation);
+  return PERSONAL_MUTATIONS.has(operation);
 }
 
 function unsupported(operation: string): AppError {

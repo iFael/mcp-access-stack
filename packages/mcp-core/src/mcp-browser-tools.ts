@@ -350,7 +350,7 @@ function definitions(
       () => e.tabs(assumeParsed(v)),
       (activeContext) => e.tabs(assumeParsed(v), activeContext),
     )),
-    d("browser_open", "Opens or safely reuses an MCP-owned browser tab. browserMode defaults to managed; browserMode=personal opens the URL in the user's connected personal Chrome profile through the MCP V3 extension. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_open", "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.open(assumeParsed(v)),
       (activeContext) => e.open(assumeParsed(v), activeContext),

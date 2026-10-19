@@ -239,6 +239,56 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("accepts extensions with additional or missing optional capabilities", async () => {
+    const { bridge, extension: original, token, port, close } = await startAuthenticatedBridge();
+    let newer: WebSocket | undefined;
+    let older: WebSocket | undefined;
+    try {
+      newer = await connectExtension(port, token, [...PERSONAL_BROWSER_CAPABILITIES, "futureBrowserAction"], "0.4.0");
+      expect(bridge.connectionInfo()).toMatchObject({
+        extensionVersion: "0.4.0",
+        capabilities: expect.arrayContaining(["futureBrowserAction"]),
+      });
+      older = await connectExtension(port, token, ["tabs", "open", "navigate", "snapshot", "click", "fill", "press", "closeTab", "finishTask"], "0.2.0");
+      expect(bridge.connectionInfo().extensionVersion).toBe("0.2.0");
+      await expect(bridge.wait({ tabId: "personal:7", timeoutMs: 100 })).rejects.toMatchObject({
+        code: "BROWSER_CAPABILITY_UNSUPPORTED",
+        message: expect.stringContaining("0.2.0"),
+      });
+      expect(bridge.isConnected()).toBe(true);
+    } finally {
+      newer?.close();
+      older?.close();
+      original.close();
+      await close();
+    }
+  });
+
+  it("rejects extensions missing a mandatory browser capability", async () => {
+    const { bridge, token, port, close } = await startAuthenticatedBridge();
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+      socket.send(JSON.stringify({
+        type: "hello",
+        protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+        extensionVersion: "0.1.0",
+        browser: "chrome",
+        profile: "personal",
+        capabilities: ["tabs", "open"],
+      }));
+      await expect(closed).resolves.toBe(1008);
+      expect(bridge.isConnected()).toBe(true);
+    } finally {
+      socket.close();
+      await close();
+    }
+  });
+
   it("requires a compatible hello before activating an authenticated socket", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
@@ -434,7 +484,12 @@ async function startAuthenticatedBridge(log?: (entry: Record<string, unknown>) =
   };
 }
 
-async function connectExtension(port: number, token: string): Promise<WebSocket> {
+async function connectExtension(
+  port: number,
+  token: string,
+  capabilities: readonly string[] = PERSONAL_BROWSER_CAPABILITIES,
+  extensionVersion = PERSONAL_BROWSER_EXTENSION_VERSION,
+): Promise<WebSocket> {
   const extension = new WebSocket(
     `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`,
   );
@@ -449,10 +504,10 @@ async function connectExtension(port: number, token: string): Promise<WebSocket>
   extension.send(JSON.stringify({
     type: "hello",
     protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
-    extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+    extensionVersion,
     browser: "chrome",
     profile: "personal",
-    capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+    capabilities: [...capabilities],
   }));
   await acknowledged;
   return extension;
