@@ -5,6 +5,9 @@ import { ReleaseOrchestrator } from "./engine/release-orchestrator.js";
 import { createOracleReleaseReadApi } from "./read-api.js";
 import { createOracleReadApiServer } from "./node-read-server.js";
 import { SqliteReleaseLedger } from "./storage/sqlite-release-ledger.js";
+import { createTrustedOracleReleaseHost, type TrustedOracleReleaseHostOptions } from "./release-trusted-host.js";
+import { OracleReleaseControlConnector,validateOracleControlSocketConfig, type OracleControlSocketConfig } from "./oracle-control-connector.js";
+import {readCredentialFromEnvironment} from "./oracle-channel-connector.js";
 
 export interface OracleReadApiServiceConfig {
   readonly ledgerPath: string;
@@ -16,7 +19,11 @@ export interface OracleReadApiServiceConfig {
 
 export function startOracleReleaseReadApiService(
   config: OracleReadApiServiceConfig,
-): { close(): Promise<void> } {
+  trustedExecution?: TrustedOracleReleaseHostOptions,
+  controlTransport?: OracleControlSocketConfig,
+): { close(): Promise<void>; trustedControl: ReturnType<typeof createTrustedOracleReleaseHost> | null } {
+  if(controlTransport && (!trustedExecution || !trustedExecution.capabilities.ready))
+    throw new Error("ORACLE_CONTROL_REQUIRES_AUTHORIZED_CAPABILITIES");
   validateConfig(config);
   mkdirSync(config.releaseRoot, { recursive: true });
   const ledger = SqliteReleaseLedger.open({
@@ -26,20 +33,33 @@ export function startOracleReleaseReadApiService(
   const orchestrator = new ReleaseOrchestrator(ledger);
   try {
     orchestrator.recoverInterruptedOperations("system:oracle-startup");
+    // Share this EXACT Oracle ledger instance; do not instantiate a second writer.
+    const trustedControl = trustedExecution
+      ? createTrustedOracleReleaseHost(orchestrator, trustedExecution) : null;
+    // An opt-in outbound control connection stays inside this SAME ledger process.
+    // No credential is read from the GET-only read API environment.
+    const controlAbort=new AbortController();
+    const connection=controlTransport && trustedControl
+      ? new OracleReleaseControlConnector(controlTransport,trustedControl) : null;
     const handler = createOracleReleaseReadApi({
       orchestrator,
       bearerToken: config.bearerToken,
     });
     const server = createOracleReadApiServer({ handler, host: config.host });
     server.listen(config.port, config.host);
+    const controlTask=connection?.run(controlAbort.signal).catch(()=>undefined);
     return {
-      close: () => new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => {
-          orchestrator.close();
-          if (error) rejectClose(error);
-          else resolveClose();
+      trustedControl,
+      close: async () => {
+        controlAbort.abort();
+        await controlTask?.catch(()=>undefined);
+        await new Promise<void>((resolveClose,rejectClose)=>{
+          server.close(error=>{
+            orchestrator.close();
+            if(error)rejectClose(error);else resolveClose();
+          });
         });
-      }),
+      },
     };
   } catch (error) {
     orchestrator.close();
@@ -125,20 +145,54 @@ function readPort(value: string): number {
   return port;
 }
 
+/**
+ * Oracle read API stays read-only. The only control channel is the dedicated
+ * outbound socket, opt-in and sharing this exact SQLite writer. A missing
+ * typed capability registry is an explicit startup NO-GO.
+ */
+export function resolveOracleControlTransport(
+  environment: NodeJS.ProcessEnv = process.env,
+  readBearer?: string,
+): OracleControlSocketConfig | undefined {
+  const enabled=environment.UPDATE_CONTROL_ORACLE_CONTROL_ENABLED;
+  const endpoint=environment.UPDATE_CONTROL_ORACLE_CONTROL_URL;
+  const tokenFile=environment.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN_FILE;
+  if(enabled===undefined && endpoint===undefined && tokenFile===undefined)return undefined;
+  if(enabled!=="1" || !endpoint?.trim() || !tokenFile?.trim()) {
+    throw new Error("ORACLE_CONTROL_CONFIG_INCOMPLETE");
+  }
+  const token=readCredentialFromEnvironment(environment,
+    "UPDATE_CONTROL_ORACLE_CONTROL_TOKEN_FILE");
+  if(token===readBearer)throw new Error("ORACLE_CONTROL_MUST_NOT_REUSE_READ_CREDENTIAL");
+  try {
+    const config={url:new URL(endpoint),credential:token};
+    validateOracleControlSocketConfig(config);
+    return config;
+  } catch {
+    throw new Error("ORACLE_CONTROL_CONFIG_INVALID");
+  }
+}
+
 export function startFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
+  trustedExecution?: TrustedOracleReleaseHostOptions,
 ): { close(): Promise<void> } {
   const ledgerPath = resolve(requireEnv("ORCHESTRATOR_LEDGER_PATH", environment));
   const releaseRoot = resolve(requireEnv("ORCHESTRATOR_RELEASE_ROOT", environment));
   const host = environment.ORCHESTRATOR_READ_API_HOST?.trim() || "127.0.0.1";
   const port = readPort(environment.ORCHESTRATOR_READ_API_PORT?.trim() || "9381");
+  const bearerToken=resolveOrchestratorReadApiToken(environment);
+  const control=resolveOracleControlTransport(environment,bearerToken);
+  if(control && (!trustedExecution || !trustedExecution.capabilities.ready)) {
+    throw new Error("ORACLE_CONTROL_REQUIRES_AUTHORIZED_CAPABILITIES");
+  }
   return startOracleReleaseReadApiService({
     ledgerPath,
     releaseRoot,
-    bearerToken: resolveOrchestratorReadApiToken(environment),
+    bearerToken,
     host,
     port,
-  });
+  },trustedExecution,control);
 }
 
 async function main(): Promise<void> {

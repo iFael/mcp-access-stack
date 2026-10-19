@@ -213,11 +213,11 @@ describe("typed protected-main policy", () => {
     })).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
   });
 
-  test("blocks local merge when current target is main", () => {
+  test("allows typed fast-forward integration into protected main", () => {
     expect(() => assertTypedGitBranchMutationAllowed({
       operation: "git_merge_branch",
       currentBranch: "MAIN",
-    })).toThrow(expect.objectContaining({ code: "GIT_PROTECTED_BRANCH" }));
+    })).not.toThrow();
   });
 
   test("blocks direct push to protected main", () => {

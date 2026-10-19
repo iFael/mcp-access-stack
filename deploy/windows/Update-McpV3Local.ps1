@@ -25,15 +25,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 local updater dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -51,15 +47,27 @@ if ($null -eq $currentState -or $null -eq $currentState.active) {
 }
 $currentReleaseId = [string]$currentState.active.releaseId
 
-$headers = @{
-    Accept = 'application/vnd.github+json'
-    'User-Agent' = 'mcp-v3-local-updater'
-    'X-GitHub-Api-Version' = '2022-11-28'
-}
 $resolvedTag = $Tag
 if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
-    $latest = Invoke-RestMethod -Uri ("https://api.github.com/repos/{0}/releases/latest" -f $Repository) -Headers $headers
-    $resolvedTag = [string]$latest.tag_name
+    $activeReleaseRoot = Join-Path $installation ("releases\$currentReleaseId")
+    $null = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $activeReleaseRoot -ExpectedReleaseId $currentReleaseId -AllowLegacyInstalledFormat -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    $node = Join-Path $activeReleaseRoot 'runtime\node\node.exe'
+    $selector = Join-Path $activeReleaseRoot 'deploy\common\select-mcp-v3-release.mjs'
+    foreach ($required in @($node, $selector)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw 'The active signed release lacks the unified version selector.'
+        }
+    }
+    $channel = if ($currentReleaseId -match '-companion\.[1-9][0-9]*$') { 'companion' } elseif ($currentReleaseId.Contains('-')) { 'prerelease' } else { 'stable' }
+    $selected = @(& $node $selector $Repository $channel '-windows-x64.zip' $currentReleaseId)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Release catalog selection failed; installation state was not changed.'
+    }
+    $resolvedTag = ($selected -join '').Trim()
+}
+if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
+    [pscustomobject]@{status='up-to-date';releaseId=$currentReleaseId;taskName=$TaskName} | ConvertTo-Json -Compress
+    return
 }
 if ($resolvedTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$') {
     throw "Resolved MCP V3 release tag is invalid: $resolvedTag"
@@ -75,7 +83,7 @@ if ($currentReleaseId -eq $expectedReleaseId) {
 }
 
 $genericUpdater = Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1'
-Assert-McpPublicSignature -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $prepared = & $genericUpdater -Repository $Repository -InstallationRoot $installation -Tag $resolvedTag -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $expectedReleaseId) {
@@ -84,15 +92,41 @@ if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $e
 
 $targetReleaseRoot = Join-Path $installation ("releases\$expectedReleaseId")
 $switchScript = Join-Path $targetReleaseRoot 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'
-Assert-McpPublicSignature -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $switchResult = & $switchScript -InstallationRoot $installation -StateRoot $state -TargetReleaseId $expectedReleaseId -TaskName $TaskName -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
 if ([string]$switchResult.status -ne 'active' -or [string]$switchResult.releaseId -ne $expectedReleaseId) {
     throw 'MCP V3 local updater failed to activate the prepared release.'
 }
 
+# Retire old, verified local release folders only after the new task passed
+# the existing handover and startup health checks. Retention never masks a
+# successful switch and never deletes active/previous/candidate releases.
+$retentionStatus = 'deferred'
+if ([bool]$switchResult.taskRunning) {
+    try {
+        $activeNode = Join-Path $targetReleaseRoot 'runtime\node\node.exe'
+        $retentionScript = Join-Path $targetReleaseRoot 'deploy\common\prune-mcp-v3-local.mjs'
+        if (-not (Test-Path -LiteralPath $activeNode -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $retentionScript -PathType Leaf)) {
+            throw 'Signed local retention prerequisites are missing.'
+        }
+        $doneOutput = @(& $activeNode $retentionScript --drain $installation $expectedReleaseId $currentReleaseId)
+        if ($LASTEXITCODE -ne 0) { throw 'Local retention execution requires reconciliation.' }
+        $done = $doneOutput -join '' | ConvertFrom-Json
+        if ([string]$done.status -ne 'completed') {
+            throw 'Local retention completion is unverified.'
+        }
+        $retentionStatus = 'completed'
+    }
+    catch {
+        $retentionStatus = 'deferred'
+    }
+}
+
 [pscustomobject]@{
     status = 'updated'
+    retentionStatus = $retentionStatus
     previousReleaseId = $currentReleaseId
     releaseId = $expectedReleaseId
     taskName = $TaskName

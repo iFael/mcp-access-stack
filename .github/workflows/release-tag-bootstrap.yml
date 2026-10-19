@@ -1,5 +1,7 @@
 name: Release tag bootstrap
 
+run-name: ${{ inputs.operation_id != '' && format('mcp-release-{0}', inputs.operation_id) || inputs.tag }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +12,10 @@ on:
       expected_sha:
         description: Exact 40-character commit SHA already validated by main CI
         required: true
+        type: string
+      operation_id:
+        description: Stable UUID for a typed MCP release operation (optional for legacy dispatch)
+        required: false
         type: string
 
 permissions:
@@ -40,6 +46,17 @@ jobs:
         with:
           node-version: 26
 
+      - name: Check typed release operation ID before publishing
+        if: ${{ inputs.operation_id != '' }}
+        shell: bash
+        env:
+          OPERATION_ID: ${{ inputs.operation_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_SHA" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
       - name: Validate exact tag, main SHA and canonical CI; publish one Git ref
         env:
           GH_TOKEN: ${{ github.token }}

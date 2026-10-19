@@ -56,6 +56,11 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("deleteFile"));
   }
 
+  oracleReleaseAdvance(...args:Parameters<WorkspaceExecutor["oracleReleaseAdvance"]>){
+    return this.fallback?.oracleReleaseAdvance(...args) ??
+      Promise.reject(this.notImplemented("oracleReleaseAdvance"));
+  }
+
   getReleaseState(...args: Parameters<WorkspaceExecutor["getReleaseState"]>) {
     return this.fallback?.getReleaseState(...args) ??
       Promise.reject(this.notImplemented("getReleaseState"));
@@ -69,6 +74,10 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   promoteRelease(...args: Parameters<WorkspaceExecutor["promoteRelease"]>) {
     return this.fallback?.promoteRelease(...args) ??
       Promise.reject(this.notImplemented("promoteRelease"));
+  }
+
+  pruneReleases(...args: Parameters<WorkspaceExecutor["pruneReleases"]>) {
+    return this.fallback?.pruneReleases(...args) ?? Promise.reject(this.notImplemented("pruneReleases"));
   }
 
   runValidation(...args: Parameters<WorkspaceExecutor["runValidation"]>) {

@@ -11,7 +11,7 @@ import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/
 import { LocalBrowserWorker } from "./companion/local-browser-worker.js";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
-import { LocalRepositoryManager } from "./companion/local-repository-manager.js";
+import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
 import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     stateDirectory: path.join(runtime.stateRoot, "state"),
     managedRoot: runtime.managedRoot,
     homeDirectory: os.homedir(),
+    githubAccountOwners: parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS),
     onChanged: reloadLocalRuntime,
   });
   if (process.platform === "win32" && process.env.MCP_V3_RELEASE_ROOT?.trim()) {

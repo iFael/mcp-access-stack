@@ -1,5 +1,8 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
+import {ORACLE_CONTROL_CONNECT_PATH,ORACLE_CONTROL_RPC_PATH,ORACLE_CONTROL_ORIGIN,ORACLE_CONTROL_SCOPE,
+  ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_RPC_PATH,ORACLE_SOURCE_ORIGIN,ORACLE_SOURCE_SCOPE,
+  ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_RPC_PATH,ORACLE_WORKFLOW_ORIGIN,ORACLE_WORKFLOW_SCOPE} from "@mcp-access-stack/update-control-contract";
 import type {
   UpdateControlEvent,
   UpdateControlRunSnapshot,
@@ -19,6 +22,9 @@ import { UpdateControlOracleChannelReadClient } from "../../src/oracle-channel-c
 import { createUpdateControlReadOnlyTools } from "../../src/tools.js";
 
 const TOKEN = "oracle-channel-test-token-".padEnd(48, "x");
+const CONTROL_TOKEN="oracle-control-separated-token-".padEnd(48,"y");
+const SOURCE_TOKEN="oracle-source-separated-token-".padEnd(48,"z");
+const WORKFLOW_TOKEN="oracle-workflow-separated-token-".padEnd(48,"w");
 const principal: AuthenticatedEdgePrincipal = {
   subject: "owner:test",
   scopes: ["update:read"],
@@ -131,7 +137,10 @@ function createHarness() {
   const pairs: Array<{ client: MemorySocket; server: MemorySocket }> = [];
   let channel = new UpdateControlOracleChannel(
     state,
-    { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN } satisfies OracleChannelEnvironment,
+    { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
     {
       webSocketPairFactory: () => {
         const pair = MemorySocket.pair();
@@ -169,7 +178,10 @@ function createHarness() {
   function reactivate(): void {
     channel = new UpdateControlOracleChannel(
       state,
-      { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN } satisfies OracleChannelEnvironment,
+      { UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN: TOKEN,
+      UPDATE_CONTROL_ORACLE_CONTROL_TOKEN:CONTROL_TOKEN,
+      UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN:SOURCE_TOKEN,
+      UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN:WORKFLOW_TOKEN } satisfies OracleChannelEnvironment,
       {
         webSocketPairFactory: () => {
           const pair = MemorySocket.pair();
@@ -218,6 +230,134 @@ function attachOraclePeer(
     void state.flush();
   };
 }
+
+describe("isolated authenticated source provider DO",()=>{
+  it("does not accept the read/control tokens or origins",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=ORACLE_SOURCE_ORIGIN)=>new Request(
+      "https://worker.example"+ORACLE_SOURCE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+    });
+    expect((await h.channel().fetch(connect(TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(CONTROL_TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(connect(SOURCE_TOKEN,ORACLE_CHANNEL_ORIGIN))).status).toBe(403);
+    expect((await h.channel().fetch(connect(SOURCE_TOKEN))).status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_SOURCE_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_CHANNEL_SCOPE)).toHaveLength(0);
+  });
+  it("forwards only fixed GET methods and validates provider response",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_SOURCE_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_SOURCE_ORIGIN,
+        authorization:"Bearer "+SOURCE_TOKEN},
+    }));
+    const pair=h.pairs.at(-1)!;
+    const received:unknown[]=[];
+    attachOraclePeer(h.channel(),h.state,pair.client,pair.server,request=>{
+      received.push(request);
+      return "a".repeat(40);
+    });
+    const rpc=(command:unknown)=>h.channel().fetch(new Request(
+      "https://worker.internal"+ORACLE_SOURCE_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(command),
+      }));
+    expect((await rpc({method:"shell",arguments:{}})).status).toBe(400);
+    expect((await rpc({method:"read_main_head",arguments:{repository:"other"}})).status).toBe(400);
+    const result=await rpc({method:"read_main_head",arguments:{}});
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({result:"a".repeat(40)});
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({method:"read_main_head",arguments:{}});
+  });
+});
+
+describe("domain-isolated workflow RPC channel",()=>{
+  it("refuses source/control bearer tokens and accepts only bounded typed workflow requests",async()=>{
+    const h=createHarness();
+    const connect=(token:string,origin=ORACLE_WORKFLOW_ORIGIN)=>h.channel().fetch(new Request(
+      "https://worker.example"+ORACLE_WORKFLOW_CONNECT_PATH,{
+        method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+      }));
+    expect((await connect(SOURCE_TOKEN)).status).toBe(401);
+    expect((await connect(CONTROL_TOKEN)).status).toBe(401);
+    expect((await connect(WORKFLOW_TOKEN,ORACLE_SOURCE_ORIGIN)).status).toBe(403);
+    expect((await connect(WORKFLOW_TOKEN)).status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_WORKFLOW_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_SOURCE_SCOPE)).toHaveLength(0);
+    const pair=h.pairs.at(-1)!;
+    const operationId="11111111-2222-4333-8444-555555555555";
+    const request={method:"workflow_operation",arguments:{
+      workflow:"release-tag-bootstrap.yml",mode:"reconcile",tag:"v1.1.0-beta.90",
+      expectedMainSha:"a".repeat(40),operationId,
+    }};
+    const requests:unknown[]=[];
+    attachOraclePeer(h.channel(),h.state,pair.client,pair.server,frame=>{
+      requests.push(frame);
+      return {status:"observed",operationId,runId:4,state:"completed",conclusion:"success"};
+    });
+    const rpc=(value:unknown)=>h.channel().fetch(new Request(
+      "https://oracle-workflow.internal"+ORACLE_WORKFLOW_RPC_PATH,{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value),
+      }));
+    expect((await rpc({...request,arguments:{...request.arguments,owner:"attacker"}})).status).toBe(400);
+    expect((await rpc({method:"shell",arguments:{}})).status).toBe(400);
+    const response=await rpc(request);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({result:{
+      status:"observed",operationId,runId:4,state:"completed",conclusion:"success",
+    }});
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject(request);
+  });
+});
+
+describe("isolated control mode on existing Oracle channel DO implementation",()=>{
+  it("rejects the read token and read origin for the separate control socket",async()=>{
+    const h=createHarness();
+    const url="https://worker.example"+ORACLE_CONTROL_CONNECT_PATH;
+    const mk=(token:string,origin=ORACLE_CONTROL_ORIGIN)=>new Request(url,{
+      method:"GET",headers:{upgrade:"websocket",origin,authorization:"Bearer "+token},
+    });
+    expect((await h.channel().fetch(mk(TOKEN))).status).toBe(401);
+    expect((await h.channel().fetch(mk(CONTROL_TOKEN,ORACLE_CHANNEL_ORIGIN))).status).toBe(403);
+    const response=await h.channel().fetch(mk(CONTROL_TOKEN));
+    expect(response.status).toBe(200);
+    expect(h.state.getWebSockets(ORACLE_CONTROL_SCOPE)).toHaveLength(1);
+    expect(h.state.getWebSockets(ORACLE_CHANNEL_SCOPE)).toHaveLength(0);
+    expect((await h.channel().fetch(rpcRequest("advance_release",{}))).status).toBe(400);
+  });
+  it("delivers only the fixed typed operation on the dedicated RPC path",async()=>{
+    const h=createHarness();
+    await h.channel().fetch(new Request("https://worker.example"+ORACLE_CONTROL_CONNECT_PATH,{
+      method:"GET",headers:{upgrade:"websocket",origin:ORACLE_CONTROL_ORIGIN,
+        authorization:"Bearer "+CONTROL_TOKEN},
+    }));
+    const oracle=h.pairs.at(-1)!.client,server=h.pairs.at(-1)!.server;
+    server.receiver=(message)=>h.channel().webSocketMessage(server as unknown as WebSocket,message);
+    let request:Record<string,unknown>|undefined;
+    oracle.receiver=(message)=>{
+      if(typeof message!=="string")return;
+      request=JSON.parse(message) as Record<string,unknown>;
+      oracle.send(JSON.stringify({version:1,type:"response",requestId:request.requestId,
+        outcome:"success",result:{runId, lastSeq:4,status:"paused_outcome_unknown",stop:"outcome_unknown"}}));
+      void h.state.flush();
+    };
+    const body={method:"advance_release",
+      arguments:{runId,expectedSourceSha:"a".repeat(40),expectedLastSeq:3,
+        operationId:"11111111-2222-4333-8444-555555555555"},
+      principal:{workspaceId:"mcp-access-stack",authenticatedActorId:"mcp:v3-release-control",
+        ownerScope:"trusted:release-operator"}};
+    const rpc=(value:unknown)=>h.channel().fetch(new Request("https://control.internal"+ORACLE_CONTROL_RPC_PATH,{
+      method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value),
+    }));
+    expect((await rpc({...body,method:"shell"})).status).toBe(400);
+    expect((await rpc({...body,principal:{...body.principal,ownerScope:"owner"}})).status).toBe(400);
+    expect((await rpc(body)).status).toBe(200);
+    expect(request).toMatchObject({method:"advance_release",arguments:body.arguments,
+      principal:body.principal});
+    expect((await h.channel().fetch(rpcRequest("advance_release",body.arguments))).status).toBe(400);
+  });
+});
 
 describe("Update Control reverse WSS channel", () => {
   it("routes the three existing read-only tools end to end without changing arguments or results", async () => {

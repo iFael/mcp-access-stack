@@ -34,7 +34,11 @@ mcp_v3_require_file "$config"
 current_release="$(mcp_v3_manifest_release_id "$node" "$manifest")"
 platform_id="$(mcp_v3_host_platform darwin)"
 asset_arch="${platform_id#darwin-}"
-tag="$(mcp_v3_resolve_release_tag "$node" "$repository" "$tag")"
+tag="$(mcp_v3_resolve_release_tag "$node" "$repository" "$tag" "$current_release" "-${platform_id}.tar.gz")"
+if [[ -z "$tag" ]]; then
+  printf '{"status":"up-to-date","releaseId":"%s"}\n' "$current_release"
+  exit 0
+fi
 target_release="${tag#v}"
 
 if [[ "$target_release" == "$current_release" ]]; then
@@ -55,6 +59,15 @@ device="$(mcp_v3_config_value "$node" "$config" displayName)"
 args=(--edge-base-url "$edge" --app-root "$app_root" --state-root "$state_root")
 if [[ -n "$device" ]]; then args+=(--device-name "$device"); fi
 "$package_root/deploy/macos/Install-McpV3Local.sh" "${args[@]}"
+
+# Health-gated retirement: keep rollback and do not block an already healthy
+# cutover if process inspection or retention CAS becomes inconclusive.
+if launchctl print "gui/$(id -u)/com.mcpv3.local" | grep -Eq 'state = running'; then
+  mcp_v3_prune_local_releases "$app_root/current/runtime/node/node" "$app_root" \
+    "$target_release" "$current_release" || printf '%s\n' 'LOCAL_RETENTION_DEFERRED' >&2
+else
+  printf '%s\n' 'LOCAL_RETENTION_DEFERRED' >&2
+fi
 
 printf '{"status":"updated","previousReleaseId":"%s","releaseId":"%s"}\n' \
   "$current_release" "$target_release"

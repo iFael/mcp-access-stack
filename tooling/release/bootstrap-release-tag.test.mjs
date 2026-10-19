@@ -214,6 +214,10 @@ test("the new workflow isolates tag bootstrap from the canonical release workflo
   const release = await readFile(path.join(ROOT, ".github/workflows/release.yml"), "utf8");
   assert.match(bootstrap, /workflow_dispatch:/u);
   assert.match(bootstrap, /expected_sha:/u);
+  assert.match(bootstrap, /operation_id:/u);
+  assert.match(bootstrap, /run-name: .*mcp-release-/u);
+  assert.match(bootstrap, /\[\[ "\$GITHUB_SHA" == "\$EXPECTED_SHA" \]\]/u);
+  assert.match(bootstrap, /\[\[ "\$GITHUB_RUN_ATTEMPT" == "1" \]\]/u);
   assert.match(bootstrap, /environment: public-release/u);
   assert.match(bootstrap, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(bootstrap, /ref: \$\{\{ github\.sha \}\}/u);

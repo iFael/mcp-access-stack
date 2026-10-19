@@ -123,9 +123,27 @@ Assert-ContainsAll -Label 'MCP V3 local updater' -Source $updater -Tokens @(
     "status = 'updated'"
 )
 
+$catalogSelector = Read-ProjectFile 'deploy\common\select-mcp-v3-release.mjs'
+Assert-ContainsAll -Label 'shared published-release selection' -Source $catalogSelector -Tokens @(
+    'selectPublishedRelease',
+    'compareReleaseTags',
+    'assetSuffix',
+    'RELEASE_CATALOG_REFUSED'
+)
+Assert-ContainsAll -Label 'Windows selector integration' -Source $updater -Tokens @(
+    'select-mcp-v3-release.mjs',
+    'Assert-McpWindowsExecutionNodeRelease',
+    'windows-x64.zip'
+)
+$distributor = Read-ProjectFile 'deploy\windows\New-McpPublicDistribution.ps1'
+Assert-ContainsAll -Label 'signed Windows distribution selector' -Source $distributor -Tokens @(
+    'deploy\common\select-mcp-v3-release.mjs',
+    '$catalogSelectorTarget'
+)
+
 $updateTask = Read-ProjectFile 'deploy\windows\Install-McpV3LocalUpdateTask.ps1'
 Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @(
-    '-ExecutionPolicy AllSigned',
+    '-ExecutionPolicy RemoteSigned',
     'state.active.releaseId',
     'Invoke-McpV3LocalUpdateTask.ps1',
     'Get-Command pwsh.exe -CommandType Application -ErrorAction Stop',
@@ -200,6 +218,13 @@ Assert-ContainsAll -Label 'MCP V3 Windows execution-node staging retry' -Source 
     'directory move failed after {0} attempts'
 )
 
+$immutableReleaseBuilder = Read-ProjectFile 'deploy\windows\New-McpRelease.ps1'
+Assert-ContainsAll -Label 'Immutable Windows runtime dependencies' -Source $immutableReleaseBuilder -Tokens @(
+    "'packages/update-control-contract'",
+    'oracle-control-caller.js',
+    'Immutable Windows release cannot load its Oracle runtime dependencies.'
+)
+
 $distribution = Read-ProjectFile 'deploy\windows\New-McpPublicDistribution.ps1'
 Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -Tokens @(
     'Install-McpV3Local.ps1',
@@ -213,7 +238,7 @@ Assert-ContainsAll -Label 'MCP V3 public distribution' -Source $distribution -To
     "id = 'local-companion'",
     "-Id 'local-companion-runtime'",
     'edgeBaseUrl = $edgeOrigin',
-    'native\McpElevationBroker.exe'
+    'native/McpElevationBroker.exe'
 )
 
 $executionCommon = Read-ProjectFile 'deploy\windows\WindowsExecutionNode.Common.ps1'

@@ -255,23 +255,26 @@ mcp_v3_resolve_release_tag() {
     printf '%s\n' "$requested"
     return
   fi
-  "$node" - "$repository" <<'NODE'
-const repo = process.argv[2];
-const response = await fetch(
-  "https://api.github.com/repos/" + repo + "/releases/latest",
-  { headers: {
-    "user-agent": "mcp-v3-local-updater",
-    "accept": "application/vnd.github+json",
-  }},
-);
-if (!response.ok) process.exit(2);
-const value = await response.json();
-if (
-  typeof value.tag_name !== "string" ||
-  !/^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$/.test(value.tag_name)
-) process.exit(3);
-process.stdout.write(value.tag_name);
-NODE
+  local current_release="${4:-}"
+  local asset_suffix="${5:-}"
+  [[ -n "$current_release" && -n "$asset_suffix" ]] ||
+    mcp_v3_die "Automatic release selection requires an installed release and platform asset."
+  local channel="stable"
+  [[ "$current_release" == *-* ]] && channel="prerelease"
+  [[ "$current_release" =~ -companion\.[1-9][0-9]*$ ]] && channel="companion"
+  local selector="${BASH_SOURCE[0]%/*}/../common/select-mcp-v3-release.mjs"
+  [[ -f "$selector" ]] || mcp_v3_die "Signed release selector is missing."
+  "$node" "$selector" "$repository" "$channel" "$asset_suffix" "$current_release"
+}
+
+mcp_v3_prune_local_releases() {
+  local node="$1"
+  local app_root="$2"
+  local active="$3"
+  local previous="$4"
+  local script="$app_root/current/deploy/common/prune-mcp-v3-local.mjs"
+  [[ -f "$script" ]] || mcp_v3_die "Signed local retention helper is missing."
+  "$node" "$script" --drain "$app_root" "$active" "$previous" >/dev/null
 }
 
 mcp_v3_download_verified_asset() {

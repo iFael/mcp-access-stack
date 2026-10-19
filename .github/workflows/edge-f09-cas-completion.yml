@@ -1,0 +1,97 @@
+name: Complete f09 contract CAS after verified deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact main SHA with terminal GREEN CI
+        required: true
+        type: string
+      operation_id:
+        description: Original stable CAS replacement operation UUID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: public-release-edge
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify exact main, successful CI, prior deployment and operation identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          OPERATION_ID: ${{ inputs.operation_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$OPERATION_ID" == "8f02a2a4-2f1f-45de-b127-d11253aaa0d5" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+          ci="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
+            --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
+            --json headSha,status,conclusion --jq '[.[] | select(.headSha == env.EXPECTED_MAIN_SHA and .status == "completed" and .conclusion == "success")] | length')"
+          [[ "$ci" =~ ^[1-9][0-9]*$ ]]
+          provenance="$(gh api repos/iFael/mcp-access-stack/actions/runs/38277129007 --jq '.status + ":" + .conclusion + ":" + .head_sha')"
+          [[ "$provenance" == "completed:success:5722697ef6add8ed8fd5c580b368d62c1c249aac" ]]
+          prior="$(gh api repos/iFael/mcp-access-stack/actions/runs/38276764006 --jq '.status + ":" + .conclusion + ":" + .head_sha')"
+          [[ "$prior" == "completed:failure:5722697ef6add8ed8fd5c580b368d62c1c249aac" ]]
+  complete:
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    name: Replace candidate only without redeploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: public-release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+      - name: Pinned Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+      - name: Reconcile main SHA after protected Environment approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+      - name: Check pinned contract and regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          grep -Fq 'da7f5d3967de5325b5daa36951ce87417767a308ebf5eb0d3a999019d7780c92' services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts
+          node --test tooling/release/activate-edge-f09-cas.test.mjs
+      - name: Replace old candidate with signed f09 catalog using exact existing deployment
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
+          EDGE_CAS_OPERATION_ID: ${{ inputs.operation_id }}
+          EDGE_NEW_DEPLOYMENT_ID: 7d2b9560-f0d8-4c6d-8a4f-f93cf0fc1380
+        run: |
+          set -euo pipefail
+          node tooling/release/activate-edge-f09-cas.mjs replace

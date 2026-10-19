@@ -302,7 +302,12 @@ async function waitForPidFile(pidPath: string, timeoutMs: number): Promise<numbe
       const pid = Number((await readFile(pidPath, "utf8")).trim());
       if (Number.isSafeInteger(pid) && pid > 0) return pid;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // PowerShell's Set-Content briefly holds an exclusive handle on Windows.
+      // Retry only transient open/read races; still require a valid PID in time.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EBUSY" && code !== "EPERM" && code !== "EACCES") {
+        throw error;
+      }
     }
     await delay(25);
   }

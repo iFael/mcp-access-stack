@@ -29,18 +29,13 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required execution-node staging dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and
-        -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature `
+Assert-McpPublicFile `
     -Path $publicCommonPath `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature `
+Assert-McpPublicFile `
     -Path $executionCommonPath `
     -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath

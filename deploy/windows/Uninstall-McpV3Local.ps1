@@ -24,15 +24,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required MCP V3 local uninstall dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -148,7 +144,7 @@ function Remove-McpV3OAuthCredential {
                 $releaseRoot = Join-Path $installation ("releases\$releaseId")
                 if (Test-Path -LiteralPath $releaseRoot -PathType Container) {
                     try {
-                        $verified = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $releaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+                        $verified = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $releaseId -AllowLegacyInstalledFormat -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
                         $record = @($verified.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'browser-credential-broker' })
                         if ($record.Count -eq 1) {
                             $candidate = Resolve-McpPublicChildPath -Root $releaseRoot -RelativePath ([string]$record[0].path)

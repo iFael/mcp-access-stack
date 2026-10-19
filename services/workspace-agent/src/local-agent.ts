@@ -20,6 +20,7 @@ import {
   getReleaseStateInputSchema,
   prepareReleaseInputSchema,
   promoteReleaseInputSchema,
+  pruneReleasesInputSchema,
   readFileInputSchema,
   readBinaryFileInputSchema,
   runWorkspaceValidationInputSchema,
@@ -64,6 +65,8 @@ import {
   type PrepareReleaseResult,
   type PromoteReleaseInput,
   type PromoteReleaseResult,
+  type PruneReleasesInput,
+  type PruneReleasesResult,
   type ReadFileInput,
   type ReadFileResult,
   type ReadBinaryFileInput,
@@ -111,6 +114,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
+  githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -139,6 +144,8 @@ import {
   type GitHubCommitChecksResult,
   type GitHubExecutor,
   type GitHubGetCommitChecksInput,
+  type GitHubWorkflowOperationInput,
+  type GitHubWorkflowOperationResult,
   type GitHubMaterializeActionsArtifactInput,
   type GitHubMaterializeActionsArtifactResult,
   type GitHubGetCommitChecksWatchesInput,
@@ -182,12 +189,30 @@ import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
 import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js";
+import {
+  OracleControlCaller, type OracleControlCallerInput,
+  type OracleControlCallerBinding,
+} from "./release/oracle-control-caller.js";
+import { parseOracleControlAdvance } from "@mcp-access-stack/update-control-contract";
+import {oracleReleaseAdvanceResultSchema,type OracleReleaseAdvanceResult} from "@vs-code-gpt/shared";
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
+import {
+  TrustedCampaignAgentLifecycle,
+  type TrustedCampaignEnrollment,
+  type TrustedCampaignHostOptions,
+} from "./campaign/trusted-campaign-agent-lifecycle.js";
+import {
+  TrustedCampaignEnrollmentCatalog,
+  type TrustedCampaignBindingFactories,
+} from "./campaign/trusted-campaign-enrollment-catalog.js";
 import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt-store.js";
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
-import { GitHubHttpClient } from "./source-control/github-http-client.js";
+import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control/github-http-client.js";
+import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
+import {inspectGitHubPublicReleaseAssets,
+  type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
 import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
 import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
@@ -211,10 +236,13 @@ export interface LocalAgentOptions {
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
+  workflowClient?: GitHubWorkflowApiClient;
   commandConfirmationRegistry?: CommandConfirmationRegistry;
   typedConfirmationRegistry?: TypedConfirmationRegistry;
   mutationReceiptStore?: MutationReceiptStore;
   elevationBroker?: ElevationBroker;
+  /** Host-owned control capability: absent unless explicitly enrolled. */
+  oracleControl?: OracleControlCallerBinding;
 }
 
 function backgroundTaskAccess(
@@ -232,6 +260,7 @@ export class LocalAgent {
   private readonly validationService = new ValidationService();
   private readonly backgroundTaskManager: BackgroundTaskManager;
   private readonly releaseLifecycleService: ReleaseLifecycleService;
+  private readonly oracleControlCaller: OracleControlCaller | undefined;
   private readonly serviceControlService = new LinuxServiceControlService();
   private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
@@ -242,6 +271,8 @@ export class LocalAgent {
   private readonly mutationReceiptStores = new Map<string, MutationReceiptStore>();
   private gitRepositoryServicePromise: Promise<GitRepositoryService> | undefined;
   private gitHubExecutorPromise: Promise<GitHubExecutor> | undefined;
+  private workflowClientPromise: Promise<GitHubWorkflowApiClient> | undefined;
+  private readonly injectedWorkflowClient: GitHubWorkflowApiClient | undefined;
 
   private constructor(
     private readonly registry: WorkspaceRegistry,
@@ -255,6 +286,7 @@ export class LocalAgent {
     this.injectedGitRepositoryExecutor = options.gitRepositoryExecutor;
     this.injectedGitOriginResolver = options.gitOriginResolver;
     this.injectedGitHubExecutor = options.githubExecutor;
+    this.injectedWorkflowClient = options.workflowClient;
     this.typedConfirmationRegistry = options.typedConfirmationRegistry ?? new TypedConfirmationRegistry();
     this.injectedMutationReceiptStore = options.mutationReceiptStore;
     this.backgroundTaskManager = new BackgroundTaskManager({
@@ -281,6 +313,8 @@ export class LocalAgent {
         terminate: terminateProcessTreeByPid,
       },
     });
+    this.oracleControlCaller = options.oracleControl === undefined
+      ? undefined : new OracleControlCaller(options.oracleControl);
     this.releaseLifecycleService = new ReleaseLifecycleService(
       this.shellService,
       this.backgroundTaskManager,
@@ -316,6 +350,35 @@ export class LocalAgent {
     const agent = new LocalAgent(registry, audit, options);
     await agent.githubChecksWatchManager.recover();
     return agent;
+  }
+
+  /**
+   * Opt-in lifecycle integration for a trusted local service only.
+   * Creating LocalAgent never autostarts a campaign or broadens MCP tools.
+   * The caller must provide code-owned typed bindings and explicit state root.
+   */
+  createTrustedCampaignHost(
+    enrollments: readonly TrustedCampaignEnrollment[],
+    options: TrustedCampaignHostOptions,
+  ): TrustedCampaignAgentLifecycle {
+    return new TrustedCampaignAgentLifecycle(this, enrollments, options);
+  }
+
+  /**
+   * Trusted-process startup hook. The on-disk catalog holds only enrollment
+   * identity/digests, never executable commands or credentials. Fresh code
+   * factories are mandatory on every restart. No execution until serve().
+   */
+  async createTrustedCampaignHostFromCatalog(
+    catalog: TrustedCampaignEnrollmentCatalog,
+    factories: TrustedCampaignBindingFactories,
+    options: TrustedCampaignHostOptions,
+  ): Promise<TrustedCampaignAgentLifecycle> {
+    const enrollments = await catalog.load(this, factories);
+    if (enrollments.length === 0) {
+      throw new Error("CAMPAIGN_CATALOG_EMPTY: no authorized enrollments");
+    }
+    return this.createTrustedCampaignHost(enrollments, options);
   }
 
   resolveWorkspaceConcurrencyKey(workspaceId: string): string {
@@ -484,6 +547,46 @@ export class LocalAgent {
     );
   }
 
+  /** Private typed binding for the future unified release tool. No MCP catalog
+   * entry or automatic dispatch is created by this enrollment. */
+  async oracleReleaseAdvance(
+    input: OracleControlCallerInput,
+    context: OperationContext = {},
+  ): Promise<OracleReleaseAdvanceResult> {
+    const schema = {safeParse:(value:unknown) => {
+      try {
+        if(!value || typeof value!=="object" || Array.isArray(value) ||
+          Object.keys(value).length!==5 || !Object.hasOwn(value,"workspaceId") ||
+          (value as {workspaceId?:unknown}).workspaceId!=="mcp-access-stack") {
+          return {success:false as const};
+        }
+        const v=value as OracleControlCallerInput;
+        const parsed=parseOracleControlAdvance({
+          runId:v.runId,expectedSourceSha:v.expectedSourceSha,
+          expectedLastSeq:v.expectedLastSeq,operationId:v.operationId,
+        });
+        return {success:true as const,data:{workspaceId:v.workspaceId,...parsed}};
+      } catch {return {success:false as const};}
+    }};
+    return this.runValidatedAudited(
+      "oracleReleaseAdvance","shell",schema,input,context,
+      parsed=>({query:parsed.operationId,
+        targetResource:`oracle:${parsed.workspaceId}:run/${parsed.runId}`,
+        expectedSha:parsed.expectedSourceSha}),
+      async(workspace,parsed,activeContext)=>{
+        if(!this.oracleControlCaller ||
+          workspace.id!=="mcp-access-stack" ||
+          workspace.permissionProfile!=="full-repo-write" ||
+          workspace.confirmationMode!=="trusted-workspace") {
+          throw new AppError("CAPABILITY_UNSUPPORTED",
+            "Oracle control is not enrolled for this trusted workspace.");
+        }
+        return oracleReleaseAdvanceResultSchema.parse(await this.oracleControlCaller.advance(
+          parsed,this.mutationReceiptStoreFor(workspace),activeContext));
+      },
+    );
+  }
+
   async prepareRelease(
     input: PrepareReleaseInput,
     context: OperationContext = {},
@@ -533,6 +636,14 @@ export class LocalAgent {
     );
   }
 
+  async pruneReleases(input: PruneReleasesInput, context: OperationContext = {}): Promise<PruneReleasesResult> {
+    return this.runValidatedAudited(
+      "pruneReleases", "shell", pruneReleasesInputSchema, input, context,
+      (parsed) => ({ query: parsed.operationId, targetResource: "oracle-release-retention" }),
+      (workspace, parsed, activeContext) => this.releaseLifecycleService.prune(workspace, parsed, activeContext.signal),
+    );
+  }
+
   async runValidation(
     input: RunWorkspaceValidationInput,
     context: OperationContext = {},
@@ -577,7 +688,7 @@ export class LocalAgent {
       context,
       (parsed) => ({ targetResource: parsed.serviceName }),
       (_workspace, parsed, activeContext) =>
-        this.serviceControlService.getStatus(parsed.serviceName, activeContext.signal),
+        this.serviceControlService.getStatus(parsed.serviceName, activeContext.signal, parsed.diagnostics),
     );
   }
 
@@ -1195,6 +1306,112 @@ export class LocalAgent {
     );
   }
 
+  /** Internal release-provider read. Uses the same authenticated GitHub
+   * client, repository ACL and audit path as existing typed source-control
+   * tools, without introducing a general-purpose public GitHub-ref tool. */
+  async releaseReadGitHubMainHead(
+    input: GitHubGetRepositoryInput,
+    context: OperationContext = {},
+  ): Promise<string> {
+    return this.runSourceControlValidatedAudited(
+      "releaseReadGitHubMainHead",
+      githubGetRepositoryInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = "github:" + repository + ":ref/heads/main";
+        await this.assertGitHubRepositoryCapability(
+          workspace, "github.repository.read", repository,
+          parsed.root ?? ".", false, activeContext.signal,
+        );
+        const ref = await (await this.getGitHubWorkflowApiClient()).getMainRef(
+          parsed.owner, parsed.repository, activeContext,
+        );
+        if (ref.ref !== "refs/heads/main" || ref.object.type !== "commit" ||
+          !/^[a-f0-9]{40}$/u.test(ref.object.sha)) {
+          throw new AppError("EXECUTION_STATE_INVALID",
+            "Canonical GitHub main ref is not a commit.");
+        }
+        metadata.resultSha = ref.object.sha;
+        return ref.object.sha;
+      },
+    );
+  }
+
+  /** Internal Oracle release tag verifier. GitHub lightweight refs alone
+   * qualify; annotated tags and any unexpected commit are refused. Reuses the
+   * existing source-control policy, authenticated client and audit trail. */
+  async releaseVerifyGitHubLightweightTag(
+    input: GitHubGetRepositoryInput,
+    tag: string,
+    commitSha: string,
+    context: OperationContext = {},
+  ): Promise<boolean> {
+    return this.runSourceControlValidatedAudited(
+      "releaseVerifyGitHubLightweightTag",
+      githubGetRepositoryInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(tag) ||
+            tag.includes("-oracle.") || tag.includes("-companion.") ||
+            !/^[a-f0-9]{40}$/u.test(commitSha)) {
+          throw new AppError("INVALID_ARGUMENT", "Invalid immutable public release tag identity.");
+        }
+        const repository = parsed.owner + "/" + parsed.repository;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = "github:" + repository + ":ref/tags/" + tag;
+        metadata.expectedSha = commitSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace, "github.repository.read", repository,
+          parsed.root ?? ".", false, activeContext.signal,
+        );
+        const client = await this.getGitHubWorkflowApiClient();
+        if (!client.getTagRef) {
+          throw new AppError("CAPABILITY_UNSUPPORTED", "Authenticated tag ref read unavailable.");
+        }
+        const ref = await client.getTagRef(parsed.owner, parsed.repository, tag, activeContext);
+        const verified = ref.ref === "refs/tags/" + tag &&
+          ref.object.type === "commit" && ref.object.sha === commitSha;
+        if (verified) metadata.resultSha = commitSha;
+        return verified;
+      },
+    );
+  }
+
+  /** Authenticated, audited postcondition for fixed public release assets.
+   * Integrity and publication are checked against authenticated GitHub metadata. */
+  async releaseInspectGitHubPublicDistribution(
+    input:GitHubGetRepositoryInput,runId:number,tag:string,commitSha:string,
+    context:OperationContext={},
+  ):Promise<GitHubPublicDistributionInspection>{
+    return this.runSourceControlValidatedAudited(
+      "releaseInspectGitHubPublicDistribution",githubGetRepositoryInputSchema,
+      input,context,
+      async(workspace,parsed,activeContext,metadata)=>{
+        const repository=parsed.owner+"/"+parsed.repository;
+        metadata.sourceControlCapability="github.repository.read";
+        metadata.targetResource="github:"+repository+":release/"+tag+":run/"+runId;
+        metadata.expectedSha=commitSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace,"github.repository.read",repository,parsed.root??".",
+          false,activeContext.signal,
+        );
+        const client=await this.getGitHubWorkflowApiClient();
+        if(!client.getWorkflowRun || !client.getReleaseByTag ||
+          !client.getTagRef || !client.getReleaseAssetChecksum)
+          throw new AppError("CAPABILITY_UNSUPPORTED",
+            "Authenticated GitHub public release inspection unavailable.");
+        const observation=await inspectGitHubPublicReleaseAssets(
+          client,parsed.owner,parsed.repository,runId,tag,commitSha,activeContext);
+        metadata.resultSha=observation.assetInventorySha256;
+        return observation;
+      },
+    );
+  }
+
   async githubMaterializeActionsArtifact(input: GitHubMaterializeActionsArtifactInput, context: OperationContext = {}): Promise<GitHubMaterializeActionsArtifactResult> {
     return this.runSourceControlValidatedAudited(
       "githubMaterializeActionsArtifact",
@@ -1254,6 +1471,48 @@ export class LocalAgent {
             activeContext,
           ),
         );
+      },
+    );
+  }
+
+  async githubWorkflowOperation(
+    input: GitHubWorkflowOperationInput,
+    context: OperationContext = {},
+  ): Promise<GitHubWorkflowOperationResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubWorkflowOperation", githubWorkflowOperationInputSchema, input, context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        const capability = parsed.mode !== "dispatch"
+          ? "github.repository.read" as const
+          : parsed.workflow === "release-tag-bootstrap.yml"
+            ? "github.workflow.bootstrap" as const
+            : parsed.workflow === "release.yml"
+              ? "github.workflow.public_release" as const
+              : "github.workflow.dispatch" as const;
+        metadata.sourceControlCapability = capability;
+        metadata.targetResource = "github:" + repository + ":workflow/" + parsed.workflow +
+          ":operation/" + parsed.operationId;
+        metadata.expectedSha = parsed.expectedMainSha;
+        await this.assertGitHubRepositoryCapability(workspace, capability, repository,
+          parsed.root ?? ".", parsed.mode === "dispatch", activeContext.signal);
+        const coordinator = new GitHubReleaseWorkflowOperation({
+          client: await this.getGitHubWorkflowApiClient(),
+          receipts: this.mutationReceiptStoreFor(workspace),
+          authorize: async () => {
+            await this.assertGitHubRepositoryCapability(workspace,
+              parsed.workflow === "release-tag-bootstrap.yml"
+                ? "github.workflow.bootstrap"
+                : parsed.workflow === "release.yml"
+                  ? "github.workflow.public_release" : "github.workflow.dispatch",
+              repository, parsed.root ?? ".", true, activeContext.signal);
+            return true;
+          },
+        });
+        const outcome = parsed.mode === "dispatch"
+          ? await coordinator.dispatch(parsed, activeContext)
+          : await coordinator.reconcile(parsed, activeContext);
+        return githubWorkflowOperationResultSchema.parse(outcome);
       },
     );
   }
@@ -1773,6 +2032,14 @@ export class LocalAgent {
 
   private async getGitOriginResolver(): Promise<GitOriginResolver> {
     return this.injectedGitOriginResolver ?? this.getGitRepositoryService();
+  }
+
+  private async getGitHubWorkflowApiClient(): Promise<GitHubWorkflowApiClient> {
+    if (this.injectedWorkflowClient) return this.injectedWorkflowClient;
+    this.workflowClientPromise ??= (async () => new GitHubHttpClient({
+      credentialProvider: await GhCliUserCredentialProvider.create(),
+    }))();
+    return this.workflowClientPromise;
   }
 
   private async getGitHubExecutor(): Promise<GitHubExecutor> {

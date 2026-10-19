@@ -28,6 +28,8 @@ import type {
   PrepareReleaseResult,
   PromoteReleaseInput,
   PromoteReleaseResult,
+  PruneReleasesInput,
+  PruneReleasesResult,
   ReadBackgroundTaskLogsInput,
   ReadBackgroundTaskOutputInput,
   ReadFileInput,
@@ -95,6 +97,13 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.deleteFile(input, context);
   }
 
+  oracleReleaseAdvance(
+    input:import("@vs-code-gpt/shared").OracleReleaseAdvanceInput,
+    context?:OperationContext,
+  ):Promise<import("@vs-code-gpt/shared").OracleReleaseAdvanceResult>{
+    return this.agent.oracleReleaseAdvance(input,context);
+  }
+
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,
@@ -114,6 +123,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     context?: OperationContext,
   ): Promise<PromoteReleaseResult> {
     return this.agent.promoteRelease(input, context);
+  }
+
+  pruneReleases(input: PruneReleasesInput, context?: OperationContext): Promise<PruneReleasesResult> {
+    return this.agent.pruneReleases(input, context);
   }
 
   runValidation(
@@ -239,6 +252,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   }
   getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
     return this.agent.githubGetCommitChecks(...args);
+  }
+  githubWorkflowOperation(...args: Parameters<LocalAgent["githubWorkflowOperation"]>) {
+    return this.agent.githubWorkflowOperation(...args);
   }
   materializeActionsArtifact(...args: Parameters<GitHubExecutor["materializeActionsArtifact"]>) {
     const [input, _workspaceRoot, context] = args;

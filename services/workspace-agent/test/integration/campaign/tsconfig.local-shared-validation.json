@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@vs-code-gpt/shared": ["../../../../../packages/mcp-core/dist/index.d.ts"]
+    },
+    "noEmit": true
+  }
+}

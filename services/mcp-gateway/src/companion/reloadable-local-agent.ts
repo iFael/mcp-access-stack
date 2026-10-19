@@ -10,10 +10,15 @@ import {
   InProcessWorkspaceExecutor,
   LocalAgent,
   type LocalAgentOptions,
+  createOracleReleaseGitHubReadPort,
+  createOracleReleaseGitHubWorkflowPort,
+  type OracleReleaseGitHubWorkflowPolicy,
+  type OracleReleaseGitHubReadConfig,
 } from "@vs-code-gpt/local-agent";
 
 export class ReloadableLocalAgent {
   private current: InProcessWorkspaceExecutor | null = null;
+  private currentAgent:LocalAgent|null=null;
   private generation = 0;
   private readonly options: LocalAgentOptions;
   readonly workspaceExecutor: WorkspaceExecutor;
@@ -49,6 +54,61 @@ export class ReloadableLocalAgent {
     this.sourceControlExecutor = proxy;
   }
 
+  /** Read port follows policy reload and discards observations that finish
+   * after policy revocation. Never capture a stale LocalAgent. */
+  oracleSourceReadPort(config:OracleReleaseGitHubReadConfig){
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const active=this.currentAgent,epoch=this.generation;
+      if(!active)throw new AppError("WORKSPACE_NOT_FOUND","Oracle source host offline.");
+      const result=await operation(active);
+      if(epoch!==this.generation || this.currentAgent!==active){
+        throw new AppError("PERMISSION_DENIED","Oracle source policy changed during read.");
+      }
+      return result;
+    };
+    return createOracleReleaseGitHubReadPort({
+      releaseReadGitHubMainHead:(input,context)=>checked(agent=>
+        agent.releaseReadGitHubMainHead(input,context)),
+      githubGetCommitChecks:(input,context)=>checked(agent=>
+        agent.githubGetCommitChecks(input,context)),
+    },config);
+  }
+
+  /** Every workflow RPC uses the current LocalAgent, not the previous policy
+   * generation. If reload races an in-flight dispatch, the result is
+   * outcome_unknown; never issue the request again under a new generation. */
+  oracleWorkflowPort(config:OracleReleaseGitHubReadConfig,
+    policy:OracleReleaseGitHubWorkflowPolicy) {
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const active=this.currentAgent,epoch=this.generation;
+      if(!active)throw new AppError("WORKSPACE_NOT_FOUND","Oracle workflow host offline.");
+      const result=await operation(active);
+      if(epoch!==this.generation || active!==this.currentAgent){
+        throw new AppError("PERMISSION_DENIED","Oracle workflow policy changed during operation.");
+      }
+      return result;
+    };
+    const pinned=createOracleReleaseGitHubWorkflowPort({
+      githubWorkflowOperation:(input,context)=>checked(agent=>
+        agent.githubWorkflowOperation(input,context)),
+      releaseVerifyGitHubLightweightTag:(input,tag,sha,context)=>checked(agent=>
+        agent.releaseVerifyGitHubLightweightTag(input,tag,sha,context)),
+    },config,{
+      authorizeWorkflow:input=>checked(async()=>policy.authorizeWorkflow(input)),
+      authorizeTagRead:(tag,sha)=>checked(async()=>policy.authorizeTagRead(tag,sha)),
+    });
+    // A workflow frame can never select the GitHub account, repository, scope
+    // or workspace: these exist only in the trusted host enrollment.
+    return {
+      workflowOperation:(input:Omit<Parameters<typeof pinned.workflowOperation>[0],
+        "workspaceId"|"owner"|"repository">)=>pinned.workflowOperation({
+          ...input,workspaceId:config.workspaceId,owner:config.owner,
+          repository:config.repository,
+        }),
+      verifyLightweightTag:(tag:string,sha:string)=>pinned.verifyLightweightTag(tag,sha),
+    };
+  }
+
   get ready(): boolean {
     return this.current !== null;
   }
@@ -59,11 +119,13 @@ export class ReloadableLocalAgent {
 
   async reload(policy: PolicyFile | null): Promise<void> {
     if (!policy) {
+      this.currentAgent=null;
       this.current = null;
       this.generation += 1;
       return;
     }
     const agent = await LocalAgent.createFromPolicy(policy, this.options);
+    this.currentAgent=agent;
     this.current = new InProcessWorkspaceExecutor(agent);
     this.generation += 1;
   }

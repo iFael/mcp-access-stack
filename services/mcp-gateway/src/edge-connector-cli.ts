@@ -13,9 +13,14 @@ import {
 import { createGatewayApplication } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
-import { LocalRepositoryManager } from "./companion/local-repository-manager.js";
+import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
+import {loadOracleControlBindingFromEnvironment} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
+import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
+import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-provider-host.js";
+import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
+import {loadOracleWorkflowProviderFromEnvironment} from "./edge/oracle-workflow-provider-host.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
@@ -50,18 +55,30 @@ async function main(): Promise<void> {
   const internalAssertion = randomBytes(32).toString("base64url");
 
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
-  const reloadable = new ReloadableLocalAgent();
+  const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
+  const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
+  const reloadable = new ReloadableLocalAgent(oracleControl ? {oracleControl} : {});
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
     const managedPolicy = await repositories.buildPolicy();
-    await reloadable.reload(mergePrimaryPolicies(basePolicy, managedPolicy));
+    await reloadable.reload(withGlobalGitHubRepositoryCreatePolicy(
+      mergePrimaryPolicies(basePolicy, managedPolicy), githubAccountOwners,
+    ));
   };
   repositories = await LocalRepositoryManager.create({
     stateDirectory: runtime.repositoryStateDirectory,
     managedRoot: runtime.managedRepositoryRoot,
+    githubAccountOwners,
     onChanged: reloadPrimaryRuntime,
   });
   await reloadPrimaryRuntime();
+  const sourceOptions=await loadOracleSourceProviderFromEnvironment(process.env,
+    config=>reloadable.oracleSourceReadPort(config));
+  const sourceConnector=sourceOptions===undefined?undefined:new OracleSourceProviderConnector(sourceOptions);
+  const workflowOptions=await loadOracleWorkflowProviderFromEnvironment(process.env,
+    (config,policy)=>reloadable.oracleWorkflowPort(config,policy));
+  const workflowConnector=workflowOptions===undefined?undefined:
+    new OracleWorkflowProviderConnector(workflowOptions);
 
   let browserPool: ScopedBrowserWorkerPool | undefined;
   try {
@@ -161,7 +178,21 @@ async function main(): Promise<void> {
   try {
     await assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion);
     writeLog({ event: "edge_connector_loopback_health_passed" });
-    await connector.run(controller.signal);
+    let providerFailure:unknown;
+    const providerFailed=(error:unknown)=>{
+      providerFailure=error;
+      controller.abort();
+      connector.stop();
+    };
+    const sourceTask=sourceConnector?.run(controller.signal).catch(providerFailed);
+    const workflowTask=workflowConnector?.run(controller.signal).catch(providerFailed);
+    try{
+      await connector.run(controller.signal);
+    }finally{
+      controller.abort();
+      await Promise.all([sourceTask,workflowTask]);
+    }
+    if(providerFailure!==undefined)throw providerFailure;
   } finally {
     connector.stop();
     process.removeListener("SIGINT", onSigint);

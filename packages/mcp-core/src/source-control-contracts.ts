@@ -167,6 +167,9 @@ export const sourceControlCapabilities = [
   "git.remote.push",
   "github.repository.read",
   "github.artifact.materialize",
+  "github.workflow.dispatch",
+  "github.workflow.bootstrap",
+  "github.workflow.public_release",
   "github.repository.create",
   "github.pull_request.read",
   "github.pull_request.create",
@@ -192,6 +195,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
   "github_wait_commit_checks_watch",
+  "github_workflow_operation",
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
@@ -772,6 +776,37 @@ export const githubCreateRepositoryResultSchema = z.discriminatedUnion("status",
 export type GitHubCreateRepositoryResult = z.infer<
   typeof githubCreateRepositoryResultSchema
 >;
+
+export const githubWorkflowOperationInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  owner: githubOwnerSchema,
+  repository: githubRepositoryNameSchema,
+  workflow: z.enum(["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"]),
+  tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
+  mode: z.enum(["dispatch", "reconcile"]),
+  expectedMainSha: gitShaSchema,
+  operationId: z.uuid(),
+  bootstrapOperationId: z.uuid().optional(),
+}).strict().superRefine((input,ctx)=>{
+  const isPublic=input.workflow==="release.yml";
+  const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
+  if((needsTag && (!input.tag || input.tag.includes("-oracle.") || input.tag.includes("-companion."))) ||
+      (!needsTag && input.tag!==undefined) ||
+      (isPublic && input.mode==="dispatch" && !input.bootstrapOperationId) ||
+      (!isPublic && input.bootstrapOperationId!==undefined)){
+    ctx.addIssue({code:"custom",message:"Public release dispatch needs an exact bootstrapOperationId; other workflows forbid that field."});
+  }
+});
+export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;
+
+export const githubWorkflowOperationResultSchema = z.discriminatedUnion("status",[
+  z.object({status:z.literal("submitted"),operationId:z.uuid()}).strict(),
+  z.object({status:z.literal("outcome_unknown"),operationId:z.uuid()}).strict(),
+  z.object({status:z.literal("observed"),operationId:z.uuid(),runId:z.number().int().positive(),
+    state:z.enum(["queued","in_progress","completed"]),conclusion:z.string().nullable()}).strict(),
+]);
+export type GitHubWorkflowOperationResult = z.infer<typeof githubWorkflowOperationResultSchema>;
 
 export const githubGetPullRequestInputSchema = z
   .object({

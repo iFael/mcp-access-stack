@@ -27,16 +27,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required execution-node cutover dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and
-        -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -56,7 +51,8 @@ function Assert-McpCutoverPointerRelease {
     param(
         [Parameter(Mandatory = $true)][object]$Pointer,
         [Parameter(Mandatory = $true)][string]$ReleasesRoot,
-        [Parameter(Mandatory = $true)][string]$Name
+        [Parameter(Mandatory = $true)][string]$Name,
+        [switch]$AllowLegacyInstalledFormat
     )
 
     Assert-McpWindowsExecutionNodePointer -Pointer $Pointer -Name $Name
@@ -65,6 +61,7 @@ function Assert-McpCutoverPointerRelease {
     $verification = Assert-McpWindowsExecutionNodeRelease `
         -ReleaseRoot $releaseRoot `
         -ExpectedReleaseId ([string]$Pointer.releaseId) `
+        -AllowLegacyInstalledFormat:$AllowLegacyInstalledFormat `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     if ([string]$verification.executionManifestSha256 -ne [string]$Pointer.manifestSha256) {
         throw "Execution-node $Name pointer does not match its materialized release."
@@ -122,12 +119,14 @@ try {
     $null = Assert-McpCutoverPointerRelease `
         -Pointer $targetPointer `
         -ReleasesRoot $releasesRoot `
-        -Name 'target'
+        -Name 'target' `
+        -AllowLegacyInstalledFormat:($Operation -eq 'Rollback')
     if ($null -ne $sourcePointer) {
         $null = Assert-McpCutoverPointerRelease `
             -Pointer $sourcePointer `
             -ReleasesRoot $releasesRoot `
-            -Name 'active'
+            -Name 'active' `
+            -AllowLegacyInstalledFormat
     }
 
     $now = [DateTimeOffset]::UtcNow.ToString('O')

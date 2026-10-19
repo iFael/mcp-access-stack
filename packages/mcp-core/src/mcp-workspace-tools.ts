@@ -79,6 +79,8 @@ import {
   promoteReleaseInputSchema,
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
+import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
+import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
   managedServiceSnapshotSchema,
   serviceGetStatusInputSchema,
@@ -113,6 +115,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
+  githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -130,7 +134,7 @@ import {
   sourceControlOperationNameSchema,
   type SourceControlOperationName,
 } from "./source-control-contracts.js";
-import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor } from "./source-control-executor.js";
+import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor, GitHubWorkflowExecutor } from "./source-control-executor.js";
 import { AppError as AppErrorClass, asAppError } from "./errors.js";
 import {
   createOperationDeadline,
@@ -202,6 +206,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_publish_tag",
   "github_get_repository",
   "github_get_commit_checks",
+  "github_workflow_operation",
   "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
@@ -225,8 +230,10 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "patch_files",
   "delete_file",
   "get_release_state",
+  "release_orchestrator",
   "prepare_release",
   "promote_release",
+  "prune_releases",
   "service_get_status",
   "service_start",
   "run_workspace_validation",
@@ -1274,6 +1281,43 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("release_orchestrator",include)) {
+    server.registerTool("release_orchestrator",{
+      title:"Release lifecycle orchestrator",
+      description:"Single typed release facade for local-state inspection and an Oracle run advance. "
+        +"Oracle advance requires a separately enrolled authenticated control host, trusted workspace, owner policy, "
+        +"exact SHA/sequence and a durable operationId. No user-supplied endpoints, tokens or shell commands. "
+        +"Uncertain results must be reconciled read-only, never re-dispatched.",
+      inputSchema:releaseOrchestratorPublishedInputSchema,
+      outputSchema:releaseOrchestratorPublishedOutputSchema,
+      annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true,idempotentHint:true},
+      _meta:meta,
+    },async(input,extra)=>{
+      const authError=validateAuthentication(options,extra.authInfo);
+      if(authError)return authError;
+      try {
+        const parsed=releaseOrchestratorInputSchema.parse(input);
+        const result=await withToolOperationContext(options.operationContextFactory,extra,
+          MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,async context=>
+            parsed.action==="get_local_state"
+              ? {action:"get_local_state" as const,result:await executor.getReleaseState(
+                {workspaceId:parsed.workspaceId},context)}
+              : {action:"advance_oracle" as const,result:await executor.oracleReleaseAdvance(
+                oracleReleaseAdvanceInputSchema.parse({workspaceId:parsed.workspaceId,
+                  runId:parsed.runId,operationId:parsed.operationId,
+                  expectedSourceSha:parsed.expectedSourceSha,expectedLastSeq:parsed.expectedLastSeq}),context)});
+        const structuredContent=releaseOrchestratorResultSchema.parse(result);
+        return {content:[{type:"text",
+          text:parsed.action==="get_local_state"
+            ? "Release lifecycle state read."
+            : structuredContent.action==="advance_oracle" && structuredContent.result.status==="observed"
+              ? "Oracle release-control observation recorded; not proof of production deployment."
+              : "Oracle release operation outcome unknown; reconcile the same operation without retrying POST."
+        }],structuredContent};
+      } catch(error){return toolError(error);}
+    });
+  }
+
   if (shouldInclude("prepare_release", include)) {
     server.registerTool(
       "prepare_release",
@@ -1354,13 +1398,52 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("prune_releases", include)) {
+    server.registerTool(
+      "prune_releases",
+      {
+        title: "Prune obsolete Oracle release artifacts",
+        description:
+          "Plans or performs a bounded deletion of explicit generated release or staging directories. " +
+          "Requires operationId, dry-run plan lifecycle SHA, active/previous/candidate protections, process and task checks. " +
+          "Never accepts arbitrary paths or shell commands. Execution is destructive and leaves an unreconciled lock if interrupted.",
+        inputSchema: pruneReleasesInputSchema,
+        outputSchema: pruneReleasesResultSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = pruneReleasesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.pruneReleases(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "planned"
+              ? "Prune plan validated without filesystem mutation."
+              : "Requested obsolete release artifacts removed and receipt persisted." }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("service_get_status", include)) {
     server.registerTool(
       "service_get_status",
       {
         title: "Get managed Linux service status",
         description:
-          "Reads bounded status for one allowlisted MCP V3 Linux service. " +
+          "Reads bounded status for one allowlisted MCP V3 Linux service. An optional two-hour diagnostic window inspects only sanitized journal event categories and fixed Polkit metadata; unavailable permissions are explicit, never bypassed. " +
           "Only mcp-v3-oracle-read-api.service and mcp-v3-update-control-oracle-channel.service are accepted; arbitrary unit names or shell commands are impossible.",
         inputSchema: serviceGetStatusInputSchema,
         outputSchema: managedServiceSnapshotSchema,
@@ -2406,7 +2489,7 @@ async function executeCommand(
   return result;
 }
 
-export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor;
+export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor & Partial<GitHubWorkflowExecutor>;
 
 export interface RegisterSourceControlToolsOptions {
   securitySchemes?: WorkspaceToolSecurityScheme[];
@@ -2654,6 +2737,29 @@ const sourceControlMcpSchemas = {
     }).strict(),
     output: mcpGitHubCommitChecksResult,
   },
+  github_workflow_operation: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName,
+      workflow: z.enum(["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"]),
+      tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
+      mode: z.enum(["dispatch","reconcile"]),
+      expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
+      bootstrapOperationId: z.uuid().optional(),
+    }).strict(),
+    // The MCP SDK publishes object schemas, not a discriminated union root.
+    // Runtime results still use the strict branch-specific contract.
+    output: z.object({
+      status: z.enum(["submitted", "outcome_unknown", "observed"]),
+      operationId: z.uuid(),
+      runId: z.number().int().positive().optional(),
+      state: z.enum(["queued", "in_progress", "completed"]).optional(),
+      conclusion: z.string().nullable().optional(),
+    }).strict().refine(value => githubWorkflowOperationResultSchema.safeParse(value).success, {
+      message: "Invalid github_workflow_operation MCP result.",
+    }),
+  },
   github_materialize_actions_artifact: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -2798,6 +2904,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_workflow_operation: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   github_wait_commit_checks_watch: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
@@ -3197,6 +3304,34 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_workflow_operation", include)) {
+    server.registerTool(
+      "github_workflow_operation",
+      {
+        title: "Run or reconcile guarded release workflow",
+        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
+        inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
+        outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
+        annotations: sourceControlAnnotations.github_workflow_operation,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          if (!executor.githubWorkflowOperation) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Trusted GitHub workflow control is unavailable.");
+          const parsed = githubWorkflowOperationInputSchema.parse(input);
+          const structuredContent = githubWorkflowOperationResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              context => executor.githubWorkflowOperation!(parsed, context)),
+          );
+          return sourceControlSuccess("Guarded GitHub release workflow observed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
   if (shouldInclude("github_materialize_actions_artifact", include)) {
     server.registerTool("github_materialize_actions_artifact", {
       title: "Materialize pinned GitHub Actions artifact",
@@ -3465,8 +3600,10 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   patchFile: "patch_file",
   deleteFile: "delete_file",
   getReleaseState: "get_release_state",
+  oracleReleaseAdvance:"release_orchestrator",
   prepareRelease: "prepare_release",
   promoteRelease: "promote_release",
+  pruneReleases: "prune_releases",
   runValidation: "run_workspace_validation",
   runCommand: "run_command",
   searchFiles: "search_files",
@@ -3490,6 +3627,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitPublishTag: "git_publish_tag",
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
+  githubWorkflowOperation: "github_workflow_operation",
   githubMaterializeActionsArtifact: "github_materialize_actions_artifact",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
   githubGetCommitChecksWatches: "github_get_commit_checks_watches",

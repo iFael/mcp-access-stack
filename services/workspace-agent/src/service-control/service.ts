@@ -5,6 +5,7 @@ import {
   managedServiceSnapshotSchema,
   type ManagedLinuxServiceName,
   type ManagedServiceSnapshot,
+  type ServiceGetStatusInput,
   type ServiceStartInput,
   type ServiceStartResult,
 } from "@vs-code-gpt/shared";
@@ -60,6 +61,7 @@ export class LinuxServiceControlService {
   async getStatus(
     serviceName: ManagedLinuxServiceName,
     signal?: AbortSignal,
+    diagnostics?: ServiceGetStatusInput["diagnostics"],
   ): Promise<ManagedServiceSnapshot> {
     this.assertLinux();
     const parsedService = managedLinuxServiceNameSchema.parse(serviceName);
@@ -86,7 +88,104 @@ export class LinuxServiceControlService {
         "Managed service status is unavailable on this runtime.",
       );
     }
-    return parseServiceStatus(parsedService, result.stdout);
+    const snapshot = parseServiceStatus(parsedService, result.stdout);
+    if (!diagnostics) return snapshot;
+    return { ...snapshot, diagnostics: await this.inspectDiagnostics(parsedService, diagnostics, signal) };
+  }
+
+  private async inspectDiagnostics(
+    serviceName: ManagedLinuxServiceName,
+    window: NonNullable<ServiceGetStatusInput["diagnostics"]>,
+    signal?: AbortSignal,
+  ): Promise<NonNullable<ManagedServiceSnapshot["diagnostics"]>> {
+    // Fixed binaries, unit allowlist and bounded time window; no shell or elevation.
+    const journal = await this.runner.run(
+      "/usr/bin/journalctl",
+      ["--unit", serviceName, "--since", window.since, "--until", window.until,
+        "--output=json", "--no-pager", "--lines=50"],
+      COMMAND_TIMEOUT_MS,
+      signal,
+    );
+    const journalStatus = journal.timedOut || journal.exitCode !== 0 ||
+      Buffer.byteLength(journal.stdout, "utf8") >= MAX_OUTPUT_BYTES
+      ? /permission|access denied|not permitted/iu.test(journal.stderr)
+        ? "permission_denied" : "unavailable"
+      : "available";
+    const events: NonNullable<ManagedServiceSnapshot["diagnostics"]>["journal"]["events"] = [];
+    let journalReadable = journalStatus === "available";
+    if (journalReadable) {
+      try {
+        for (const line of journal.stdout.split(/\r?\n/u).filter(Boolean)) {
+          const value: unknown = JSON.parse(line);
+          if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+          const entry = value as Record<string, unknown>;
+          const micros = Number(entry.__REALTIME_TIMESTAMP);
+          if (!Number.isSafeInteger(micros) || micros < 0) continue;
+          const date = new Date(Math.floor(micros / 1_000));
+          if (Number.isNaN(date.getTime())) continue;
+          const message = typeof entry.MESSAGE === "string" ? entry.MESSAGE : "";
+          const origin = entry._PID === "1" && entry._COMM === "systemd" ? "systemd_manager" :
+            entry._SYSTEMD_UNIT === serviceName ? "service" : "other";
+          events.push({
+            timestamp: date.toISOString(),
+            origin,
+            kind: origin === "systemd_manager" ? classifyServiceEvent(message) : "other",
+          });
+        }
+      } catch {
+        journalReadable = false;
+        events.length = 0;
+      }
+    }
+
+    const path = "/etc/polkit-1/rules.d/00-mcp-v3-service-control.rules";
+    const metadata = await this.runner.run(
+      "/usr/bin/stat",
+      ["-c", "%U:%G:%a", "--", path],
+      COMMAND_TIMEOUT_MS,
+      signal,
+    );
+    const boundedJournal = { status: journalReadable ? "available" as const :
+      journalStatus === "permission_denied" ? "permission_denied" as const : "unavailable" as const,
+      events };
+    if (metadata.timedOut || metadata.exitCode !== 0) {
+      return {
+        journal: boundedJournal,
+        polkit: {
+          status: metadata.timedOut ? "unavailable" :
+            /permission denied|not permitted/iu.test(metadata.stderr) ? "permission_denied" :
+            /no such file/iu.test(metadata.stderr) ? "missing" : "unavailable",
+          owner: null, mode: null, sha256: null,
+        },
+      };
+    }
+    const [user, group, mode] = metadata.stdout.trim().split(":");
+    if (!user || !group || !mode || !/^\d{3,4}$/u.test(mode)) {
+      return {
+        journal: boundedJournal,
+        polkit: { status: "unavailable", owner: null, mode: null, sha256: null },
+      };
+    }
+    const digest = await this.runner.run(
+      "/usr/bin/sha256sum",
+      ["--", path],
+      COMMAND_TIMEOUT_MS,
+      signal,
+    );
+    const hash = digest.exitCode === 0 && !digest.timedOut
+      ? digest.stdout.match(/^([a-f0-9]{64})\s/u)?.[1] ?? null
+      : null;
+    return {
+      journal: boundedJournal,
+      polkit: {
+        status: digest.timedOut ? "unavailable" :
+          /permission denied|not permitted/iu.test(digest.stderr) ? "permission_denied" :
+          digest.exitCode === 0 && hash ? "available" : "unavailable",
+        owner: (user + ":" + group).slice(0, 64),
+        mode,
+        sha256: hash,
+      },
+    };
   }
 
   async start(
@@ -322,6 +421,15 @@ function parseServiceStatus(
     execMainStatus: nullableNonNegativeInteger(properties.get("ExecMainStatus")),
     stateChangeTimestamp: nullableText(properties.get("StateChangeTimestamp")),
   });
+}
+
+function classifyServiceEvent(message: string): "starting" | "stopping" | "started" | "stopped" | "exit" | "other" {
+  if (/^Stopping\b/iu.test(message)) return "stopping";
+  if (/^Starting\b/iu.test(message)) return "starting";
+  if (/^Stopped\b/iu.test(message)) return "stopped";
+  if (/^Started\b/iu.test(message)) return "started";
+  if (/^Main process exited\b|^Deactivated successfully\b/iu.test(message)) return "exit";
+  return "other";
 }
 
 function stateValue(value: string | undefined): string {

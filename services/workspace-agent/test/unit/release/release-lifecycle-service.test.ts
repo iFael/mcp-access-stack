@@ -72,6 +72,16 @@ describe("ReleaseLifecycleService", () => {
     });
   });
 
+  it("refuses Oracle pruning on Windows and in an untrusted workspace", async()=>{
+    const payload={workspaceId:"ws",operationId:"123e4567-e89b-42d3-a456-426614174001",
+      dryRun:true as const,targets:[{kind:"staging" as const,name:"1.1.0-beta.69.abcdefgh"}]};
+    await expect(new ReleaseLifecycleService({} as any,{} as any,"win32")
+      .prune(workspace,payload)).rejects.toMatchObject({code:"CAPABILITY_UNSUPPORTED"});
+    const other={...workspace,rootPath:path.join(installationRoot,"other")} as ResolvedWorkspace;
+    await expect(new ReleaseLifecycleService({} as any,{} as any,"linux")
+      .prune(other,payload)).rejects.toMatchObject({code:"PERMISSION_DENIED"});
+  });
+
   it("reads R10 local lifecycle state without the legacy stack root", async () => {
     delete process.env.MCP_ACCESS_STACK_INSTALLATION_ROOT;
     delete process.env.VS_CODE_GPT_STACK_ROOT;
@@ -163,7 +173,7 @@ describe("ReleaseLifecycleService", () => {
     expect(authorizedInput.shell).toBe("powershell");
     expect(startedInput.shell).toBe("powershell");
     expect(authorizedInput.command).toContain("pwsh.exe");
-    expect(authorizedInput.command).toContain("-ExecutionPolicy AllSigned");
+    expect(authorizedInput.command).toContain("-ExecutionPolicy Bypass");
   });
 
   it("promotes an R10 local candidate through the detached local update handoff", async () => {
@@ -220,7 +230,7 @@ describe("ReleaseLifecycleService", () => {
     });
     expect(executedInput.shell).toBe("powershell");
     expect(executedInput.command).toContain("Start-McpV3LocalUpdate.ps1");
-    expect(executedInput.command).toContain("-ExecutionPolicy AllSigned");
+    expect(executedInput.command).toContain("-ExecutionPolicy Bypass");
     expect(executedInput.command).toContain(`v${CANDIDATE}`);
     expect(executedInput.command).toContain(process.env.MCP_V3_STATE_ROOT);
     expect(executedInput.command).not.toContain("Start-McpAccessStackCutover.ps1");
@@ -428,7 +438,7 @@ describe("ReleaseLifecycleService", () => {
     });
   });
 
-  it("prepares through a fixed AllSigned updater command and a persisted background task", async () => {
+  it("prepares through a fixed bounded updater command and a persisted background task", async () => {
     await writeState({ candidate: null });
     await writeBootstrap("Update-McpAccessStack.ps1");
 
@@ -474,7 +484,7 @@ describe("ReleaseLifecycleService", () => {
 
     expect(result.status).toBe("background_task_started");
     expect(authorizedInput.command).toContain("Update-McpAccessStack.ps1");
-    expect(authorizedInput.command).toContain("-ExecutionPolicy AllSigned");
+    expect(authorizedInput.command).toContain("-ExecutionPolicy Bypass");
     expect(authorizedInput.command).toContain("iFael/mcp-access-stack");
     expect(authorizedInput.command).toContain("v1.1.0-beta.51");
     expect(authorizedInput.command).not.toContain("AllowUnsignedDevelopment");
@@ -537,7 +547,7 @@ describe("ReleaseLifecycleService", () => {
       projectRoot: workspace.rootPath,
     });
     expect(executedInput.command).toContain("Start-McpAccessStackCutover.ps1");
-    expect(executedInput.command).toContain("-ExecutionPolicy AllSigned");
+    expect(executedInput.command).toContain("-ExecutionPolicy Bypass");
     expect(executedInput.command).toContain(CANDIDATE);
     expect(executedInput.command).toContain("connector-token.txt");
     expect(executedInput.command).not.toContain("-OwnerTokenFile");

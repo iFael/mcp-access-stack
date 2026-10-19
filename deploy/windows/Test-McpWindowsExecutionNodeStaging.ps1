@@ -54,7 +54,8 @@ function New-TestDistribution {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$ReleaseId,
-        [Parameter(Mandatory = $true)][string]$Commit
+        [Parameter(Mandatory = $true)][string]$Commit,
+        [switch]$LegacyFormat
     )
 
     $release = Join-Path $Root "releases\$ReleaseId"
@@ -100,23 +101,32 @@ function New-TestDistribution {
         platform = 'win32-x64'
         createdAt = '2026-09-13T00:00:00.000Z'
         runtimeMode = 'bundled-node'
-        integrityRoot = 'signed-distribution-manifest'
+        integrityRoot = 'sha256-distribution-manifest'
         services = @(
             [ordered]@{ id = 'edge-runtime'; entryArtifactId = 'edge-host' },
             [ordered]@{ id = 'browser-worker'; entryArtifactId = 'node-host-launcher' },
             [ordered]@{ id = 'local-companion'; entryArtifactId = 'node-host-launcher' }
         )
         artifacts = @(
-            (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $true),
+            (New-ArtifactRecord 'edge-host' 'edge-runtime' 'native/McpEdgeHost.exe' $false),
             (New-ArtifactRecord 'edge-connector' 'edge-runtime' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/edge-connector-cli.js' $false),
-            (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $true),
+            (New-ArtifactRecord 'edge-validation-launcher' 'edge-runtime' 'deploy/windows/Start-McpEdgeConnector.ps1' $false),
             (New-ArtifactRecord 'browser-worker-server' 'browser-worker' 'services/browser-worker/dist/server.js' $false),
             (New-ArtifactRecord 'local-companion-runtime' 'shared' 'node_modules/@vs-code-gpt/remote-mcp-gateway/dist/companion-cli.js' $false),
-            (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $true),
-            (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $true),
-            (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $true),
+            (New-ArtifactRecord 'node-host-launcher' 'shared' 'compat/McpNodeHostLauncher.exe' $false),
+            (New-ArtifactRecord 'browser-credential-broker' 'browser-worker' 'compat/McpCredentialBroker.exe' $false),
+            (New-ArtifactRecord 'elevation-broker' 'shared' 'native/McpElevationBroker.exe' $false),
             (New-ArtifactRecord 'node-runtime' 'shared' 'runtime/node/node.exe' $false)
         )
+    }
+    if ($LegacyFormat) {
+        $executionManifest.integrityRoot = 'signed-distribution-manifest'
+        foreach ($artifact in $executionManifest.artifacts) {
+            if ($artifact.id -in @('edge-host', 'edge-validation-launcher',
+                'node-host-launcher', 'browser-credential-broker', 'elevation-broker')) {
+                $artifact.authenticodeRequired = $true
+            }
+        }
     }
     $executionManifestPath = Join-Path $release 'execution-node-manifest.json'
     Write-TestUtf8 `
@@ -290,7 +300,71 @@ try {
         $heldLock.Dispose()
     }
 
-    Write-Output 'Execution-node candidate staging passed v2 Edge integrity, idempotence, boundary and lock gates.'
+    # Historical signed releases remain hash-checked ONLY as installed active/previous
+    # pointers. They are never accepted as new staging candidates.
+    $legacyId = '1.1.0-companion.legacy-fixture'
+    $modernId = '1.1.0-companion.modern-fixture'
+    $legacyDistribution = Join-Path $testRoot 'legacy'
+    $modernDistribution = Join-Path $testRoot 'modern'
+    New-TestDistribution -Root $legacyDistribution -ReleaseId $legacyId -Commit ('d' * 40) -LegacyFormat
+    New-TestDistribution -Root $modernDistribution -ReleaseId $modernId -Commit ('e' * 40)
+    . (Join-Path $PSScriptRoot 'PublicDistribution.Common.ps1')
+    . (Join-Path $PSScriptRoot 'WindowsExecutionNode.Common.ps1')
+    $legacyRelease = Join-Path $legacyDistribution "releases\$legacyId"
+    $strictRejected = $false
+    try {
+        Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $legacyRelease -ExpectedReleaseId $legacyId | Out-Null
+    }
+    catch { $strictRejected = $_.Exception.Message -like '*integrity root is invalid*' }
+    if (-not $strictRejected) { throw 'Unsigned staging unexpectedly accepted a legacy release.' }
+    $proof = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $legacyRelease -ExpectedReleaseId $legacyId -AllowLegacyInstalledFormat
+    if ($proof.releaseId -ne $legacyId -or $proof.executionManifest.integrityRoot -ne 'signed-distribution-manifest') {
+        throw 'Opt-in validation of existing historical release failed.'
+    }
+
+    $crossVersionInstall = Join-Path $testRoot 'cross-version-install'
+    $crossReleases = Join-Path $crossVersionInstall 'releases'
+    $crossStateRoot = Join-Path $crossVersionInstall 'state'
+    New-Item -Path $crossReleases, $crossStateRoot -ItemType Directory -Force | Out-Null
+    Copy-Item -LiteralPath $legacyRelease -Destination (Join-Path $crossReleases $legacyId) -Recurse
+    Copy-Item -LiteralPath (Join-Path $modernDistribution "releases\$modernId") -Destination (Join-Path $crossReleases $modernId) -Recurse
+    $now = [DateTimeOffset]::UtcNow.ToString('O')
+    $legacyPointer = [ordered]@{
+        releaseId = $legacyId
+        manifestSha256 = $proof.executionManifestSha256
+        materializedAt = $now
+    }
+    $modernProof = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot (Join-Path $crossReleases $modernId) -ExpectedReleaseId $modernId
+    $modernPointer = [ordered]@{
+        releaseId = $modernId
+        manifestSha256 = $modernProof.executionManifestSha256
+        materializedAt = $now
+    }
+    $statePath = Join-Path $crossStateRoot 'lifecycle-state.v1.json'
+    Write-TestUtf8 -Path $statePath -Content (([ordered]@{
+        version = 1
+        active = $legacyPointer
+        candidate = $modernPointer
+        previous = $null
+        updatedAt = $now
+    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+    $cutover = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
+    $promoted = & $cutover -InstallationRoot $crossVersionInstall -Operation Promote -Execute | ConvertFrom-Json
+    if ($promoted.activeReleaseId -ne $modernId -or $promoted.previousReleaseId -ne $legacyId) {
+        throw 'Promotion from legacy active to checksummed candidate failed.'
+    }
+    $rolledBack = & $cutover -InstallationRoot $crossVersionInstall -Operation Rollback -Execute | ConvertFrom-Json
+    if ($rolledBack.activeReleaseId -ne $legacyId -or $rolledBack.candidateReleaseId -ne $modernId) {
+        throw 'Rollback to the previously installed legacy release failed.'
+    }
+    Add-Content -LiteralPath (Join-Path $legacyRelease 'native/McpEdgeHost.exe') -Value 'tampered'
+    $legacyTamperRejected = $false
+    try {
+        Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $legacyRelease -ExpectedReleaseId $legacyId -AllowLegacyInstalledFormat | Out-Null
+    }
+    catch { $legacyTamperRejected = $_.Exception.Message -like '*hash*' }
+    if (-not $legacyTamperRejected) { throw 'Legacy compatibility accepted altered release bytes.' }
+    Write-Output 'Execution-node staging, historical manifest migration and rollback gates passed.'
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {

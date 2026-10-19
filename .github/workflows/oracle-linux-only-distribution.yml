@@ -1,0 +1,237 @@
+name: Oracle Linux-only source distribution
+
+run-name: oracle-linux ${{ inputs.tag }} @ ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing reserved Oracle tag vX.Y.Z[-pre]-oracle.N
+        required: true
+        type: string
+      expected_sha:
+        description: Exact successful main commit SHA
+        required: true
+        type: string
+      ci_run_id:
+        description: Exact successful canonical main CI run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: oracle-linux-only-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      commit: ${{ steps.verify.outputs.commit }}
+      ci-run-id: ${{ steps.verify.outputs.ci-run-id }}
+    steps:
+      - name: Checkout exact dispatch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate SHA, canonical CI, main CAS and duplicate run
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+          [[ ${#RELEASE_TAG} -le 64 ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-oracle\.[1-9][0-9]*$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
+          [[ "$tag_sha" == "$EXPECTED_SHA" ]]
+          remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$remote_main" == "$EXPECTED_SHA" ]]
+          evidence="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID" \
+            --jq '{head_sha,head_branch,event,status,conclusion,repository:.repository.full_name,workflow_id}')"
+          workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml" --jq '.id')"
+          jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" --argjson id "$workflow_id" \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and
+             .status == "completed" and .conclusion == "success" and
+             .repository == $repo and .workflow_id == $id' <<< "$evidence" >/dev/null
+          previous="$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow oracle-linux-only-distribution.yml --event workflow_dispatch \
+            --limit 100 --json databaseId,displayTitle)"
+          [[ "$(jq 'length' <<< "$previous")" -lt 100 ]]
+          duplicate_count="$(jq -r --arg title "oracle-linux $RELEASE_TAG @ $EXPECTED_SHA" \
+            --argjson current "$GITHUB_RUN_ID" \
+            '[.[] | select(.displayTitle == $title and .databaseId != $current)] | length' \
+            <<< "$previous")"
+          [[ "$duplicate_count" == "0" ]]
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json id >/dev/null 2>&1; then
+            echo "A release with this tag already exists; refusing duplicate publication." >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "ci-run-id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Verify server source builds without installing
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          npm ci --no-audit --no-fund
+          npm run build --workspace @vs-code-gpt/shared
+          npm run build --workspace @mcp-access-stack/edge-protocol
+          npm run build --workspace @vs-code-gpt/browser-worker
+          npm run build --workspace @vs-code-gpt/local-agent
+          npm run build --workspace @vs-code-gpt/remote-mcp-gateway
+          test -f services/workspace-agent/dist/index.js
+          test -f services/browser-worker/dist/server.js
+          test -f services/mcp-gateway/dist/edge-connector-cli.js
+
+      - name: Package immutable Oracle Linux source and checksum
+        id: artifact
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+          CI_RUN_ID: ${{ needs.preflight.outputs.ci-run-id }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          directory="$RUNNER_TEMP/oracle-linux-only"
+          mkdir -p "$directory"
+          name="oracle-linux-source-$EXPECTED_SHA.tar.gz"
+          git archive --format=tar --prefix="oracle-linux-source-$EXPECTED_SHA/" "$EXPECTED_SHA" \
+            | gzip -n > "$directory/$name"
+          (cd "$directory" && sha256sum "$name" > "$name.sha256")
+          sha="$(sha256sum "$directory/$name" | cut -d' ' -f1)"
+          jq -n --arg commit "$EXPECTED_SHA" --arg ci "$CI_RUN_ID" \
+            --arg name "$name" --arg sha "$sha" \
+            '{schemaVersion:1,product:"mcp-access-stack",kind:"source-archive",
+              sourceCommit:$commit,ciRunId:$ci,artifactName:$name,artifactSha256:$sha}' \
+            > "$directory/oracle-source-manifest.json"
+          node tooling/release/Verify-OracleLinuxSourceArtifact.mjs \
+            "$directory/$name" "$directory/$name.sha256" \
+            "$directory/oracle-source-manifest.json" "$EXPECTED_SHA" "$CI_RUN_ID"
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          echo "archive=$directory/$name" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck main CAS before artifact availability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$remote_main" == "$EXPECTED_SHA" ]]
+
+      - name: Upload checksummed source bundle without release, tag or Edge deploy
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oracle-linux-source-${{ needs.preflight.outputs.tag }}-${{ needs.preflight.outputs.commit }}
+          path: |
+            ${{ steps.artifact.outputs.directory }}/oracle-linux-source-*.tar.gz
+            ${{ steps.artifact.outputs.directory }}/oracle-linux-source-*.tar.gz.sha256
+            ${{ steps.artifact.outputs.directory }}/oracle-source-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [preflight, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: public-release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout exact pinned source identity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Set up Node 26 for checksum verification
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      - name: Download artifact from successful package job
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: oracle-linux-source-${{ needs.preflight.outputs.tag }}-${{ needs.preflight.outputs.commit }}
+          path: oracle-source-assets
+
+      - name: Verify artifact, main SHA and release tag CAS
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+          CI_RUN_ID: ${{ needs.preflight.outputs.ci-run-id }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          directory="oracle-source-assets"
+          name="oracle-linux-source-$EXPECTED_SHA.tar.gz"
+          node tooling/release/Verify-OracleLinuxSourceArtifact.mjs \
+            "$directory/$name" "$directory/$name.sha256" \
+            "$directory/oracle-source-manifest.json" "$EXPECTED_SHA" "$CI_RUN_ID"
+          remote_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          remote_tag="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
+          [[ "$remote_main" == "$EXPECTED_SHA" && "$remote_tag" == "$EXPECTED_SHA" ]]
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json id >/dev/null 2>&1; then
+            echo "An Oracle release already exists; refusing duplicate publication." >&2
+            exit 1
+          fi
+
+      - name: Publish Oracle-only GitHub Release without Cloudflare or installation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            "oracle-source-assets/oracle-linux-source-$EXPECTED_SHA.tar.gz" \
+            "oracle-source-assets/oracle-linux-source-$EXPECTED_SHA.tar.gz.sha256" \
+            "oracle-source-assets/oracle-source-manifest.json" \
+            --verify-tag --prerelease --repo "$GITHUB_REPOSITORY" \
+            --title "$RELEASE_TAG (Oracle Linux source only)" \
+            --notes "Oracle Linux-only source archive with SHA-256 and GitHub SHA-256 manifest. No Edge deployment, service installation or cutover. The current Oracle updater builds the runtime from this pinned Git tag."

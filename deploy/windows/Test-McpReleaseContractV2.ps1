@@ -119,7 +119,7 @@ try {
     $distributionStepIndex = $releaseWorkflow.IndexOf('deploy/windows/New-McpPublicDistribution.ps1', [StringComparison]::Ordinal)
     if ($releaseStepIndex -lt 0 -or $nativeStepIndex -lt 0 -or $distributionStepIndex -lt 0 -or
         $releaseStepIndex -ge $nativeStepIndex -or $nativeStepIndex -ge $distributionStepIndex) {
-        throw 'Public release workflow must build immutable release, native artifacts, then signed distribution in order.'
+        throw 'Public release workflow must build immutable release, native artifacts, then SHA-256 distribution in order.'
     }
     if ($releaseWorkflow -match 'test\s+"\$\{#run_ids\[@\]\}"\s+-eq\s+1') {
         throw 'Public release workflow rejects valid duplicate successful CI evidence for the same immutable commit.'
@@ -146,8 +146,11 @@ try {
         'npm run deploy --workspace @mcp-access-stack/edge-gateway',
         'services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts',
         'Preflight contract rollout compatibility',
-        'Contract-changing release requires rollout infrastructure from the previous stable Edge before deploy.',
-        'another candidate contract is still prepared',
+        'tooling/release/preflight-edge-contract-readonly.mjs',
+        'EDGE_SAFE_INSPECTION_VERSION_ID',
+        'EDGE_SAFE_INSPECTION_CONTRACT_REVISION',
+        'candidateConnectorReady',
+        'candidateRuntime.catalogContractRevision',
         'expectedContractRevision',
         'activeContractRevision',
         'candidateContractRevision',
@@ -176,7 +179,7 @@ try {
         throw 'Public GitHub Release must depend on the successful Edge contract gate.'
     }
     if ($distributionStepIndex -ge $edgeJobMatch.Index) {
-        throw 'Signed Windows distribution must be complete before the Edge production mutation begins.'
+        throw 'SHA-256 Windows distribution must be complete before the Edge production mutation begins.'
     }
 
     $breakGlassWorkflowPath = Join-Path $repositoryRoot '.github\workflows\edge-breakglass.yml'

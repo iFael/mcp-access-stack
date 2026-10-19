@@ -197,6 +197,20 @@ describe("BackgroundTaskManager", () => {
     );
   });
 
+  it("detects in-flight tasks across owner scopes without disclosing records", async () => {
+    const runner = new ControlledRunner();
+    const manager = new BackgroundTaskManager({ stateDirectory, runner });
+    const created = await manager.start_background_task({
+      workspaceId:"project",operation:"prepare_release",command:"npm ci",shell:"pwsh",
+    },{ownerScope:"other-private-session"});
+    await waitFor(async() => (await manager.hasActiveTasksForWorkspace("project"))===true);
+    expect(await manager.list_background_tasks({workspaceId:"project"})).toEqual([]);
+    expect(await manager.hasActiveTasksForWorkspace("other")).toBe(false);
+    await runner.succeed();
+    await waitFor(async() => (await manager.hasActiveTasksForWorkspace("project"))===false);
+    expect(await manager.hasActiveTasksForWorkspace("project")).toBe(false);
+  });
+
   it("isolates deduplication and task access by owner scope", async () => {
     const runner = new ControlledRunner();
     const manager = new BackgroundTaskManager({ stateDirectory, runner });

@@ -23,11 +23,14 @@ import {
   type PrepareReleaseResult,
   type PromoteReleaseInput,
   type PromoteReleaseResult,
+  type PruneReleasesInput,
+  type PruneReleasesResult,
 } from "@vs-code-gpt/shared";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import { PathSecurity } from "../path-security.js";
 import type { ShellService } from "../shell/service.js";
 import type { BackgroundTaskManager } from "../tasks/background-task-manager.js";
+import { ReleasePruneService } from "./release-prune-service.js";
 
 interface ReleaseShellService {
   authorizeBackgroundCommand: ShellService["authorizeBackgroundCommand"];
@@ -37,6 +40,7 @@ interface ReleaseShellService {
 
 interface ReleaseBackgroundTaskManager {
   start_background_task: BackgroundTaskManager["start_background_task"];
+  hasActiveTasksForWorkspace?: BackgroundTaskManager["hasActiveTasksForWorkspace"];
 }
 
 const PREPARE_TIMEOUT_MS = 30 * 60 * 1_000;
@@ -122,6 +126,13 @@ export class ReleaseLifecycleService {
         cutoverScriptPresent,
       },
     };
+  }
+
+  async prune(workspace: ResolvedWorkspace, input: PruneReleasesInput, signal?: AbortSignal): Promise<PruneReleasesResult> {
+    if (this.platform !== "linux") throw new AppError("CAPABILITY_UNSUPPORTED", "Release prune requires Oracle Linux.");
+    assertReleaseWorkspace(workspace, this.platform);
+    if (!this.backgroundTaskManager.hasActiveTasksForWorkspace) throw new AppError("CAPABILITY_UNSUPPORTED", "Global task safety inspection unavailable.");
+    return new ReleasePruneService({ root: resolveInstallationRoot(), ...(signal === undefined ? {} : { signal }), activeTasks: () => this.backgroundTaskManager.hasActiveTasksForWorkspace!(workspace.id) }).prune(input);
   }
 
   async prepare(
@@ -668,7 +679,7 @@ function buildPrepareCommand(
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
-      "AllSigned",
+      "Bypass",
       "-File",
       quotePowerShell(updater),
       "-Repository",
@@ -705,7 +716,7 @@ function buildLocalPromoteCommand(
     "-NoProfile",
     "-NonInteractive",
     "-ExecutionPolicy",
-    "AllSigned",
+    "Bypass",
     "-File",
     quotePowerShell(handoff),
     "-InstallationRoot",
@@ -733,7 +744,7 @@ function buildPromoteCommand(
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
-      "AllSigned",
+      "Bypass",
       "-File",
       quotePowerShell(cutover),
       "-InstallationRoot",

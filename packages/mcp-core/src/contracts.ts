@@ -32,6 +32,8 @@ import {
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
   githubGetCommitChecksInputSchema,
+  githubWorkflowOperationInputSchema,
+  githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -75,6 +77,8 @@ import {
   promoteReleaseInputSchema,
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
+import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
+import {oracleReleaseAdvanceInputSchema,oracleReleaseAdvanceResultSchema} from "./release-orchestrator-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const relativePathSchema = z.string().min(1);
@@ -867,6 +871,7 @@ export const sourceControlRelayOperations = [
   "gitPublishTag",
   "githubGetRepository",
   "githubGetCommitChecks",
+  "githubWorkflowOperation",
   "githubMaterializeActionsArtifact",
   "githubStartCommitChecksWatch",
   "githubGetCommitChecksWatches",
@@ -889,8 +894,10 @@ export const relayOperations = [
   "patchFile",
   "deleteFile",
   "getReleaseState",
+  "oracleReleaseAdvance",
   "prepareRelease",
   "promoteRelease",
+  "pruneReleases",
   "runValidation",
   "runCommand",
   "searchFiles",
@@ -965,6 +972,8 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     operation: z.literal("getReleaseState"),
     input: getReleaseStateInputSchema,
   }).strict(),
+  z.object({...relayRequestBase,operation:z.literal("oracleReleaseAdvance"),
+    input:oracleReleaseAdvanceInputSchema}).strict(),
   z.object({
     ...relayRequestBase,
     operation: z.literal("prepareRelease"),
@@ -975,6 +984,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     operation: z.literal("promoteRelease"),
     input: promoteReleaseInputSchema,
   }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("pruneReleases"), input: pruneReleasesInputSchema }).strict(),
   z.object({
     ...relayRequestBase,
     operation: z.literal("runValidation"),
@@ -1050,6 +1060,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   z.object({ ...relayRequestBase, operation: z.literal("gitPublishTag"), input: gitPublishTagInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubGetRepository"), input: githubGetRepositoryInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubGetCommitChecks"), input: githubGetCommitChecksInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubWorkflowOperation"), input: githubWorkflowOperationInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubMaterializeActionsArtifact"), input: githubMaterializeActionsArtifactInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubStartCommitChecksWatch"), input: githubStartCommitChecksWatchInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubGetCommitChecksWatches"), input: githubGetCommitChecksWatchesInputSchema }).strict(),
@@ -1133,8 +1144,10 @@ export const relayResultSchemas = {
   patchFile: patchFileResultSchema,
   deleteFile: deleteFileResultSchema,
   getReleaseState: getReleaseStateResultSchema,
+  oracleReleaseAdvance:oracleReleaseAdvanceResultSchema,
   prepareRelease: prepareReleaseResultSchema,
   promoteRelease: promoteReleaseResultSchema,
+  pruneReleases: pruneReleasesResultSchema,
   runValidation: runWorkspaceValidationResultSchema,
   runCommand: runCommandResultSchema,
   searchFiles: searchFilesResultSchema,
@@ -1158,6 +1171,7 @@ export const relayResultSchemas = {
   gitPublishTag: gitPublishTagResultSchema,
   githubGetRepository: githubRepositoryResultSchema,
   githubGetCommitChecks: githubCommitChecksResultSchema,
+  githubWorkflowOperation: githubWorkflowOperationResultSchema,
   githubMaterializeActionsArtifact: githubMaterializeActionsArtifactResultSchema,
   githubStartCommitChecksWatch: githubStartCommitChecksWatchResultSchema,
   githubGetCommitChecksWatches: githubGetCommitChecksWatchesResultSchema,

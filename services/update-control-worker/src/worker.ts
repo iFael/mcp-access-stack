@@ -13,6 +13,14 @@ import {
   type UpdateControlEnvironment,
 } from "./auth-state.js";
 import { verifyOperationHmac } from "./operation-hmac.js";
+import { verifyOracleControlRequest } from "./oracle-control-auth.js";
+import { verifyOracleSourceRequest } from "./oracle-source-auth.js";
+import { verifyOracleWorkflowRequest } from "./oracle-workflow-auth.js";
+import {ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_DISPATCH_PATH,ORACLE_WORKFLOW_RPC_PATH,
+  ORACLE_WORKFLOW_SCOPE,ORACLE_WORKFLOW_MAX_RESULT_BYTES} from "@mcp-access-stack/update-control-contract";
+import {ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_DISPATCH_PATH,ORACLE_SOURCE_RPC_PATH,
+  ORACLE_SOURCE_SCOPE,ORACLE_SOURCE_MAX_RESULT_BYTES} from "@mcp-access-stack/update-control-contract";
+import { ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_SCOPE } from "@mcp-access-stack/update-control-contract";
 import {
   ORACLE_CHANNEL_CONNECT_PATH,
   ORACLE_CHANNEL_SCOPE,
@@ -38,6 +46,12 @@ export interface UpdateControlWorkerEnv extends UpdateControlEnvironment {
   readonly UPDATE_CONTROL_AUTH_STATE: DurableObjectNamespaceLike;
   readonly UPDATE_CONTROL_ORACLE_CHANNEL: OracleChannelNamespace;
   readonly UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_CONTROL_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY?: string;
+  readonly UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY?: string;
+  readonly UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY?: string;
 }
 
 export class UpdateControlAuthState {
@@ -102,6 +116,134 @@ const updateControlWorker = {
       }
       const id = channel.idFromName(ORACLE_CHANNEL_SCOPE);
       return channel.get(id).fetch(withoutClientInternalAuthMarkers(request));
+    }
+
+    if(url.pathname===ORACLE_SOURCE_CONNECT_PATH){
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_source_not_configured"},503);
+      return channel.get(channel.idFromName(ORACLE_SOURCE_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+    if(url.pathname===ORACLE_SOURCE_DISPATCH_PATH){
+      if(!env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY ||
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY===env.UPDATE_CONTROL_ADMIN_HMAC_KEY ||
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY===env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY ||
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY===env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN ||
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY===env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN ||
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY===env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN)
+        return jsonResponse({error:"oracle_source_not_configured"},503);
+      const command=await verifyOracleSourceRequest(request,env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY);
+      if(!command)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_source_not_configured"},503);
+      const rpc=await channel.get(channel.idFromName(ORACLE_SOURCE_SCOPE)).fetch(new Request(
+        "https://oracle-source.internal"+ORACLE_SOURCE_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(command),
+          redirect:"error",cache:"no-store",
+        }));
+      const length=rpc.headers.get("content-length");
+      if(length && (!/^\d+$/u.test(length) || Number(length)>ORACLE_SOURCE_MAX_RESULT_BYTES))
+        return jsonResponse({error:"oracle_source_unavailable"},503);
+      const reader=rpc.body?.getReader();
+      if(!reader)return jsonResponse({error:"oracle_source_unavailable"},503);
+      const chunks:Uint8Array[]=[];let size=0;
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          size+=chunk.value.byteLength;
+          if(size>ORACLE_SOURCE_MAX_RESULT_BYTES){
+            await reader.cancel();
+            return jsonResponse({error:"oracle_source_unavailable"},503);
+          }
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
+    }
+
+    if(url.pathname===ORACLE_WORKFLOW_CONNECT_PATH){
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_workflow_not_configured"},503);
+      return channel.get(channel.idFromName(ORACLE_WORKFLOW_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+    if(url.pathname===ORACLE_WORKFLOW_DISPATCH_PATH){
+      const key=env.UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY;
+      if(!key || [env.UPDATE_CONTROL_ADMIN_HMAC_KEY,env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY,env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN,env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN].some(other=>other===key))
+        return jsonResponse({error:"oracle_workflow_not_configured"},503);
+      const command=await verifyOracleWorkflowRequest(request,key);
+      if(!command)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_workflow_not_configured"},503);
+      const rpc=await channel.get(channel.idFromName(ORACLE_WORKFLOW_SCOPE)).fetch(new Request(
+        "https://oracle-workflow.internal"+ORACLE_WORKFLOW_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(command),
+          redirect:"error",cache:"no-store",
+        }));
+      const length=rpc.headers.get("content-length");
+      if(length && (!/^\d+$/u.test(length) || Number(length)>ORACLE_WORKFLOW_MAX_RESULT_BYTES))
+        return jsonResponse({error:"oracle_workflow_unavailable"},503);
+      const reader=rpc.body?.getReader();
+      if(!reader)return jsonResponse({error:"oracle_workflow_unavailable"},503);
+      const chunks:Uint8Array[]=[];let size=0;
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          size+=chunk.value.byteLength;
+          if(size>ORACLE_WORKFLOW_MAX_RESULT_BYTES){
+            await reader.cancel();
+            return jsonResponse({error:"oracle_workflow_unavailable"},503);
+          }
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
+    }
+
+    if (url.pathname === ORACLE_CONTROL_CONNECT_PATH) {
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_control_not_configured"},503);
+      return channel.get(channel.idFromName(ORACLE_CONTROL_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+
+    if (url.pathname === ORACLE_CONTROL_DISPATCH_PATH) {
+      if (!env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY ||
+          env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY === env.UPDATE_CONTROL_ADMIN_HMAC_KEY)
+        return jsonResponse({error:"oracle_control_not_configured"},503);
+      const verified=await verifyOracleControlRequest(request,env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY);
+      if(!verified)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_control_not_configured"},503);
+      const command={
+        method:"advance_release",arguments:verified.input,
+        principal:{workspaceId:"mcp-access-stack",
+          authenticatedActorId:"mcp:v3-release-control",
+          ownerScope:"trusted:release-operator"},
+      };
+      const rpc=await channel.get(channel.idFromName(ORACLE_CONTROL_SCOPE))
+        .fetch(new Request("https://oracle-control.internal"+ORACLE_CONTROL_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify(command),redirect:"error",cache:"no-store",
+        }));
+      const bytes=new Uint8Array(await rpc.arrayBuffer());
+      if(bytes.byteLength>4096)return jsonResponse({error:"oracle_control_unavailable"},503);
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
     }
 
     const authState = env.UPDATE_CONTROL_AUTH_STATE.get(

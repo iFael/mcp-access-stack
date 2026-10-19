@@ -7,7 +7,7 @@ import {
 
 export interface MutationReceiptIdentity {
   workspaceId: string;
-  operation: SourceControlOperationName;
+  operation: SourceControlOperationName | "oracle_release_advance";
   targetResource: string;
   canonicalArgumentsDigest: string;
   idempotencyKey: string;
@@ -63,7 +63,7 @@ export interface MutationReceiptStore {
 export const mutationReceiptIdentitySchema = z
   .object({
     workspaceId: z.string().trim().min(1),
-    operation: sourceControlOperationNameSchema,
+    operation: z.union([sourceControlOperationNameSchema, z.literal("oracle_release_advance")]),
     targetResource: z.string().trim().min(1).max(512),
     canonicalArgumentsDigest: z.string().regex(/^[a-f0-9]{64}$/u),
     idempotencyKey: z.string().trim().min(1).max(512),

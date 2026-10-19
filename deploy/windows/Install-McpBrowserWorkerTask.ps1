@@ -182,16 +182,11 @@ foreach ($bootstrapPath in @($PSCommandPath, $publicCommonPath, $executionCommon
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw "Required Browser Worker task dependency is missing: $bootstrapPath"
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
-    if ($signature.Status -ne 'Valid' -and
-        -not ($AllowUnsignedDevelopment -and $signature.Status -eq 'NotSigned')) {
-        throw "Invalid Authenticode signature for $bootstrapPath. Status=$($signature.Status)"
-    }
 }
 
 . $publicCommonPath
-Assert-McpPublicSignature -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-Assert-McpPublicSignature -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $publicCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $executionCommonPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 . $executionCommonPath
 Assert-McpPublicWindowsX64
 
@@ -205,14 +200,14 @@ $nodePath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -
 $browserWorkerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-worker-server' -ReleaseRoot $releaseRoot
 $nativeLauncherPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'node-host-launcher' -ReleaseRoot $releaseRoot
 $nativeLauncherRecord = @($release.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'node-host-launcher' })
-if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $true) {
-    throw 'Browser Worker native launcher must be a signed critical release artifact.'
+if ($nativeLauncherRecord.Count -ne 1 -or $nativeLauncherRecord[0].authenticodeRequired -ne $false) {
+    throw 'Browser Worker native launcher must be a SHA-256 verified release artifact.'
 }
 $credentialBrokerPath = Get-McpBrowserReleaseArtifact -Manifest $release.executionManifest -Id 'browser-credential-broker' -ReleaseRoot $releaseRoot
 if (-not (Test-Path -LiteralPath $credentialBrokerPath -PathType Leaf)) {
     throw 'Browser Worker credential broker is missing from the release.'
 }
-Assert-McpPublicSignature -Path $credentialBrokerPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+Assert-McpPublicFile -Path $credentialBrokerPath -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $logs = Join-Path $runtime 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -290,7 +285,7 @@ if (-not $alreadyInstalled) {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description 'Owns the native Windows MCP Browser Worker through the signed GUI-subsystem launcher.'
+        -Description 'Owns the native Windows MCP Browser Worker through the immutable GUI-subsystem launcher.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 
