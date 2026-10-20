@@ -17,6 +17,8 @@ import {
   browserDragInputSchema,
   browserEvaluateInputSchema,
   browserSnapshotInputSchema,
+  browserScreenshotInputSchema,
+  browserConsoleInputSchema,
   browserSnapshotResultSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
@@ -67,6 +69,26 @@ describe("browser snapshot filter contract", () => {
       tabId: "personal:7", url: "https://example.com/", content: "",
       pageInstanceId: "private-page-id", truncated: true, refs: [],
     }).success).toBe(true);
+  });
+});
+
+describe("browser targeted screenshot and console contracts", () => {
+  it("bounds viewport crops, scale and excludes fullPage with region", () => {
+    const region = { x: 120, y: 90, width: 360, height: 200 };
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region, scale: "device" }).success).toBe(true);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region, fullPage: true }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region: { ...region, width: 0 } }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region: { ...region, height: 10_000, width: 10_000 } }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", scale: "3x" }).success).toBe(false);
+  });
+
+  it("validates console regex, errors-only and bounded result limit", () => {
+    expect(browserConsoleInputSchema.safeParse({
+      tabId: "personal:7", pattern: "TypeError|warning", onlyErrors: true, limit: 50,
+    }).success).toBe(true);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "(" }).success).toBe(false);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "x".repeat(501) }).success).toBe(false);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", limit: 1001 }).success).toBe(false);
   });
 });
 

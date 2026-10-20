@@ -134,6 +134,11 @@ describe("personal browser extension assets", () => {
     expect(probe("p-7", guard, false, 150, 40)).toMatchObject({ error: "point_outside_target" });
     expect(probe("p-7", { ...guard, name: "Wrong" }, false, 21, 40))
       .toMatchObject({ error: "target_changed" });
+    button.tagName = "CANVAS";
+    vm.runInContext('globalThis.__mcpV3OwnedRefMetadata.set("p-7", {ref:"p-7",role:"canvas",name:"Help"})', context);
+    expect(inspect(21, 40)).toEqual({ ref: "p-7", role: "canvas", name: "Help" });
+    expect(probe("p-7", { ...guard, role: "canvas" }, false, 21, 40))
+      .toMatchObject({ x: 21, y: 40 });
   });
 
   it("drags with trusted CDP events and always releases the mouse on abort", async () => {
@@ -449,6 +454,49 @@ describe("personal browser extension assets", () => {
     })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
   });
 
+  it("captures a bounded CSS viewport region using page scroll offsets and device scale", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      MAX_FULL_PAGE_PIXELS: 40_000_000,
+      MAX_SCREENSHOT_BASE64_CHARS: 3_000_000,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      crypto: { randomUUID: () => "example" },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      base64ByteLength: () => 3,
+      chrome: { debugger: {
+        attach: async () => undefined, detach: async () => undefined,
+        sendCommand: async (_target: unknown, name: string, params: Record<string, unknown>) => {
+          commands.push({ name, params });
+          if (name === "Page.getLayoutMetrics") return {
+            cssVisualViewport: { clientWidth: 800, clientHeight: 600, pageX: 32, pageY: 80 },
+          };
+          if (name === "Runtime.evaluate") return { result: { value: 2 } };
+          if (name === "Page.captureScreenshot") return { data: "AQID" };
+          return {};
+        },
+      } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+    const screenshot = vm.runInContext("screenshot", context) as (args: unknown) => Promise<unknown>;
+    await expect(screenshot({
+      tabId: "personal:7",
+      region: { x: 10, y: 20, width: 200, height: 100 },
+      scale: "device",
+    })).resolves.toMatchObject({ sizeBytes: 3, mimeType: "image/jpeg" });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 2 },
+    });
+    commands.length = 0;
+    await expect(screenshot({
+      tabId: "personal:7",
+      region: { x: 780, y: 30, width: 50, height: 100 },
+    })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(commands.some((c) => c.name === "Page.captureScreenshot")).toBe(false);
+  });
+
   it("announces a versioned capability handshake and blocks private navigation targets", () => {
     const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
       "x".repeat(43),
@@ -456,7 +504,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.6.0");
+    expect(parsedManifest.version).toBe("0.6.1");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

@@ -112,6 +112,7 @@ export interface BrowserScreenshotRequest {
   type?: "png" | "jpeg";
   scale?: "css" | "device";
   fullPage?: boolean;
+  region?: { x: number; y: number; width: number; height: number };
 }
 
 export type BrowserAuthenticationInspection =

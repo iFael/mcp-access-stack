@@ -24,6 +24,9 @@ export const browserNetworkDetails = browserNetworkDetailSchema.options;
 
 export interface BrowserConsoleOptions {
   level?: BrowserConsoleLevel;
+  pattern?: string;
+  onlyErrors?: boolean;
+  limit?: number;
   clear?: boolean;
 }
 

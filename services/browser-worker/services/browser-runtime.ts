@@ -1560,6 +1560,9 @@ export class BrowserRuntime implements BrowserExecutor {
   async screenshot(input: BrowserScreenshotInput): Promise<BrowserScreenshotResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     await this.selectTab(tab);
+    if (input.region && !isDirectPlaywrightDriver(this.driver)) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Region screenshots require the direct browser driver.");
+    }
     const relativePath = isDirectPlaywrightDriver(this.driver)
       ? path.join(
           "direct",
@@ -1575,6 +1578,8 @@ export class BrowserRuntime implements BrowserExecutor {
       scale: "css",
       filename: relativePath.replaceAll("\\", "/"),
       fullPage: input.fullPage ?? false,
+      ...(input.region ? { region: input.region } : {}),
+      ...(input.scale ? { scale: input.scale } : {}),
     });
     const metadata = await stat(absolutePath);
     return { tabId: tab.tabId, path: absolutePath, sizeBytes: metadata.size };

@@ -1104,6 +1104,39 @@ async function screenshot(input, signal) {
     attached = true;
     await chrome.debugger.sendCommand(target, "Page.enable");
     let clip;
+    if (input.region) {
+      if (input.fullPage === true) {
+        throw coded("INVALID_ARGUMENT", "Region screenshot cannot also be full page.");
+      }
+      const box = input.region;
+      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+      const { x, y, width, height } = box;
+      if (![x, y, width, height].every(Number.isInteger) || x < 0 || y < 0 ||
+          width <= 0 || height <= 0 || width * height > 12000000 ||
+          !Number.isFinite(view?.clientWidth) || !Number.isFinite(view?.clientHeight) ||
+          x + width > view.clientWidth || y + height > view.clientHeight) {
+        throw coded("INVALID_ARGUMENT", "Screenshot region must fit the current CSS viewport and pixel budget.");
+      }
+      let scale = 1;
+      if (input.scale === "device") {
+        const dpr = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+          expression: "window.devicePixelRatio", returnByValue: true,
+        });
+        scale = Number(dpr?.result?.value);
+        if (!Number.isFinite(scale) || scale < 1 || scale > 4) {
+          throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome returned an invalid device scale.");
+        }
+      }
+      if (width * height * scale * scale > MAX_FULL_PAGE_PIXELS) {
+        throw coded("LIMIT_EXCEEDED", "Screenshot scaling exceeds the image pixel budget.");
+      }
+      clip = {
+        x: (Number(view.pageX) || 0) + x,
+        y: (Number(view.pageY) || 0) + y,
+        width, height, scale,
+      };
+    }
     if (input.fullPage === true) {
       const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
       const contentSize = metrics?.cssContentSize ?? metrics?.contentSize;
@@ -1382,6 +1415,8 @@ function snapshotPage(generation) {
     "textarea",
     "select",
     "summary",
+    "canvas",
+    "svg",
     "[role='button']",
     "[role='link']",
     "[role='textbox']",
@@ -1457,6 +1492,7 @@ function snapshotPage(generation) {
   function defaultRole(element) {
     const tag = element.tagName.toLowerCase();
     if (tag === "a") return "link";
+    if (tag === "canvas" || tag === "svg") return "canvas";
     if (tag === "button" || tag === "summary") return "button";
     if (tag === "textarea") return "textbox";
     if (tag === "select") return element.multiple ? "listbox" : "combobox";
@@ -1567,7 +1603,7 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   const tag = element.tagName.toLowerCase();
   const type = String(element.getAttribute("type") || "").toLowerCase();
   const role = element.getAttribute("role") ||
-    (tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
+    (tag === "canvas" || tag === "svg" ? "canvas" : tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
       tag === "textarea" ? "textbox" : tag === "select" ? element.multiple ? "listbox" : "combobox" :
       tag === "input" ? ["button","submit","reset","image","file"].includes(type) ? "button" :
         type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :

@@ -762,12 +762,26 @@ export const browserFrameFillInputSchema = z
   .strict();
 export type BrowserFrameFillInput = z.infer<typeof browserFrameFillInputSchema>;
 
+export const browserScreenshotRegionSchema = z.object({
+  x: z.number().int().min(0).max(20_000),
+  y: z.number().int().min(0).max(20_000),
+  width: z.number().int().min(1).max(10_000),
+  height: z.number().int().min(1).max(10_000),
+}).strict().refine((value) => value.width * value.height <= 12_000_000, {
+  message: "Screenshot region exceeds the 12 megapixel cap.",
+});
+export type BrowserScreenshotRegion = z.infer<typeof browserScreenshotRegionSchema>;
 export const browserScreenshotInputSchema = z
   .object({
     tabId: tabIdSchema,
     fullPage: z.boolean().optional(),
+    region: browserScreenshotRegionSchema.optional(),
+    scale: z.enum(["css", "device"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.fullPage && value.region), {
+    message: "A screenshot cannot be both full-page and clipped.",
+  });
 export type BrowserScreenshotInput = z.infer<typeof browserScreenshotInputSchema>;
 export const browserScreenshotImageContentSchema = z
   .object({
@@ -1001,6 +1015,9 @@ export const browserConsoleInputSchema = z
   .object({
     tabId: tabIdSchema,
     level: browserConsoleLevelSchema.optional(),
+    pattern: browserNetworkFilterSchema.optional(),
+    onlyErrors: z.boolean().optional(),
+    limit: z.number().int().min(1).max(1_000).optional(),
     clear: z.boolean().optional(),
   })
   .strict();

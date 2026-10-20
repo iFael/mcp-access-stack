@@ -22173,7 +22173,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Captures an MCP-owned tab and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.",
+    "description": "Captures an MCP-owned tab, optionally cropping a CSS viewport region and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -22188,8 +22188,47 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "fullPage": {
           "type": "boolean"
         },
+        "region": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "width": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "x": {
+              "maximum": 20000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "maximum": 20000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        },
         "runtimeId": {
           "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "scale": {
+          "enum": [
+            "css",
+            "device"
+          ],
           "type": "string"
         },
         "tabId": {
@@ -23316,7 +23355,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Reads or clears sanitized console messages from an MCP-owned tab. Basic sanitized console reads are available in interactive mode; trace/video and detailed network inspection remain diagnostic-only.",
+    "description": "Reads or clears sanitized console messages with regex pattern, errors-only, and result limit from an MCP-owned tab. Basic sanitized console reads are available in interactive mode; trace/video and detailed network inspection remain diagnostic-only.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -23338,6 +23377,18 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "info",
             "debug"
           ],
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "onlyErrors": {
+          "type": "boolean"
+        },
+        "pattern": {
+          "maxLength": 500,
           "type": "string"
         },
         "runtimeId": {
@@ -23986,13 +24037,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "53ab41eeede775eab4ec32f5e49d7ad47d40a94db71a2d6a8a6889644c17a6fa",
-  "serverVersion": "0.4.0-catalog.c53ab41eeede7.sffe3d39efd60",
+  "contractRevision": "1e263b649b6aac86e1dd2039f1f33c2159553691c407614433e993a8bc6fde12",
+  "serverVersion": "0.4.0-catalog.c1e263b649b6a.sffe3d39efd60",
   "toolCount": 106,
   "toolSetRevision": "ffe3d39efd602a939f3bb3264ede9a058394d0b6ef314460722f1a0ccd828c79"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c53ab41eeede7.sffe3d39efd60"
+  "version": "0.4.0-catalog.c1e263b649b6a.sffe3d39efd60"
 } as const;

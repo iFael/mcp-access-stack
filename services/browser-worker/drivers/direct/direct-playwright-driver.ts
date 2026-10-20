@@ -189,13 +189,13 @@ async function inspectSemanticPoint(page: Page, x: number, y: number): Promise<{
       top = inner;
     }
     if (!top) return null;
-    const interactive = "button,input,textarea,select,a[href],summary,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='switch'],[role='combobox'],[contenteditable='true']";
+    const interactive = "button,input,textarea,select,a[href],summary,canvas,svg,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='switch'],[role='combobox'],[contenteditable='true']";
     const element = top.closest(interactive);
     if (!element) return null;
     const tag = element.tagName.toLowerCase();
     const type = (element.getAttribute("type") ?? "text").toLowerCase();
     const role = element.getAttribute("role") ??
-      (tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
+      (tag === "canvas" || tag === "svg" ? "canvas" : tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
       tag === "textarea" ? "textbox" : tag === "select" ? "combobox" :
       tag === "input" ? type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
       type === "button" || type === "submit" ? "button" : "textbox" : "generic");
@@ -738,6 +738,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         type: input.type ?? "png",
         fullPage: input.fullPage ?? false,
         scale: input.scale ?? "css",
+        ...(input.region ? { clip: input.region } : {}),
       });
       return this.pageResponse(page);
     });
@@ -1071,11 +1072,14 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   ): Promise<BrowserDiagnosticTextResult> {
     const page = this.requireCurrentPage();
     const entries = this.consoleEntries.get(page) ?? [];
-    const level = options.level;
-    const filtered = level
-      ? entries.filter((entry) => consoleEntryMeetsThreshold(entry, level))
-      : entries;
-    const result = this.normalizeDiagnostic(filtered.join("\n"));
+    const level = options.onlyErrors ? "error" : options.level;
+    const expression = options.pattern ? new RegExp(validateBrowserNetworkFilter(options.pattern)) : undefined;
+    const filtered = entries.filter((entry) =>
+      (!level || consoleEntryMeetsThreshold(entry, level)) &&
+      (!expression || expression.test(entry)),
+    );
+    const limit = options.limit ?? this.config.diagnosticMaxEntries;
+    const result = this.normalizeDiagnostic(filtered.slice(0, limit).join("\n"));
     if (options.clear) entries.splice(0);
     return result;
   }
