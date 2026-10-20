@@ -25,7 +25,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "selectTab", "dialog", "viewport", "upload", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
+  "open", "selectTab", "dialog", "viewport", "upload", "download", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
   "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
@@ -36,6 +36,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "dialog",
   "viewport",
   "upload",
+  "download",
   "open",
   "navigate",
   "snapshot",
@@ -78,7 +79,7 @@ export function buildPersonalBrowserExtensionAssets(
     version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
-    permissions: ["tabs", "scripting", "storage", "debugger", "tabGroups"],
+    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
@@ -299,6 +300,7 @@ async function perform(operation, input, signal, timing) {
     case "dialog": return observePersonalDialog(input, signal);
     case "viewport": return configurePersonalViewport(input, signal);
     case "upload": return uploadPersonalFiles(input, signal);
+    case "download": return downloadPersonalFile(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
@@ -1765,6 +1767,234 @@ async function inspectPersonalNetwork(input, signal) {
   const raw = typeof value === "string" ? value : JSON.stringify(value);
   return { tabId: input.tabId, text: sanitizePersonalDiagnosticText(raw.slice(0, 256 * 1024), 256 * 1024),
     truncated: raw.length > 256 * 1024, collectedAt: new Date().toISOString() };
+}
+
+function safeChromeDownloadName(raw) {
+  const pieces = String(raw ?? "download.bin").split("/").pop().split(String.fromCharCode(92));
+  const last = pieces[pieces.length - 1] ?? "download.bin";
+  const name = [...last].map((character) => character.charCodeAt(0) < 32 ||
+    '<>:"/|?*'.includes(character) || character === String.fromCharCode(92)
+    ? "_" : character).join("").replace(/[. ]+$/u, "").slice(0, 160);
+  return name && name !== "." && name !== ".." ? name : "download.bin";
+}
+
+async function downloadPersonalFile(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "download", false);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || tab.url !== input.guard.url || Boolean(input.ref) === Boolean(input.url)) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Download must target one URL or snapshot ref on an owned tab.");
+  }
+  if ((input.url && !chrome.downloads?.download) || !chrome.downloads?.search ||
+      !chrome.downloads?.onCreated?.addListener ||
+      !chrome.downloads?.onDeterminingFilename?.addListener) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome downloads API is not available.");
+  }
+  if (typeof input.runId !== "string" || !/^[a-f0-9-]{36}$/u.test(input.runId)) {
+    throw coded("INVALID_ARGUMENT", "Download requires a one-time private staging identifier.");
+  }
+  const prefix = "MCP-V3-Staging/" + input.runId + "/";
+  const safeName = safeChromeDownloadName(input.url
+    ? new URL(input.url).pathname.split("/").pop()
+    : "download.bin");
+  let downloadId;
+  let createdListener;
+  let changedListener;
+  let filenameListener;
+  let cdpListener;
+  let chooserTimer;
+  let attached = false;
+  let success = false;
+  const target = { tabId: chromeTabId };
+  const awaitingFilename = new Map();
+  const createdCandidates = new Map();
+  let cdpDownloadUrl;
+  const matchesDownload = (item) =>
+    Boolean(cdpDownloadUrl && (item?.url === cdpDownloadUrl ||
+      item?.finalUrl === cdpDownloadUrl));
+  const supplyFilename = (id, item, callback) => {
+    const stored = awaitingFilename.get(id);
+    if (stored) {
+      clearTimeout(stored.timer);
+      awaitingFilename.delete(id);
+    }
+    if (typeof callback === "function") {
+      callback({ filename: prefix + safeChromeDownloadName(item.filename || item.url),
+        conflictAction: "uniquify" });
+    }
+  };
+  try {
+    if (input.url) {
+      const url = assertPersonalNavigationTarget(input.url);
+      downloadId = await chrome.downloads.download({
+        url, filename: prefix + safeName, saveAs: false, conflictAction: "uniquify",
+      });
+      if (!Number.isInteger(downloadId)) {
+        throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome did not start an authorized download.");
+      }
+    } else {
+      if (input.guard.ref !== input.ref || !chrome.debugger?.onEvent?.addListener) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Download requires a fresh guarded ref and tab-scoped CDP.");
+      }
+      let resolveCreated;
+      let rejectCreated;
+      const created = new Promise((resolve, reject) => {
+        resolveCreated = resolve;
+        rejectCreated = reject;
+      });
+      void created.catch(() => undefined);
+      const matchCandidates = () => {
+        if (!cdpDownloadUrl || Number.isInteger(downloadId)) return;
+        const matches = [...createdCandidates.values()].filter(matchesDownload);
+        if (matches.length > 1) {
+          rejectCreated(coded("BROWSER_CONFIRMATION_INVALID", "Ambiguous simultaneous download attribution."));
+          return;
+        }
+        if (matches.length !== 1) return;
+        const chosen = matches[0];
+        downloadId = chosen.id;
+        const waiting = awaitingFilename.get(downloadId);
+        if (waiting) supplyFilename(downloadId, waiting.item, waiting.suggest);
+        resolveCreated(downloadId);
+      };
+      chooserTimer = setTimeout(() =>
+        rejectCreated(coded("EXECUTION_STATE_INVALID", "The guarded link did not start a verifiable owned-tab download.")), 15000);
+      cdpListener = (source, method, params) => {
+        if (source?.tabId !== chromeTabId ||
+            !["Page.downloadWillBegin", "Browser.downloadWillBegin"].includes(method) ||
+            typeof params?.url !== "string") return;
+        // CDP is attached only to the MCP-owned tab. It is the provenance evidence:
+        // downloads.DownloadItem itself does NOT contain a tabId.
+        if (cdpDownloadUrl && cdpDownloadUrl !== params.url) {
+          rejectCreated(coded("BROWSER_CONFIRMATION_INVALID", "Multiple downloads began from one guarded click."));
+          return;
+        }
+        cdpDownloadUrl = params.url;
+        matchCandidates();
+      };
+      createdListener = (item) => {
+        if (!Number.isInteger(item?.id) || typeof item?.url !== "string") return;
+        createdCandidates.set(item.id, item);
+        if (createdCandidates.size > 20) {
+          rejectCreated(coded("EXECUTION_STATE_INVALID", "Too many concurrent browser downloads for safe attribution."));
+          return;
+        }
+        matchCandidates();
+      };
+      changedListener = (delta) => {
+        const candidate = createdCandidates.get(delta?.id);
+        if (!candidate) return;
+        if (typeof delta?.finalUrl?.current === "string") {
+          candidate.finalUrl = delta.finalUrl.current;
+          matchCandidates();
+        }
+      };
+      filenameListener = (item, suggest) => {
+        if (!Number.isInteger(item?.id)) {
+          suggest();
+          return;
+        }
+        if (Number.isInteger(downloadId)) {
+          if (item.id === downloadId) {
+            supplyFilename(item.id, item, suggest);
+          } else {
+            suggest();
+          }
+          return;
+        }
+        // The filename callback can arrive before the tab-scoped CDP event.
+        // Briefly defer, then release unrelated downloads unchanged.
+        const timer = setTimeout(() => {
+          awaitingFilename.delete(item.id);
+          suggest();
+        }, 1000);
+        awaitingFilename.set(item.id, { item, suggest, timer });
+        matchCandidates();
+        return true;
+      };
+      chrome.debugger.onEvent.addListener(cdpListener);
+      chrome.downloads.onCreated.addListener(createdListener);
+      if (chrome.downloads.onChanged?.addListener) chrome.downloads.onChanged.addListener(changedListener);
+      chrome.downloads.onDeterminingFilename.addListener(filenameListener);
+      let point;
+      if (!input.ref.startsWith("ax-")) {
+        const [hit] = await chrome.scripting.executeScript({
+          target, func: probeGuardedElement,
+          args: [input.ref, input.guard, false],
+        });
+        point = hit?.result;
+        if (!point || point.error) {
+          throw coded("BROWSER_CONFIRMATION_INVALID", "Download link changed since the snapshot.");
+        }
+      }
+      attached = await attachGuardedDebugger(target);
+      await chrome.debugger.sendCommand(target, "Page.enable");
+      if (input.ref.startsWith("ax-")) {
+        point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+      }
+      for (const [type, buttons] of [["mouseMoved", 0], ["mousePressed", 1], ["mouseReleased", 0]]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+          type, x: point.x, y: point.y, button: type === "mouseMoved" ? "none" : "left",
+          buttons, clickCount: 1,
+        });
+      }
+      downloadId = await created;
+    }
+    throwIfAborted(signal, "download", true);
+    const started = Date.now();
+    let download;
+    while (Date.now() - started < 45000) {
+      const rows = await chrome.downloads.search({ id: downloadId });
+      const current = Array.isArray(rows) ? rows[0] : undefined;
+      if (current?.state === "interrupted") {
+        throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome interrupted the authorized download.");
+      }
+      if (current?.state === "complete" && typeof current.filename === "string") {
+        if (current.danger && !["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe"].includes(current.danger)) {
+          throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome marked the downloaded file as unsafe.");
+        }
+        download = current;
+        break;
+      }
+      throwIfAborted(signal, "download", true);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!download) {
+      throw coded("EXECUTION_STATE_INVALID", "Download did not finish within 45 seconds.");
+    }
+    const filename = String(download.filename);
+    const normalized = filename.replaceAll(String.fromCharCode(92), "/");
+    if (!normalized.includes("/" + prefix) && !normalized.endsWith(prefix + safeName)) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome did not save the download inside private staging.");
+    }
+    const result = { tabId: input.tabId, path: filename,
+      suggestedFilename: safeChromeDownloadName(filename),
+      ...(Number.isSafeInteger(download.fileSize) && download.fileSize >= 0
+        ? { sizeBytes: download.fileSize } : {}),
+    };
+    success = true;
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("download", signal, true);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome could not download the guarded resource.");
+  } finally {
+    if (chooserTimer) clearTimeout(chooserTimer);
+    if (createdListener) chrome.downloads.onCreated.removeListener(createdListener);
+    if (changedListener) chrome.downloads.onChanged?.removeListener(changedListener);
+    if (filenameListener) chrome.downloads.onDeterminingFilename.removeListener(filenameListener);
+    if (cdpListener) chrome.debugger.onEvent.removeListener(cdpListener);
+    for (const pending of awaitingFilename.values()) {
+      clearTimeout(pending.timer);
+      pending.suggest();
+    }
+    awaitingFilename.clear();
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (!success && Number.isInteger(downloadId)) {
+      await chrome.downloads.cancel(downloadId).catch(() => undefined);
+    }
+  }
 }
 
 async function uploadPersonalFiles(input, signal) {

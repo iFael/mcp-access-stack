@@ -1,6 +1,7 @@
 import { createBrowserLatencyRecorder, extensionLatencyMetrics } from "@mcp-access-stack/edge-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import {
   AppError,
@@ -513,10 +514,52 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return result;
   }
 
-  download(
-    ..._args: Parameters<BrowserExecutor["download"]>
-  ): ReturnType<BrowserExecutor["download"]> {
-    throw unsupported("browser_download");
+  async download(...args: Parameters<BrowserExecutor["download"]>): ReturnType<BrowserExecutor["download"]> {
+    this.requireGuardedActions();
+    const [input, context] = args;
+    const guard = input.ref
+      ? this.actions.guardClick({ tabId: input.tabId, ref: input.ref,
+          ...(input.confirmationId ? { confirmationId: input.confirmationId } : {}) })
+      : this.actions.guardPage(input.tabId);
+    const runId = randomUUID();
+    const result = await this.call("download", { ...input, runId, guard }, context);
+    const source = result.path;
+    if (!path.isAbsolute(source) || path.basename(path.dirname(source)) !== runId ||
+        path.basename(path.dirname(path.dirname(source))).toLowerCase() !== "mcp-v3-staging") {
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Chrome returned a download outside its private staging directory.");
+    }
+    const parent = path.dirname(source);
+    const marker = path.dirname(parent);
+    const [file, folder, markerFolder] = await Promise.all([
+      lstat(source), lstat(parent), lstat(marker),
+    ]);
+    if (!file.isFile() || file.isSymbolicLink() || file.size > 128 * 1024 * 1024 ||
+        !folder.isDirectory() || folder.isSymbolicLink() ||
+        !markerFolder.isDirectory() || markerFolder.isSymbolicLink() ||
+        (result.sizeBytes !== undefined && result.sizeBytes !== file.size)) {
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Chrome staged download did not pass private artifact checks.");
+    }
+    const raw = path.basename(result.suggestedFilename ?? source);
+    const name = raw.replace(/[<>:"\/\\|?*\x00-\x1f]/gu, "_").replace(/[. ]+$/u, "");
+    const filename = name && name !== "." && name !== ".." ? name.slice(0, 180) : "download.bin";
+    const folderPath = path.join(path.resolve(this.options.stateRoot), "browser", "personal-artifacts", "downloads");
+    await mkdir(folderPath, { recursive: true, mode: 0o700 });
+    const finalPath = path.join(folderPath, randomUUID() + "-" + filename);
+    try {
+      await rename(source, finalPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+      await copyFile(source, finalPath, constants.COPYFILE_EXCL);
+      await unlink(source);
+    }
+    const finalFile = await lstat(finalPath);
+    if (!finalFile.isFile() || finalFile.isSymbolicLink() || finalFile.size !== file.size) {
+      await rm(finalPath, { force: true });
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Downloaded artifact changed during private staging transfer.");
+    }
+    await chmod(finalPath, 0o600);
+    await rm(parent, { recursive: false, force: false }).catch(() => undefined);
+    return { tabId: input.tabId, path: finalPath, suggestedFilename: filename, sizeBytes: file.size };
   }
 
   async upload(...args: Parameters<BrowserExecutor["upload"]>): ReturnType<BrowserExecutor["upload"]> {
@@ -1169,6 +1212,7 @@ function resolveCallTimeoutMs(
   context?: OperationContext,
 ): number {
   let timeoutMs = DEFAULT_TIMEOUT_MS;
+  if (operation === "download") timeoutMs = Math.max(timeoutMs, 90_000);
   if (operation === "wait" && isRecord(input) &&
       typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
     timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);

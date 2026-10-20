@@ -669,6 +669,133 @@ describe("personal browser extension assets", () => {
     expect(vm.runInContext("personalNetworkEntries.size", context)).toBe(0);
   });
 
+  it("downloads only from an owned tab into an isolated Chrome staging subdirectory", async () => {
+    const { serviceWorker, manifest } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const permissions = (JSON.parse(manifest) as { permissions: string[] }).permissions;
+    expect(permissions).toContain("downloads");
+    const runId = "00000000-0000-4000-8000-000000000007";
+    let requestedFilename = "";
+    const ctx = vm.createContext({
+      URL, Date, setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      assertPersonalNavigationTarget: (url: string) => url,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.test/" }) },
+        downloads: {
+          download: async (input: { url: string; filename: string }) => {
+            requestedFilename = input.filename;
+            expect(input.url).toBe("https://example.test/report.pdf?token=private");
+            return 17;
+          },
+          search: async () => [{
+            id: 17, state: "complete",
+            filename: "C:\\Users\\Tester\\Downloads\\" + requestedFilename.replaceAll("/", "\\"),
+            fileSize: 123,
+          }],
+          cancel: async () => undefined,
+          onCreated: { addListener: () => undefined, removeListener: () => undefined },
+          onDeterminingFilename: { addListener: () => undefined, removeListener: () => undefined },
+        },
+      },
+    });
+    for (const fn of ["safeChromeDownloadName", "detachGuardedDebugger", "downloadPersonalFile"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), ctx);
+    }
+    const download = vm.runInContext("downloadPersonalFile", ctx) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await download({
+      tabId: "personal:7", url: "https://example.test/report.pdf?token=private", runId,
+      guard: { url: "https://example.test/" },
+    });
+    expect(requestedFilename).toBe("MCP-V3-Staging/" + runId + "/report.pdf");
+    expect(result).toMatchObject({ tabId: "personal:7", suggestedFilename: "report.pdf", sizeBytes: 123 });
+    expect(String(result.path)).toContain(runId);
+    await expect(download({
+      tabId: "personal:7", url: "https://example.test/report.pdf", runId,
+      guard: { url: "https://different.example/" },
+    })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+  });
+
+  it("attributes a click download via tab-scoped CDP without relying on nonexistent DownloadItem.tabId", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const runId = "00000000-0000-4000-8000-000000000008";
+    const created = new Set<(item: unknown) => void>();
+    const determining = new Set<(item: unknown, suggest: (data?: unknown) => void) => void>();
+    const cdpListeners = new Set<(target: { tabId: number }, method: string, params: unknown) => void>();
+    let filename = "";
+    let unrelatedTouched = false;
+    const commands: string[] = [];
+    const ctx = vm.createContext({
+      URL, Date, setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      probeGuardedElement: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.test/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 25, y: 30 } }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          onEvent: {
+            addListener: (fn: (target: { tabId: number }, method: string, params: unknown) => void) => { cdpListeners.add(fn); },
+            removeListener: (fn: (target: { tabId: number }, method: string, params: unknown) => void) => { cdpListeners.delete(fn); },
+          },
+          sendCommand: async (_target: unknown, method: string, params?: { type?: string }) => {
+            commands.push(method);
+            if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
+              // DownloadItem has url/id but no tabId in the real Chrome downloads API.
+              for (const listener of created) listener({ id: 100, url: "https://unrelated.test/secret" });
+              for (const listener of created) listener({ id: 18, url: "https://example.test/export.csv" });
+              for (const listener of cdpListeners) {
+                listener({ tabId: 99 }, "Page.downloadWillBegin", { url: "https://unrelated.test/secret" });
+                listener({ tabId: 7 }, "Page.downloadWillBegin", { url: "https://example.test/export.csv" });
+              }
+              for (const listener of determining) {
+                listener({ id: 55, url: "https://unrelated.test/secret", filename: "other.txt" }, (data?: unknown) => {
+                  if (data !== undefined) unrelatedTouched = true;
+                });
+                listener({ id: 18, url: "https://example.test/export.csv", filename: "export.csv" }, (data?: unknown) => {
+                  filename = (data as { filename: string }).filename;
+                });
+              }
+            }
+          },
+        },
+        downloads: {
+          search: async () => [{ id: 18, state: "complete",
+            filename: "C:\\Users\\Tester\\Downloads\\" + filename.replaceAll("/", "\\"), fileSize: 5, danger: "safe" }],
+          cancel: async () => undefined,
+          onCreated: {
+            addListener: (fn: (item: unknown) => void) => { created.add(fn); },
+            removeListener: (fn: (item: unknown) => void) => { created.delete(fn); },
+          },
+          onDeterminingFilename: {
+            addListener: (fn: (item: unknown, suggest: (data?: unknown) => void) => void) => { determining.add(fn); },
+            removeListener: (fn: (item: unknown, suggest: (data?: unknown) => void) => void) => { determining.delete(fn); },
+          },
+        },
+      },
+    });
+    for (const fn of ["safeChromeDownloadName", "borrowPersonalDebugger",
+      "attachGuardedDebugger", "detachGuardedDebugger", "downloadPersonalFile"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), ctx);
+    }
+    const download = vm.runInContext("downloadPersonalFile", ctx) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await download({ tabId: "personal:7", ref: "p-1", runId,
+      guard: { url: "https://example.test/", ref: "p-1", role: "link", name: "Export" } });
+    expect(filename).toBe("MCP-V3-Staging/" + runId + "/export.csv");
+    expect(result).toMatchObject({ sizeBytes: 5, suggestedFilename: "export.csv" });
+    expect(unrelatedTouched).toBe(false);
+    expect(commands).toContain("Page.enable");
+    expect(commands).toContain("Input.dispatchMouseEvent");
+    expect(created.size).toBe(0);
+    expect(determining.size).toBe(0);
+    expect(cdpListeners.size).toBe(0);
+  });
+
   it("intercepts a trusted upload trigger and selects the underlying Chrome file input natively", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const listeners = new Set<(target: { tabId: number }, method: string, params: unknown) => void>();
@@ -1065,7 +1192,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.2.0");
+    expect(parsedManifest.version).toBe("1.3.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

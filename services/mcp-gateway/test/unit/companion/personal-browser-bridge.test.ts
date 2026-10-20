@@ -82,6 +82,48 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("moves one owned Chrome download into private storage and rejects paths outside its one-time staging scope", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-download-staging-"));
+    temporaryRoots.push(stagingRoot);
+    let stagedPath = "";
+    let unsafe = false;
+    try {
+      await primeReference(bridge, extension, tabId);
+      const responder = async (data: WebSocket.RawData) => {
+        const request = JSON.parse(data.toString()) as WireMessage;
+        if (request.type !== "request" || request.operation !== "download") return;
+        const input = request.input as { runId: string; guard: { url: string } };
+        expect(input.guard.url).toBe("https://example.com/");
+        const directory = path.join(stagingRoot, "MCP-V3-Staging", input.runId);
+        await mkdir(directory, { recursive: true });
+        stagedPath = unsafe ? path.join(stagingRoot, "unsafe.txt") : path.join(directory, "report.txt");
+        await writeFile(stagedPath, "hello");
+        extension.send(JSON.stringify({
+          type: "response", id: request.id, ok: true,
+          result: { tabId, path: stagedPath, suggestedFilename: "report.txt", sizeBytes: 5 },
+        }));
+      };
+      extension.on("message", responder);
+      try {
+        const result = await bridge.download({ tabId, url: "https://example.com/report.txt" });
+        expect(result.path).toContain("personal-artifacts");
+        expect(result.path).toContain("downloads");
+        expect(result.sizeBytes).toBe(5);
+        expect((await readFile(result.path)).toString()).toBe("hello");
+        await expect(readFile(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        unsafe = true;
+        await expect(bridge.download({ tabId, url: "https://example.com/other.txt" }))
+          .rejects.toMatchObject({ code: "RELAY_PROTOCOL_ERROR" });
+      } finally {
+        extension.off("message", responder);
+      }
+    } finally {
+      await close();
+    }
+  });
+
   it("stages authorized Chrome uploads privately and removes temporary bytes after native selection", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
