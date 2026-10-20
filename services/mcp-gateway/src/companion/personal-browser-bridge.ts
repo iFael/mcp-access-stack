@@ -390,9 +390,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   frameExtract(
-    ..._args: Parameters<NonNullable<BrowserExecutor["frameExtract"]>>
+    ...args: Parameters<NonNullable<BrowserExecutor["frameExtract"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameExtract"]>> {
-    throw unsupported("browser_frame_extract");
+    return this.call("frameExtract", args[0], args[1]);
   }
 
   frameClick(

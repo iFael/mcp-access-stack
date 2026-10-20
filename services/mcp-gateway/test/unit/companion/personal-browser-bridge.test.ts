@@ -23,6 +23,29 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("routes named-frame extraction only through the authenticated personal Chrome extension", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const captured: Array<{ operation?: string; input: unknown }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      captured.push({ ...(request.operation ? { operation: request.operation } : {}), input: request.input });
+      extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", frame: "Corpo do conteúdo", format: "text",
+          value: "Scoped content" } }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.frameExtract({ tabId: "personal:7", frame: "Corpo do conteúdo" }))
+        .resolves.toMatchObject({ tabId: "personal:7", frame: "Corpo do conteúdo", value: "Scoped content" });
+      expect(captured).toEqual([{ operation: "frameExtract",
+        input: { tabId: "personal:7", frame: "Corpo do conteúdo" } }]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("routes the owned-tab viewport preset and reset without altering unrelated Chrome tabs", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: unknown }> = [];

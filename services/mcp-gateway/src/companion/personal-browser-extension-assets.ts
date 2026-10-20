@@ -51,6 +51,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "press",
   "wait",
   "extract",
+  "frameExtract",
   "sequence",
   "screenshot",
   "console",
@@ -315,6 +316,7 @@ async function perform(operation, input, signal, timing) {
     case "press": return press(input, signal);
     case "wait": return wait(input, signal);
     case "extract": return extract(input, signal);
+    case "frameExtract": return frameExtract(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
@@ -1385,6 +1387,75 @@ async function extract(input) {
     format: input.format ?? "text",
     value: result.result.value,
   };
+}
+
+// Discover only scriptable child frames of this explicitly MCP-owned Chrome tab.
+// Names and document titles must match exactly; ambiguous targets fail closed.
+// The injected code executes independently inside each accessible frame, including
+// cross-origin frames for which Chrome granted host permission.
+function describePersonalFrame() {
+  return {
+    url: location.href, name: window.name || "", title: document.title || "",
+    // A cross-origin child cannot access its frameElement. Its parent's public
+    // iframe attributes can still resolve a unique named frame by exact src.
+    embedded: Array.from(document.querySelectorAll("iframe,frame")).slice(0, 128).map((frame) => ({
+      id: frame.id || "", name: frame.getAttribute("name") || "",
+      title: frame.getAttribute("title") || "", src: frame.src || "",
+    })),
+  };
+}
+
+async function frameExtract(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "frameExtract", false);
+  if (typeof input.frame !== "string" || input.frame.length === 0 || input.frame.length > 200) {
+    throw coded("INVALID_ARGUMENT", "Frame name is required.");
+  }
+  if (input.completion === "document") {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Full-frame bounded scrolling is not implemented in personal Chrome.");
+  }
+  let frames;
+  try {
+    frames = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, allFrames: true },
+      func: describePersonalFrame,
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "Chrome cannot inspect the requested frame with its current permissions.");
+  }
+  const aliases = new Set((frames || []).flatMap((parent) =>
+    (parent.result?.embedded || [])
+      .filter((frame) => [frame.id, frame.name, frame.title].includes(input.frame))
+      .map((frame) => frame.src)
+      .filter((src) => src.startsWith("https://") || src.startsWith("http://"))));
+  const matches = (frames || []).filter((entry) =>
+    entry.frameId !== 0 && entry.result &&
+    ([entry.result.name, entry.result.title, entry.result.url].includes(input.frame) ||
+      aliases.has(entry.result.url)));
+  if (matches.length === 0) throw coded("FRAME_NOT_FOUND", "No accessible child frame matches the exact frame name.");
+  if (matches.length !== 1) throw coded("LOCATOR_AMBIGUOUS", "Multiple child frames match the requested name.");
+  const matched = matches[0];
+  assertPersonalNavigationTarget(matched.result.url);
+  throwIfAborted(signal, "frameExtract", false);
+  let extracted;
+  try {
+    [extracted] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, frameIds: [matched.frameId] },
+      func: extractPage,
+      args: [null, input.selector ?? null, input.format ?? "text", matched.result.url],
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "The child frame is no longer accessible.");
+  }
+  if (!extracted || extracted.frameId !== matched.frameId ||
+      (matched.documentId && extracted.documentId !== matched.documentId) ||
+      extracted.result?.stale) {
+    throw coded("FRAME_NOT_READY", "The child frame navigated during extraction.");
+  }
+  if (!extracted.result?.found) throw coded("LOCATOR_NOT_FOUND", "The requested frame extraction target does not exist.");
+  throwIfAborted(signal, "frameExtract", false);
+  return { tabId: input.tabId, frame: input.frame, format: input.format ?? "text", value: extracted.result.value };
 }
 
 async function sequence(input, signal, timing) {
@@ -2793,7 +2864,8 @@ function waitProbe(text, ref) {
   return true;
 }
 
-function extractPage(ref, selector, format) {
+function extractPage(ref, selector, format, expectedUrl) {
+  if (expectedUrl !== undefined && location.href !== expectedUrl) return { found: false, stale: true };
   let target = document.body;
   if (typeof ref === "string") target = globalThis.__mcpV3OwnedRefElements?.get(ref);
   else if (typeof selector === "string") target = document.querySelector(selector);

@@ -6,6 +6,112 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("extracts an exact named cross-origin child frame in the owned Chrome tab without a second browser", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const targets: Array<{ tabId: number; allFrames?: boolean; frameIds?: number[] }> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      assertPersonalNavigationTarget: (url: string) => {
+        if (url.startsWith("http://127.0.0.1")) throw Object.assign(new Error("private"), { code: "NAVIGATION_BLOCKED" });
+        return url;
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async ({ target }: { target: { tabId: number; allFrames?: boolean; frameIds?: number[] } }) => {
+        targets.push(target);
+        if (target.allFrames) return [
+          { frameId: 0, result: { url: "https://host.example/", name: "", title: "Host" } },
+          { frameId: 17, documentId: "child-1", result: { url: "https://frame.example/", name: "content", title: "Details" } },
+          { frameId: 18, documentId: "child-2", result: { url: "https://other.example/", name: "other", title: "Other" } },
+        ];
+        return [{ frameId: 17, documentId: "child-1", result: { found: true, value: "Cross-origin detail" } }];
+      } } },
+    });
+    for (const name of ["describePersonalFrame", "extractPage", "frameExtract"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const extract = vm.runInContext("frameExtract", context) as (input: unknown) => Promise<unknown>;
+    await expect(extract({ tabId: "personal:7", frame: "content", format: "text" }))
+      .resolves.toEqual({ tabId: "personal:7", frame: "content", format: "text", value: "Cross-origin detail" });
+    expect(targets).toEqual([{ tabId: 7, allFrames: true }, { tabId: 7, frameIds: [17] }]);
+    await expect(extract({ tabId: "personal:7", frame: "missing" }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_FOUND" });
+    expect(targets).toHaveLength(3);
+    await expect(extract({ tabId: "personal:7", frame: "content", completion: "document" }))
+      .rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    expect(targets).toHaveLength(3);
+  });
+
+  it("resolves the iframe title attribute across origins only when its URL identifies one child", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const targets: number[][] = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, assertPersonalNavigationTarget: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async ({ target }: { target: { allFrames?: boolean; frameIds?: number[] } }) => {
+        if (target.allFrames) return [
+          { frameId: 0, result: { url: "https://portal.example/", name: "", title: "Portal",
+            embedded: [{ id: "", name: "", title: "Corpo do conteúdo", src: "https://content.example/view" }] } },
+          { frameId: 42, documentId: "same-document", result: {
+            url: "https://content.example/view", name: "", title: "Unrelated document title" } },
+        ];
+        targets.push(target.frameIds!);
+        return [{ frameId: 42, documentId: "same-document", result: { found: true, value: "Panel content" } }];
+      } } },
+    });
+    for (const name of ["describePersonalFrame", "extractPage", "frameExtract"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const extract = vm.runInContext("frameExtract", context) as (input: unknown) => Promise<unknown>;
+    await expect(extract({ tabId: "personal:7", frame: "Corpo do conteúdo" }))
+      .resolves.toEqual({ tabId: "personal:7", frame: "Corpo do conteúdo", format: "text", value: "Panel content" });
+    expect(targets).toEqual([[42]]);
+  });
+
+  it("rejects ambiguous, private and navigated frames before exposing their contents", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let mode: "ambiguous" | "private" | "navigated" = "ambiguous";
+    let reads = 0;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      assertPersonalNavigationTarget: (url: string) => {
+        if (url.includes("127.0.0.1")) throw Object.assign(new Error("private"), { code: "NAVIGATION_BLOCKED" });
+      },
+      chrome: { scripting: { executeScript: async ({ target }: { target: { allFrames?: boolean } }) => {
+        if (target.allFrames) {
+          const url = mode === "private" ? "http://127.0.0.1/admin" : "https://frame.example/";
+          return [
+            { frameId: 0, result: { url: "https://host.example/", title: "Host" } },
+            { frameId: 17, documentId: "before", result: { url, name: "content" } },
+            ...(mode === "ambiguous" ? [{ frameId: 18, result: { url, name: "content" } }] : []),
+          ];
+        }
+        reads += 1;
+        return [{ frameId: 17, documentId: "after", result: { found: true, value: "not safe" } }];
+      } } },
+    });
+    for (const name of ["describePersonalFrame", "extractPage", "frameExtract"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const extract = vm.runInContext("frameExtract", context) as (input: unknown) => Promise<unknown>;
+    await expect(extract({ tabId: "personal:7", frame: "content" }))
+      .rejects.toMatchObject({ code: "LOCATOR_AMBIGUOUS" });
+    mode = "private";
+    await expect(extract({ tabId: "personal:7", frame: "content" }))
+      .rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
+    expect(reads).toBe(0);
+    mode = "navigated";
+    await expect(extract({ tabId: "personal:7", frame: "content" }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+    expect(reads).toBe(1);
+  });
+
+  it("returns a stale-frame guard if navigation occurred before document extraction", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ location: { href: "https://new.example/" }, document: { body: { innerText: "private" } } });
+    vm.runInContext(extractFunction(serviceWorker, "extractPage"), context);
+    const read = vm.runInContext("extractPage", context) as (...args: unknown[]) => unknown;
+    expect(read(null, null, "text", "https://old.example/")).toEqual({ found: false, stale: true });
+  });
+
   it("returns isolated bounded timing on concurrent and sequential requests without putting page data in telemetry", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const sent: Array<Record<string, unknown>> = [];
@@ -1192,7 +1298,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.3.0");
+    expect(parsedManifest.version).toBe("1.3.1");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
