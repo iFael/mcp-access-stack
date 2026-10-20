@@ -414,15 +414,15 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   profilePage(
-    ..._args: Parameters<NonNullable<BrowserExecutor["profilePage"]>>
+    ...args: Parameters<NonNullable<BrowserExecutor["profilePage"]>>
   ): ReturnType<NonNullable<BrowserExecutor["profilePage"]>> {
-    throw unsupported("browser_profile_page");
+    return this.call("profilePage", args[0], args[1]);
   }
 
   domIndex(
-    ..._args: Parameters<NonNullable<BrowserExecutor["domIndex"]>>
+    ...args: Parameters<NonNullable<BrowserExecutor["domIndex"]>>
   ): ReturnType<NonNullable<BrowserExecutor["domIndex"]>> {
-    throw unsupported("browser_dom_index");
+    return this.call("domIndex", args[0], args[1]);
   }
 
   frameSequence(

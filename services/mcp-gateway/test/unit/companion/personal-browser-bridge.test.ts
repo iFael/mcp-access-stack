@@ -23,6 +23,48 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("routes legacy page profiles and frame DOM indices only through the authenticated owned-tab Chrome bridge", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const received: Array<{ operation?: string; input?: unknown }> = [];
+    const reply = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type !== "request") return;
+      received.push({ ...(message.operation ? { operation: message.operation } : {}),
+        input: message.input });
+      const result = message.operation === "profilePage"
+        ? { tabId: "personal:7", profile: "legacy-frames", signals: {
+          frames: 1, nestedFrames: 0, layoutTables: 0, inlineHandlers: 0,
+          hashLinks: 0, targetedNavigation: 0, postForms: 0,
+        }, pageSignature: "12345678", frameGraphSignature: "87654321",
+        frames: [{ path: ["menu"], name: "menu", index: 0, status: "ready",
+          signature: "11223344", children: [] }], telemetry: { totalMs: 1 } }
+        : { tabId: "personal:7", framePath: ["menu"], pageSignature: "12345678",
+            frameGraphSignature: "87654321", offset: 0, truncated: false,
+            totalCount: 1, items: [{ ref: "lref_12345678", tag: "button", id: "save",
+              text: "Save", visible: true, enabled: true, selector: "#save",
+              framePath: ["menu"], ancestors: [] }], telemetry: { totalMs: 1 } };
+      extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, result }));
+    };
+    extension.on("message", reply);
+    try {
+      const profile = await bridge.profilePage({ tabId: "personal:7", maxDepth: 4 });
+      expect(profile).toMatchObject({ profile: "legacy-frames",
+        frames: [{ path: ["menu"] }] });
+      const index = await bridge.domIndex({ tabId: "personal:7",
+        framePath: ["menu"], visibleOnly: true });
+      expect(index).toMatchObject({ items: [{ ref: "lref_12345678" }] });
+      expect(received).toEqual([
+        { operation: "profilePage", input: { tabId: "personal:7", maxDepth: 4 } },
+        { operation: "domIndex", input: {
+          tabId: "personal:7", framePath: ["menu"], visibleOnly: true,
+        } },
+      ]);
+    } finally {
+      extension.off("message", reply);
+      await close();
+    }
+  });
+
   it("routes named-frame extraction only through the authenticated personal Chrome extension", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const captured: Array<{ operation?: string; input: unknown }> = [];

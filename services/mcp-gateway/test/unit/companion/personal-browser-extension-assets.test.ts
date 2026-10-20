@@ -6,6 +6,120 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("profiles exact Chrome webNavigation frame ancestry and indexes one owned frame without exposing private values", async () => {
+    const { serviceWorker, manifest } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    expect((JSON.parse(manifest) as { permissions: string[] }).permissions).toContain("webNavigation");
+    const host = {
+      url: "https://host.example/", name: "", title: "Portal", readyState: "complete",
+      childElementCount: 12, embedded: [
+        { id: "menu", name: "menu", src: "https://child.example/path?private=secret" },
+      ],
+      signals: { layoutTables: 1, inlineHandlers: 2, hashLinks: 1,
+        targetedNavigation: 0, postForms: 1 },
+    };
+    const child = {
+      url: "https://child.example/path?private=secret", name: "menu", title: "Menu",
+      readyState: "complete", childElementCount: 7, embedded: [],
+      signals: { layoutTables: 0, inlineHandlers: 0, hashLinks: 0,
+        targetedNavigation: 0, postForms: 0 },
+    };
+    const routes: string[] = [];
+    const navigation = [
+      { frameId: 0, parentFrameId: -1, url: host.url },
+      { frameId: 15, parentFrameId: 0, url: child.url },
+      { frameId: 16, parentFrameId: 0, url: "http://127.0.0.1/admin" },
+    ];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, performance: { now: () => 50 },
+      assertPersonalNavigationTarget: (url: string) => {
+        if (url.startsWith("http://127.0.0.1/")) throw new Error("blocked");
+        return url;
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://host.example/" }) },
+        webNavigation: { getAllFrames: async () => navigation },
+        scripting: { executeScript: async ({ target, func }: {
+          target: { allFrames?: boolean; frameIds?: number[] }; func: { name: string };
+        }) => {
+          routes.push(func.name);
+          if (target.allFrames) return [
+            { frameId: 0, documentId: "root", result: host },
+            { frameId: 15, documentId: "child-1", result: child },
+          ];
+          return [{ frameId: 15, documentId: "child-1", result: { items: [
+            { id: "save", tag: "button", text: "Save", visible: true,
+              enabled: true, selector: "#save", ancestors: [] },
+          ], truncated: false, totalCount: 1 } }];
+        } },
+      },
+    });
+    for (const name of ["inspectPersonalLegacyDocument", "personalLegacySignature",
+      "inspectPersonalFrameGraph", "profilePage", "collectPersonalLegacyIndex", "domIndex"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const profilePage = vm.runInContext("profilePage", context) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const domIndex = vm.runInContext("domIndex", context) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const profile = await profilePage({ tabId: "personal:7", maxDepth: 8 });
+    expect(profile).toMatchObject({
+      tabId: "personal:7", profile: "hybrid", signals: {
+        frames: 2, nestedFrames: 0, layoutTables: 1, postForms: 1,
+      },
+    });
+    expect((profile.frames as Array<Record<string, unknown>>)[0]).toMatchObject({
+      path: ["menu"], status: "ready", index: 0,
+    });
+    expect((profile.frames as Array<Record<string, unknown>>)[1]).toMatchObject({
+      path: ["1"], status: "inaccessible", index: 1,
+    });
+    const indexed = await domIndex({ tabId: "personal:7", framePath: ["menu"], limit: 10 });
+    expect(indexed).toMatchObject({
+      framePath: ["menu"], totalCount: 1, truncated: false,
+      items: [{ tag: "button", id: "save", ref: expect.stringMatching(/^lref_[a-f0-9]{8}$/),
+        framePath: ["menu"] }],
+    });
+    expect(routes).toContain("collectPersonalLegacyIndex");
+    expect(JSON.stringify(indexed)).not.toContain("private=secret");
+    expect(JSON.stringify(profile)).not.toContain("127.0.0.1");
+    await expect(domIndex({ tabId: "personal:7", framePath: ["missing"] }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_FOUND" });
+    await expect(domIndex({ tabId: "personal:7", framePath: ["1"] }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+    navigation[1]!.parentFrameId = 16;
+    navigation[2]!.parentFrameId = 15;
+    await expect(profilePage({ tabId: "personal:7" }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+  });
+
+  it("builds legacy selectors without reading personal input or password values", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const input = {
+      tagName: "INPUT", nodeType: 1, id: "password", disabled: false,
+      value: "DO_NOT_EXPOSE_PRIVATE_VALUE", parentElement: null,
+      getAttribute: (name: string) => ({
+        id: "password", name: "password", type: "password", placeholder: "Password",
+      })[name as "id"] ?? null,
+      getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    };
+    const document = { querySelectorAll: (selector: string) =>
+      selector === "#password" ? [input] : [input] };
+    const ctx = vm.createContext({ document, location: { href: "https://host.example/" },
+      CSS: { escape: (str: string) => str }, URL,
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }) });
+    vm.runInContext(extractFunction(serviceWorker, "collectPersonalLegacyIndex"), ctx);
+    const index = vm.runInContext("collectPersonalLegacyIndex", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const result = index("https://host.example/", { visibleOnly: true });
+    expect(result).toMatchObject({ totalCount: 1,
+      items: [{ id: "password", tag: "input", selector: "#password" }] });
+    expect(JSON.stringify(result)).not.toContain("DO_NOT_EXPOSE_PRIVATE_VALUE");
+    expect(result).not.toHaveProperty("private");
+    expect(index("https://changed.example/", { visibleOnly: false })).toMatchObject({ stale: true });
+  });
+
   it("extracts an exact named cross-origin child frame in the owned Chrome tab without a second browser", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const targets: Array<{ tabId: number; allFrames?: boolean; frameIds?: number[] }> = [];
@@ -1453,8 +1567,8 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.4.0");
-    expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
+    expect(parsedManifest.version).toBe("1.5.0");
+    expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
     expect(serviceWorker).toContain('"screenshot"');

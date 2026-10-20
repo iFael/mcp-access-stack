@@ -54,6 +54,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "frameExtract",
   "frameClick",
   "frameFill",
+  "profilePage",
+  "domIndex",
   "sequence",
   "screenshot",
   "console",
@@ -82,7 +84,7 @@ export function buildPersonalBrowserExtensionAssets(
     version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
-    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups"],
+    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
@@ -321,6 +323,8 @@ async function perform(operation, input, signal, timing) {
     case "frameExtract": return frameExtract(input, signal);
     case "frameClick": return frameClick(input, signal);
     case "frameFill": return frameFill(input, signal);
+    case "profilePage": return profilePage(input, signal);
+    case "domIndex": return domIndex(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
@@ -1740,6 +1744,332 @@ async function frameClick(input, signal) {
 
 async function frameFill(input, signal) {
   return directFrameAction(input, signal, true);
+}
+
+// Read-only legacy profiling. Frame ancestry comes from Chrome's own frame IDs,
+// not from guessed iframe names or DOM access across origins.
+function inspectPersonalLegacyDocument() {
+  const count = (selector) => document.querySelectorAll(selector).length;
+  const embedded = Array.from(document.querySelectorAll("iframe,frame")).slice(0, 100).map((node) => ({
+    id: (node.id || "").slice(0, 200),
+    name: (node.getAttribute("name") || "").slice(0, 200),
+    src: (node.src || "").slice(0, 2048),
+  }));
+  return {
+    url: location.href, name: (window.name || "").slice(0, 200),
+    title: (document.title || "").slice(0, 500),
+    readyState: document.readyState,
+    childElementCount: document.documentElement?.childElementCount ?? 0,
+    embedded,
+    signals: {
+      layoutTables: count("table:not([role='grid'])"),
+      inlineHandlers: count("[onclick],[onchange],[onkeyup],[ondblclick],[onmousedown]"),
+      hashLinks: count("a[href^='#']"),
+      targetedNavigation: count("[target]:not([target='_self'])"),
+      postForms: count("form[method='post' i]"),
+    },
+  };
+}
+
+// Fingerprints are non-security cache signatures, never authentication proofs.
+function personalLegacySignature(input) {
+  let hash = 2166136261;
+  const value = typeof input === "string" ? input : JSON.stringify(input);
+  for (let i = 0; i < value.length; i += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(i), 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+async function inspectPersonalFrameGraph(chromeTabId) {
+  if (!chrome.webNavigation?.getAllFrames) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome webNavigation permission is required for exact frame ancestry.");
+  }
+  const tab = await chrome.tabs.get(chromeTabId);
+  assertPersonalNavigationTarget(tab.url);
+  const [navigation, observations] = await Promise.all([
+    chrome.webNavigation.getAllFrames({ tabId: chromeTabId }),
+    chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, allFrames: true },
+      func: inspectPersonalLegacyDocument,
+    }),
+  ]);
+  if (!Array.isArray(navigation) || navigation.length === 0 ||
+      navigation.length > 101 || !navigation.some((entry) => entry.frameId === 0)) {
+    throw coded("FRAME_NOT_READY", "Chrome returned an incomplete or oversized frame graph.");
+  }
+  const byId = new Map();
+  for (const entry of navigation) {
+    if (!Number.isInteger(entry.frameId) || !Number.isInteger(entry.parentFrameId) ||
+        byId.has(entry.frameId)) throw coded("FRAME_NOT_READY", "Frame IDs are inconsistent.");
+    byId.set(entry.frameId, {
+      frameId: entry.frameId, parentFrameId: entry.parentFrameId,
+      url: entry.url, children: [], status: "inaccessible",
+    });
+  }
+  const observed = new Map();
+  for (const item of observations || []) {
+    if (observed.has(item.frameId)) throw coded("FRAME_NOT_READY", "Duplicate scriptable frame ID.");
+    observed.set(item.frameId, item);
+  }
+  for (const frame of byId.values()) {
+    if (frame.frameId !== 0) {
+      const parent = byId.get(frame.parentFrameId);
+      if (!parent) throw coded("FRAME_NOT_READY", "Frame ancestry is incomplete.");
+      parent.children.push(frame);
+    }
+    try {
+      assertPersonalNavigationTarget(frame.url);
+      const injection = observed.get(frame.frameId);
+      if (injection?.result?.url === frame.url) {
+        frame.data = injection.result;
+        frame.documentId = injection.documentId;
+        frame.status = frame.data.readyState === "loading" ? "not-ready" : "ready";
+      } else {
+        frame.status = "inaccessible";
+      }
+    } catch {
+      frame.status = "inaccessible";
+    }
+  }
+  const root = byId.get(0);
+  if (root.url !== tab.url || !root.data) {
+    throw coded("FRAME_NOT_READY", "The owned parent tab changed during frame inspection.");
+  }
+  // Resolve a safe child label from the child's window.name or a unique parent
+  // element URL; unnamed siblings use their structural index.
+  const visited = new Set([0]);
+  const visit = (parent, path, depth) => {
+    parent.children.sort((a, b) => a.frameId - b.frameId);
+    for (const [index, child] of parent.children.entries()) {
+      if (visited.has(child.frameId) || depth > 100) {
+        throw coded("FRAME_NOT_READY", "Chrome frame graph has a cycle or excessive depth.");
+      }
+      visited.add(child.frameId);
+      const aliases = (parent.data?.embedded || []).filter((node) => node.src === child.url);
+      const alias = aliases.length === 1 ? aliases[0] : null;
+      child.index = index;
+      child.name = child.data?.name || alias?.name || "";
+      child.id = alias?.id || "";
+      let segment = child.name || child.id || String(index);
+      const duplicates = parent.children.filter((candidate) => {
+        const matches = (parent.data?.embedded || []).filter((node) => node.src === candidate.url);
+        const match = matches.length === 1 ? matches[0] : null;
+        return (candidate.data?.name || match?.name || match?.id || String(parent.children.indexOf(candidate))) === segment;
+      });
+      if (duplicates.length > 1) segment = String(index);
+      child.path = [...path, segment];
+      child.depth = depth;
+      visit(child, child.path, depth + 1);
+    }
+  };
+  root.path = [];
+  root.depth = 0;
+  visit(root, [], 1);
+  if (visited.size !== byId.size) {
+    throw coded("FRAME_NOT_READY", "Chrome returned an orphaned or cyclic frame graph.");
+  }
+  const end = await chrome.tabs.get(chromeTabId);
+  if (end.url !== tab.url) throw coded("FRAME_NOT_READY", "The tab navigated during frame inspection.");
+  return { root, byId };
+}
+
+async function profilePage(input, signal, precomputedGraph) {
+  const started = performance.now();
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "profilePage", false);
+  const graph = precomputedGraph || await inspectPersonalFrameGraph(chromeTabId);
+  const maxDepth = input.maxDepth ?? 8;
+  const signals = {
+    frames: graph.byId.size - 1, nestedFrames: 0,
+    layoutTables: 0, inlineHandlers: 0, hashLinks: 0,
+    targetedNavigation: 0, postForms: 0,
+  };
+  for (const frame of graph.byId.values()) {
+    if (frame.frameId !== 0 && frame.depth > 1) signals.nestedFrames += 1;
+    for (const key of ["layoutTables", "inlineHandlers", "hashLinks",
+      "targetedNavigation", "postForms"]) {
+      signals[key] += frame.data?.signals?.[key] || 0;
+    }
+  }
+  const categories = [];
+  if (signals.frames) categories.push("legacy-frames");
+  if (signals.layoutTables) categories.push("legacy-table-layout");
+  if (signals.postForms) categories.push("legacy-form-post");
+  if (signals.inlineHandlers || signals.hashLinks || signals.targetedNavigation) categories.push("legacy-script-navigation");
+  const profile = categories.length === 0 ? "modern" :
+    categories.length === 1 ? categories[0] : "hybrid";
+  const makeNode = (frame) => ({
+    path: frame.path, index: frame.index, status: frame.status,
+    ...(frame.name ? { name: frame.name } : {}),
+    ...(frame.id ? { id: frame.id } : {}),
+    ...(frame.data?.readyState ? { readyState: frame.data.readyState.slice(0, 50) } : {}),
+    signature: personalLegacySignature([frame.frameId, frame.url, frame.status, frame.data?.childElementCount || 0]),
+    children: frame.depth < maxDepth ? frame.children.map(makeNode) : [],
+  });
+  const frames = maxDepth ? graph.root.children.map(makeNode) : [];
+  const frameGraphSignature = personalLegacySignature([...graph.byId.values()].map((f) =>
+    [f.frameId, f.parentFrameId, f.url, f.status]));
+  const pageSignature = personalLegacySignature([
+    graph.root.url, graph.root.data.title, graph.root.data.childElementCount, signals, frameGraphSignature,
+  ]);
+  throwIfAborted(signal, "profilePage", false);
+  return { tabId: input.tabId, profile, signals,
+    pageSignature, frameGraphSignature, frames,
+    telemetry: { totalMs: Math.max(0, performance.now() - started),
+      frameResolutionMs: Math.max(0, performance.now() - started), retries: 0 },
+  };
+}
+
+// Index only actionable elements, not form field values or arbitrary private
+// text. Selectors are unique within the actual selected frame document.
+function collectPersonalLegacyIndex(expectedUrl, options) {
+  if (location.href !== expectedUrl) return { stale: true };
+  let root = document;
+  try {
+    if (options.rootSelector) root = document.querySelector(options.rootSelector);
+  } catch {
+    return { invalidSelector: true };
+  }
+  if (!root) return { missing: true };
+  const selector = [
+    "button", "a[href]", "input:not([type='hidden'])", "textarea", "select", "summary",
+    "[role='button']", "[role='link']", "[role='checkbox']", "[role='radio']",
+    "[role='combobox']", "[role='option']", "[role='menuitem']", "[role='tab']",
+    "[role='switch']", "[role='slider']", "[contenteditable='true']",
+  ].join(",");
+  const candidates = Array.from(root.querySelectorAll(selector));
+  const capped = candidates.length > 5000;
+  const results = [];
+  for (const element of candidates.slice(0, 5000)) {
+    const tag = element.tagName.toLowerCase();
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const visible = style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+    if (options.visibleOnly && !visible) continue;
+    const attr = (name, cap = 256) => (element.getAttribute(name) || "").slice(0, cap);
+    const type = attr("type", 100).toLowerCase();
+    const role = attr("role", 100);
+    // Never inspect .value, even for non-password controls. It can contain PII.
+    const label = attr("aria-label", 500) || attr("title", 500) ||
+      (tag === "input" || tag === "textarea" || tag === "select"
+        ? attr("placeholder", 500)
+        : (element.innerText || element.textContent || "").trim().slice(0, 500));
+    const id = attr("id");
+    const name = attr("name");
+    const searchable = [label, id, name, role, type, tag].join(" ").toLocaleLowerCase();
+    if (options.query && !searchable.includes(options.query.toLocaleLowerCase())) continue;
+    const uniqueSelector = () => {
+      if (id && CSS?.escape) {
+        const byId = "#" + CSS.escape(id);
+        if (document.querySelectorAll(byId).length === 1) return byId;
+      }
+      const parts = [];
+      for (let node = element; node && node.nodeType === 1 && parts.length < 12; node = node.parentElement) {
+        const siblings = node.parentElement
+          ? Array.from(node.parentElement.children).filter((other) => other.tagName === node.tagName)
+          : [node];
+        parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + (siblings.indexOf(node) + 1) + ")");
+        const proposal = parts.join(" > ");
+        if (document.querySelectorAll(proposal).length === 1) return proposal;
+      }
+      return null;
+    };
+    const path = uniqueSelector();
+    if (!path) continue;
+    let href;
+    if (tag === "a") {
+      try {
+        const url = new URL(element.getAttribute("href") || "", location.href);
+        if (url.protocol === "https:" || url.protocol === "http:") href = (url.origin + url.pathname).slice(0, 2000);
+      } catch {}
+    }
+    results.push({
+      tag, text: label, visible,
+      enabled: !element.disabled && element.getAttribute("aria-disabled") !== "true",
+      selector: path,
+      ...(id ? { id } : {}),
+      ...(name ? { name } : {}),
+      ...(type ? { type } : {}),
+      ...(role ? { role } : {}),
+      ...(href ? { href } : {}),
+      ...(attr("target") ? { target: attr("target") } : {}),
+      ...(attr("onclick") ? { onclickSignature: "inline-handler" } : {}),
+      ...(attr("aria-label", 500) ? { ariaLabel: attr("aria-label", 500) } : {}),
+      ...(attr("title", 500) ? { title: attr("title", 500) } : {}),
+      ...(attr("alt", 500) ? { alt: attr("alt", 500) } : {}),
+      ancestors: [],
+    });
+  }
+  return { items: results, truncated: capped, totalCount: results.length };
+}
+
+async function domIndex(input, signal) {
+  const start = performance.now();
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "domIndex", false);
+  const graph = await inspectPersonalFrameGraph(chromeTabId);
+  const framePath = input.framePath || [];
+  const targets = [...graph.byId.values()].filter((entry) =>
+    JSON.stringify(entry.path) === JSON.stringify(framePath));
+  if (targets.length !== 1) {
+    throw coded(targets.length ? "LOCATOR_AMBIGUOUS" : "FRAME_NOT_FOUND",
+      "Frame path is not uniquely resolved in this Chrome tab.");
+  }
+  const frame = targets[0];
+  if (!frame.data || frame.status !== "ready") {
+    throw coded("FRAME_NOT_READY", "The selected Chrome frame is inaccessible or not ready.");
+  }
+  const offset = input.offset ?? 0;
+  const limit = input.limit ?? 500;
+  if (!Number.isInteger(offset) || !Number.isInteger(limit) ||
+      offset < 0 || offset > 1000000 || limit < 1 || limit > 2000) {
+    throw coded("INVALID_ARGUMENT", "Invalid legacy DOM index pagination.");
+  }
+  let result;
+  try {
+    [result] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+      func: collectPersonalLegacyIndex,
+      args: [frame.url, {
+        rootSelector: input.rootSelector, query: input.query,
+        visibleOnly: input.visibleOnly === true,
+      }],
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "The selected document cannot be indexed.");
+  }
+  if (!result || result.frameId !== frame.frameId ||
+      (frame.documentId && result.documentId !== frame.documentId) ||
+      result.result?.stale) throw coded("FRAME_NOT_READY", "The frame navigated during indexing.");
+  if (result.result?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy root selector is not valid CSS.");
+  if (result.result?.missing) throw coded("LOCATOR_NOT_FOUND", "Legacy index root selector did not match.");
+  if (!Array.isArray(result.result?.items)) throw coded("FRAME_NOT_READY", "The frame returned an incomplete index.");
+  const source = result.result.items;
+  const profile = await profilePage({ tabId: input.tabId }, signal, graph);
+  const seen = new Set();
+  const items = source.slice(offset, offset + limit).map((item) => {
+    const ref = "lref_" + personalLegacySignature([
+      profile.pageSignature, profile.frameGraphSignature, frame.frameId, item.selector,
+    ]);
+    if (seen.has(ref)) throw coded("LOCATOR_AMBIGUOUS", "Legacy element index ref collided.");
+    seen.add(ref);
+    return { ...item, ref, framePath: [...framePath] };
+  });
+  throwIfAborted(signal, "domIndex", false);
+  return {
+    tabId: input.tabId, framePath,
+    pageSignature: profile.pageSignature, frameGraphSignature: profile.frameGraphSignature,
+    items, truncated: Boolean(result.result.truncated || offset + limit < source.length),
+    offset, totalCount: source.length,
+    ...(offset + limit < source.length ? { nextOffset: offset + limit } : {}),
+    telemetry: { totalMs: Math.max(0, performance.now() - start),
+      frameResolutionMs: Math.max(0, performance.now() - start),
+      indexMs: Math.max(0, performance.now() - start), candidateCount: source.length, retries: 0 },
+  };
 }
 
 async function sequence(input, signal, timing) {
