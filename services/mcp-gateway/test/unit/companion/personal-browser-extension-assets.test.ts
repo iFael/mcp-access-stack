@@ -6,6 +6,133 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("runs multi-frame read-only legacy sequences with indexed refs, assertions and bounded waits", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    let waits = 0;
+    const frame = { frameId: 15, documentId: "doc1", status: "ready",
+      path: ["menu"], url: "https://child.example/" };
+    const context = vm.createContext({
+      performance: { now: () => 20 }, Date,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      inspectPersonalFrameGraph: async () => ({ byId: new Map([[15, frame]]) }),
+      domIndex: async (input: { framePath: string[] }) => {
+        calls.push("index");
+        return { items: [{ ref: "lref_12345678", selector: "#save",
+          tag: "button", text: "Save" }], truncated: false, totalCount: 1, ...input };
+      },
+      delay: async () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async ({ target, func, args }: {
+        target: { frameIds: number[] }; func: { name: string }; args: unknown[];
+      }) => {
+        calls.push("probe");
+        expect(func.name).toBe("probePersonalLegacyReadStep");
+        expect(target.frameIds).toEqual([15]);
+        expect(args[0]).toBe("https://child.example/");
+        const step = args[1] as { action: string };
+        const value = step.action === "waitFor"
+          ? { satisfied: ++waits >= 2 }
+          : step.action === "assert" ? { asserted: true }
+            : { found: true, value: "Sanitized content" };
+        return [{ frameId: 15, documentId: "doc1", result: value }];
+      } } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), context);
+    vm.runInContext(extractFunction(serviceWorker, "frameSequence"), context);
+    const sequence = vm.runInContext("frameSequence", context) as
+      (value: unknown) => Promise<Record<string, unknown>>;
+    const input = {
+      tabId: "personal:7", steps: [
+        { action: "index", framePath: ["menu"], limit: 5 },
+        { action: "extract", framePath: ["menu"],
+          locator: { ref: "lref_12345678" } },
+        { action: "assert", framePath: ["menu"],
+          locator: { selector: "#save" }, condition: "exists" },
+        { action: "waitFor", framePath: ["menu"],
+          locator: { selector: "#save" }, state: "visible", timeoutMs: 1000 },
+      ],
+    };
+    const result = await sequence(input);
+    expect(result).toMatchObject({ tabId: "personal:7", completed: true,
+      steps: [{ action: "index", completed: true },
+        { action: "extract", value: "Sanitized content" },
+        { action: "assert", completed: true }, { action: "waitFor", completed: true }],
+      telemetry: { strategy: "chrome-frame-readonly" } });
+    expect(calls.filter(c => c === "index")).toHaveLength(2);
+    expect(waits).toBe(2);
+  });
+
+  it("rejects legacy mutations before executing any read, and rejects stale indexed refs", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let injected = 0;
+    const context = vm.createContext({
+      performance: { now: () => 1 }, Date,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      inspectPersonalFrameGraph: async () => ({ byId: new Map([
+        [15, { frameId: 15, path: ["menu"], url: "https://child.example/", status: "ready",
+          documentId: "doc1" }],
+      ]) }),
+      domIndex: async () => ({ items: [], truncated: false, totalCount: 0 }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async () => {
+        injected += 1;
+        return [{ frameId: 15, documentId: "doc1", result: { asserted: false } }];
+      } } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), context);
+    vm.runInContext(extractFunction(serviceWorker, "frameSequence"), context);
+    const sequence = vm.runInContext("frameSequence", context) as
+      (input: unknown) => Promise<unknown>;
+    await expect(sequence({ tabId: "personal:7", steps: [
+      { action: "assert", condition: "frameReady" },
+      { action: "click", framePath: ["menu"], locator: { selector: "#danger" } },
+    ] })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    expect(injected).toBe(0);
+    await expect(sequence({ tabId: "personal:7", steps: [
+      { action: "extract", framePath: ["menu"], locator: { ref: "lref_deadbeef" } },
+    ] })).rejects.toMatchObject({ code: "LOCATOR_NOT_FOUND" });
+    expect(injected).toBe(0);
+    await expect(sequence({ tabId: "personal:7", steps: [
+      { action: "assert", framePath: ["menu"], condition: "frameReady" },
+    ] })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(injected).toBe(1);
+  });
+
+  it("probes read-only legacy elements without exposing sensitive form field values", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const node = {
+      tagName: "INPUT", disabled: false, value: "PRIVATE_FORM_VALUE",
+      getAttribute: (name: string) => ({ "aria-label": "Search", placeholder: "Search", type: "text" })[name as "type"] ?? null,
+      getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    };
+    const ctx = vm.createContext({
+      location: { href: "https://child.example/" },
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      document: {
+        readyState: "complete",
+        body: { innerText: "Safe visible content" },
+        querySelectorAll: () => [node],
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), ctx);
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const extracted = probe("https://child.example/", {
+      action: "extract", format: "text", locator: { selector: "input" },
+    }, undefined);
+    expect(JSON.stringify(extracted)).not.toContain("PRIVATE_FORM_VALUE");
+    expect(probe("https://child.example/", {
+      action: "assert", condition: "exists", locator: { selector: "input" },
+    }, undefined)).toMatchObject({ asserted: true });
+    expect(probe("https://other.example/", {
+      action: "assert", condition: "exists", locator: { selector: "input" },
+    }, undefined)).toMatchObject({ stale: true });
+  });
+
   it("dispatches confirmed pixel clicks through native Chrome CDP on the unchanged owned tab", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -1664,7 +1791,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.6.0");
+    expect(parsedManifest.version).toBe("1.7.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

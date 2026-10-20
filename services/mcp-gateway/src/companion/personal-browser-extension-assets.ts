@@ -56,6 +56,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "frameFill",
   "profilePage",
   "domIndex",
+  "frameSequence",
   "sequence",
   "screenshot",
   "console",
@@ -325,6 +326,7 @@ async function perform(operation, input, signal, timing) {
     case "frameFill": return frameFill(input, signal);
     case "profilePage": return profilePage(input, signal);
     case "domIndex": return domIndex(input, signal);
+    case "frameSequence": return frameSequence(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
@@ -2098,7 +2100,9 @@ async function domIndex(input, signal) {
   const seen = new Set();
   const items = source.slice(offset, offset + limit).map((item) => {
     const ref = "lref_" + personalLegacySignature([
-      profile.pageSignature, profile.frameGraphSignature, frame.frameId, item.selector,
+      profile.pageSignature, profile.frameGraphSignature, frame.frameId, frame.documentId || "",
+      item.selector, item.tag, item.type || "", item.role || "", item.text,
+      item.href || "", item.enabled, item.visible,
     ]);
     if (seen.has(ref)) throw coded("LOCATOR_AMBIGUOUS", "Legacy element index ref collided.");
     seen.add(ref);
@@ -2115,6 +2119,187 @@ async function domIndex(input, signal) {
       frameResolutionMs: Math.max(0, performance.now() - start),
       indexMs: Math.max(0, performance.now() - start), candidateCount: source.length, retries: 0 },
   };
+}
+
+// Read-only legacy frame steps. Executed inside the selected document; no
+// synthetic DOM mutations, no credential field values and no cross-frame DOM access.
+function probePersonalLegacyReadStep(expectedUrl, step, selector) {
+  if (location.href !== expectedUrl) return { stale: true };
+  const locator = step.locator;
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const label = (element) =>
+    (element.getAttribute("aria-label") || element.getAttribute("title") ||
+      (["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
+        ? element.getAttribute("placeholder") : (element.innerText || element.textContent)) ||
+      "").trim();
+  let candidates = [];
+  if (locator) {
+    try {
+      if (selector) candidates = Array.from(document.querySelectorAll(selector));
+      else if (locator.selector) candidates = Array.from(document.querySelectorAll(locator.selector));
+      else if (locator.id) candidates = Array.from(document.querySelectorAll("[id]")).filter((e) => e.id === locator.id);
+      else if (locator.name) candidates = Array.from(document.querySelectorAll("[name]")).filter((e) => e.getAttribute("name") === locator.name);
+      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable]")).slice(0, 2001);
+    } catch { return { invalidSelector: true }; }
+    if (candidates.length > 2000) return { ambiguous: true };
+    candidates = candidates.filter((element) => {
+      if (locator.id && element.id !== locator.id) return false;
+      if (locator.name && element.getAttribute("name") !== locator.name) return false;
+      if (locator.tag && element.tagName.toLowerCase() !== locator.tag.toLowerCase()) return false;
+      if (locator.type && (element.getAttribute("type") || "").toLowerCase() !== locator.type.toLowerCase()) return false;
+      if (locator.role && element.getAttribute("role") !== locator.role) return false;
+      if (locator.target && element.getAttribute("target") !== locator.target) return false;
+      if (locator.href && element.getAttribute("href") !== locator.href &&
+          element.href !== locator.href) return false;
+      if (locator.onclickSignature && !element.hasAttribute("onclick")) return false;
+      if (locator.text) {
+        const actual = label(element);
+        if (locator.exact === false ? !actual.includes(locator.text) : actual !== locator.text) return false;
+      }
+      if (locator.ancestorText && !element.parentElement?.innerText?.includes(locator.ancestorText)) return false;
+      return true;
+    });
+    if (locator.index !== undefined) {
+      candidates = candidates[locator.index] ? [candidates[locator.index]] : [];
+    } else if (candidates.length > 1) return { ambiguous: true };
+  }
+  const element = locator ? candidates[0] : document.body;
+  const exists = !!element;
+  const isVisible = exists && visible(element);
+  const enabled = exists && !element.disabled && element.getAttribute("aria-disabled") !== "true";
+  const text = exists ? label(element).slice(0, 20000) : "";
+  const pageText = (document.body?.innerText || "").slice(0, 50000);
+  const textMatches = !step.text || pageText.includes(step.text);
+  const state = step.state || "exists";
+  const satisfied = state === "ready" ? document.readyState !== "loading" :
+    state === "hidden" ? !isVisible : state === "visible" ? isVisible : exists;
+  if (step.action === "waitFor") return { found: exists, satisfied: satisfied && textMatches };
+  if (step.action === "assert") {
+    let asserted = false;
+    if (step.condition === "frameReady") asserted = document.readyState !== "loading";
+    else if (step.condition === "exists") asserted = exists;
+    else if (step.condition === "visible") asserted = isVisible;
+    else if (step.condition === "enabled") asserted = enabled;
+    else if (step.condition === "textEquals") asserted = exists && text === step.expected;
+    else if (step.condition === "textContains") asserted = exists && text.includes(step.expected);
+    return { asserted };
+  }
+  if (!exists) return { found: false };
+  const format = step.format || "text";
+  const result = format === "html" ? element.outerHTML || element.innerHTML || "" :
+    format === "json" ? { text, tag: element.tagName.toLowerCase() } :
+      (element.innerText || element.textContent || "");
+  if (JSON.stringify(result).length > 32000) return { tooLarge: true };
+  return { found: true, value: result };
+}
+
+async function frameSequence(input, signal) {
+  const started = performance.now();
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  if (!Array.isArray(input.steps) || input.steps.length < 1 || input.steps.length > 20) {
+    throw coded("INVALID_ARGUMENT", "Legacy sequence requires one to twenty steps.");
+  }
+  // Preflight all operations before starting: mutation steps must not cause
+  // a partial read-only batch while native multi-frame actions are incomplete.
+  if (input.steps.some((step) => !["index", "extract", "assert", "waitFor"].includes(step.action))) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
+      "Legacy frame mutations require guarded native frame actions; this sequence is read-only.");
+  }
+  const timeout = Math.min(120000, Math.max(1, input.timeoutMs ?? 30000));
+  const deadline = Date.now() + timeout;
+  const done = [];
+  for (const [index, step] of input.steps.entries()) {
+    throwIfAborted(signal, "frameSequence", index > 0);
+    if (Date.now() >= deadline) throw coded("STATE_NOT_REACHED", "Legacy frame sequence deadline exceeded.");
+    const framePath = step.framePath || [];
+    if (step.action === "index") {
+      const value = await domIndex({ tabId: input.tabId, framePath,
+        rootSelector: step.rootSelector, query: step.query,
+        offset: step.offset, limit: step.limit, visibleOnly: step.visibleOnly }, signal);
+      done.push({ index, action: step.action, completed: true,
+        value: { items: value.items, truncated: value.truncated, totalCount: value.totalCount },
+        strategy: "chrome-web-navigation-index" });
+      continue;
+    }
+    const waitDeadline = step.action === "waitFor"
+      ? Math.min(deadline, Date.now() + (step.timeoutMs ?? 10000)) : deadline;
+    while (true) {
+      throwIfAborted(signal, "frameSequence", index > 0);
+      if (Date.now() >= (step.action === "waitFor" ? waitDeadline : deadline)) {
+        throw coded("STATE_NOT_REACHED", "Legacy frame state did not reach the requested condition.");
+      }
+      let graph;
+      try { graph = await inspectPersonalFrameGraph(chromeTabId); }
+      catch (error) {
+        if (step.action !== "waitFor" || error?.code !== "FRAME_NOT_READY") throw error;
+        await delay(150, signal);
+        continue;
+      }
+      const candidates = [...graph.byId.values()].filter((entry) =>
+        JSON.stringify(entry.path) === JSON.stringify(framePath));
+      if (candidates.length !== 1 || candidates[0].status !== "ready") {
+        if (step.action !== "waitFor") throw coded("FRAME_NOT_READY", "Selected legacy frame is missing or inaccessible.");
+        await delay(150, signal);
+        continue;
+      }
+      const frame = candidates[0];
+      let selector;
+      if (step.locator?.ref) {
+        // Only lref_ values from the live frame index can resolve. Never
+        // interpret a snapshot AX ref or a forged textual ref as an element.
+        const fresh = await domIndex({ tabId: input.tabId, framePath, limit: 2000 }, signal);
+        const matches = fresh.items.filter((item) => item.ref === step.locator.ref);
+        if (matches.length !== 1) throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
+        selector = matches[0].selector;
+      }
+      let observation;
+      try {
+        [observation] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+          func: probePersonalLegacyReadStep,
+          args: [frame.url, step, selector],
+        });
+      } catch {
+        if (step.action !== "waitFor") throw coded("FRAME_NOT_READY", "Legacy frame document is not accessible.");
+        await delay(150, signal);
+        continue;
+      }
+      if (!observation || observation.frameId !== frame.frameId ||
+          (frame.documentId && observation.documentId !== frame.documentId) ||
+          observation.result?.stale) {
+        if (step.action !== "waitFor") throw coded("FRAME_NOT_READY", "Legacy frame navigated during observation.");
+        await delay(150, signal);
+        continue;
+      }
+      const observed = observation.result;
+      if (observed?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy locator selector is not valid.");
+      if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator matched several elements.");
+      if (observed?.tooLarge) throw coded("LIMIT_EXCEEDED", "Legacy extraction exceeds its bounded output.");
+      if (step.action === "waitFor" && !observed?.satisfied) {
+        await delay(150, signal);
+        continue;
+      }
+      if (step.action === "assert" && !observed?.asserted) {
+        throw coded("STATE_NOT_REACHED", "Legacy assertion failed at step " + index + ".");
+      }
+      if (step.action === "extract" && !observed?.found) {
+        throw coded("LOCATOR_NOT_FOUND", "Legacy extraction target does not exist.");
+      }
+      done.push({ index, action: step.action, completed: true,
+        ...(step.action === "extract" ? { value: observed.value } : {}),
+        strategy: "chrome-frame-script-read" });
+      break;
+    }
+  }
+  return { tabId: input.tabId, completed: true, steps: done,
+    telemetry: { totalMs: Math.max(0, performance.now() - started),
+      strategy: "chrome-frame-readonly", retries: 0 } };
 }
 
 async function sequence(input, signal, timing) {

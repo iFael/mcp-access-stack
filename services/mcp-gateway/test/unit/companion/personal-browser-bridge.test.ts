@@ -23,6 +23,52 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("routes read-only frame sequences atomically and blocks mixed mutations before dispatch", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input?: unknown }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      requests.push({
+        ...(request.operation ? { operation: request.operation } : {}),
+        input: request.input,
+      });
+      if (request.operation !== "frameSequence") return;
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: {
+          tabId: "personal:7", completed: true,
+          steps: [{ index: 0, action: "index", completed: true,
+            value: { items: [], truncated: false, totalCount: 0 } },
+          { index: 1, action: "assert", completed: true }],
+          telemetry: { totalMs: 12, strategy: "chrome-frame-readonly", retries: 0 },
+        },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      const input = {
+        tabId: "personal:7", steps: [
+          { action: "index" as const, framePath: ["menu"], limit: 25 },
+          { action: "assert" as const, framePath: ["menu"], condition: "frameReady" as const },
+        ],
+      };
+      await expect(bridge.frameSequence(input)).resolves.toMatchObject({
+        tabId: input.tabId, completed: true,
+        steps: [{ action: "index" }, { action: "assert" }],
+      });
+      expect(requests).toEqual([{ operation: "frameSequence", input }]);
+      await expect(bridge.frameSequence({ tabId: input.tabId, steps: [
+        { action: "index", framePath: ["menu"] },
+        { action: "click", framePath: ["menu"], locator: { selector: "#delete" } },
+      ] })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+      expect(requests).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("binds physical canvas drags to fresh screenshot evidence and a one-use confirmation", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";

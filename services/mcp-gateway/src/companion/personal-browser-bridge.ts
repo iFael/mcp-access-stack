@@ -471,10 +471,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("domIndex", args[0], args[1]);
   }
 
-  frameSequence(
-    ..._args: Parameters<NonNullable<BrowserExecutor["frameSequence"]>>
+  async frameSequence(
+    ...args: Parameters<NonNullable<BrowserExecutor["frameSequence"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameSequence"]>> {
-    throw unsupported("browser_frame_sequence");
+    // Reject any unsupported mutation before sending or executing read steps.
+    // Native frame click/fill remain separate guarded operations.
+    if (args[0].steps.some((step) =>
+      !["index", "extract", "assert", "waitFor"].includes(step.action))) {
+      throw unsupported("browser_frame_sequence_mutation");
+    }
+    return this.call("frameSequence", args[0], args[1]);
   }
 
   navigatePath(
@@ -1283,6 +1289,10 @@ function resolveCallTimeoutMs(
 ): number {
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   if (operation === "download") timeoutMs = Math.max(timeoutMs, 90_000);
+  if (operation === "frameSequence" && isRecord(input) &&
+      typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
+    timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);
+  }
   if (operation === "wait" && isRecord(input) &&
       typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
     timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);
