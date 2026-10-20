@@ -1478,19 +1478,38 @@ async function wait(input, signal) {
   throw coded("STATE_NOT_REACHED", "The requested personal browser state was not reached before timeout.");
 }
 
-async function extract(input) {
+async function extract(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId: chromeTabId },
-    func: extractPage,
-    args: [input.ref ?? null, input.selector ?? null, input.format ?? "text"],
-  });
-  if (!result?.result?.found) throw coded("LOCATOR_NOT_FOUND", "The requested personal browser extraction target was not found.");
+  throwIfAborted(signal, "extract", false);
+  if (input.completion === "document-and-safe-pagination") {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
+      "Safe pagination across pages is not implemented in personal Chrome; no links were followed.");
+  }
+  const tab = await chrome.tabs.get(chromeTabId);
+  assertPersonalNavigationTarget(tab.url);
+  let result;
+  try {
+    [result] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: input.completion === "document" ? extractCompletePersonalFrame : extractPage,
+      args: [input.ref ?? null, input.selector ?? null, input.format ?? "text", tab.url],
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "Owned Chrome document is unavailable for extraction.");
+  }
+  if (!result || result.result?.stale) {
+    throw coded("FRAME_NOT_READY", "The owned Chrome document navigated during extraction.");
+  }
+  if (!result.result?.found) {
+    throw coded("LOCATOR_NOT_FOUND", "The requested personal browser extraction target was not found.");
+  }
+  throwIfAborted(signal, "extract", false);
   return {
     tabId: input.tabId,
     format: input.format ?? "text",
     value: result.result.value,
+    ...(result.result.completeness ? { completeness: result.result.completeness } : {}),
   };
 }
 
@@ -1512,11 +1531,13 @@ function describePersonalFrame() {
 
 // Runs inside the selected frame, not in the service worker. Capture is bounded,
 // restores scroll position and never follows links or interacts with another tab.
-async function extractCompletePersonalFrame(_ref, selector, format, expectedUrl) {
+async function extractCompletePersonalFrame(ref, selector, format, expectedUrl) {
   if (location.href !== expectedUrl) return { found: false, stale: true };
-  const element = selector ? document.querySelector(selector) : document.body;
-  if (!element) return { found: false };
-  const scrollNode = selector ? element : (document.scrollingElement || document.documentElement);
+  const element = typeof ref === "string"
+    ? globalThis.__mcpV3OwnedRefElements?.get(ref)
+    : selector ? document.querySelector(selector) : document.body;
+  if (!element || typeof ref === "string" && !element.isConnected) return { found: false };
+  const scrollNode = selector || ref ? element : (document.scrollingElement || document.documentElement);
   const originalScroll = scrollNode.scrollTop;
   const deadline = Date.now() + 3500;
   const maxScrolls = 12;
@@ -1568,6 +1589,10 @@ async function extractCompletePersonalFrame(_ref, selector, format, expectedUrl)
 }
 
 async function frameExtract(input, signal) {
+  if (input.completion === "document-and-safe-pagination") {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
+      "Cross-page pagination is not safe without an explicit, verified navigation plan.");
+  }
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "frameExtract", false);

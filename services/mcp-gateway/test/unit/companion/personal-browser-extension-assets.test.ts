@@ -6,6 +6,81 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("reads an owned top-level document to bounded completeness and fails closed on navigation", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const invoked: string[] = [];
+    let stale = false;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      assertPersonalNavigationTarget: (url: string) => url,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async ({ func, args }: {
+          func: { name: string }; args: unknown[];
+        }) => {
+          invoked.push(func.name);
+          expect(args[3]).toBe("https://example.com/");
+          return [{ result: stale ? { stale: true } : {
+            found: true, value: "Entire document",
+            ...(func.name === "extractCompletePersonalFrame" ? {
+              completeness: { status: "complete", reason: "end-of-document",
+                mode: "document", pages: 1, scrolls: 2, bytes: 15 },
+            } : {}),
+          } }];
+        } },
+      },
+    });
+    for (const name of ["extractPage", "extractCompletePersonalFrame", "extract"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const extract = vm.runInContext("extract", context) as (input: unknown) => Promise<unknown>;
+    await expect(extract({ tabId: "personal:7", completion: "document", format: "text" }))
+      .resolves.toMatchObject({
+        tabId: "personal:7", value: "Entire document",
+        completeness: { status: "complete", mode: "document" },
+      });
+    await expect(extract({ tabId: "personal:7", completion: "visible" }))
+      .resolves.toMatchObject({ value: "Entire document" });
+    expect(invoked).toEqual(["extractCompletePersonalFrame", "extractPage"]);
+    await expect(extract({ tabId: "personal:7",
+      completion: "document-and-safe-pagination" })).rejects.toMatchObject({
+      code: "BROWSER_CAPABILITY_UNSUPPORTED",
+    });
+    expect(invoked).toHaveLength(2);
+    stale = true;
+    await expect(extract({ tabId: "personal:7", completion: "document" }))
+      .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+  });
+
+  it("collects a previously observed element ref in document mode without leaking unrelated DOM", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const scroll = { scrollTop: 3, scrollHeight: 100, clientHeight: 100 };
+    const child = Object.assign(scroll, {
+      tagName: "DIV", isConnected: true, innerText: "Bound element text",
+    });
+    const context = vm.createContext({
+      document: { body: { tagName: "BODY", innerText: "Sensitive unrelated text" },
+        scrollingElement: { scrollTop: 0, clientHeight: 500, scrollHeight: 500 } },
+      location: { href: "https://example.com/" },
+      TextEncoder, Date, setTimeout: (fn: () => void) => { fn(); return 0; },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "extractCompletePersonalFrame"), context);
+    vm.runInContext("globalThis.__mcpV3OwnedRefElements = new Map([['p-1', globalThis.testChild]])",
+      Object.assign(context, { testChild: child }));
+    const collect = vm.runInContext("extractCompletePersonalFrame", context) as
+      (...args: unknown[]) => Promise<Record<string, unknown>>;
+    const response = await collect("p-1", null, "text", "https://example.com/");
+    expect(response).toMatchObject({ found: true, value: "Bound element text",
+      completeness: { mode: "document", status: "complete" } });
+    expect(JSON.stringify(response)).not.toContain("Sensitive unrelated text");
+    expect(child.scrollTop).toBe(3);
+    child.isConnected = false;
+    await expect(collect("p-1", null, "text", "https://example.com/"))
+      .resolves.toMatchObject({ found: false });
+  });
+
   it("runs multi-frame read-only legacy sequences with indexed refs, assertions and bounded waits", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
@@ -1791,7 +1866,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.7.0");
+    expect(parsedManifest.version).toBe("1.8.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
