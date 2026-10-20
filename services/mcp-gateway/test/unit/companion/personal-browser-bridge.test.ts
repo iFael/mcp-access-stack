@@ -23,6 +23,38 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("reads a dialog and dismisses only the exact observed message", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const actions: string[] = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      actions.push((request.input as { action?: string }).action ?? "");
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", state: (request.input as { action?: string } | undefined)?.action === "inspect" ? "open" : "idle",
+          ...((request.input as { action?: string } | undefined)?.action === "inspect" ? {
+            dialogType: "confirm", message: "Continue?",
+            expiresAt: "2026-10-20T12:00:30.000Z",
+          } : {}) },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.dialog({ tabId: "personal:7", action: "respond",
+        response: "dismiss", expectedMessage: "Continue?" }))
+        .resolves.toMatchObject({ state: "idle" });
+      expect(actions).toEqual(["inspect", "respond"]);
+      await expect(bridge.dialog({ tabId: "personal:7", action: "respond",
+        response: "dismiss", expectedMessage: "Changed?" }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      expect(actions).toEqual(["inspect", "respond", "inspect"]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("routes select_tab to the owned Chrome extension without touching other tabs", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: unknown }> = [];

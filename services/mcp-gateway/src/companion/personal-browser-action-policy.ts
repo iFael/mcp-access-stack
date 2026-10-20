@@ -7,6 +7,8 @@ import {
   BrowserConfirmationRegistry,
   BrowserInteractionContextService,
   type BrowserClickInput,
+  type BrowserDialogInput,
+  type BrowserDialogResult,
   type BrowserDragInput,
   type BrowserFillInput,
   type BrowserFormInputInput,
@@ -51,6 +53,30 @@ export class PersonalBrowserActionPolicy {
       ...(prior?.taskId ? { taskId: prior.taskId } : {}),
     });
     this.confirmations.discardTabs([result.tabId]);
+  }
+
+  authorizeDialogResponse(
+    input: BrowserDialogInput,
+    observed: BrowserDialogResult,
+  ): void {
+    if (input.action !== "respond" || input.response !== "accept" ||
+        observed.dialogType === "alert") return;
+    if (observed.state !== "open" || observed.message !== input.expectedMessage) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "Dialog changed before acceptance.");
+    }
+    const page = this.requirePage(input.tabId);
+    const digest = createHash("sha256")
+      .update(JSON.stringify([observed.dialogType, observed.message, input.response, input.promptText]))
+      .digest("hex");
+    this.authorize(
+      input.confirmationId,
+      this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url },
+        observed.dialogType === "prompt" ? "submit-form" : "accept-terms-or-contract",
+        "dialog-accept",
+        "sha256:" + digest,
+      ),
+    );
   }
 
   guardEvaluate(input: BrowserEvaluateInput): PersonalActionGuard {

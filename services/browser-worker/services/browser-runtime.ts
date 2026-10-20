@@ -78,6 +78,8 @@ import {
   type BrowserTraceStartResult,
   type BrowserTraceStopResult,
   type BrowserTabActionInput,
+  type BrowserDialogInput,
+  type BrowserDialogResult,
   type BrowserTabResult,
   type BrowserTabsInput,
   type BrowserTabsResult,
@@ -559,6 +561,20 @@ export class BrowserRuntime implements BrowserExecutor {
     await this.selectBrowserTab(tab);
     await this.checkpoint();
     return { tab: this.tabsRegistry.assertMcpOwned(tab.tabId) };
+  }
+
+  async dialog(
+    input: BrowserDialogInput,
+    _context: OperationContext = {},
+  ): Promise<BrowserDialogResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (!this.driver.dialog) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support JavaScript dialogs.");
+    }
+    await this.selectBrowserTab(tab);
+    const result = await this.driver.dialog(input);
+    await this.checkpoint();
+    return result;
   }
 
   async tabs(

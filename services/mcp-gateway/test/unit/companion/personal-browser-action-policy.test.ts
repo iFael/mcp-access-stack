@@ -19,6 +19,32 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("requires bound confirmation for accepting confirm/prompt, but allows dismissing and alerts", () => {
+    const policy = prepare();
+    const input = { tabId: sample.tabId, action: "respond" as const,
+      response: "accept" as const, expectedMessage: "Pay invoice?", promptText: "123" };
+    const observed = { tabId: sample.tabId, state: "open" as const, dialogType: "prompt" as const,
+      message: "Pay invoice?" };
+    let id = "";
+    try { policy.authorizeDialogResponse(input, observed); }
+    catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      id = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+    }
+    expect(id).toBeTruthy();
+    expect(() => policy.authorizeDialogResponse({ ...input, promptText: "456", confirmationId: id }, observed))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(() => policy.authorizeDialogResponse({ ...input, confirmationId: id }, observed)).not.toThrow();
+    expect(() => policy.authorizeDialogResponse({ tabId: sample.tabId, action: "respond",
+      response: "dismiss", expectedMessage: "Pay invoice?" }, observed)).not.toThrow();
+    expect(() => policy.authorizeDialogResponse({ tabId: sample.tabId, action: "respond",
+      response: "accept", expectedMessage: "Notice" }, {
+      tabId: sample.tabId, state: "open", dialogType: "alert", message: "Notice",
+    })).not.toThrow();
+  });
+
+
   it("binds dangerous coordinate clicks to the exact viewport point", () => {
     const policy = prepare();
     let confirmationId = "";

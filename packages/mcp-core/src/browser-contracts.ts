@@ -817,6 +817,34 @@ export const browserScreenshotTransportResultSchema = browserScreenshotResultSch
     }
   });
 
+export const browserDialogInputSchema = z.object({
+  tabId: tabIdSchema,
+  action: z.enum(["arm", "inspect", "respond", "cancel"]),
+  response: z.enum(["accept", "dismiss"]).optional(),
+  expectedMessage: z.string().max(2000).optional(),
+  promptText: z.string().max(2000).optional(),
+  confirmationId: confirmationIdSchema,
+}).strict().superRefine((input, ctx) => {
+  if (input.action === "respond" && (!input.response || input.expectedMessage === undefined)) {
+    ctx.addIssue({ code: "custom", message: "Respond requires the inspected exact message and a response." });
+  }
+  if (input.action !== "respond" && (input.response || input.expectedMessage !== undefined || input.promptText || input.confirmationId)) {
+    ctx.addIssue({ code: "custom", message: "Only response actions accept message, response and confirmation." });
+  }
+  if (input.promptText !== undefined && (input.action !== "respond" || input.response !== "accept")) {
+    ctx.addIssue({ code: "custom", message: "Prompt text is only allowed for accepting a prompt." });
+  }
+});
+export type BrowserDialogInput = z.infer<typeof browserDialogInputSchema>;
+export const browserDialogResultSchema = z.object({
+  tabId: tabIdSchema,
+  state: z.enum(["idle", "armed", "open"]),
+  dialogType: z.enum(["alert", "confirm", "prompt", "beforeunload"]).optional(),
+  message: z.string().max(2000).optional(),
+  expiresAt: z.string().datetime().optional(),
+}).strict();
+export type BrowserDialogResult = z.infer<typeof browserDialogResultSchema>;
+
 export const browserTabActionInputSchema = z.object({ tabId: tabIdSchema }).strict();
 export type BrowserTabActionInput = z.infer<typeof browserTabActionInputSchema>;
 
@@ -1182,6 +1210,7 @@ export const browserOperationSchema = z.enum([
   "connect",
   "tabs",
   "selectTab",
+  "dialog",
   "open",
   "openAuthorizedSite",
   "navigate",
@@ -1260,6 +1289,7 @@ export const browserOperationInputSchemas = {
   connect: browserConnectInputSchema,
   tabs: browserTabsInputSchema,
   selectTab: browserTabActionInputSchema,
+  dialog: browserDialogInputSchema,
   open: browserOpenInputSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteInputSchema,
   navigate: browserNavigateInputSchema,
@@ -1307,6 +1337,7 @@ export const browserOperationResultSchemas = {
   connect: browserConnectResultSchema,
   tabs: browserTabsResultSchema,
   selectTab: browserTabResultSchema,
+  dialog: browserDialogResultSchema,
   open: browserTabResultSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteResultSchema,
   navigate: browserTabResultSchema,

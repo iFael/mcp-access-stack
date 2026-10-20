@@ -153,6 +153,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return result;
   }
 
+  async dialog(...args: Parameters<BrowserExecutor["dialog"]>): ReturnType<BrowserExecutor["dialog"]> {
+    const [input, context] = args;
+    if (input.action === "respond") {
+      const observed = await this.call("dialog", { tabId: input.tabId, action: "inspect" }, context);
+      if (observed.state !== "open" || observed.message !== input.expectedMessage) {
+        throw new AppError("BROWSER_CONFIRMATION_INVALID", "Inspected dialog changed before response.");
+      }
+      this.actions.authorizeDialogResponse(input, observed);
+    }
+    return this.call("dialog", input, context);
+  }
+
   async open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
     const result = await this.call("open", args[0], args[1]);
     this.actions.observeTab(result.tab);

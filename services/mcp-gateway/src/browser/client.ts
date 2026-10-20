@@ -50,6 +50,7 @@ import {
   type BrowserSnapshotInput,
   type BrowserStatusInput,
   type BrowserTabActionInput,
+  type BrowserDialogInput,
   type BrowserTraceInput,
   type BrowserTabsInput,
   type BrowserVideoStartInput,
@@ -115,6 +116,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   selectTab(input: BrowserTabActionInput, context?: OperationContext) {
     return this.call("selectTab", input, context);
+  }
+
+  dialog(input: BrowserDialogInput, context?: OperationContext) {
+    return this.call("dialog", input, context);
   }
 
   open(input: BrowserOpenInput, context?: OperationContext) {

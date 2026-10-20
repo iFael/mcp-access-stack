@@ -7,6 +7,7 @@ import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
   browserTabActionInputSchema,
+  browserDialogInputSchema,
   browserHoverInputSchema,
   browserFindInputSchema,
   browserFindResultSchema,
@@ -33,6 +34,22 @@ import {
 } from "../src/mcp-browser-tools.js";
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
+
+describe("browser dialogue lifecycle contracts", () => {
+  it("requires exact messages for responses and bounds prompt input", () => {
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "arm" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "inspect" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "cancel" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "dismiss", expectedMessage: "Are you sure?" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "accept" }).success).toBe(false);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "arm",
+      response: "accept" }).success).toBe(false);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "accept", expectedMessage: "Name?", promptText: "a".repeat(2001) }).success).toBe(false);
+  });
+});
 
 describe("browser mode contract", () => {
   it("accepts only an explicit owned tab reference for tab selection", () => {

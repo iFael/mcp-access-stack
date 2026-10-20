@@ -663,6 +663,71 @@ describe("personal browser extension assets", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("observes, inspects and responds to Chrome JavaScript dialogs without blind acceptance", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(source: { tabId: number }, method: string, params: Record<string, unknown>) => void>();
+    const sent: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    let deadline: (() => void) | undefined;
+    const ctx = vm.createContext({
+      Date,
+      setTimeout: (fn: () => void) => { deadline = fn; return 10; },
+      clearTimeout: () => { deadline = undefined; },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: {
+          onEvent: {
+            addListener: (fn: (source: { tabId: number }, method: string, params: Record<string, unknown>) => void) => { listeners.add(fn); },
+            removeListener: (fn: (source: { tabId: number }, method: string, params: Record<string, unknown>) => void) => { listeners.delete(fn); },
+          },
+          attach: async () => { sent.push({ method: "attach" }); },
+          detach: async () => { sent.push({ method: "detach" }); },
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            sent.push({ method, ...(params ? { params } : {}) });
+          },
+        },
+      },
+    });
+    vm.runInContext("const personalDialogArms = new Map(); const personalNetworkCaptures = new Map(); globalThis.__mcpV3PersonalDialogArms = personalDialogArms;", ctx);
+    for (const fn of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "finalizePersonalDialog", "observePersonalDialog"]) vm.runInContext(extractFunction(serviceWorker, fn), ctx);
+    const dialog = vm.runInContext("observePersonalDialog", ctx) as
+      (args: Record<string, unknown>) => Promise<{ state: string; message?: string; dialogType?: string }>;
+    await expect(dialog({ tabId: "personal:7", action: "arm" })).resolves.toMatchObject({ state: "armed" });
+    for (const emit of listeners) emit({ tabId: 7 }, "Page.javascriptDialogOpening", {
+      type: "confirm", message: "Delete everything?",
+    });
+    expect(await dialog({ tabId: "personal:7", action: "inspect" }))
+      .toMatchObject({ state: "open", dialogType: "confirm", message: "Delete everything?" });
+    await expect(dialog({ tabId: "personal:7", action: "respond",
+      response: "accept", expectedMessage: "Different dialog" }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(sent.some((call) => call.method === "Page.handleJavaScriptDialog")).toBe(false);
+    await expect(dialog({ tabId: "personal:7", action: "respond",
+      response: "dismiss", expectedMessage: "Delete everything?" }))
+      .resolves.toMatchObject({ state: "idle" });
+    expect(sent.filter((call) => call.method === "Page.handleJavaScriptDialog")).toEqual([{
+      method: "Page.handleJavaScriptDialog", params: { accept: false },
+    }]);
+    expect(sent.filter((call) => call.method === "detach")).toHaveLength(1);
+    expect(listeners.size).toBe(0);
+
+    await dialog({ tabId: "personal:7", action: "arm" });
+    for (const emit of listeners) emit({ tabId: 7 }, "Page.javascriptDialogOpening", {
+      type: "prompt", message: "Name?",
+    });
+    const expire = deadline!;
+    expire();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent.filter((call) => call.method === "Page.handleJavaScriptDialog")).toHaveLength(2);
+    expect(sent.filter((call) => call.method === "Page.handleJavaScriptDialog").at(-1)?.params)
+      .toEqual({ accept: false });
+  });
+
   it("captures and sanitizes CDP console on the MCP-owned Chrome tab with filters and cleanup", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const listeners = new Set<(source: { tabId: number }, name: string, args: unknown) => void>();
@@ -788,7 +853,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.9.0");
+    expect(parsedManifest.version).toBe("1.0.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

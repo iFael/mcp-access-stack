@@ -49,6 +49,8 @@ import type {
   BrowserStatusInput,
   BrowserStatusResult,
   BrowserTabActionInput,
+  BrowserDialogInput,
+  BrowserDialogResult,
   BrowserTraceInput,
   BrowserTraceStartResult,
   BrowserTraceStopResult,
@@ -79,6 +81,7 @@ export interface BrowserExecutor {
   connect(input: BrowserConnectInput, context?: OperationContext): Promise<BrowserConnectResult>;
   tabs(input: BrowserTabsInput, context?: OperationContext): Promise<BrowserTabsResult>;
   selectTab(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
+  dialog(input: BrowserDialogInput, context?: OperationContext): Promise<BrowserDialogResult>;
   open(input: BrowserOpenInput, context?: OperationContext): Promise<BrowserTabResult>;
   openAuthorizedSite(
     input: BrowserOpenAuthorizedSiteInput,

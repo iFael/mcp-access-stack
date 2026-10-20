@@ -8,6 +8,7 @@ import {
   type BrowserContext,
   type CDPSession,
   type ConsoleMessage,
+  type Dialog,
   type FileChooser,
   type Frame,
   type Locator,
@@ -20,6 +21,8 @@ import {
 import {
   abortSignalError,
   AppError,
+  type BrowserDialogInput,
+  type BrowserDialogResult,
 } from "@vs-code-gpt/shared";
 import {
   normalizeBrowserDiagnosticPayload,
@@ -117,6 +120,14 @@ export async function showActionPointer(target: Locator): Promise<void> {
 const DEFAULT_PAGE_STABILIZATION_TIMEOUT_MS = 2_000;
 const MAX_STABILIZATION_FRAME_PROBES = 32;
 const STABILIZATION_RESOURCE_TYPES = new Set(["document", "script", "xhr", "fetch"]);
+
+interface ObservedJsDialog {
+  expiresAt: string;
+  dialog?: Dialog;
+  onDialog: (value: Dialog) => void;
+  timer: ReturnType<typeof setTimeout>;
+  cleanup: () => void;
+}
 
 interface NetworkEntry {
   request: Request;
@@ -218,6 +229,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   private readonly relevantRequests = new WeakMap<Page, Set<Request>>();
   private readonly frameNavigationEpochs = new WeakMap<Frame, number>();
   private readonly pendingFileChoosers = new WeakMap<Page, FileChooser>();
+  private readonly observedDialogs = new WeakMap<Page, ObservedJsDialog>();
   private readonly suppressedDiagnosticPages = new WeakSet<Page>();
   private readonly pageAllowedOrigins = new WeakMap<Page, Map<string, number>>();
   private readonly pageRequestPolicies = new WeakMap<Page, AuthorizedSitePolicy>();
@@ -563,6 +575,70 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       }
       return this.pageResponse(page);
     });
+  }
+
+  async dialog(input: BrowserDialogInput): Promise<BrowserDialogResult> {
+    const page = this.requireCurrentPage();
+    const current = this.observedDialogs.get(page);
+    const describe = (entry: ObservedJsDialog | undefined): BrowserDialogResult => ({
+      tabId: input.tabId,
+      state: !entry ? "idle" : entry.dialog ? "open" : "armed",
+      ...(entry?.dialog ? {
+        dialogType: entry.dialog.type() as NonNullable<BrowserDialogResult["dialogType"]>,
+        message: entry.dialog.message(),
+      } : {}),
+      ...(entry ? { expiresAt: entry.expiresAt } : {}),
+    });
+    if (input.action === "inspect") return describe(current);
+    if (input.action === "cancel") {
+      if (current?.dialog) await current.dialog.dismiss().catch(() => undefined);
+      current?.cleanup();
+      return describe(undefined);
+    }
+    if (input.action === "arm") {
+      if (current) throw new AppError("EXECUTION_STATE_INVALID", "An observer is already armed for this tab.");
+      const expiresAt = new Date(Date.now() + 30_000).toISOString();
+      let state!: ObservedJsDialog;
+      const cleanup = () => {
+        clearTimeout(state.timer);
+        page.off("dialog", state.onDialog);
+        this.observedDialogs.delete(page);
+      };
+      const onDialog = (dialog: Dialog) => {
+        if (dialog.message().length > 2_000) {
+          void dialog.dismiss().catch(() => undefined).finally(cleanup);
+          return;
+        }
+        state.dialog = dialog;
+      };
+      state = {
+        expiresAt,
+        cleanup,
+        onDialog,
+        timer: setTimeout(() => {
+          if (state.dialog) void state.dialog.dismiss().catch(() => undefined).finally(cleanup);
+          else cleanup();
+        }, 30_000),
+      };
+      page.on("dialog", onDialog);
+      this.observedDialogs.set(page, state);
+      return describe(state);
+    }
+    if (!current?.dialog || input.expectedMessage === undefined ||
+        input.expectedMessage !== current.dialog.message()) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "Dialog is absent or its message changed.");
+    }
+    const dialog = current.dialog;
+    if (input.promptText !== undefined && dialog.type() !== "prompt") {
+      throw new AppError("INVALID_ARGUMENT", "Prompt text requires a prompt dialog.");
+    }
+    try {
+      if (input.response === "accept") await dialog.accept(input.promptText);
+      else await dialog.dismiss();
+    } finally {
+      current.cleanup();
+    }
+    return describe(undefined);
   }
 
   async drag(

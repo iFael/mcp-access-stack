@@ -189,6 +189,7 @@ export interface BrowserDriver {
   ): Promise<BrowserDriverResponse>;
   formInput?(input: BrowserFormInputRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   drag?(input: BrowserDragRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  dialog?(input: import("@vs-code-gpt/shared").BrowserDialogInput): Promise<import("@vs-code-gpt/shared").BrowserDialogResult>;
   inspectPoint?(input: { x: number; y: number }, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   type?(input: BrowserTypeRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   press(

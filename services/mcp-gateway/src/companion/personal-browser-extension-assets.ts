@@ -25,7 +25,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "selectTab", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
+  "open", "selectTab", "dialog", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
   "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
@@ -33,6 +33,7 @@ export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
   "selectTab",
+  "dialog",
   "open",
   "navigate",
   "snapshot",
@@ -113,8 +114,16 @@ const axTargetsByTab = new Map();
 const personalConsoleEntries = new Map();
 const personalNetworkEntries = new Map();
 const personalNetworkCaptures = new Map();
+const personalDialogArms = new Map();
+globalThis.__mcpV3PersonalDialogArms = personalDialogArms;
 function borrowPersonalDebugger(target) {
-  const session = globalThis.__mcpV3PersonalNetworkCaptures?.get(String(target.tabId));
+  const key = String(target.tabId);
+  const dialog = globalThis.__mcpV3PersonalDialogArms?.get(key);
+  if (dialog && !dialog.closing) {
+    dialog.borrowers += 1;
+    return dialog;
+  }
+  const session = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
   if (!session) return null;
   session.borrowers = (session.borrowers ?? 0) + 1;
   return session;
@@ -131,7 +140,21 @@ async function detachGuardedDebugger(target, attached) {
     await chrome.debugger.detach(target);
     return;
   }
-  const borrowed = globalThis.__mcpV3PersonalNetworkCaptures?.get(String(target.tabId));
+  const key = String(target.tabId);
+  const dialog = globalThis.__mcpV3PersonalDialogArms?.get(key);
+  if (dialog && dialog.borrowers > 0) {
+    dialog.borrowers -= 1;
+    if (dialog.closing && dialog.borrowers === 0) {
+      globalThis.__mcpV3PersonalDialogArms?.delete(key);
+      if (dialog.attached) await chrome.debugger.detach(target).catch(() => undefined);
+      else {
+        const network = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
+        if (network) network.borrowers = Math.max(0, (network.borrowers ?? 0) - 1);
+      }
+    }
+    return;
+  }
+  const borrowed = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
   if (borrowed) borrowed.borrowers = Math.max(0, (borrowed.borrowers ?? 0) - 1);
 }
 
@@ -259,6 +282,7 @@ async function perform(operation, input, signal, timing) {
   switch (operation) {
     case "tabs": return tabs(input, signal);
     case "selectTab": return selectOwnedTab(input, signal);
+    case "dialog": return observePersonalDialog(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
@@ -306,6 +330,117 @@ async function tabs(input) {
     if (changed) await writeOwnedTabs(owned);
     return { tabs: result };
   });
+}
+
+async function finalizePersonalDialog(chromeTabId, dismiss) {
+  const key = String(chromeTabId);
+  const session = personalDialogArms.get(key);
+  if (!session || session.closing) return;
+  session.closing = true;
+  clearTimeout(session.timer);
+  chrome.debugger.onEvent.removeListener(session.listener);
+  if (dismiss && session.open) {
+    await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Page.handleJavaScriptDialog", {
+      accept: false,
+    }).catch(() => undefined);
+  }
+  if (session.borrowers > 0) return;
+  personalDialogArms.delete(key);
+  if (session.attached) {
+    await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  } else {
+    await detachGuardedDebugger({ tabId: chromeTabId }, false).catch(() => undefined);
+  }
+}
+
+async function observePersonalDialog(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "dialog", false);
+  const key = String(chromeTabId);
+  const current = personalDialogArms.get(key);
+  const describe = (session) => ({
+    tabId: input.tabId,
+    state: !session || session.closing ? "idle" : session.open ? "open" : "armed",
+    ...(session?.open ? { dialogType: session.open.type, message: session.open.message } : {}),
+    ...(session && !session.closing ? { expiresAt: session.expiresAt } : {}),
+  });
+  if (input.action === "inspect") return describe(current);
+  if (input.action === "cancel") {
+    await finalizePersonalDialog(chromeTabId, true);
+    return describe(undefined);
+  }
+  if (input.action === "respond") {
+    if (!current || current.closing || !current.open ||
+        typeof input.expectedMessage !== "string" ||
+        current.open.message !== input.expectedMessage) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Dialog is absent or its inspected message changed.");
+    }
+    if (input.promptText !== undefined && current.open.type !== "prompt") {
+      throw coded("INVALID_ARGUMENT", "Prompt text requires a JavaScript prompt dialog.");
+    }
+    if (!["accept", "dismiss"].includes(input.response)) {
+      throw coded("INVALID_ARGUMENT", "A dialog response must be accept or dismiss.");
+    }
+    const tab = await chrome.tabs.get(chromeTabId);
+    if (current.url !== tab.url) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "The dialog page changed since arming.");
+    }
+    let responded = false;
+    try {
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Page.handleJavaScriptDialog", {
+        accept: input.response === "accept",
+        ...(input.response === "accept" && current.open.type === "prompt"
+          ? { promptText: input.promptText ?? "" } : {}),
+      });
+      responded = true;
+    } finally {
+      await finalizePersonalDialog(chromeTabId, !responded);
+    }
+    return describe(undefined);
+  }
+  if (input.action !== "arm") throw coded("INVALID_ARGUMENT", "Unknown dialog action.");
+  if (current) throw coded("EXECUTION_STATE_INVALID", "A dialog observer is already armed on this tab.");
+  if (!chrome.debugger?.onEvent?.addListener || !chrome.debugger?.onEvent?.removeListener) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger dialog events are unavailable.");
+  }
+  const target = { tabId: chromeTabId };
+  const tab = await chrome.tabs.get(chromeTabId);
+  let attached = false;
+  let listener;
+  let timer;
+  try {
+    attached = await attachGuardedDebugger(target);
+    listener = (source, method, params) => {
+      if (source?.tabId !== chromeTabId || method !== "Page.javascriptDialogOpening") return;
+      const dialogType = String(params?.type ?? "");
+      const message = String(params?.message ?? "");
+      const session = personalDialogArms.get(key);
+      if (!session || session.closing) return;
+      if (!["alert", "confirm", "prompt", "beforeunload"].includes(dialogType) ||
+          message.length > 2000) {
+        void finalizePersonalDialog(chromeTabId, true);
+        return;
+      }
+      session.open = { type: dialogType, message };
+    };
+    const expiresAt = new Date(Date.now() + 30_000).toISOString();
+    const session = { attached, url: tab.url, listener, expiresAt, open: undefined,
+      borrowers: 0, closing: false, timer: undefined };
+    personalDialogArms.set(key, session);
+    chrome.debugger.onEvent.addListener(listener);
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    timer = setTimeout(() => { void finalizePersonalDialog(chromeTabId, true); }, 30_000);
+    session.timer = timer;
+    return describe(session);
+  } catch (error) {
+    if (timer) clearTimeout(timer);
+    personalDialogArms.delete(key);
+    if (listener) chrome.debugger.onEvent.removeListener(listener);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome could not arm its JavaScript dialog observer.");
+  }
 }
 
 async function selectOwnedTab(input, signal) {
@@ -1660,6 +1795,7 @@ async function closeTab(input) {
   if (metadata.protected || metadata.sticky) {
     throw coded("TAB_PROTECTED", "The personal browser tab is protected and cannot be closed directly.");
   }
+  await finalizePersonalDialog(chromeTabId, true);
   await chrome.tabs.remove(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   return { tabId: input.tabId, completed: true };
@@ -1677,7 +1813,10 @@ async function finishTask(input) {
       }));
   });
 
-  for (const target of targets) axTargetsByTab.delete(target.chromeTabId);
+  for (const target of targets) {
+    axTargetsByTab.delete(target.chromeTabId);
+    await finalizePersonalDialog(target.chromeTabId, true);
+  }
   if (input.keepOpen === true) {
     const groupedTabIds = [];
     for (const target of targets) {
@@ -2273,6 +2412,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
+  const dialog = personalDialogArms.get(key);
+  if (dialog) {
+    clearTimeout(dialog.timer);
+    chrome.debugger.onEvent.removeListener(dialog.listener);
+    personalDialogArms.delete(key);
+  }
   const capture = personalNetworkCaptures.get(key);
   if (!capture) return;
   capture.active = false;
