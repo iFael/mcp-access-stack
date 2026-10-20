@@ -26,7 +26,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
   "open", "selectTab", "dialog", "viewport", "upload", "download", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
-  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
+  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -52,6 +52,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "wait",
   "extract",
   "frameExtract",
+  "frameClick",
+  "frameFill",
   "sequence",
   "screenshot",
   "console",
@@ -317,6 +319,8 @@ async function perform(operation, input, signal, timing) {
     case "wait": return wait(input, signal);
     case "extract": return extract(input, signal);
     case "frameExtract": return frameExtract(input, signal);
+    case "frameClick": return frameClick(input, signal);
+    case "frameFill": return frameFill(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
@@ -1270,6 +1274,43 @@ async function formInput(input, signal) {
   }
 }
 
+// CDP physical keyboard events are needed by autocomplete, masks and rich editors.
+// Unknown layouts / IME characters use insertText rather than pretending that a
+// physical key was pressed. This routine only handles single US-ASCII key strokes.
+function physicalTypingKey(character) {
+  const codePoint = character.codePointAt(0);
+  if (codePoint >= 65 && codePoint <= 90) return {
+    key: character, code: "Key" + character, keyCode: codePoint, modifiers: 8,
+  };
+  if (codePoint >= 97 && codePoint <= 122) return {
+    key: character, code: "Key" + character.toUpperCase(), keyCode: codePoint - 32, modifiers: 0,
+  };
+  if (codePoint >= 48 && codePoint <= 57) return {
+    key: character, code: "Digit" + character, keyCode: codePoint, modifiers: 0,
+  };
+  if (character === " ") return { key: " ", code: "Space", keyCode: 32, modifiers: 0 };
+  if (codePoint === 10) return { key: "Enter", code: "Enter", keyCode: 13, modifiers: 0 };
+  const symbols = {
+    "-": ["Minus", 189, 0], "_": ["Minus", 189, 8],
+    "=": ["Equal", 187, 0], "+": ["Equal", 187, 8],
+    ".": ["Period", 190, 0], ">": ["Period", 190, 8],
+    ",": ["Comma", 188, 0], "<": ["Comma", 188, 8],
+    "/": ["Slash", 191, 0], "?": ["Slash", 191, 8],
+    ";": ["Semicolon", 186, 0], ":": ["Semicolon", 186, 8],
+    "'": ["Quote", 222, 0], '"': ["Quote", 222, 8],
+    "[": ["BracketLeft", 219, 0], "{": ["BracketLeft", 219, 8],
+    "]": ["BracketRight", 221, 0], "}": ["BracketRight", 221, 8],
+    "|": ["Backslash", 220, 8],
+    "!": ["Digit1", 49, 8], "@": ["Digit2", 50, 8],
+    "#": ["Digit3", 51, 8], "$": ["Digit4", 52, 8],
+    "%": ["Digit5", 53, 8], "^": ["Digit6", 54, 8],
+    "&": ["Digit7", 55, 8], "*": ["Digit8", 56, 8],
+    "(": ["Digit9", 57, 8], ")": ["Digit0", 48, 8],
+  };
+  const mapping = symbols[character];
+  return mapping ? { key: character, code: mapping[0], keyCode: mapping[1], modifiers: mapping[2] } : null;
+}
+
 async function typeText(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -1288,7 +1329,20 @@ async function typeText(input, signal) {
     if (input.slowly) {
       for (const char of input.text) {
         throwIfAborted(signal, "type", true);
-        await chrome.debugger.sendCommand(target, "Input.insertText", { text: char });
+        const physical = physicalTypingKey(char);
+        if (physical) {
+          const args = { key: physical.key, code: physical.code,
+            windowsVirtualKeyCode: physical.keyCode, nativeVirtualKeyCode: physical.keyCode,
+            modifiers: physical.modifiers };
+          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+            ...args, type: "keyDown", text: char, unmodifiedText: char,
+          });
+          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+            ...args, type: "keyUp",
+          });
+        } else {
+          await chrome.debugger.sendCommand(target, "Input.insertText", { text: char });
+        }
         await new Promise((resolve) => setTimeout(resolve, 15));
       }
     } else {
@@ -1405,15 +1459,69 @@ function describePersonalFrame() {
   };
 }
 
+// Runs inside the selected frame, not in the service worker. Capture is bounded,
+// restores scroll position and never follows links or interacts with another tab.
+async function extractCompletePersonalFrame(_ref, selector, format, expectedUrl) {
+  if (location.href !== expectedUrl) return { found: false, stale: true };
+  const element = selector ? document.querySelector(selector) : document.body;
+  if (!element) return { found: false };
+  const scrollNode = selector ? element : (document.scrollingElement || document.documentElement);
+  const originalScroll = scrollNode.scrollTop;
+  const deadline = Date.now() + 3500;
+  const maxScrolls = 12;
+  const maxBytes = 160000;
+  let scrolls = 0;
+  let reason = "scroll-limit";
+  let output = "";
+  let previous = "";
+  let unchanged = 0;
+  let stableEnd = 0;
+  try {
+    while (true) {
+      if (location.href !== expectedUrl) return { found: false, stale: true };
+      const current = String(format === "html"
+        ? (element.outerHTML || element.innerHTML || "")
+        : (element.innerText || element.textContent || ""));
+      // Preserve growing page text, while retaining distinct virtualized chunks.
+      if (current.length > output.length && current.includes(output)) output = current;
+      else if (current !== previous && !output.includes(current)) {
+        output += (output ? String.fromCharCode(10) : "") + current;
+      }
+      previous = current;
+      const bytes = new TextEncoder().encode(output).byteLength;
+      if (bytes > maxBytes) { reason = "byte-limit"; break; }
+      const bottom = scrollNode.scrollTop + scrollNode.clientHeight >= scrollNode.scrollHeight - 2;
+      stableEnd = bottom ? stableEnd + 1 : 0;
+      unchanged = current === output ? unchanged + 1 : 0;
+      if (stableEnd >= 2) { reason = "end-of-document"; break; }
+      if (Date.now() >= deadline) { reason = "time-limit"; break; }
+      if (scrolls >= maxScrolls) { reason = "scroll-limit"; break; }
+      if (unchanged > 6 && !bottom) { reason = "no-progress"; break; }
+      scrollNode.scrollTop = Math.min(scrollNode.scrollHeight, scrollNode.scrollTop + Math.max(1, scrollNode.clientHeight * 0.8));
+      scrolls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 85));
+    }
+  } finally {
+    scrollNode.scrollTop = originalScroll;
+  }
+  const bounded = new TextEncoder().encode(output).byteLength > maxBytes
+    ? output.slice(0, Math.floor(maxBytes / 4)) : output;
+  const bytes = new TextEncoder().encode(bounded).byteLength;
+  const value = format === "json"
+    ? { text: bounded, tag: element.tagName?.toLowerCase?.() || null }
+    : bounded;
+  return { found: true, value, completeness: {
+    status: reason === "end-of-document" ? "complete" : "partial",
+    reason, mode: "document", pages: 1, scrolls, bytes,
+  } };
+}
+
 async function frameExtract(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "frameExtract", false);
   if (typeof input.frame !== "string" || input.frame.length === 0 || input.frame.length > 200) {
     throw coded("INVALID_ARGUMENT", "Frame name is required.");
-  }
-  if (input.completion === "document") {
-    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Full-frame bounded scrolling is not implemented in personal Chrome.");
   }
   let frames;
   try {
@@ -1442,7 +1550,7 @@ async function frameExtract(input, signal) {
   try {
     [extracted] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId, frameIds: [matched.frameId] },
-      func: extractPage,
+      func: input.completion === "document" ? extractCompletePersonalFrame : extractPage,
       args: [null, input.selector ?? null, input.format ?? "text", matched.result.url],
     });
   } catch {
@@ -1455,7 +1563,183 @@ async function frameExtract(input, signal) {
   }
   if (!extracted.result?.found) throw coded("LOCATOR_NOT_FOUND", "The requested frame extraction target does not exist.");
   throwIfAborted(signal, "frameExtract", false);
-  return { tabId: input.tabId, frame: input.frame, format: input.format ?? "text", value: extracted.result.value };
+  return { tabId: input.tabId, frame: input.frame, format: input.format ?? "text", value: extracted.result.value,
+    ...(extracted.result.completeness ? { completeness: extracted.result.completeness } : {}),
+  };
+}
+
+// Match only a scriptable, uniquely identified direct child frame. The CDP
+// pointer stays in top-level CSS coordinates; deeper/navigated/redirected frame
+// geometry is intentionally rejected instead of producing a misdirected click.
+function probeDirectFrameElement(expectedParentUrl, expectedChildUrl, localPoint) {
+  if (location.href !== expectedParentUrl) return { stale: true };
+  const frames = Array.from(document.querySelectorAll("iframe,frame")).filter(
+    (element) => element.src === expectedChildUrl);
+  if (frames.length !== 1) return { ambiguous: frames.length > 1, missing: frames.length === 0 };
+  const element = frames[0];
+  const rect = element.getBoundingClientRect();
+  const style = getComputedStyle(element);
+  if (style.transform !== "none" ||
+      Math.abs(rect.width - element.offsetWidth) > 2 ||
+      Math.abs(rect.height - element.offsetHeight) > 2 ||
+      rect.width <= 0 || rect.height <= 0) return { unsupported: true };
+  const x = rect.left + element.clientLeft + localPoint.x;
+  const y = rect.top + element.clientTop + localPoint.y;
+  if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight ||
+      document.elementFromPoint(x, y) !== element) return { obscured: true };
+  return { x, y };
+}
+
+function probeDirectFrameControl(expectedUrl, selector, text, match, index, filling) {
+  if (location.href !== expectedUrl) return { stale: true };
+  const candidates = selector
+    ? Array.from(document.querySelectorAll(selector)).slice(0, 201)
+    : Array.from(document.querySelectorAll("button,a,summary,input[type=submit],[role=button]")).slice(0, 201);
+  if (candidates.length > 200) return { ambiguous: true };
+  const matched = candidates.filter((node) => {
+    if (text === undefined) return true;
+    const label = (node.innerText || node.textContent || node.value || "").trim();
+    return match === "contains" ? label.includes(text) : label === text;
+  });
+  if (matched.length === 0) return { missing: true };
+  if (index === undefined && matched.length !== 1) return { ambiguous: true };
+  if (index !== undefined && (index < 0 || index >= matched.length)) return { missing: true };
+  const element = matched[index ?? 0];
+  const tag = element.tagName.toLowerCase();
+  const type = (element.getAttribute("type") || "").toLowerCase();
+  if (element.disabled || element.getAttribute("aria-disabled") === "true") return { disabled: true };
+  if (filling && !(tag === "textarea" || (tag === "input" &&
+       !["file", "hidden", "submit", "button", "radio", "checkbox", "reset"].includes(type)) ||
+       element.isContentEditable)) return { notEditable: true };
+  if (filling && element.readOnly) return { notEditable: true };
+  element.scrollIntoView({ block: "center", inline: "center" });
+  const rect = element.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  if (rect.width <= 0 || rect.height <= 0 || x < 0 || y < 0 ||
+      x >= innerWidth || y >= innerHeight) return { invisible: true };
+  const hit = document.elementFromPoint(x, y);
+  if (hit !== element && !element.contains(hit)) return { obscured: true };
+  return { x, y, tag };
+}
+
+function confirmDirectFrameFocus(expectedUrl, selector) {
+  if (location.href !== expectedUrl) return false;
+  const element = document.querySelector(selector);
+  return Boolean(element && (document.activeElement === element ||
+    (element.isContentEditable && element.contains(document.activeElement))));
+}
+
+async function directFrameAction(input, signal, filling) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || !input.guard.url || tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Frame action requires an observed parent tab URL.");
+  }
+  throwIfAborted(signal, "frameAction", false);
+  let discovery;
+  try {
+    discovery = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, allFrames: true }, func: describePersonalFrame,
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "Frame discovery is unavailable.");
+  }
+  const aliases = new Set((discovery || []).flatMap((parent) =>
+    (parent.result?.embedded || [])
+      .filter((element) => [element.id, element.name, element.title].includes(input.frame))
+      .map((element) => element.src)));
+  const matches = (discovery || []).filter((entry) => entry.frameId !== 0 && entry.result &&
+    ([entry.result.url, entry.result.name, entry.result.title].includes(input.frame) ||
+      aliases.has(entry.result.url)));
+  if (matches.length !== 1) {
+    throw coded(matches.length ? "LOCATOR_AMBIGUOUS" : "FRAME_NOT_FOUND",
+      "Frame mutation requires one exact scriptable target.");
+  }
+  const frame = matches[0];
+  assertPersonalNavigationTarget(frame.result.url);
+  let candidate;
+  try {
+    [candidate] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+      func: probeDirectFrameControl,
+      args: [frame.result.url, input.selector ?? null, input.text,
+        input.match ?? "exact", input.index, filling],
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "The frame control cannot be inspected.");
+  }
+  if (!candidate || candidate.frameId !== frame.frameId ||
+      (frame.documentId && candidate.documentId !== frame.documentId) ||
+      candidate.result?.stale) throw coded("FRAME_NOT_READY", "Frame changed while resolving the control.");
+  const point = candidate.result;
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+    throw coded(point?.ambiguous ? "LOCATOR_AMBIGUOUS" : "LOCATOR_NOT_FOUND",
+      "Frame target is missing, obscured, disabled or not editable.");
+  }
+  let parent;
+  try {
+    [parent] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: probeDirectFrameElement,
+      args: [input.guard.url, frame.result.url, point],
+    });
+  } catch {
+    throw coded("FRAME_NOT_READY", "Direct-frame geometry cannot be verified.");
+  }
+  if (!Number.isFinite(parent?.result?.x) || !Number.isFinite(parent?.result?.y)) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
+      "Frame target needs a visible, unique untransformed direct iframe; nested or redirected frames are unsupported.");
+  }
+  const before = await chrome.tabs.get(chromeTabId);
+  if (before.url !== input.guard.url) throw coded("BROWSER_CONFIRMATION_INVALID", "The parent navigated.");
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    attached = await attachGuardedDebugger(target);
+    throwIfAborted(signal, "frameAction", false);
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type, x: parent.result.x, y: parent.result.y,
+        button: type === "mouseMoved" ? "none" : "left",
+        buttons: type === "mousePressed" ? 1 : 0, clickCount: 1,
+      });
+    }
+    if (filling) {
+      const current = await chrome.tabs.get(chromeTabId);
+      if (current.url !== input.guard.url) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The frame host navigated before input.");
+      }
+      const [focused] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+        func: confirmDirectFrameFocus, args: [frame.result.url, input.selector],
+      });
+      if (!focused || focused.frameId !== frame.frameId ||
+          (frame.documentId && focused.documentId !== frame.documentId) ||
+          !focused.result) throw coded("FRAME_NOT_READY", "The intended field did not receive native focus.");
+      await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+        type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+      });
+      await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+        type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+      });
+      await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+    }
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native frame input is unavailable or the debugger is occupied.");
+  } finally {
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
+  }
+}
+
+async function frameClick(input, signal) {
+  return directFrameAction(input, signal, false);
+}
+
+async function frameFill(input, signal) {
+  return directFrameAction(input, signal, true);
 }
 
 async function sequence(input, signal, timing) {

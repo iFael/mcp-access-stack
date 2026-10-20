@@ -28,7 +28,7 @@ describe("personal browser extension assets", () => {
         return [{ frameId: 17, documentId: "child-1", result: { found: true, value: "Cross-origin detail" } }];
       } } },
     });
-    for (const name of ["describePersonalFrame", "extractPage", "frameExtract"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    for (const name of ["describePersonalFrame", "extractPage", "extractCompletePersonalFrame", "frameExtract"]) vm.runInContext(extractFunction(serviceWorker, name), context);
     const extract = vm.runInContext("frameExtract", context) as (input: unknown) => Promise<unknown>;
     await expect(extract({ tabId: "personal:7", frame: "content", format: "text" }))
       .resolves.toEqual({ tabId: "personal:7", frame: "content", format: "text", value: "Cross-origin detail" });
@@ -37,8 +37,49 @@ describe("personal browser extension assets", () => {
       .rejects.toMatchObject({ code: "FRAME_NOT_FOUND" });
     expect(targets).toHaveLength(3);
     await expect(extract({ tabId: "personal:7", frame: "content", completion: "document" }))
-      .rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
-    expect(targets).toHaveLength(3);
+      .resolves.toMatchObject({ tabId: "personal:7", frame: "content", value: "Cross-origin detail" });
+    expect(targets).toHaveLength(5);
+  });
+
+  it("collects bounded named-frame document text with explicit completeness and restores scroll", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const scroll = { scrollTop: 0, scrollHeight: 260, clientHeight: 100 };
+    const body = { tagName: "BODY", get innerText() {
+      return scroll.scrollTop < 80 ? "First" : scroll.scrollTop < 160 ? "First Second" : "First Second Third";
+    } };
+    const context = vm.createContext({ document: { body, scrollingElement: scroll },
+      location: { href: "https://child.example/" }, Date, TextEncoder,
+      setTimeout: (callback: () => void) => { callback(); return 0; } });
+    vm.runInContext(extractFunction(serviceWorker, "extractCompletePersonalFrame"), context);
+    const collect = vm.runInContext("extractCompletePersonalFrame", context) as
+      (...args: unknown[]) => Promise<Record<string, unknown>>;
+    const result = await collect(null, null, "text", "https://child.example/");
+    expect(result).toMatchObject({
+      found: true, value: "First Second Third",
+      completeness: { status: "complete", reason: "end-of-document",
+        mode: "document", pages: 1 },
+    });
+    expect(scroll.scrollTop).toBe(0);
+    await expect(collect(null, null, "text", "https://wrong.example/"))
+      .resolves.toMatchObject({ found: false, stale: true });
+  });
+
+  it("reports partial frame data instead of claiming document completeness when scroll budget is exhausted", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const scroll = { scrollTop: 10, scrollHeight: 100_000, clientHeight: 100 };
+    const context = vm.createContext({ document: { body: { tagName: "BODY",
+      get innerText() { return "Section " + scroll.scrollTop; } },
+    scrollingElement: scroll }, location: { href: "https://child.example/" },
+    Date, TextEncoder, setTimeout: (cb: () => void) => { cb(); return 0; } });
+    vm.runInContext(extractFunction(serviceWorker, "extractCompletePersonalFrame"), context);
+    const collect = vm.runInContext("extractCompletePersonalFrame", context) as
+      (...args: unknown[]) => Promise<Record<string, unknown>>;
+    const result = await collect(null, null, "text", "https://child.example/");
+    expect(result).toMatchObject({
+      found: true,
+      completeness: { status: "partial", reason: "scroll-limit", scrolls: 12 },
+    });
+    expect(scroll.scrollTop).toBe(10);
   });
 
   it("resolves the iframe title attribute across origins only when its URL identifies one child", async () => {
@@ -102,6 +143,104 @@ describe("personal browser extension assets", () => {
     await expect(extract({ tabId: "personal:7", frame: "content" }))
       .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
     expect(reads).toBe(1);
+  });
+
+  it("uses real CDP events for a uniquely identified direct cross-origin frame and verifies focus before filling", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let changed = false;
+    let focused = true;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      assertPersonalNavigationTarget: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      attachGuardedDebugger: async () => true,
+      detachGuardedDebugger: async () => undefined,
+      chrome: {
+        tabs: { get: async () => ({ url: changed ? "https://changed.example/" : "https://host.example/" }) },
+        debugger: { attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+          events.push({ method, params });
+        } },
+        scripting: { executeScript: async ({ target, func }: {
+          target: { allFrames?: boolean; frameIds?: number[] }; func: { name: string };
+        }) => {
+          if (target.allFrames) return [
+            { frameId: 0, result: { url: "https://host.example/", embedded: [
+              { id: "inner", name: "content", title: "", src: "https://child.example/" },
+            ] } },
+            { frameId: 17, documentId: "child-1", result: {
+              url: "https://child.example/", name: "content", title: "Details",
+            } },
+          ];
+          if (func.name === "probeDirectFrameControl") return [
+            { frameId: 17, documentId: "child-1", result: { x: 25, y: 30 } },
+          ];
+          if (func.name === "probeDirectFrameElement") return [
+            { frameId: 0, result: { x: 225, y: 130 } },
+          ];
+          if (func.name === "confirmDirectFrameFocus") return [
+            { frameId: 17, documentId: "child-1", result: focused },
+          ];
+          throw new Error("Unexpected Chrome script " + func.name);
+        } },
+      },
+    });
+    for (const fn of ["describePersonalFrame", "probeDirectFrameControl",
+      "probeDirectFrameElement", "confirmDirectFrameFocus",
+      "directFrameAction", "frameClick", "frameFill"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const frameClick = vm.runInContext("frameClick", context) as (input: unknown) => Promise<unknown>;
+    const frameFill = vm.runInContext("frameFill", context) as (input: unknown) => Promise<unknown>;
+    const guard = { url: "https://host.example/" };
+    await expect(frameClick({ tabId: "personal:7", frame: "content", selector: "#submit", guard }))
+      .resolves.toMatchObject({ completed: true });
+    expect(events.map(x => x.method)).toEqual([
+      "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
+    ]);
+    expect(events[1]?.params).toMatchObject({
+      x: 225, y: 130, type: "mousePressed", button: "left",
+    });
+    events.length = 0;
+    await expect(frameFill({ tabId: "personal:7", frame: "content",
+      selector: "#message", value: "hello", guard })).resolves.toMatchObject({ completed: true });
+    expect(events.map(x => x.method)).toEqual([
+      "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.insertText",
+    ]);
+    expect(events[5]?.params).toEqual({ text: "hello" });
+    events.length = 0;
+    focused = false;
+    await expect(frameFill({ tabId: "personal:7", frame: "content",
+      selector: "#message", value: "secret", guard })).rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+    expect(events.map(x => x.method)).not.toContain("Input.insertText");
+    changed = true;
+    await expect(frameClick({ tabId: "personal:7", frame: "content", selector: "#submit", guard }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+  });
+
+  it("refuses obscured direct frames and transformed or ambiguous iframe geometry", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const iframe = { src: "https://child.example/", offsetWidth: 220, offsetHeight: 150,
+      clientLeft: 1, clientTop: 1,
+      getBoundingClientRect: () => ({ left: 100, top: 80, width: 220, height: 150 }) };
+    const document = { querySelectorAll: () => [iframe], elementFromPoint: () => null };
+    const context = vm.createContext({ document, location: { href: "https://host.example/" },
+      innerWidth: 800, innerHeight: 600, getComputedStyle: () => ({ transform: "none" }), Math });
+    vm.runInContext(extractFunction(serviceWorker, "probeDirectFrameElement"), context);
+    const probe = vm.runInContext("probeDirectFrameElement", context) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const args = ["https://host.example/", "https://child.example/", { x: 20, y: 20 }];
+    expect(probe(...args)).toMatchObject({ obscured: true });
+    document.elementFromPoint = () => iframe as never;
+    expect(probe(...args)).toEqual({ x: 121, y: 101 });
+    document.querySelectorAll = () => [iframe, iframe];
+    expect(probe(...args)).toMatchObject({ ambiguous: true });
+    document.querySelectorAll = () => [iframe];
+    expect(probe("https://changed.example/", ...args.slice(1))).toMatchObject({ stale: true });
   });
 
   it("returns a stale-frame guard if navigation occurred before document extraction", () => {
@@ -410,6 +549,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: unknown }> = [];
     const context = vm.createContext({
+      setTimeout: (callback: () => void) => { callback(); return 0; },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -424,6 +564,7 @@ describe("personal browser extension assets", () => {
       },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
     });
+    vm.runInContext(extractFunction(serviceWorker, "physicalTypingKey"), context);
     vm.runInContext(extractFunction(serviceWorker, "typeText"), context);
     const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
     await expect(typeText({ tabId: "personal:7", text: "hello" }))
@@ -434,6 +575,20 @@ describe("personal browser extension assets", () => {
     ]);
     expect(events[0]?.params).toEqual({ text: "hello" });
     expect(events[1]?.params).toMatchObject({ key: "Enter", type: "keyDown" });
+    events.length = 0;
+    await typeText({ tabId: "personal:7", text: "Ab7!é", slowly: true,
+      guard: { url: "https://example.com/" } });
+    expect(events.map(event => event.method)).toEqual([
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+      "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.insertText",
+    ]);
+    expect(events[0]?.params).toMatchObject({ type: "keyDown", key: "A", code: "KeyA", modifiers: 8, text: "A" });
+    expect(events[1]?.params).toMatchObject({ type: "keyUp", key: "A" });
+    expect(events[2]?.params).toMatchObject({ type: "keyDown", key: "b", code: "KeyB", modifiers: 0, text: "b" });
+    expect(events[6]?.params).toMatchObject({ type: "keyDown", key: "!", code: "Digit1", modifiers: 8, text: "!" });
+    expect(events[8]?.params).toEqual({ text: "é" });
   });
 
   it("routes scroll through explicit CSS viewport coordinates with bounded Chrome wheel origin", async () => {
@@ -1298,7 +1453,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.3.1");
+    expect(parsedManifest.version).toBe("1.4.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

@@ -46,6 +46,40 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("guards direct-frame click/fill with the previously observed owned parent URL", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const forwarded: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    try {
+      await primeReference(bridge, extension, tabId);
+      const respond = (data: WebSocket.RawData) => {
+        const request = JSON.parse(data.toString()) as WireMessage;
+        if (request.type !== "request" || !request.operation ||
+            !["frameClick", "frameFill"].includes(request.operation)) return;
+        forwarded.push({ operation: request.operation, input: request.input as Record<string, unknown> });
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId, completed: true } }));
+      };
+      extension.on("message", respond);
+      try {
+        await expect(bridge.frameClick({ tabId, frame: "details", selector: "#save" }))
+          .resolves.toEqual({ tabId, completed: true });
+        await expect(bridge.frameFill({ tabId, frame: "details", selector: "#title", value: "Draft" }))
+          .resolves.toEqual({ tabId, completed: true });
+        expect(forwarded).toEqual([
+          { operation: "frameClick", input: { tabId, frame: "details", selector: "#save",
+            guard: { url: "https://example.com/" } } },
+          { operation: "frameFill", input: { tabId, frame: "details", selector: "#title",
+            value: "Draft", guard: { url: "https://example.com/" } } },
+        ]);
+      } finally {
+        extension.off("message", respond);
+      }
+    } finally {
+      await close();
+    }
+  });
+
   it("routes the owned-tab viewport preset and reset without altering unrelated Chrome tabs", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: unknown }> = [];

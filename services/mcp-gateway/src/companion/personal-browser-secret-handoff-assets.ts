@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.3.1";
+export const HANDOFF_EXTENSION_VERSION = "1.4.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

@@ -395,16 +395,22 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("frameExtract", args[0], args[1]);
   }
 
-  frameClick(
-    ..._args: Parameters<NonNullable<BrowserExecutor["frameClick"]>>
+  async frameClick(
+    ...args: Parameters<NonNullable<BrowserExecutor["frameClick"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameClick"]>> {
-    throw unsupported("browser_frame_click");
+    this.requireGuardedActions();
+    const [input, context] = args;
+    const guard = this.actions.guardPage(input.tabId);
+    return this.call("frameClick", { ...input, guard }, context);
   }
 
-  frameFill(
-    ..._args: Parameters<NonNullable<BrowserExecutor["frameFill"]>>
+  async frameFill(
+    ...args: Parameters<NonNullable<BrowserExecutor["frameFill"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameFill"]>> {
-    throw unsupported("browser_frame_fill");
+    this.requireGuardedActions();
+    const [input, context] = args;
+    const guard = this.actions.guardPage(input.tabId);
+    return this.call("frameFill", { ...input, guard }, context);
   }
 
   profilePage(
