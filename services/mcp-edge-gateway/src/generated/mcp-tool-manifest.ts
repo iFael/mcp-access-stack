@@ -18852,7 +18852,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Prefer for 2+ known mutations needing no intermediate observation. Executes up to 20 typed steps under one tab lock; use finalSnapshot=true and knownRevision for one final state. Split at navigation or ref changes requiring fresh observation. Statically mutating even for wait/extract-only steps; use browser_wait/browser_extract directly for those flows. Steps are not atomic: earlier effects may remain after failure; observe before retrying. Batching does not bypass confirmation or policy requirements.",
+    "description": "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -18863,6 +18863,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
+        },
+        "finalScreenshot": {
+          "type": "boolean"
         },
         "finalSnapshot": {
           "type": "boolean"
@@ -19012,6 +19015,256 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "additionalProperties": false,
                 "properties": {
                   "action": {
+                    "const": "hover",
+                    "type": "string"
+                  },
+                  "ref": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "x": {
+                    "maximum": 20000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "y": {
+                    "maximum": 20000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "scroll",
+                    "type": "string"
+                  },
+                  "amount": {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "direction": {
+                    "enum": [
+                      "up",
+                      "down",
+                      "left",
+                      "right"
+                    ],
+                    "type": "string"
+                  },
+                  "ref": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "x": {
+                    "maximum": 20000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "y": {
+                    "maximum": 20000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "action",
+                  "direction",
+                  "amount"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "drag",
+                    "type": "string"
+                  },
+                  "confirmationId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "from": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "ref": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "x": {
+                            "maximum": 20000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "y": {
+                            "maximum": 20000,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "steps": {
+                    "maximum": 40,
+                    "minimum": 2,
+                    "type": "integer"
+                  },
+                  "to": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "ref": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "x": {
+                            "maximum": 20000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "y": {
+                            "maximum": 20000,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action",
+                  "from",
+                  "to"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "formInput",
+                    "type": "string"
+                  },
+                  "confirmationId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "ref": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200000,
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "items": {
+                          "maxLength": 500,
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action",
+                  "ref",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "type",
+                    "type": "string"
+                  },
+                  "confirmationId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "slowly": {
+                    "type": "boolean"
+                  },
+                  "submit": {
+                    "type": "boolean"
+                  },
+                  "text": {
+                    "maxLength": 100000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
                     "const": "wait",
                     "type": "string"
                   },
@@ -19098,9 +19351,91 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "actionSummary": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "durationMs": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "index": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "index",
+              "action",
+              "durationMs"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "type": "array"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "screenshot": {
+          "additionalProperties": false,
+          "properties": {
+            "imageContent": {
+              "additionalProperties": false,
+              "properties": {
+                "data": {
+                  "maxLength": 3200000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "mimeType": {
+                  "enum": [
+                    "image/png",
+                    "image/jpeg",
+                    "image/webp"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data",
+                "mimeType"
+              ],
+              "type": "object"
+            },
+            "path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sizeBytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tabId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tabId",
+            "path",
+            "sizeBytes"
+          ],
+          "type": "object"
         },
         "snapshot": {
           "additionalProperties": false,
@@ -19472,6 +19807,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "navigate",
                   "click",
                   "fill",
+                  "hover",
+                  "scroll",
+                  "drag",
+                  "formInput",
+                  "type",
                   "press",
                   "wait",
                   "extract"
@@ -19546,6 +19886,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "bytes"
                 ],
                 "type": "object"
+              },
+              "durationMs": {
+                "minimum": 0,
+                "type": "number"
               },
               "index": {
                 "maximum": 9007199254740991,
@@ -24597,13 +24941,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "d9ca10dc38f701cdfd3b625ef7937825a191ae092254dddfdfc7b592f1ef60d7",
-  "serverVersion": "0.4.0-catalog.cd9ca10dc38f7.saca8cfec86ad",
+  "contractRevision": "1bbc95294a13c866853ce0b0bbe66ebbbaeb7045e008cef409feec6a709efb75",
+  "serverVersion": "0.4.0-catalog.c1bbc95294a13.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cd9ca10dc38f7.saca8cfec86ad"
+  "version": "0.4.0-catalog.c1bbc95294a13.saca8cfec86ad"
 } as const;

@@ -448,7 +448,7 @@ function definitions(
       () => e.extract(assumeParsed(v)),
       (activeContext) => e.extract(assumeParsed(v), activeContext),
     )),
-    d("browser_sequence", "Prefer for 2+ known mutations needing no intermediate observation. Executes up to 20 typed steps under one tab lock; use finalSnapshot=true and knownRevision for one final state. Split at navigation or ref changes requiring fresh observation. Statically mutating even for wait/extract-only steps; use browser_wait/browser_extract directly for those flows. Steps are not atomic: earlier effects may remain after failure; observe before retrying. Batching does not bypass confirmation or policy requirements.", c.browserSequenceInputSchema, c.browserSequenceResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_sequence", "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step.", c.browserSequenceInputSchema, c.browserSequenceResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.sequence(assumeParsed(v)),
       (activeContext) => e.sequence(assumeParsed(v), activeContext),

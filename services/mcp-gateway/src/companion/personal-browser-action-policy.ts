@@ -195,7 +195,7 @@ export class PersonalBrowserActionPolicy {
         guarded.push(step);
         continue;
       }
-      if (hasNavigated && (step.action === "click" || step.action === "fill" || step.action === "press")) {
+      if (hasNavigated && ["click", "fill", "press", "hover", "scroll", "drag", "formInput", "type"].includes(step.action)) {
         throw new AppError(
           "BROWSER_CAPABILITY_UNSUPPORTED",
           "Personal browser sequences require a fresh snapshot after navigation before interacting.",
@@ -204,6 +204,17 @@ export class PersonalBrowserActionPolicy {
       if (step.action === "click") guarded.push({ ...step, guard: this.guardClick({ ...step, tabId: input.tabId }) });
       else if (step.action === "fill") guarded.push({ ...step, guard: this.guardFill({ ...step, tabId: input.tabId }) });
       else if (step.action === "press") guarded.push({ ...step, guard: this.guardPress({ ...step, tabId: input.tabId }) });
+      else if (step.action === "hover") {
+        if (!step.ref) throw new AppError("INVALID_ARGUMENT", "Resolve hover coordinates against a fresh snapshot before sequencing.");
+        guarded.push({ ...step, guard: this.guardReference(input.tabId, step.ref) });
+      }
+      else if (step.action === "scroll") guarded.push({ ...step, guard: step.ref
+        ? this.guardReference(input.tabId, step.ref) : this.guardPage(input.tabId) });
+      else if (step.action === "drag") guarded.push({ ...step,
+        ...this.guardDrag({ ...step, tabId: input.tabId }) });
+      else if (step.action === "formInput") guarded.push({ ...step,
+        guard: this.guardFormInput({ ...step, tabId: input.tabId }) });
+      else if (step.action === "type") guarded.push({ ...step, guard: this.guardType({ ...step, tabId: input.tabId }) });
       else guarded.push(step);
     }
     return guarded;

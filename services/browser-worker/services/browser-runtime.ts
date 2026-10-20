@@ -1229,6 +1229,7 @@ export class BrowserRuntime implements BrowserExecutor {
     const results: BrowserSequenceResult["steps"] = [];
     try {
       for (const [index, step] of input.steps.entries()) {
+        const stepStarted = performance.now();
         switch (step.action) {
           case "navigate": {
             const current = this.tabsRegistry.assertNavigable(tab.tabId, step.url);
@@ -1288,6 +1289,26 @@ export class BrowserRuntime implements BrowserExecutor {
             this.updateSelectedTab(tab.tabId, response);
             break;
           }
+          case "hover": {
+            await this.hover({ tabId: tab.tabId, ...step }, context);
+            break;
+          }
+          case "scroll": {
+            await this.scroll({ tabId: tab.tabId, ...step }, context);
+            break;
+          }
+          case "drag": {
+            await this.drag({ tabId: tab.tabId, ...step }, context);
+            break;
+          }
+          case "formInput": {
+            await this.formInput({ tabId: tab.tabId, ...step }, context);
+            break;
+          }
+          case "type": {
+            await this.type({ tabId: tab.tabId, ...step }, context);
+            break;
+          }
           case "press": {
             validateBrowserKeySequence(step.key, step.repeat);
             if (containsBrowserEnterKey(step.key)) {
@@ -1319,11 +1340,13 @@ export class BrowserRuntime implements BrowserExecutor {
               completed: true,
               value: extracted.value,
               completeness: extracted.completeness,
+              durationMs: Math.max(0, performance.now() - stepStarted),
             });
             continue;
           }
         }
-        results.push({ index, action: step.action, completed: true });
+        results.push({ index, action: step.action, completed: true,
+          durationMs: Math.max(0, performance.now() - stepStarted) });
       }
       const snapshot = input.finalSnapshot
         ? isDirectPlaywrightDriver(this.driver)
@@ -1336,12 +1359,16 @@ export class BrowserRuntime implements BrowserExecutor {
             )
           : await this.captureSnapshotSelected(tab.tabId)
         : undefined;
+      const screenshot = input.finalScreenshot ? await this.screenshot({ tabId: tab.tabId }) : undefined;
       await this.checkpoint();
       await this.recordNavigation(this.tabsRegistry.assertMcpOwned(tab.tabId));
       return {
         tabId: tab.tabId,
         completed: true,
         steps: results,
+        actionSummary: results.map((result) => ({ index: result.index, action: result.action,
+          durationMs: result.durationMs ?? 0 })),
+        ...(screenshot === undefined ? {} : { screenshot }),
         ...(snapshot === undefined ? {} : { snapshot }),
         ...(snapshot?.state === undefined ? {} : { state: snapshot.state }),
         ...(snapshot?.timing === undefined ? {} : { timing: snapshot.timing }),

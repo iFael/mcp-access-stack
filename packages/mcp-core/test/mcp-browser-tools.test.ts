@@ -9,6 +9,8 @@ import {
   browserTabActionInputSchema,
   browserDialogInputSchema,
   browserViewportInputSchema,
+  browserSequenceInputSchema,
+  browserSequenceResultSchema,
   browserHoverInputSchema,
   browserFindInputSchema,
   browserFindResultSchema,
@@ -35,6 +37,36 @@ import {
 } from "../src/mcp-browser-tools.js";
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
+
+describe("advanced browser sequence parity", () => {
+  it("accepts all trusted advanced steps and optional final screenshot", () => {
+    const input = {
+      tabId: "personal:7",
+      steps: [
+        { action: "hover", x: 150, y: 220 },
+        { action: "scroll", direction: "down", amount: 300, x: 150, y: 220 },
+        { action: "drag", from: { ref: "p-1" }, to: { ref: "p-2" }, steps: 10 },
+        { action: "formInput", ref: "p-3", value: true },
+        { action: "type", text: "Hello", slowly: true },
+      ],
+      finalScreenshot: true,
+      finalSnapshot: true,
+    };
+    expect(browserSequenceInputSchema.safeParse(input).success).toBe(true);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "hover" }] }).success).toBe(false);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "scroll", direction: "down", amount: 100, x: 10 }] }).success).toBe(false);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "type", text: "a".repeat(100_001) }] }).success).toBe(false);
+    expect(browserSequenceResultSchema.safeParse({
+      tabId: "personal:7", completed: true,
+      steps: [{ index: 0, action: "hover", completed: true, durationMs: 5 }],
+      actionSummary: [{ index: 0, action: "hover", durationMs: 5 }],
+      screenshot: { tabId: "personal:7", path: "/private/frame.png", sizeBytes: 22 },
+    }).success).toBe(true);
+  });
+});
 
 describe("browser viewport contracts", () => {
   it("requires owned tab and coherent emulation settings", () => {

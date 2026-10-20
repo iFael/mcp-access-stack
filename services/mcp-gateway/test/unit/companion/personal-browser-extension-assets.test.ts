@@ -35,6 +35,43 @@ describe("personal browser extension assets", () => {
     expect(vm.runInContext("inFlightRequests.size", context)).toBe(0);
   });
 
+  it("dispatches advanced guarded sequence steps and returns bounded action summary", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let now = 0;
+    const dispatched: string[] = [];
+    const stub = (action: string) => async () => {
+      dispatched.push(action);
+      now += 7;
+      return { completed: true };
+    };
+    const context = vm.createContext({
+      performance: { now: () => now },
+      throwIfAborted: () => undefined,
+      hover: stub("hover"), scroll: stub("scroll"), drag: stub("drag"),
+      formInput: stub("formInput"), typeText: stub("type"),
+    });
+    vm.runInContext(extractFunction(serviceWorker, "sequence"), context);
+    const sequence = vm.runInContext("sequence", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await sequence({ tabId: "personal:7", steps: [
+      { action: "hover", ref: "p-1", guard: { url: "https://example.test/" } },
+      { action: "scroll", direction: "down", amount: 300, guard: { url: "https://example.test/" } },
+      { action: "drag", from: { ref: "p-1" }, to: { ref: "p-2" }, steps: 10 },
+      { action: "formInput", ref: "p-3", value: true, guard: { url: "https://example.test/" } },
+      { action: "type", text: "hello", guard: { url: "https://example.test/" } },
+    ] });
+    expect(dispatched).toEqual(["hover", "scroll", "drag", "formInput", "type"]);
+    expect(result).toMatchObject({ tabId: "personal:7", completed: true });
+    expect(result.steps).toEqual([
+      { index: 0, action: "hover", completed: true, durationMs: 7 },
+      { index: 1, action: "scroll", completed: true, durationMs: 7 },
+      { index: 2, action: "drag", completed: true, durationMs: 7 },
+      { index: 3, action: "formInput", completed: true, durationMs: 7 },
+      { index: 4, action: "type", completed: true, durationMs: 7 },
+    ]);
+    expect(result.actionSummary).toHaveLength(5);
+    expect(JSON.stringify(result.actionSummary)).not.toMatch(/https|hello|private/);
+  });
+
   it("measures final snapshot separately from action in the actual sequence", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     let clock = 0;

@@ -82,6 +82,38 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("materializes a final screenshot after a sequence and keeps transport base64 out of the result", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const seen: string[] = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      if (request.operation) seen.push(request.operation);
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: request.operation === "sequence"
+          ? { tabId: "personal:7", completed: true,
+              steps: [{ index: 0, action: "wait", completed: true, durationMs: 5 }],
+              actionSummary: [{ index: 0, action: "wait", durationMs: 5 }] }
+          : { tabId: "personal:7", path: "/runtime/staged.png", sizeBytes: 5,
+              mimeType: "image/png", contentBase64: "aGVsbG8=" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      const result = await bridge.sequence({ tabId: "personal:7",
+        steps: [{ action: "wait", timeoutMs: 5 }], finalScreenshot: true });
+      expect(seen).toEqual(["sequence", "screenshot"]);
+      expect(result).toMatchObject({ completed: true, screenshot: { sizeBytes: 5,
+        path: expect.stringContaining("personal-artifacts") } });
+      expect(JSON.stringify(result)).not.toContain("aGVsbG8");
+      expect(result.actionSummary).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("routes select_tab to the owned Chrome extension without touching other tabs", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: unknown }> = [];

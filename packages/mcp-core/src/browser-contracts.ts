@@ -651,6 +651,40 @@ const browserSequenceStepSchema = z.discriminatedUnion("action", [
     confirmationId: confirmationIdSchema,
   }).strict(),
   z.object({
+    action: z.literal("hover"),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("scroll"),
+    direction: z.enum(["up", "down", "left", "right"]),
+    amount: z.number().int().min(1).max(10000),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("drag"),
+    from: browserDragEndpointSchema,
+    to: browserDragEndpointSchema,
+    steps: z.number().int().min(2).max(40).optional(),
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
+    action: z.literal("formInput"),
+    ref: z.string().min(1).max(128),
+    value: browserFormInputInputSchema.shape.value,
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
+    action: z.literal("type"),
+    text: z.string().max(100_000),
+    slowly: z.boolean().optional(),
+    submit: z.boolean().optional(),
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
     action: z.literal("wait"),
     timeoutMs: z.number().int().positive().max(120_000).optional(),
     text: z.string().min(1).max(10_000).optional(),
@@ -669,11 +703,24 @@ export const browserSequenceInputSchema = z
     tabId: tabIdSchema,
     steps: z.array(browserSequenceStepSchema).min(1).max(20),
     finalSnapshot: z.boolean().optional(),
+    finalScreenshot: z.boolean().optional(),
     knownRevision: knownRevisionSchema,
   })
   .strict()
   .superRefine((input, context) => {
     input.steps.forEach((step, index) => {
+      if (step.action === "hover" &&
+          (Boolean(step.ref) === (step.x !== undefined && step.y !== undefined) ||
+            (step.x === undefined) !== (step.y === undefined))) {
+        context.addIssue({ code: "custom", path: ["steps", index],
+          message: "Hover requires a ref or a viewport CSS x/y point." });
+      }
+      if (step.action === "scroll" &&
+          ((step.x === undefined) !== (step.y === undefined) ||
+            (step.ref !== undefined && step.x !== undefined))) {
+        context.addIssue({ code: "custom", path: ["steps", index],
+          message: "Scroll requires either a ref, coordinates, or the page." });
+      }
       if (
         step.action === "wait" &&
         step.timeoutMs === undefined &&
@@ -693,10 +740,11 @@ export type BrowserSequenceStep = BrowserSequenceInput["steps"][number];
 export const browserSequenceStepResultSchema = z
   .object({
     index: z.number().int().nonnegative(),
-    action: z.enum(["navigate", "click", "fill", "press", "wait", "extract"]),
+    action: z.enum(["navigate", "click", "fill", "hover", "scroll", "drag", "formInput", "type", "press", "wait", "extract"]),
     completed: z.literal(true),
     value: z.unknown().optional(),
     completeness: browserExtractionCompletenessSchema.optional(),
+    durationMs: z.number().nonnegative().optional(),
   })
   .strict();
 export const browserSequenceResultSchema = z
@@ -705,6 +753,8 @@ export const browserSequenceResultSchema = z
     completed: z.literal(true),
     steps: z.array(browserSequenceStepResultSchema).max(20),
     snapshot: browserSnapshotResultSchema.optional(),
+    screenshot: z.lazy(() => browserScreenshotResultSchema).optional(),
+    actionSummary: z.array(z.object({ index: z.number().int().nonnegative(), action: z.string().max(64), durationMs: z.number().nonnegative() }).strict()).max(200).optional(),
     state: browserStateUpdateSchema.optional(),
     timing: browserOperationTimingSchema.optional(),
   })

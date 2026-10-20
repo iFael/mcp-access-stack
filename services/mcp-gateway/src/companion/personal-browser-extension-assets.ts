@@ -1388,10 +1388,16 @@ async function sequence(input, signal, timing) {
   for (let index = 0; index < input.steps.length; index += 1) {
     throwIfAborted(signal, "sequence", true);
     const step = input.steps[index];
+    const started = performance.now();
     let value;
     if (step.action === "navigate") value = await navigate({ tabId: input.tabId, url: step.url }, signal);
     else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref, guard: step.guard, button: step.button, clickCount: step.clickCount, modifiers: step.modifiers }, signal);
     else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value, guard: step.guard }, signal);
+    else if (step.action === "hover") value = await hover({ tabId: input.tabId, ref: step.ref, guard: step.guard }, signal);
+    else if (step.action === "scroll") value = await scroll({ tabId: input.tabId, direction: step.direction, amount: step.amount, ref: step.ref, guard: step.guard }, signal);
+    else if (step.action === "drag") value = await drag({ tabId: input.tabId, from: step.from, to: step.to, steps: step.steps, fromGuard: step.fromGuard, toGuard: step.toGuard }, signal);
+    else if (step.action === "formInput") value = await formInput({ tabId: input.tabId, ref: step.ref, value: step.value, guard: step.guard }, signal);
+    else if (step.action === "type") value = await typeText({ tabId: input.tabId, text: step.text, slowly: step.slowly, submit: step.submit, guard: step.guard }, signal);
     else if (step.action === "press") value = await press({ tabId: input.tabId, key: step.key, repeat: step.repeat, guard: step.guard }, signal);
     else if (step.action === "wait") value = await wait({ tabId: input.tabId, timeoutMs: step.timeoutMs, text: step.text, ref: step.ref }, signal);
     else if (step.action === "extract") value = await extract({ tabId: input.tabId, ref: step.ref, selector: step.selector, format: step.format }, signal);
@@ -1399,10 +1405,13 @@ async function sequence(input, signal, timing) {
       index,
       action: step.action,
       completed: true,
+      durationMs: Math.max(0, performance.now() - started),
       ...(step.action === "extract" ? { value: value.value } : {}),
     });
   }
-  const response = { tabId: input.tabId, completed: true, steps: results };
+  const response = { tabId: input.tabId, completed: true, steps: results,
+    actionSummary: results.map((r) => ({ index: r.index, action: r.action, durationMs: r.durationMs })),
+  };
   if (input.finalSnapshot) {
     const started = performance.now();
     try { response.snapshot = await snapshot({ tabId: input.tabId }, signal); }

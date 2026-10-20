@@ -356,8 +356,36 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async sequence(...args: Parameters<BrowserExecutor["sequence"]>): ReturnType<BrowserExecutor["sequence"]> {
     this.requireGuardedActions();
-    const steps = this.actions.guardSequence(args[0]);
-    return this.call("sequence", { ...args[0], steps }, args[1]);
+    const [input, context] = args;
+    const resolvePoint = async (x: number, y: number): Promise<string> => {
+      const snapshot = await this.snapshot({
+        tabId: input.tabId, point: { x, y }, forceFull: true,
+      }, context);
+      if (!snapshot.pointTarget?.ref) {
+        throw new AppError("LOCATOR_NOT_FOUND", "Sequence point does not resolve to a current actionable control.");
+      }
+      return snapshot.pointTarget.ref;
+    };
+    const resolvedSteps: typeof input.steps = [];
+    for (const step of input.steps) {
+      if (step.action === "hover" && !step.ref && step.x !== undefined && step.y !== undefined) {
+        resolvedSteps.push({ ...step, ref: await resolvePoint(step.x, step.y) });
+      } else if (step.action === "drag") {
+        const from = "ref" in step.from ? step.from : { ...step.from,
+          ref: await resolvePoint(step.from.x, step.from.y) };
+        const to = "ref" in step.to ? step.to : { ...step.to,
+          ref: await resolvePoint(step.to.x, step.to.y) };
+        resolvedSteps.push({ ...step, from, to });
+      } else {
+        resolvedSteps.push(step);
+      }
+    }
+    const steps = this.actions.guardSequence({ ...input, steps: resolvedSteps });
+    const result = await this.call("sequence", { ...input, steps }, context);
+    if (!input.finalScreenshot) return result;
+    const screenshot = await this.screenshot({ tabId: input.tabId }, context);
+    return { ...result, screenshot: { tabId: screenshot.tabId, path: screenshot.path,
+      sizeBytes: screenshot.sizeBytes, ...(screenshot.imageContent ? { imageContent: screenshot.imageContent } : {}) } };
   }
 
   frameExtract(
