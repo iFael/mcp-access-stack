@@ -163,12 +163,20 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.forTab(args[0].tabId).hover(...args);
   }
 
+  drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
+    return this.forTab(args[0].tabId).drag(...args);
+  }
+
   scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
     return this.forTab(args[0].tabId).scroll(...args);
   }
 
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.forTab(args[0].tabId).fill(...args);
+  }
+
+  formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
+    return this.forTab(args[0].tabId).formInput(...args);
   }
 
   type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {

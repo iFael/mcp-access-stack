@@ -37,7 +37,10 @@ export interface BrowserNavigateRequest {
 }
 
 export interface BrowserClickRequest {
-  target: string;
+  target?: string;
+  x?: number;
+  y?: number;
+  role?: string;
   element?: string;
   button?: "left" | "right" | "middle";
   clickCount?: number;
@@ -45,7 +48,22 @@ export interface BrowserClickRequest {
 }
 
 export interface BrowserHoverRequest {
-  target: string;
+  target?: string;
+  x?: number;
+  y?: number;
+}
+
+export interface BrowserDragEndpointRequest {
+  target?: string;
+  x?: number;
+  y?: number;
+  role?: string;
+  name?: string;
+}
+export interface BrowserDragRequest {
+  from: BrowserDragEndpointRequest;
+  to: BrowserDragEndpointRequest;
+  steps?: number;
 }
 
 export interface BrowserScrollRequest {
@@ -60,6 +78,11 @@ export interface BrowserFillRequest {
   element?: string;
   slowly?: boolean;
   submit?: boolean;
+}
+
+export interface BrowserFormInputRequest {
+  target: string;
+  value: string | number | boolean | string[];
 }
 
 export interface BrowserTypeRequest {
@@ -161,6 +184,9 @@ export interface BrowserDriver {
     input: BrowserFillRequest,
     options?: BrowserDriverCallOptions,
   ): Promise<BrowserDriverResponse>;
+  formInput?(input: BrowserFormInputRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  drag?(input: BrowserDragRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  inspectPoint?(input: { x: number; y: number }, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   type?(input: BrowserTypeRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   press(
     input: BrowserPressRequest,

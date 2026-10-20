@@ -374,6 +374,12 @@ export const browserAccessibilitySummarySchema = z.object({
 }).strict();
 export type BrowserAccessibilitySummary = z.infer<typeof browserAccessibilitySummarySchema>;
 
+export const browserPointSchema = z.object({
+  x: z.number().int().min(0).max(20_000),
+  y: z.number().int().min(0).max(20_000),
+}).strict();
+export type BrowserPoint = z.infer<typeof browserPointSchema>;
+
 export const browserSnapshotInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -384,6 +390,7 @@ export const browserSnapshotInputSchema = z
     refId: z.string().min(1).max(128).optional(),
     maxChars: z.number().int().min(50).max(200_000).optional(),
     includeAccessibility: z.boolean().optional(),
+    point: browserPointSchema.optional(),
   })
   .strict();
 export type BrowserSnapshotInput = z.infer<typeof browserSnapshotInputSchema>;
@@ -394,6 +401,7 @@ export const browserSnapshotResultSchema = z
     title: z.string().max(500).optional(),
     pageInstanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u).optional(),
     accessibility: browserAccessibilitySummarySchema.optional(),
+    pointTarget: z.object({ ref: z.string().min(1).max(128), role: z.string().max(100), name: z.string().max(500) }).strict().optional(),
     content: z.string().max(2_000_000),
     truncated: z.boolean().optional(),
     refs: z
@@ -436,21 +444,26 @@ export type BrowserFindResult = z.infer<typeof browserFindResultSchema>;
 export const browserClickInputSchema = z
   .object({
     tabId: tabIdSchema,
-    ref: z.string().min(1).max(128),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
     button: z.enum(["left", "right", "middle"]).optional(),
     clickCount: z.number().int().min(1).max(3).optional(),
     modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
   })
-  .strict();
+  .strict()
+  .refine((input) => Boolean(input.ref) !== (input.x !== undefined && input.y !== undefined) && ((input.x === undefined) === (input.y === undefined)), { message: "Specify either ref or both x and y." });
 export type BrowserClickInput = z.infer<typeof browserClickInputSchema>;
 
 export const browserHoverInputSchema = z.object({
   tabId: tabIdSchema,
-  ref: z.string().min(1).max(128),
+  ref: z.string().min(1).max(128).optional(),
+  x: browserPointSchema.shape.x.optional(),
+  y: browserPointSchema.shape.y.optional(),
   knownRevision: knownRevisionSchema,
-}).strict();
+}).strict().refine((input) => Boolean(input.ref) !== (input.x !== undefined && input.y !== undefined) && ((input.x === undefined) === (input.y === undefined)), { message: "Specify either ref or both x and y." });
 export type BrowserHoverInput = z.infer<typeof browserHoverInputSchema>;
 
 export const browserScrollInputSchema = z.object({
@@ -472,6 +485,35 @@ export const browserFillInputSchema = z
   })
   .strict();
 export type BrowserFillInput = z.infer<typeof browserFillInputSchema>;
+
+export const browserDragEndpointSchema = z.union([
+  z.object({ ref: z.string().min(1).max(128) }).strict(),
+  browserPointSchema,
+]);
+export type BrowserDragEndpoint = z.infer<typeof browserDragEndpointSchema>;
+export const browserDragInputSchema = z.object({
+  tabId: tabIdSchema,
+  from: browserDragEndpointSchema,
+  to: browserDragEndpointSchema,
+  steps: z.number().int().min(2).max(40).optional(),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserDragInput = z.infer<typeof browserDragInputSchema>;
+
+export const browserFormInputInputSchema = z.object({
+  tabId: tabIdSchema,
+  ref: z.string().min(1).max(128),
+  value: z.union([
+    z.string().max(200_000),
+    z.number().finite(),
+    z.boolean(),
+    z.array(z.string().max(500)).min(1).max(100),
+  ]),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserFormInputInput = z.infer<typeof browserFormInputInputSchema>;
 
 export const browserEvaluateInputSchema = z.object({
   tabId: tabIdSchema,
@@ -1117,8 +1159,10 @@ export const browserOperationSchema = z.enum([
   "evaluate",
   "click",
   "hover",
+  "drag",
   "scroll",
   "fill",
+  "formInput",
   "type",
   "press",
   "wait",
@@ -1192,8 +1236,10 @@ export const browserOperationInputSchemas = {
   evaluate: browserEvaluateInputSchema,
   click: browserClickInputSchema,
   hover: browserHoverInputSchema,
+  drag: browserDragInputSchema,
   scroll: browserScrollInputSchema,
   fill: browserFillInputSchema,
+  formInput: browserFormInputInputSchema,
   type: browserTypeInputSchema,
   press: browserPressInputSchema,
   wait: browserWaitInputSchema,
@@ -1236,8 +1282,10 @@ export const browserOperationResultSchemas = {
   evaluate: browserEvaluateResultSchema,
   click: browserActionResultSchema,
   hover: browserActionResultSchema,
+  drag: browserActionResultSchema,
   scroll: browserActionResultSchema,
   fill: browserActionResultSchema,
+  formInput: browserActionResultSchema,
   type: browserActionResultSchema,
   press: browserActionResultSchema,
   wait: browserActionResultSchema,

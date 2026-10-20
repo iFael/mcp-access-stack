@@ -15,7 +15,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "navigate", "evaluate", "click", "hover", "scroll", "fill", "type", "press", "sequence",
+  "open", "navigate", "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -27,8 +27,10 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "evaluate",
   "click",
   "hover",
+  "drag",
   "scroll",
   "fill",
+  "formInput",
   "type",
   "press",
   "wait",
@@ -219,8 +221,10 @@ async function perform(operation, input, signal, timing) {
     case "evaluate": return evaluatePage(input, signal);
     case "click": return click(input, signal);
     case "hover": return hover(input, signal);
+    case "drag": return drag(input, signal);
     case "scroll": return scroll(input, signal);
     case "fill": return fill(input, signal);
+    case "formInput": return formInput(input, signal);
     case "type": return typeText(input, signal);
     case "press": return press(input, signal);
     case "wait": return wait(input, signal);
@@ -361,6 +365,15 @@ async function snapshot(input, signal) {
     args: [generation],
   });
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
+  let pointTarget;
+  if (input.point) {
+    const [target] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: inspectPointInDocument,
+      args: [input.point.x, input.point.y],
+    });
+    pointTarget = target?.result;
+    if (!pointTarget) throw coded("LOCATOR_NOT_FOUND", "No observed interactive control at those viewport coordinates.");
+  }
   axTargetsByTab.delete(chromeTabId);
   const native = input.includeAccessibility
     ? await readNativeAccessibility(chromeTabId, injection.result.url, injection.result.pageInstanceId, signal)
@@ -376,6 +389,7 @@ async function snapshot(input, signal) {
         nativeRefs.map((r) => "- " + r.role + " " + JSON.stringify(r.name) + " [ref=" + r.ref + "]").join("\\n")
       : ""),
     refs: [...injection.result.refs, ...nativeRefs],
+    ...(pointTarget ? { pointTarget } : {}),
     ...(native ? { accessibility: native.summary } : {}),
   };
 }
@@ -534,7 +548,7 @@ async function click(input, signal) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
-      args: [input.ref, input.guard, false],
+      args: [input.ref, input.guard, false, input.x, input.y],
     });
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
@@ -579,7 +593,7 @@ async function hover(input, signal) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
-      args: [input.ref, input.guard, false],
+      args: [input.ref, input.guard, false, input.x, input.y],
     });
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Hover reference is stale or obscured.");
@@ -600,6 +614,80 @@ async function hover(input, signal) {
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
     if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function drag(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  const resolve = async (endpoint, guard) => {
+    if (!endpoint || !endpoint.ref || !guard || guard.ref !== endpoint.ref) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Drag requires a bound source and destination.");
+    }
+    if (endpoint.ref.startsWith("ax-")) return undefined;
+    const [probe] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probeGuardedElement,
+      args: [endpoint.ref, guard, false, endpoint.x, endpoint.y],
+    });
+    if (!probe?.result || probe.result.error) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Drag endpoint is stale, obscured or outside its observed control.");
+    }
+    return probe.result;
+  };
+  let from = await resolve(input.from, input.fromGuard);
+  let to = await resolve(input.to, input.toGuard);
+  const steps = input.steps ?? 10;
+  if (!Number.isInteger(steps) || steps < 2 || steps > 40) {
+    throw coded("INVALID_ARGUMENT", "Drag requires 2 to 40 movement steps.");
+  }
+  throwIfAborted(signal, "drag", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  let pressed = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    if (input.from.ref.startsWith("ax-")) from = await resolveGuardedAxPoint(
+      chromeTabId, input.from.ref, input.fromGuard, target, false,
+    );
+    if (input.to.ref.startsWith("ax-")) to = await resolveGuardedAxPoint(
+      chromeTabId, input.to.ref, input.toGuard, target, false,
+    );
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: from.x, y: from.y, button: "none",
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1,
+    });
+    pressed = true;
+    for (let i = 1; i <= steps; i += 1) {
+      throwIfAborted(signal, "drag", true);
+      const progress = i / steps;
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: from.x + (to.x - from.x) * progress,
+        y: from.y + (to.y - from.y) * progress,
+        buttons: 1, button: "left",
+      });
+    }
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1,
+    });
+    pressed = false;
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("drag", signal, pressed);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for drag-and-drop.");
+  } finally {
+    if (attached) {
+      if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
+        button: "left", buttons: 0,
+      }).catch(() => undefined);
+      await chrome.debugger.detach(target).catch(() => undefined);
+    }
   }
 }
 
@@ -692,6 +780,165 @@ async function fill(input, signal) {
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+function inspectGuardedForm(ref) {
+  const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
+  if (!element?.isConnected || element.disabled) return { error: "missing_or_disabled" };
+  const tag = element.tagName.toLowerCase();
+  const type = String(element.getAttribute("type") || "text").toLowerCase();
+  if (tag === "select") {
+    return { kind: "select", multiple: element.multiple === true, options:
+      Array.from(element.options || []).slice(0, 1000).map((option, index) => ({
+        index, label: String(option.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500),
+        value: String(option.value || "").slice(0, 500),
+        selected: option.selected === true, disabled: option.disabled === true,
+      })),
+    };
+  }
+  if (tag === "input" && ["checkbox", "radio"].includes(type)) {
+    return { kind: type, checked: element.checked === true };
+  }
+  if (tag === "input" && type === "range") {
+    return { kind: "range", min: Number(element.min || 0), max: Number(element.max || 100),
+      step: Number(element.step || 1), value: Number(element.value) };
+  }
+  if (tag === "textarea" || tag === "input" && !["file", "hidden", "button", "submit", "reset", "image"].includes(type) ||
+      element.isContentEditable) {
+    return { kind: "text" };
+  }
+  return { error: "unsupported_control" };
+}
+
+async function formInput(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  if (!input.guard || input.guard.ref !== input.ref) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Form control requires a bound reference.");
+  }
+  const value = input.value;
+  const ax = input.ref.startsWith("ax-");
+  let inspected;
+  let point;
+  if (!ax) {
+    const [observed] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: probeGuardedElement,
+      args: [input.ref, input.guard, false],
+    });
+    point = observed?.result;
+    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Form control is stale or obscured.");
+    const [detail] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: inspectGuardedForm, args: [input.ref],
+    });
+    inspected = detail?.result;
+    if (!inspected || inspected.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Unsupported or stale form control.");
+  }
+  throwIfAborted(signal, "formInput", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    if (ax) {
+      point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+      const kind = input.guard.role;
+      inspected = { kind: kind === "checkbox" || kind === "radio" ? kind :
+        kind === "textbox" || kind === "searchbox" || kind === "spinbutton" ? "text" : "unsupported" };
+      if (kind === "checkbox" || kind === "radio") {
+        const record = axTargetsByTab.get(chromeTabId)?.targets.get(input.ref);
+        const state = await chrome.debugger.sendCommand(target, "Accessibility.getPartialAXTree", {
+          backendNodeId: record.backendDOMNodeId, fetchRelatives: false,
+        });
+        const checked = state?.nodes?.[0]?.properties?.find((property) => property.name === "checked")?.value?.value;
+        inspected.checked = checked === "true" || checked === true;
+      }
+    }
+    if (Array.isArray(value) && (!inspected.multiple || inspected.kind !== "select")) {
+      if (value.length !== 1 || inspected.kind !== "select") {
+        throw coded("INVALID_ARGUMENT", "Multiple options require a native multi-select control.");
+      }
+    }
+    const dispatchKey = async (key, code, keyCode, modifiers = 0) => {
+      for (const kind of ["keyDown", "keyUp"]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          type: kind, key, code, windowsVirtualKeyCode: keyCode, modifiers,
+        });
+      }
+    };
+    const clickPoint = async () => {
+      for (const kind of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+          type: kind, x: point.x, y: point.y, button: kind === "mouseMoved" ? "none" : "left",
+          clickCount: 1,
+        });
+      }
+    };
+    if (typeof value === "boolean") {
+      if (!["checkbox", "radio"].includes(inspected.kind) || inspected.kind === "radio" && !value) {
+        throw coded("INVALID_ARGUMENT", "Boolean value requires a checkbox or a checked radio.");
+      }
+      if (inspected.checked !== value) await clickPoint();
+    } else if (inspected.kind === "select") {
+      const desired = (Array.isArray(value) ? value : [String(value)]);
+      const options = inspected.options || [];
+      const chosen = desired.map((item) => options.findIndex((o) => !o.disabled &&
+        (o.value === item || o.label === item)));
+      if (chosen.some((index) => index < 0)) throw coded("INVALID_ARGUMENT", "Requested select option does not exist.");
+      if (inspected.multiple) {
+        // Native listboxes: move with Control+Home/Down and toggle using Control+Space.
+        await clickPoint();
+        const current = new Set(options.filter((o) => o.selected).map((o) => o.index));
+        const wanted = new Set(chosen);
+        const changes = options.filter((o) => current.has(o.index) !== wanted.has(o.index));
+        if (options.length > 100 || changes.length > 50) throw coded("LIMIT_EXCEEDED", "Multi-select keyboard action budget exceeded.");
+        await dispatchKey("Home", "Home", 36, 2);
+        let position = 0;
+        for (const option of changes) {
+          while (position < option.index) {
+            await dispatchKey("ArrowDown", "ArrowDown", 40, 2);
+            position += 1;
+          }
+          await dispatchKey(" ", "Space", 32, 2);
+        }
+      } else {
+        if (desired.length !== 1) throw coded("INVALID_ARGUMENT", "Single-select accepts one option.");
+        await clickPoint();
+        await dispatchKey("Home", "Home", 36);
+        for (let index = 0; index < chosen[0]; index += 1) {
+          throwIfAborted(signal, "formInput", true);
+          await dispatchKey("ArrowDown", "ArrowDown", 40);
+        }
+        await dispatchKey("Enter", "Enter", 13);
+      }
+    } else if (inspected.kind === "text" && !Array.isArray(value)) {
+      await clickPoint();
+      await dispatchKey("a", "KeyA", 65, 2);
+      await dispatchKey("Backspace", "Backspace", 8);
+      await chrome.debugger.sendCommand(target, "Input.insertText", { text: String(value) });
+    } else if (inspected.kind === "range" && typeof value === "number") {
+      const { min, max, step } = inspected;
+      if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || step <= 0 ||
+          value < min || value > max || Math.abs((value - min) / step - Math.round((value - min) / step)) > 1e-6) {
+        throw coded("INVALID_ARGUMENT", "Slider value must match its legal range and step.");
+      }
+      const ticks = Math.round((value - min) / step);
+      if (ticks > 1000) throw coded("LIMIT_EXCEEDED", "Slider requires too many keyboard inputs.");
+      await clickPoint();
+      await dispatchKey("Home", "Home", 36);
+      for (let i = 0; i < ticks; i += 1) {
+        throwIfAborted(signal, "formInput", true);
+        await dispatchKey("ArrowRight", "ArrowRight", 39);
+      }
+    } else {
+      throw coded("INVALID_ARGUMENT", "Value does not match the observed control type.");
+    }
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome form control input is unavailable.");
   } finally {
     if (attached) await chrome.debugger.detach(target).catch(() => undefined);
   }
@@ -1153,6 +1400,8 @@ function snapshotPage(generation) {
   const refs = [];
   const liveRefs = new Map();
   globalThis.__mcpV3OwnedRefElements = liveRefs;
+  const refMetadata = new Map();
+  globalThis.__mcpV3OwnedRefMetadata = refMetadata;
   const refLines = [];
   const elements = [];
   let visitedRoots = 0;
@@ -1186,6 +1435,7 @@ function snapshotPage(generation) {
     const name = normalizeText(accessibleName(element)).slice(0, 500);
     const states = semanticStates(element, role);
     refs.push({ ref, role, name });
+    refMetadata.set(ref, { ref, role, name });
     refLines.push(
       "- " + role +
       (name ? " " + JSON.stringify(name) : "") +
@@ -1290,7 +1540,27 @@ function snapshotPage(generation) {
 }
 
 
-function probeGuardedElement(ref, guard, focus) {
+function inspectPointInDocument(x, y) {
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 ||
+      x >= innerWidth || y >= innerHeight) return null;
+  let top = document.elementFromPoint(x, y);
+  for (let depth = 0; depth < 6; depth += 1) {
+    const inner = top?.shadowRoot?.elementFromPoint?.(x, y);
+    if (!inner || inner === top) break;
+    top = inner;
+  }
+  const live = globalThis.__mcpV3OwnedRefElements;
+  const metadata = globalThis.__mcpV3OwnedRefMetadata;
+  if (!live || !metadata) return null;
+  for (let current = top; current; current = current.parentElement || current.getRootNode?.()?.host) {
+    for (const [ref, element] of live) {
+      if (element === current && element.isConnected) return metadata.get(ref) || null;
+    }
+  }
+  return null;
+}
+
+function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   if (!guard || guard.url !== location.href || guard.ref !== ref) return { error: "stale_page" };
   const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
   if (!element || !element.isConnected) return { error: "stale_ref" };
@@ -1321,8 +1591,12 @@ function probeGuardedElement(ref, guard, focus) {
   if (focus) element.focus?.();
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
+  const x = coordinateX === undefined ? rect.left + rect.width / 2 : coordinateX;
+  const y = coordinateY === undefined ? rect.top + rect.height / 2 : coordinateY;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < rect.left || y < rect.top ||
+      x >= rect.right || y >= rect.bottom || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
+    return { error: "point_outside_target" };
+  }
   let top = document.elementFromPoint(x, y);
   for (let depth = 0; depth < 6; depth += 1) {
     const inner = top?.shadowRoot?.elementFromPoint?.(x, y);

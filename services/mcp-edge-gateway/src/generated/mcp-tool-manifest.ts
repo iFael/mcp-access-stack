@@ -15610,6 +15610,26 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 50,
           "type": "integer"
         },
+        "point": {
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "maximum": 20000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "maximum": 20000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "type": "object"
+        },
         "refId": {
           "maxLength": 128,
           "minLength": 1,
@@ -15699,6 +15719,30 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "pageInstanceId": {
           "pattern": "^[a-zA-Z0-9_-]{1,128}$",
           "type": "string"
+        },
+        "pointTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "role",
+            "name"
+          ],
+          "type": "object"
         },
         "refs": {
           "items": {
@@ -16093,7 +16137,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Clicks an element ref and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.",
+    "description": "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -16154,11 +16198,20 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
+        },
+        "x": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "tabId",
-        "ref"
+        "tabId"
       ],
       "type": "object"
     },
@@ -16323,7 +16376,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Moves the pointer over an element ref in an MCP-owned tab without clicking. Returns updated state.",
+    "description": "Moves the pointer over an element ref OR validated CSS coordinates in an MCP-owned tab without clicking. Returns updated state.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -16353,11 +16406,20 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
+        },
+        "x": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "tabId",
-        "ref"
+        "tabId"
       ],
       "type": "object"
     },
@@ -16504,6 +16566,287 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_hover"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Drag between two fresh element refs or CSS viewport coordinates in one MCP-owned tab. Revalidates both targets, applies business-site restrictions, and bounds the trusted pointer trajectory.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "from": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "x": {
+                  "maximum": 20000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "y": {
+                  "maximum": 20000,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "knownRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "steps": {
+          "maximum": 40,
+          "minimum": 2,
+          "type": "integer"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "x": {
+                  "maximum": 20000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "y": {
+                  "maximum": 20000,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tabId",
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "name": "browser_drag",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "maximum": 999,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "console",
+                      "pageerror",
+                      "request",
+                      "response",
+                      "requestfailed",
+                      "dialog",
+                      "download",
+                      "filechooser"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "type",
+                  "timestamp"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timing": {
+          "additionalProperties": false,
+          "properties": {
+            "actionMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "queueMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "snapshotMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalMs": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "actionMs",
+            "snapshotMs",
+            "totalMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tabId",
+        "completed"
+      ],
+      "type": "object"
+    },
+    "title": "browser_drag"
   },
   {
     "_meta": {
@@ -16927,6 +17270,234 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_fill"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Set a native form control using its observed ref: text/number, checked boolean, or selected option value(s). Confirm acceptance/contract controls when requested; verify fresh refs and never log values.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "knownRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 200000,
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "maxLength": 500,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tabId",
+        "ref",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "browser_form_input",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "maximum": 999,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "console",
+                      "pageerror",
+                      "request",
+                      "response",
+                      "requestfailed",
+                      "dialog",
+                      "download",
+                      "filechooser"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "type",
+                  "timestamp"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timing": {
+          "additionalProperties": false,
+          "properties": {
+            "actionMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "queueMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "snapshotMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalMs": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "actionMs",
+            "snapshotMs",
+            "totalMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tabId",
+        "completed"
+      ],
+      "type": "object"
+    },
+    "title": "browser_form_input"
   },
   {
     "_meta": {
@@ -18052,6 +18623,30 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "pageInstanceId": {
               "pattern": "^[a-zA-Z0-9_-]{1,128}$",
               "type": "string"
+            },
+            "pointTarget": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "ref": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "role": {
+                  "maxLength": 100,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "role",
+                "name"
+              ],
+              "type": "object"
             },
             "refs": {
               "items": {
@@ -23391,13 +23986,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "a8ff53d0b6470d96bc9e1b3d756e89e74629e3fff1f15355db038f2dc09eca66",
-  "serverVersion": "0.4.0-catalog.ca8ff53d0b647.s3af77d5f2bc3",
-  "toolCount": 104,
-  "toolSetRevision": "3af77d5f2bc34ebf57e15c25cf7e2fb961ec67b04f411ae349159c5bbd224fbb"
+  "contractRevision": "53ab41eeede775eab4ec32f5e49d7ad47d40a94db71a2d6a8a6889644c17a6fa",
+  "serverVersion": "0.4.0-catalog.c53ab41eeede7.sffe3d39efd60",
+  "toolCount": 106,
+  "toolSetRevision": "ffe3d39efd602a939f3bb3264ede9a058394d0b6ef314460722f1a0ccd828c79"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ca8ff53d0b647.s3af77d5f2bc3"
+  "version": "0.4.0-catalog.c53ab41eeede7.sffe3d39efd60"
 } as const;

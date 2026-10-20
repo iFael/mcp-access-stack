@@ -7,7 +7,9 @@ import {
   BrowserConfirmationRegistry,
   BrowserInteractionContextService,
   type BrowserClickInput,
+  type BrowserDragInput,
   type BrowserFillInput,
+  type BrowserFormInputInput,
   type BrowserPressInput,
   type BrowserTypeInput,
   type BrowserEvaluateInput,
@@ -67,6 +69,7 @@ export class PersonalBrowserActionPolicy {
 
   guardClick(input: BrowserClickInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
+    if (!input.ref) throw new AppError("INVALID_ARGUMENT", "Click requires a resolved snapshot ref.");
     const reference = this.requireRef(input.tabId, input.ref, page);
     const authorization = this.interactions.prepareDangerousAction(
       { tabId: input.tabId, url: page.url },
@@ -91,6 +94,40 @@ export class PersonalBrowserActionPolicy {
   guardFill(input: BrowserFillInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
     const reference = this.requireRef(input.tabId, input.ref, page);
+    return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
+  }
+
+  guardDrag(input: BrowserDragInput): { fromGuard: PersonalActionGuard; toGuard: PersonalActionGuard } {
+    const page = this.requirePage(input.tabId);
+    if (!("ref" in input.from) || !("ref" in input.to)) {
+      throw new AppError("INVALID_ARGUMENT", "Coordinate drag endpoints must be resolved to fresh refs.");
+    }
+    const source = this.requireRef(input.tabId, input.from.ref, page);
+    const target = this.requireRef(input.tabId, input.to.ref, page);
+    const category = this.interactions.prepareDangerousAction(
+      { tabId: input.tabId, url: page.url }, source, "drag",
+    )?.category ?? this.interactions.prepareDangerousAction(
+      { tabId: input.tabId, url: page.url }, target, "drag",
+    )?.category;
+    if (category) {
+      const label = `${source.role}:${source.name}=>${target.role}:${target.name}|${JSON.stringify([input.from, input.to])}`;
+      this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url }, category, "drag", label,
+      ));
+    }
+    return {
+      fromGuard: { url: page.url, ref: source.ref, role: source.role, name: source.name },
+      toGuard: { url: page.url, ref: target.ref, role: target.role, name: target.name },
+    };
+  }
+
+  guardFormInput(input: BrowserFormInputInput): PersonalActionGuard {
+    const page = this.requirePage(input.tabId);
+    const reference = this.requireRef(input.tabId, input.ref, page);
+    const binding = this.interactions.prepareDangerousAction(
+      { tabId: input.tabId, url: page.url }, reference, "form-input",
+    );
+    if (binding) this.authorize(input.confirmationId, binding);
     return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
   }
 

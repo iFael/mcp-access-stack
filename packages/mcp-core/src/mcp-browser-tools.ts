@@ -21,7 +21,7 @@ import {
 export const BROWSER_TOOL_NAMES = [
   "browser_status", "browser_connect", "browser_tabs", "browser_open",
   "browser_open_authorized_site",
-  "browser_navigate", "browser_snapshot", "browser_find", "browser_evaluate", "browser_click", "browser_hover", "browser_scroll", "browser_fill", "browser_type",
+  "browser_navigate", "browser_snapshot", "browser_find", "browser_evaluate", "browser_click", "browser_hover", "browser_drag", "browser_scroll", "browser_fill", "browser_form_input", "browser_type",
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
@@ -380,15 +380,20 @@ function definitions(
       () => e.evaluate(assumeParsed(v)),
       (activeContext) => e.evaluate(assumeParsed(v), activeContext),
     )),
-    d("browser_click", "Clicks an element ref and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_click", "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.click(assumeParsed(v)),
       (activeContext) => e.click(assumeParsed(v), activeContext),
     )),
-    d("browser_hover", "Moves the pointer over an element ref in an MCP-owned tab without clicking. Returns updated state.", c.browserHoverInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_hover", "Moves the pointer over an element ref OR validated CSS coordinates in an MCP-owned tab without clicking. Returns updated state.", c.browserHoverInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.hover(assumeParsed(v)),
       (activeContext) => e.hover(assumeParsed(v), activeContext),
+    )),
+    d("browser_drag", "Drag between two fresh element refs or CSS viewport coordinates in one MCP-owned tab. Revalidates both targets, applies business-site restrictions, and bounds the trusted pointer trajectory.", c.browserDragInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.drag(assumeParsed(v)),
+      (activeContext) => e.drag(assumeParsed(v), activeContext),
     )),
     d("browser_scroll", "Scrolls by CSS pixels, optionally over an element ref, without clicking. Returns updated state.", c.browserScrollInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
@@ -399,6 +404,11 @@ function definitions(
       context,
       () => e.fill(assumeParsed(v)),
       (activeContext) => e.fill(assumeParsed(v), activeContext),
+    )),
+    d("browser_form_input", "Set a native form control using its observed ref: text/number, checked boolean, or selected option value(s). Confirm acceptance/contract controls when requested; verify fresh refs and never log values.", c.browserFormInputInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.formInput(assumeParsed(v)),
+      (activeContext) => e.formInput(assumeParsed(v), activeContext),
     )),
     d("browser_type", "Types into the focused element using trusted input, optionally slowly and with a confirmed Enter submit. Text is never logged. If submit=true, a bound confirmation may be required.", c.browserTypeInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,

@@ -104,6 +104,129 @@ describe("personal browser extension assets", () => {
     expect(attachCount).toBe(3);
   });
 
+  it("hit-tests viewport coordinates against authoritative isolated-world refs", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const button = {
+      tagName: "BUTTON", isConnected: true, innerText: "Help", textContent: "Help",
+      parentElement: null, getRootNode: () => ({}), labels: [],
+      getAttribute: (_key: string) => null,
+      scrollIntoView: () => undefined,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
+      contains: (_other: unknown) => false,
+    };
+    const context = vm.createContext({
+      button, innerWidth: 800, innerHeight: 600,
+      location: { href: "https://example.test/" },
+      document: { elementFromPoint: () => button },
+    });
+    vm.runInContext(`globalThis.__mcpV3OwnedRefElements = new Map([["p-7",button]]);
+      globalThis.__mcpV3OwnedRefMetadata = new Map([["p-7",{ref:"p-7",role:"button",name:"Help"}]]);`, context);
+    for (const name of ["inspectPointInDocument", "probeGuardedElement"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const inspect = vm.runInContext("inspectPointInDocument", context) as (x: number, y: number) => unknown;
+    expect(inspect(21, 40)).toEqual({ ref: "p-7", role: "button", name: "Help" });
+    expect(inspect(900, 40)).toBeNull();
+    const probe = vm.runInContext("probeGuardedElement", context) as
+      (ref: string, guard: unknown, focus: boolean, x: number, y: number) => { x?: number; y?: number; error?: string };
+    const guard = { ref: "p-7", role: "button", name: "Help", url: "https://example.test/" };
+    expect(probe("p-7", guard, false, 21, 40)).toMatchObject({ x: 21, y: 40 });
+    expect(probe("p-7", guard, false, 150, 40)).toMatchObject({ error: "point_outside_target" });
+    expect(probe("p-7", { ...guard, name: "Wrong" }, false, 21, 40))
+      .toMatchObject({ error: "target_changed" });
+  });
+
+  it("drags with trusted CDP events and always releases the mouse on abort", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let aborted = false;
+    const ctx = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => { if (aborted) throw Object.assign(new Error("abort"), { code: "OPERATION_CANCELLED" }); },
+      chrome: {
+        scripting: { executeScript: async (request: { args: unknown[] }) => [{
+          result: { x: request.args[0] === "source" ? 20 : 80, y: 40 },
+        }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            commands.push({ method, params });
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "drag"), ctx);
+    const drag = vm.runInContext("drag", ctx) as (input: unknown) => Promise<unknown>;
+    const input = {
+      tabId: "personal:7", from: { ref: "source" }, to: { ref: "destination" }, steps: 3,
+      fromGuard: { ref: "source", url: "https://example.com/", role: "link", name: "Source" },
+      toGuard: { ref: "destination", url: "https://example.com/", role: "link", name: "Destination" },
+    };
+    await drag(input);
+    expect(commands.filter((event) => event.method === "Input.dispatchMouseEvent")
+      .map((event) => event.params.type)).toEqual([
+        "mouseMoved", "mousePressed", "mouseMoved", "mouseMoved", "mouseMoved", "mouseReleased",
+      ]);
+    expect(commands.find((event) => event.params.type === "mouseReleased")?.params).toMatchObject({ x: 80, y: 40 });
+    commands.length = 0;
+    await expect(drag({ ...input, fromGuard: undefined })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands).toHaveLength(0);
+  });
+
+  it("operates native form controls with trusted CDP and rejects mismatched values", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let kind: Record<string, unknown> = { kind: "checkbox", checked: false };
+    const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      probeGuardedElement: () => undefined,
+      inspectGuardedForm: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        scripting: { executeScript: async (request: { func: { name: string } }) => [{
+          result: request.func.name === "inspectGuardedForm" ? kind : { x: 45, y: 55 },
+        }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            commands.push({ method, params });
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "formInput"), context);
+    const update = vm.runInContext("formInput", context) as (input: unknown) => Promise<unknown>;
+    const common = { tabId: "personal:7", ref: "target",
+      guard: { ref: "target", role: "checkbox", name: "Subscribe", url: "https://example.com/" } };
+    await update({ ...common, value: true });
+    expect(commands.filter((event) => event.method === "Input.dispatchMouseEvent").map((event) => event.params.type))
+      .toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    commands.length = 0;
+    kind = { kind: "checkbox", checked: true };
+    await update({ ...common, value: true });
+    expect(commands).toEqual([]);
+    kind = { kind: "text" };
+    await expect(update({ ...common, value: true })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    commands.length = 0;
+    kind = { kind: "select", multiple: false, options: [
+      { index: 0, value: "BR", label: "Brazil", selected: true, disabled: false },
+      { index: 1, value: "US", label: "United States", selected: false, disabled: false },
+    ] };
+    await update({ ...common, value: ["US"] });
+    expect(commands.filter((event) => event.method === "Input.dispatchKeyEvent" && event.params.type === "keyDown")
+      .map((event) => event.params.key)).toEqual(["Home", "ArrowDown", "Enter"]);
+    commands.length = 0;
+    kind = { kind: "text" };
+    await update({ ...common, value: "Updated" });
+    expect(commands).toContainEqual({ method: "Input.insertText", params: { text: "Updated" } });
+  });
+
   it("evaluates confirmed JavaScript via native CDP", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -333,7 +456,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.5.0");
+    expect(parsedManifest.version).toBe("0.6.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

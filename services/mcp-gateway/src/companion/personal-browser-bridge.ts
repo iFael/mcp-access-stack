@@ -60,6 +60,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly pending = new Map<string, PendingCall>();
   private readonly actions = new PersonalBrowserActionPolicy();
   private readonly snapshots = new PersonalBrowserSnapshotState();
+  private readonly coordinateClicks = new Map<string, { x: number; y: number; ref: string; url: string }>();
+  private readonly coordinateDrags = new Map<string, { signature: string; fromRef: string; toRef: string }>();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -117,6 +119,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.peerInfo = undefined;
     this.actions.clear();
     this.snapshots.clear();
+    this.coordinateClicks.clear();
+    this.coordinateDrags.clear();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -157,6 +161,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("navigate", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
+    this.coordinateClicks.delete(args[0].tabId);
+    this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
@@ -167,11 +173,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Personal Chrome extension must support cdpAccessibilityV1. Reload the updated extension.");
     }
     const filtered = input.filter !== undefined || input.depth !== undefined ||
-      input.refId !== undefined || input.maxChars !== undefined;
+      input.refId !== undefined || input.maxChars !== undefined || input.point !== undefined;
     const result = await this.call("snapshot", {
       tabId: input.tabId,
       ...(filtered || input.forceFull ? { forceFull: true } : {}),
       ...(input.includeAccessibility ? { includeAccessibility: true } : {}),
+      ...(input.point ? { point: input.point } : {}),
     }, context);
     // The original authenticated refs, not the projected text, own the guards.
     this.actions.observeSnapshot(result);
@@ -202,14 +209,86 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     this.requireGuardedActions();
-    const guard = this.actions.guardClick(args[0]);
-    return this.call("click", { ...args[0], guard }, args[1]);
+    const [input, context] = args;
+    let ref = input.ref;
+    if (!ref) {
+      if (input.x === undefined || input.y === undefined) {
+        throw new AppError("INVALID_ARGUMENT", "Provide ref or viewport CSS x/y coordinates.");
+      }
+      let point = this.coordinateClicks.get(input.tabId);
+      if (!point || point.x !== input.x || point.y !== input.y) {
+        const snapshot = await this.snapshot({
+          tabId: input.tabId, point: { x: input.x, y: input.y }, forceFull: true,
+        }, context);
+        if (!snapshot.pointTarget) throw new AppError("LOCATOR_NOT_FOUND", "No observed control at those coordinates.");
+        point = { x: input.x, y: input.y, ref: snapshot.pointTarget.ref, url: snapshot.url };
+        this.coordinateClicks.set(input.tabId, point);
+      }
+      ref = point.ref;
+    }
+    const guardedInput = { ...input, ref };
+    const guard = this.actions.guardClick(guardedInput);
+    try {
+      const result = await this.call("click", { ...guardedInput, guard }, context);
+      this.coordinateClicks.delete(input.tabId);
+      return result;
+    } catch (error) {
+      this.coordinateClicks.delete(input.tabId);
+      throw error;
+    }
   }
 
   async hover(...args: Parameters<BrowserExecutor["hover"]>): ReturnType<BrowserExecutor["hover"]> {
     this.requireGuardedActions();
-    const guard = this.actions.guardReference(args[0].tabId, args[0].ref);
-    return this.call("hover", { ...args[0], guard }, args[1]);
+    const [input, context] = args;
+    let ref = input.ref;
+    if (!ref) {
+      if (input.x === undefined || input.y === undefined) {
+        throw new AppError("INVALID_ARGUMENT", "Provide ref or viewport CSS x/y coordinates.");
+      }
+      const snapshot = await this.snapshot({
+        tabId: input.tabId, point: { x: input.x, y: input.y }, forceFull: true,
+      }, context);
+      ref = snapshot.pointTarget?.ref;
+      if (!ref) throw new AppError("LOCATOR_NOT_FOUND", "No observed control at those coordinates.");
+    }
+    const guard = this.actions.guardReference(input.tabId, ref);
+    return this.call("hover", { ...input, ref, guard }, context);
+  }
+
+  async drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
+    this.requireGuardedActions();
+    const [input, context] = args;
+    const signature = JSON.stringify([input.from, input.to]);
+    let cached = this.coordinateDrags.get(input.tabId);
+    if (!cached || cached.signature !== signature) {
+      const resolve = async (endpoint: typeof input.from): Promise<string> => {
+        if ("ref" in endpoint) return endpoint.ref;
+        const snapshot = await this.snapshot({
+          tabId: input.tabId, point: { x: endpoint.x, y: endpoint.y }, forceFull: true,
+        }, context);
+        if (!snapshot.pointTarget) {
+          throw new AppError("LOCATOR_NOT_FOUND", "No observed interactive control at the drag endpoint.");
+        }
+        return snapshot.pointTarget.ref;
+      };
+      const fromRef = await resolve(input.from);
+      const toRef = await resolve(input.to);
+      cached = { signature, fromRef, toRef };
+      this.coordinateDrags.set(input.tabId, cached);
+    }
+    const from = { ...input.from, ref: cached.fromRef };
+    const to = { ...input.to, ref: cached.toRef };
+    const resolved = { ...input, from, to };
+    const guards = this.actions.guardDrag(resolved);
+    try {
+      const result = await this.call("drag", { ...resolved, ...guards }, context);
+      this.coordinateDrags.delete(input.tabId);
+      return result;
+    } catch (error) {
+      this.coordinateDrags.delete(input.tabId);
+      throw error;
+    }
   }
 
   async scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
@@ -223,6 +302,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.requireGuardedActions();
     const guard = this.actions.guardFill(args[0]);
     return this.call("fill", { ...args[0], guard }, args[1]);
+  }
+
+  async formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardFormInput(args[0]);
+    return this.call("formInput", { ...args[0], guard }, args[1]);
   }
 
   async type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
@@ -339,6 +424,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("goBack", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
+    this.coordinateClicks.delete(args[0].tabId);
+    this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
@@ -349,6 +436,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("goForward", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
+    this.coordinateClicks.delete(args[0].tabId);
+    this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
@@ -507,6 +596,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.peerInfo = peerInfo;
           this.actions.clear();
           this.snapshots.clear();
+          this.coordinateClicks.clear();
+          this.coordinateDrags.clear();
           if (previous && previous !== socket) {
             this.rejectPendingForGeneration(
               previousGeneration,
@@ -547,6 +638,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.peerInfo = undefined;
           this.actions.clear();
           this.snapshots.clear();
+          this.coordinateClicks.clear();
+          this.coordinateDrags.clear();
           this.rejectPendingForGeneration(
             generation,
             new AppError(

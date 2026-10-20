@@ -180,12 +180,20 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.hover(...args));
   }
 
+  drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
+    return this.invoke(args[1], (client) => client.drag(...args));
+  }
+
   scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
     return this.invoke(args[1], (client) => client.scroll(...args));
   }
 
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.invoke(args[1], (client) => client.fill(...args));
+  }
+
+  formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
+    return this.invoke(args[1], (client) => client.formInput(...args));
   }
 
   type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {

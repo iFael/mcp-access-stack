@@ -2,6 +2,7 @@ import type {
   BrowserActionResult,
   BrowserClickInput,
   BrowserHoverInput,
+  BrowserDragInput,
   BrowserScrollInput,
   BrowserCloseTabInput,
   BrowserConnectInput,
@@ -17,6 +18,7 @@ import type {
   BrowserExtractInput,
   BrowserExtractResult,
   BrowserFillInput,
+  BrowserFormInputInput,
   BrowserTypeInput,
   BrowserFindInput,
   BrowserFindResult,
@@ -87,8 +89,10 @@ export interface BrowserExecutor {
   evaluate(input: BrowserEvaluateInput, context?: OperationContext): Promise<BrowserEvaluateResult>;
   click(input: BrowserClickInput, context?: OperationContext): Promise<BrowserActionResult>;
   hover(input: BrowserHoverInput, context?: OperationContext): Promise<BrowserActionResult>;
+  drag(input: BrowserDragInput, context?: OperationContext): Promise<BrowserActionResult>;
   scroll(input: BrowserScrollInput, context?: OperationContext): Promise<BrowserActionResult>;
   fill(input: BrowserFillInput, context?: OperationContext): Promise<BrowserActionResult>;
+  formInput(input: BrowserFormInputInput, context?: OperationContext): Promise<BrowserActionResult>;
   type(input: BrowserTypeInput, context?: OperationContext): Promise<BrowserActionResult>;
   press(input: BrowserPressInput, context?: OperationContext): Promise<BrowserActionResult>;
   wait(input: BrowserWaitInput, context?: OperationContext): Promise<BrowserActionResult>;

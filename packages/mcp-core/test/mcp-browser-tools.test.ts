@@ -13,6 +13,8 @@ import {
   browserClickInputSchema,
   browserPressInputSchema,
   browserTypeInputSchema,
+  browserFormInputInputSchema,
+  browserDragInputSchema,
   browserEvaluateInputSchema,
   browserSnapshotInputSchema,
   browserSnapshotResultSchema,
@@ -84,6 +86,27 @@ describe("browser interaction parity contracts", () => {
     expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: "() => 1", unsafe: true }).success).toBe(false);
   });
 
+  it("validates drag references and viewport coordinates with bounded movement", () => {
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { ref: "a" }, to: { x: 30, y: 40 }, steps: 12,
+    }).success).toBe(true);
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { x: 20, y: 30 }, to: { x: 60, y: 70 }, steps: 41,
+    }).success).toBe(false);
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { ref: "a", x: 30, y: 40 }, to: { ref: "b" },
+    }).success).toBe(false);
+  });
+
+  it("validates native form controls with bounded options and no unknown input", () => {
+    for (const value of ["Brazil", 42, true, false, ["A", "B"]]) {
+      expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value }).success).toBe(true);
+    }
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: [] }).success).toBe(false);
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: ["x".repeat(501)] }).success).toBe(false);
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: true, custom: "bad" }).success).toBe(false);
+  });
+
   it("bounds autonomous typing and submission", () => {
     expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "hello", slowly: true, submit: true }).success).toBe(true);
     expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "x".repeat(100001) }).success).toBe(false);
@@ -92,6 +115,12 @@ describe("browser interaction parity contracts", () => {
 
   it("validates bounded hover, scroll, click and repeat keyboard arguments", () => {
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1" }).success).toBe(true);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", x: 120, y: 30 }).success).toBe(true);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", x: 120, y: 30 }).success).toBe(false);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", x: 120 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", x: 20, y: 40 }).success).toBe(true);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", x: 20, y: 40 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", y: 20 }).success).toBe(false);
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450 }).success).toBe(true);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: -1 }).success).toBe(false);

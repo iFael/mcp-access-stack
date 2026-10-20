@@ -50,6 +50,7 @@ import {
   type BrowserEvaluateRequest,
   type BrowserFillRequest,
   type BrowserHoverRequest,
+  type BrowserDragRequest,
   type BrowserScrollRequest,
   type BrowserNavigateRequest,
   type BrowserPressRequest,
@@ -161,6 +162,48 @@ export interface DirectPlaywrightEngineStatus {
   browserChannel: "chromium" | "chrome";
   chromiumRevision: string;
   incrementalSnapshots: boolean;
+}
+
+async function inspectSemanticPoint(page: Page, x: number, y: number): Promise<{ role: string; name: string } | null> {
+  return page.evaluate(({ x, y }) => {
+    type HitElement = {
+      tagName: string;
+      textContent: string | null;
+      parentElement?: HitElement | null;
+      shadowRoot?: { elementFromPoint(px: number, py: number): HitElement | null } | null;
+      closest(selector: string): HitElement | null;
+      getAttribute(name: string): string | null;
+      labels?: ArrayLike<{ textContent: string | null }> | null;
+    };
+    const browser = globalThis as unknown as {
+      innerWidth: number;
+      innerHeight: number;
+      document: { elementFromPoint(px: number, py: number): HitElement | null };
+    };
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 ||
+      x >= browser.innerWidth || y >= browser.innerHeight) return null;
+    let top = browser.document.elementFromPoint(x, y);
+    for (let depth = 0; depth < 6; depth += 1) {
+      const inner = top?.shadowRoot?.elementFromPoint(x, y);
+      if (!inner || inner === top) break;
+      top = inner;
+    }
+    if (!top) return null;
+    const interactive = "button,input,textarea,select,a[href],summary,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='switch'],[role='combobox'],[contenteditable='true']";
+    const element = top.closest(interactive);
+    if (!element) return null;
+    const tag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") ?? "text").toLowerCase();
+    const role = element.getAttribute("role") ??
+      (tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
+      tag === "textarea" ? "textbox" : tag === "select" ? "combobox" :
+      tag === "input" ? type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
+      type === "button" || type === "submit" ? "button" : "textbox" : "generic");
+    const label = element.getAttribute("aria-label") ||
+      Array.from(element.labels ?? []).map((item) => item.textContent ?? "").join(" ") ||
+      element.getAttribute("placeholder") || element.getAttribute("title") || element.textContent || "";
+    return { role: role.slice(0, 100), name: label.replace(/\s+/gu, " ").trim().slice(0, 500) };
+  }, { x, y });
 }
 
 export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
@@ -459,19 +502,45 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     });
   }
 
+  async inspectPoint(
+    input: { x: number; y: number },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("inspectPoint", options, async (page) => {
+      const point = await inspectSemanticPoint(page, input.x, input.y);
+      if (!point) throw new AppError("LOCATOR_NOT_FOUND", "No actionable element at the provided CSS coordinates.");
+      return this.pageResponse(page, undefined, point);
+    });
+  }
+
   async click(
     input: BrowserClickRequest,
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("click", options, async (page) => {
-      const target = this.refLocator(page, input.target);
-      await showActionPointer(target);
-      await target.click({
-        timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
-        ...(input.button ? { button: input.button } : {}),
-        ...(input.clickCount ? { clickCount: input.clickCount } : {}),
-        ...(input.modifiers ? { modifiers: input.modifiers } : {}),
-      });
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await showActionPointer(target);
+        await target.click({
+          timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
+          ...(input.button ? { button: input.button } : {}),
+          ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+          ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+        });
+      } else {
+        if (input.x === undefined || input.y === undefined || !input.role || !input.element) {
+          throw new AppError("INVALID_ARGUMENT", "Coordinate click requires a classified target.");
+        }
+        const current = await inspectSemanticPoint(page, input.x, input.y);
+        if (!current || current.role !== input.role || current.name !== input.element) {
+          throw new AppError("BROWSER_CONFIRMATION_INVALID", "Coordinate target changed before action.");
+        }
+        await page.mouse.click(input.x, input.y, {
+          ...(input.button ? { button: input.button } : {}),
+          ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+          ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+        });
+      }
       return this.pageResponse(page);
     });
   }
@@ -481,8 +550,61 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("hover", options, async (page) => {
-      const target = this.refLocator(page, input.target);
-      await target.hover({ timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await target.hover({ timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (input.x !== undefined && input.y !== undefined) {
+        if (!await inspectSemanticPoint(page, input.x, input.y)) {
+          throw new AppError("LOCATOR_NOT_FOUND", "Coordinate hover requires a visible actionable element.");
+        }
+        await page.mouse.move(input.x, input.y);
+      } else {
+        throw new AppError("INVALID_ARGUMENT", "Hover requires a ref or coordinates.");
+      }
+      return this.pageResponse(page);
+    });
+  }
+
+  async drag(
+    input: BrowserDragRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("drag", options, async (page) => {
+      const locate = async (endpoint: BrowserDragRequest["from"]): Promise<{ x: number; y: number }> => {
+        if (endpoint.target) {
+          const rect = await this.refLocator(page, endpoint.target).boundingBox();
+          if (!rect || rect.width <= 0 || rect.height <= 0) {
+            throw new AppError("LOCATOR_NOT_FOUND", "Drag endpoint is not visible.");
+          }
+          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        }
+        if (endpoint.x === undefined || endpoint.y === undefined || !endpoint.role || endpoint.name === undefined) {
+          throw new AppError("INVALID_ARGUMENT", "Coordinate drag endpoint must be classified.");
+        }
+        const found = await inspectSemanticPoint(page, endpoint.x, endpoint.y);
+        if (!found || found.role !== endpoint.role || found.name !== endpoint.name) {
+          throw new AppError("BROWSER_CONFIRMATION_INVALID", "Coordinate drag endpoint changed before action.");
+        }
+        return { x: endpoint.x, y: endpoint.y };
+      };
+      const source = await locate(input.from);
+      const destination = await locate(input.to);
+      const steps = input.steps ?? 10;
+      await page.mouse.move(source.x, source.y);
+      await page.mouse.down();
+      try {
+        for (let i = 1; i <= steps; i += 1) {
+          this.assertNotAborted(options.signal);
+          const factor = i / steps;
+          await page.mouse.move(
+            source.x + (destination.x - source.x) * factor,
+            source.y + (destination.y - source.y) * factor,
+            { steps: 1 },
+          );
+        }
+      } finally {
+        await page.mouse.up();
+      }
       return this.pageResponse(page);
     });
   }
@@ -517,6 +639,30 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
       });
       if (input.submit) await page.keyboard.press("Enter");
+      return this.pageResponse(page);
+    });
+  }
+
+  async formInput(
+    input: { target: string; value: string | number | boolean | string[] },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("formInput", options, async (page) => {
+      const target = this.refLocator(page, input.target);
+      if (typeof input.value === "boolean") {
+        await target.setChecked(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (Array.isArray(input.value)) {
+        await target.selectOption(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (typeof input.value === "number") {
+        await target.fill(String(input.value), { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else {
+        const tag = await target.evaluate((element) => element.tagName.toLowerCase());
+        if (tag === "select") {
+          await target.selectOption(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+        } else {
+          await target.fill(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+        }
+      }
       return this.pageResponse(page);
     });
   }

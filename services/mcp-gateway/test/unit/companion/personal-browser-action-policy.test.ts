@@ -19,6 +19,57 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("binds dangerous coordinate clicks to the exact viewport point", () => {
+    const policy = prepare();
+    let confirmationId = "";
+    try {
+      policy.guardClick({ tabId: sample.tabId, ref: "p-1", x: 20, y: 30 });
+    } catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+    }
+    expect(confirmationId).toBeTruthy();
+    expect(() => policy.guardClick({ tabId: sample.tabId, ref: "p-1", x: 21, y: 30, confirmationId }))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardClick({ tabId: sample.tabId, ref: "p-1", x: 20, y: 30, confirmationId }))
+      .toMatchObject({ ref: "p-1" });
+  });
+
+  it("requires bound confirmation to accept contract controls, but not for ordinary checkboxes", () => {
+    const policy = prepare();
+    policy.observeSnapshot({ tabId: sample.tabId, url: sample.url, content: "", refs: [
+      { ref: "agree", role: "checkbox", name: "Accept terms and conditions" },
+      { ref: "notifications", role: "checkbox", name: "Receive notifications" },
+    ] });
+    expect(policy.guardFormInput({ tabId: sample.tabId, ref: "notifications", value: true })).toMatchObject({
+      ref: "notifications", role: "checkbox",
+    });
+    expect(() => policy.guardFormInput({ tabId: sample.tabId, ref: "agree", value: true }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+  });
+
+  it("guards both drag endpoints and binds destructive confirmation to exact target pair", () => {
+    const policy = prepare();
+    const from = { ref: "p-2" };
+    const to = { ref: "p-1" };
+    let confirmationId = "";
+    try {
+      policy.guardDrag({ tabId: sample.tabId, from, to });
+    } catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+    }
+    expect(confirmationId).toBeTruthy();
+    expect(() => policy.guardDrag({ tabId: sample.tabId, from: to, to: from, confirmationId }))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardDrag({ tabId: sample.tabId, from, to, confirmationId })).toMatchObject({
+      fromGuard: { ref: "p-2", role: "link", name: "Help" },
+      toGuard: { ref: "p-1", role: "button", name: "Delete account" },
+    });
+  });
+
   it("binds JavaScript confirmation to the exact function digest", () => {
     const policy = prepare();
     let confirmationId = "";

@@ -14,6 +14,7 @@ import {
   type BrowserActionResult,
   type BrowserClickInput,
   type BrowserHoverInput,
+  type BrowserDragInput,
   type BrowserScrollInput,
   type BrowserCloseTabInput,
   type BrowserConnectInput,
@@ -31,6 +32,7 @@ import {
   type BrowserExtractInput,
   type BrowserExtractResult,
   type BrowserFillInput,
+  type BrowserFormInputInput,
   type BrowserTypeInput,
   type BrowserFindInput,
   type BrowserEvaluateInput,
@@ -912,34 +914,46 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    this.assertBusinessReadOnlyReference(tab, input.ref, "click");
+    if (input.ref) this.assertBusinessReadOnlyReference(tab, input.ref, "click");
     await this.selectTab(tab);
-    const reference = this.interactionContext.requireReference(
-      tab.tabId,
-      input.ref,
-    );
-    const authorization = this.interactionContext.prepareDangerousAction(
-      tab,
-      reference,
-      clickAuthorizationAction(input),
-    );
-    if (authorization) {
-      this.authorizeAction(input.confirmationId, authorization);
+    const variant = clickAuthorizationAction(input);
+    let action: Parameters<typeof this.driver.click>[0];
+    if (input.ref) {
+      const reference = this.interactionContext.requireReference(tab.tabId, input.ref);
+      const authorization = this.interactionContext.prepareDangerousAction(tab, reference, variant);
+      if (authorization) this.authorizeAction(input.confirmationId, authorization);
+      action = {
+        target: reference.ref, element: reference.name || reference.role,
+        ...(input.button ? { button: input.button } : {}),
+        ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+        ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+      };
+    } else {
+      if (input.x === undefined || input.y === undefined || !this.driver.inspectPoint) {
+        throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "The driver must classify a coordinate target before clicking.");
+      }
+      const inspected = await this.driver.inspectPoint({ x: input.x, y: input.y });
+      const target = inspected.result as { role?: unknown; name?: unknown } | undefined;
+      if (typeof target?.role !== "string" || typeof target?.name !== "string") {
+        throw new AppError("LOCATOR_NOT_FOUND", "No classified interactive control at the CSS coordinates.");
+      }
+      this.assertBusinessReadOnlyTarget(tab, target.name, "click", target.role);
+      const authorization = this.interactionContext.prepareDangerousTarget(tab, target.name, variant, target.role);
+      if (authorization) this.authorizeAction(input.confirmationId, authorization);
+      action = {
+        x: input.x, y: input.y, role: target.role, element: target.name,
+        ...(input.button ? { button: input.button } : {}),
+        ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+        ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+      };
     }
     await this.beginNavigation(tab.tabId, "click");
     const actionStarted = performance.now();
-    const response = await this.driver.click({
-      target: reference.ref,
-      element: reference.name || reference.role,
-      ...(input.button ? { button: input.button } : {}),
-      ...(input.clickCount ? { clickCount: input.clickCount } : {}),
-      ...(input.modifiers ? { modifiers: input.modifiers } : {}),
-    });
-    const actionMs = elapsedMs(actionStarted);
+    const response = await this.driver.click(action);
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
     await this.checkpoint();
-    return this.withActionState(tab.tabId, input.knownRevision, actionMs, context);
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context);
   }
 
   async hover(
@@ -948,11 +962,60 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     await this.selectTab(tab);
-    const reference = this.interactionContext.requireReference(tab.tabId, input.ref);
     if (!this.driver.hover) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support hover.");
+    const target = input.ref
+      ? { target: this.interactionContext.requireReference(tab.tabId, input.ref).ref }
+      : input.x !== undefined && input.y !== undefined
+        ? { x: input.x, y: input.y }
+        : undefined;
+    if (!target) throw new AppError("INVALID_ARGUMENT", "Hover requires a ref or viewport coordinates.");
     const started = performance.now();
-    const response = await this.driver.hover({ target: reference.ref });
+    const response = await this.driver.hover(target);
     this.updateSelectedTab(tab.tabId, response);
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
+  }
+
+  async drag(
+    input: BrowserDragInput,
+    context: OperationContext = {},
+  ): Promise<BrowserActionResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (this.isBusinessReadOnlyTab(tab)) {
+      throw new AppError("ACTION_BLOCKED_BY_POLICY", "Dragging is blocked on business-read-only sites.");
+    }
+    if (!this.driver.drag) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support drag-and-drop.");
+    await this.selectTab(tab);
+    const resolve = async (endpoint: BrowserDragInput["from"]) => {
+      if ("ref" in endpoint) {
+        const reference = this.interactionContext.requireReference(tab.tabId, endpoint.ref);
+        return { driver: { target: reference.ref }, reference };
+      }
+      if (!this.driver.inspectPoint) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Cannot classify coordinate drag endpoint.");
+      const observed = await this.driver.inspectPoint({ x: endpoint.x, y: endpoint.y });
+      const point = observed.result as { role?: unknown; name?: unknown } | undefined;
+      if (typeof point?.role !== "string" || typeof point?.name !== "string") {
+        throw new AppError("LOCATOR_NOT_FOUND", "Coordinate drag endpoint has no actionable control.");
+      }
+      return {
+        driver: { x: endpoint.x, y: endpoint.y, role: point.role, name: point.name },
+        reference: { ref: "coordinate", role: point.role, name: point.name },
+      };
+    };
+    const from = await resolve(input.from);
+    const to = await resolve(input.to);
+    const fromRisk = this.interactionContext.prepareDangerousAction(tab, from.reference, "drag");
+    const toRisk = this.interactionContext.prepareDangerousAction(tab, to.reference, "drag");
+    const category = fromRisk?.category ?? toRisk?.category;
+    if (category) {
+      const label = `${from.reference.role}:${from.reference.name}=>${to.reference.role}:${to.reference.name}|${JSON.stringify([input.from, input.to])}`;
+      this.authorizeAction(input.confirmationId, this.interactionContext.prepareConfirmation(tab, category, "drag", label));
+    }
+    await this.beginNavigation(tab.tabId, "click");
+    const started = performance.now();
+    const response = await this.driver.drag({ from: from.driver, to: to.driver, ...(input.steps !== undefined ? { steps: input.steps } : {}) });
+    this.updateSelectedTab(tab.tabId, response);
+    this.updateRequestedUrl(tab.tabId);
+    await this.checkpoint();
     return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
   }
 
@@ -995,6 +1058,31 @@ export class BrowserRuntime implements BrowserExecutor {
     const actionMs = elapsedMs(actionStarted);
     this.updateSelectedTab(tab.tabId, response);
     return this.withActionState(tab.tabId, input.knownRevision, actionMs, context);
+  }
+
+  async formInput(
+    input: BrowserFormInputInput,
+    context: OperationContext = {},
+  ): Promise<BrowserActionResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    await this.selectTab(tab);
+    const reference = this.interactionContext.requireReference(tab.tabId, input.ref);
+    // Checking acceptance/contract controls is a deliberate commitment.
+    if (typeof input.value === "boolean" && input.value === true) {
+      const confirmation = this.interactionContext.prepareDangerousAction(
+        tab, reference, "form-input",
+      );
+      if (confirmation) this.authorizeAction(input.confirmationId, confirmation);
+    }
+    if (this.isBusinessReadOnlyTab(tab)) {
+      throw new AppError("ACTION_BLOCKED_BY_POLICY", "Changing form controls is blocked in business-read-only mode.");
+    }
+    if (!this.driver.formInput) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support form controls.");
+    const started = performance.now();
+    const response = await this.driver.formInput({ target: reference.ref, value: input.value });
+    this.updateSelectedTab(tab.tabId, response);
+    await this.checkpoint();
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
   }
 
   async type(

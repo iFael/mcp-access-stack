@@ -6,13 +6,13 @@ import type {
 } from "./browser-confirmation.js";
 
 export function clickAuthorizationAction(
-  input: Pick<BrowserClickInput, "button" | "clickCount" | "modifiers">,
+  input: Pick<BrowserClickInput, "button" | "clickCount" | "modifiers" | "x" | "y">,
 ): string {
   const button = input.button ?? "left";
   const count = input.clickCount ?? 1;
   const modifiers = [...new Set(input.modifiers ?? [])].sort();
-  if (button === "left" && count === 1 && modifiers.length === 0) return "click";
-  return `click:${button}:${count}:${modifiers.join("+")}`;
+  const variant = button === "left" && count === 1 && modifiers.length === 0 ? "click" : `click:${button}:${count}:${modifiers.join("+")}`;
+  return input.x === undefined || input.y === undefined ? variant : `${variant}:point:${input.x},${input.y}`;
 }
 
 /** Detect an Enter action anywhere in a Playwright-compatible key chord/sequence. */

@@ -23,6 +23,43 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("resolves viewport coordinates to authenticated structured refs before clicking or hovering", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input: Record<string, unknown> }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type !== "request") return;
+      requests.push({ ...(message.operation ? { operation: message.operation } : {}), input: message.input as Record<string, unknown> });
+      const result = message.operation === "snapshot"
+        ? {
+          tabId: "personal:7", url: "https://example.com/",
+          content: '- link "Help" [ref=p-7]',
+          refs: [{ ref: "p-7", role: "link", name: "Help" }],
+          pointTarget: { ref: "p-7", role: "link", name: "Help" },
+        }
+        : { tabId: "personal:7", completed: true };
+      extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, result }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.click({ tabId: "personal:7", x: 31, y: 44 }))
+        .resolves.toMatchObject({ tabId: "personal:7", completed: true });
+      expect(requests.map((request) => request.operation)).toEqual(["snapshot", "click"]);
+      expect(requests[0]?.input).toMatchObject({ tabId: "personal:7", point: { x: 31, y: 44 } });
+      expect(requests[1]?.input).toMatchObject({
+        tabId: "personal:7", ref: "p-7", x: 31, y: 44,
+        guard: { ref: "p-7", role: "link", name: "Help" },
+      });
+      requests.length = 0;
+      await expect(bridge.hover({ tabId: "personal:7", x: 31, y: 44 }))
+        .resolves.toMatchObject({ completed: true });
+      expect(requests.map((request) => request.operation)).toEqual(["snapshot", "hover"]);
+      expect(requests[1]?.input).toMatchObject({ ref: "p-7", x: 31, y: 44 });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
   it("projects personal snapshots while preserving full authenticated refs and revision history", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<Record<string, unknown>> = [];

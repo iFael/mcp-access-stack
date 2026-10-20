@@ -14,6 +14,7 @@ import {
   browserOperationResultSchemas,
   type BrowserClickInput,
   type BrowserHoverInput,
+  type BrowserDragInput,
   type BrowserScrollInput,
   type BrowserCloseTabInput,
   type BrowserConnectInput,
@@ -24,6 +25,7 @@ import {
   type BrowserExecutor,
   type BrowserExtractInput,
   type BrowserFillInput,
+  type BrowserFormInputInput,
   type BrowserTypeInput,
   type BrowserFindInput,
   type BrowserEvaluateInput,
@@ -146,12 +148,20 @@ export class BrowserWorkerClient implements BrowserExecutor {
     return this.call("hover", input, context);
   }
 
+  drag(input: BrowserDragInput, context?: OperationContext) {
+    return this.call("drag", input, context);
+  }
+
   scroll(input: BrowserScrollInput, context?: OperationContext) {
     return this.call("scroll", input, context);
   }
 
   fill(input: BrowserFillInput, context?: OperationContext) {
     return this.call("fill", input, context);
+  }
+
+  formInput(input: BrowserFormInputInput, context?: OperationContext) {
+    return this.call("formInput", input, context);
   }
 
   type(input: BrowserTypeInput, context?: OperationContext) {
