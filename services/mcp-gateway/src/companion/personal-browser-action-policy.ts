@@ -15,6 +15,7 @@ import {
   type BrowserPressInput,
   type BrowserTypeInput,
   type BrowserEvaluateInput,
+  type BrowserFrameSequenceInput,
   type BrowserSnapshotResult,
   type BrowserSequenceInput,
   type BrowserTab,
@@ -28,6 +29,14 @@ export interface PersonalActionGuard {
   ref?: string;
   role?: string;
   name?: string;
+}
+
+/** Element descriptor returned by the extension preflight; never a field value. */
+export interface PersonalLegacyFrameTarget {
+  index: number;
+  label: string;
+  role: string;
+  submitLike: boolean;
 }
 
 export class PersonalBrowserActionPolicy {
@@ -303,6 +312,42 @@ export class PersonalBrowserActionPolicy {
       else guarded.push(step);
     }
     return guarded;
+  }
+
+  /**
+   * Bind every dangerous legacy click/Enter target before consuming any
+   * confirmation, so a missing grant for a later step never wastes an earlier one.
+   */
+  guardFrameSequence(
+    input: BrowserFrameSequenceInput,
+    targets: readonly PersonalLegacyFrameTarget[],
+  ): void {
+    const page = this.requirePage(input.tabId);
+    const tab = { tabId: input.tabId, url: page.url };
+    const required: Array<{
+      confirmationId: string | undefined;
+      binding: Parameters<BrowserConfirmationRegistry["create"]>[0];
+    }> = [];
+    for (const target of targets) {
+      const step = input.steps[target.index];
+      if (step?.action !== "click" && step?.action !== "press") {
+        throw new AppError("RELAY_PROTOCOL_ERROR", "Legacy preflight target does not match a click or key step.");
+      }
+      if (step.action === "press") validateBrowserKeySequence(step.key);
+      const action = `legacy-${step.action}`;
+      const scope = `${(step.framePath ?? []).join("/")}|${target.role}:${target.label}`;
+      const category = this.interactions.prepareDangerousTarget(tab, target.label, action, target.role)?.category ??
+        (target.submitLike || step.action === "press" ? "submit-form" : undefined);
+      if (!category) continue;
+      required.push({
+        confirmationId: step.confirmationId,
+        binding: this.interactions.prepareConfirmation(tab, category, action,
+          step.action === "press" ? `keyboard:Enter|${scope}` : scope),
+      });
+    }
+    const missing = required.find((entry) => entry.confirmationId === undefined);
+    if (missing) this.authorize(undefined, missing.binding);
+    for (const entry of required) this.authorize(entry.confirmationId, entry.binding);
   }
 
   discard(tabIds: readonly string[]): void {

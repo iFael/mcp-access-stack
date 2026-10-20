@@ -63,6 +63,66 @@ export class McpBrowserSmokeClient implements BrowserExecutor {
     );
   }
 
+  async selectTab(input: c.BrowserTabActionInput): Promise<c.BrowserTabResult> {
+    return c.browserTabResultSchema.parse(
+      await this.callTool("browser_select_tab", c.browserTabActionInputSchema.parse(input)),
+    );
+  }
+
+  async dialog(input: c.BrowserDialogInput): Promise<c.BrowserDialogResult> {
+    return c.browserDialogResultSchema.parse(
+      await this.callTool("browser_dialog", c.browserDialogInputSchema.parse(input)),
+    );
+  }
+
+  async viewport(input: c.BrowserViewportInput): Promise<c.BrowserViewportResult> {
+    return c.browserViewportResultSchema.parse(
+      await this.callTool("browser_viewport", c.browserViewportInputSchema.parse(input)),
+    );
+  }
+
+  async find(input: c.BrowserFindInput): Promise<c.BrowserFindResult> {
+    return c.browserFindResultSchema.parse(
+      await this.callTool("browser_find", c.browserFindInputSchema.parse(input)),
+    );
+  }
+
+  async evaluate(input: c.BrowserEvaluateInput): Promise<c.BrowserEvaluateResult> {
+    return c.browserEvaluateResultSchema.parse(
+      await this.callTool("browser_evaluate", c.browserEvaluateInputSchema.parse(input)),
+    );
+  }
+
+  async hover(input: c.BrowserHoverInput): Promise<c.BrowserActionResult> {
+    return c.browserActionResultSchema.parse(
+      await this.callTool("browser_hover", c.browserHoverInputSchema.parse(input)),
+    );
+  }
+
+  async drag(input: c.BrowserDragInput): Promise<c.BrowserActionResult> {
+    return c.browserActionResultSchema.parse(
+      await this.callTool("browser_drag", c.browserDragInputSchema.parse(input)),
+    );
+  }
+
+  async scroll(input: c.BrowserScrollInput): Promise<c.BrowserActionResult> {
+    return c.browserActionResultSchema.parse(
+      await this.callTool("browser_scroll", c.browserScrollInputSchema.parse(input)),
+    );
+  }
+
+  async formInput(input: c.BrowserFormInputInput): Promise<c.BrowserActionResult> {
+    return c.browserActionResultSchema.parse(
+      await this.callTool("browser_form_input", c.browserFormInputInputSchema.parse(input)),
+    );
+  }
+
+  async type(input: c.BrowserTypeInput): Promise<c.BrowserActionResult> {
+    return c.browserActionResultSchema.parse(
+      await this.callTool("browser_type", c.browserTypeInputSchema.parse(input)),
+    );
+  }
+
   async click(input: c.BrowserClickInput): Promise<c.BrowserActionResult> {
     return c.browserActionResultSchema.parse(
       await this.callTool("browser_click", c.browserClickInputSchema.parse(input)),

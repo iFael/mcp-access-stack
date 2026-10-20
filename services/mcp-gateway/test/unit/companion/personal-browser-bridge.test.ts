@@ -58,14 +58,113 @@ describe("PersonalBrowserBridge", () => {
         steps: [{ action: "index" }, { action: "assert" }],
       });
       expect(requests).toEqual([{ operation: "frameSequence", input }]);
+      // Mutations need a fresh page guard before anything is dispatched.
       await expect(bridge.frameSequence({ tabId: input.tabId, steps: [
         { action: "index", framePath: ["menu"] },
         { action: "click", framePath: ["menu"], locator: { selector: "#delete" } },
-      ] })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+      ] })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
       expect(requests).toHaveLength(1);
     } finally {
       extension.off("message", respond);
       await close();
+    }
+  });
+
+  it("preflights legacy frame mutations and binds every dangerous target before consuming a confirmation", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const requests: Array<Record<string, unknown>> = [];
+    let targets = [
+      { index: 1, label: "Excluir pedido", role: "button", submitLike: false },
+      { index: 2, label: "keyboard:Enter", role: "keyboard", submitLike: true },
+    ];
+    const respond = (data: WebSocket.RawData) => {
+      const req = JSON.parse(data.toString()) as WireMessage;
+      if (req.type !== "request") return;
+      const input = req.input as Record<string, unknown>;
+      let result: unknown = { tabId, url: "https://legacy.example/", content: "Legacy", refs: [] };
+      if (req.operation === "frameSequence") {
+        requests.push(input);
+        result = input.phase === "preflight"
+          ? { tabId, completed: true, steps: targets.map(({ index, ...value }) => ({
+            index, action: index === 1 ? "click" : "press", completed: true, value,
+            strategy: "chrome-frame-preflight" })),
+          telemetry: { totalMs: 1, strategy: "chrome-frame-preflight", retries: 0 } }
+          : { tabId, completed: true, steps: [0, 1, 2].map((index) => ({
+            index, action: ["fill", "click", "press"][index], completed: true })),
+          telemetry: { totalMs: 3, strategy: "chrome-frame-native-input", retries: 0 } };
+      }
+      extension.send(JSON.stringify({ type: "response", id: req.id, ok: true, result }));
+    };
+    extension.on("message", respond);
+    const confirmationOf = async (promise: Promise<unknown>): Promise<string> => {
+      try {
+        await promise;
+      } catch (error) {
+        const typed = error as { code: string; message: string };
+        expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+        return JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId as string;
+      }
+      throw new Error("Expected a confirmation request.");
+    };
+    try {
+      await bridge.snapshot({ tabId });
+      const fill = { action: "fill" as const, framePath: ["main"], locator: { name: "pedido" }, value: "42" };
+      const click = { action: "click" as const, framePath: ["main"], locator: { selector: "#excluir" } };
+      const press = { action: "press" as const, framePath: ["main"], key: "Enter" };
+      const steps = [fill, click, press];
+      const first = await confirmationOf(bridge.frameSequence({ tabId, steps }));
+      expect(requests.map((request) => request.phase)).toEqual(["preflight"]);
+      expect(requests[0]).toMatchObject({ guard: { url: "https://legacy.example/" } });
+      // A later missing confirmation must not consume the earlier one.
+      const second = await confirmationOf(bridge.frameSequence({ tabId, steps: [
+        fill, { ...click, confirmationId: first }, press,
+      ] }));
+      expect(second).not.toBe(first);
+      const confirmed = [fill, { ...click, confirmationId: first }, { ...press, confirmationId: second }];
+      await expect(bridge.frameSequence({ tabId, steps: confirmed })).resolves.toMatchObject({
+        completed: true, steps: [{ action: "fill" }, { action: "click" }, { action: "press" }],
+      });
+      expect(requests.map((request) => request.phase))
+        .toEqual(["preflight", "preflight", "preflight", "execute"]);
+      expect(requests[3]).toMatchObject({ phase: "execute", expectedTargets: targets });
+      // Confirmations are single use.
+      await expect(bridge.frameSequence({ tabId, steps: confirmed }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      // A preflight that omits a click step cannot be used to skip confirmation.
+      targets = [targets[1]!];
+      await expect(bridge.frameSequence({ tabId, steps }))
+        .rejects.toMatchObject({ code: "RELAY_PROTOCOL_ERROR" });
+      expect(requests.filter((request) => request.phase === "execute")).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("refuses legacy frame mutations when the extension lacks the mutation capability", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const workerSource = await readFile(
+      path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
+    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1] ?? "";
+    const extension = await connectExtension(port, token,
+      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "frameSequenceMutationsV1"));
+    const operations: string[] = [];
+    extension.on("message", (data: WebSocket.RawData) => {
+      const req = JSON.parse(data.toString()) as WireMessage;
+      if (req.type === "request" && req.operation) operations.push(req.operation);
+    });
+    try {
+      await expect(bridge.frameSequence({ tabId: "personal:7", steps: [
+        { action: "click", locator: { selector: "#go" } },
+      ] })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+      expect(operations).toEqual([]);
+    } finally {
+      extension.close();
+      await bridge.close();
     }
   });
 

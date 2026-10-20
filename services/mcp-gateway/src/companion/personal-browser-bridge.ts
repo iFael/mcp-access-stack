@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   AppError,
   browserOperationResultSchemas,
+  containsBrowserEnterKey,
   browserPdfTransportResultSchema,
   findBrowserElements,
   projectBrowserSnapshot,
@@ -13,6 +14,7 @@ import {
   errorCodes,
   type BrowserExecutor,
   type BrowserDragInput,
+  type BrowserFrameSequenceInput,
   type BrowserOperation,
   type OperationContext,
 } from "@vs-code-gpt/shared";
@@ -29,7 +31,10 @@ import {
   PERSONAL_BROWSER_PROTOCOL_VERSION,
   PERSONAL_BROWSER_EXTENSION_VERSION,
 } from "./personal-browser-extension-assets.js";
-import { PersonalBrowserActionPolicy } from "./personal-browser-action-policy.js";
+import {
+  PersonalBrowserActionPolicy,
+  type PersonalLegacyFrameTarget,
+} from "./personal-browser-action-policy.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 
 const DEFAULT_PORT = 3361;
@@ -474,13 +479,22 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async frameSequence(
     ...args: Parameters<NonNullable<BrowserExecutor["frameSequence"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameSequence"]>> {
-    // Reject any unsupported mutation before sending or executing read steps.
-    // Native frame click/fill remain separate guarded operations.
-    if (args[0].steps.some((step) =>
-      !["index", "extract", "assert", "waitFor"].includes(step.action))) {
+    const [input, context] = args;
+    if (input.steps.every((step) => READ_ONLY_FRAME_STEPS.has(step.action))) {
+      return this.call("frameSequence", input, context);
+    }
+    this.requireGuardedActions();
+    if (!this.peerInfo?.capabilities.includes("frameSequenceMutationsV1")) {
       throw unsupported("browser_frame_sequence_mutation");
     }
-    return this.call("frameSequence", args[0], args[1]);
+    // Two calls: a side-effect-free preflight describes every click/Enter
+    // target, all required confirmations are bound before any is consumed,
+    // and execution fails closed unless it observes the same targets.
+    const guard = this.actions.guardPage(input.tabId);
+    const preflight = await this.call("frameSequence", { ...input, guard, phase: "preflight" }, context);
+    const targets = parseLegacyFrameTargets(input, preflight.steps);
+    this.actions.guardFrameSequence(input, targets);
+    return this.call("frameSequence", { ...input, guard, phase: "execute", expectedTargets: targets }, context);
   }
 
   navigatePath(
@@ -1325,6 +1339,31 @@ function sendCancel(socket: WebSocket, id: string): void {
 }
 
 const PERSONAL_MUTATIONS: ReadonlySet<BrowserOperation> = new Set(PERSONAL_BROWSER_MUTATING_OPERATIONS);
+const READ_ONLY_FRAME_STEPS: ReadonlySet<string> = new Set(["index", "extract", "assert", "waitFor"]);
+
+// The extension must describe exactly every click and Enter step; anything
+// else means the preflight cannot be trusted to bind confirmations.
+function parseLegacyFrameTargets(
+  input: BrowserFrameSequenceInput,
+  steps: ReadonlyArray<{ index: number; action: string; value?: unknown }>,
+): PersonalLegacyFrameTarget[] {
+  const expected = input.steps.flatMap((step, index) =>
+    step.action === "click" || (step.action === "press" && containsBrowserEnterKey(step.key)) ? [index] : []);
+  const targets = steps.map((step) => {
+    const value = step.value;
+    if (!isRecord(value) || typeof value.label !== "string" || value.label.length > 200 ||
+        typeof value.role !== "string" || value.role.length < 1 || value.role.length > 200 ||
+        typeof value.submitLike !== "boolean" || step.action !== input.steps[step.index]?.action) {
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Personal Chrome returned an invalid legacy frame preflight.");
+    }
+    return { index: step.index, label: value.label, role: value.role, submitLike: value.submitLike };
+  });
+  if (targets.length !== expected.length ||
+      targets.some((target, position) => target.index !== expected[position])) {
+    throw new AppError("RELAY_PROTOCOL_ERROR", "Personal Chrome preflight did not describe every click/Enter step.");
+  }
+  return targets;
+}
 
 function isMutatingOperation(operation: BrowserOperation): boolean {
   return PERSONAL_MUTATIONS.has(operation);

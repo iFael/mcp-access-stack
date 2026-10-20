@@ -26,7 +26,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
   "open", "selectTab", "dialog", "viewport", "upload", "download", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
-  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill",
+  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill", "frameSequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -68,6 +68,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabGroups",
   "guardedActionsV1",
   "snapshotRevisionV1",
+  "frameSequenceMutationsV1",
   "openShadowDomV1",
   "cdpAccessibilityV1",
   "closeTab",
@@ -907,7 +908,7 @@ async function click(input, signal) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
-      args: [input.ref, input.guard, false, input.x, input.y],
+      args: [input.ref, input.guard, false, input.x ?? null, input.y ?? null],
     });
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
@@ -951,7 +952,7 @@ async function hover(input, signal) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
-      args: [input.ref, input.guard, false, input.x, input.y],
+      args: [input.ref, input.guard, false, input.x ?? null, input.y ?? null],
     });
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Hover reference is stale or obscured.");
@@ -1006,7 +1007,7 @@ async function drag(input, signal) {
     const [probe] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
-      args: [endpoint.ref, guard, false, endpoint.x, endpoint.y],
+      args: [endpoint.ref, guard, false, endpoint.x ?? null, endpoint.y ?? null],
     });
     if (!probe?.result || probe.result.error) {
       throw coded("BROWSER_CONFIRMATION_INVALID", "Drag endpoint is stale, obscured or outside its observed control.");
@@ -1673,13 +1674,13 @@ function probeDirectFrameControl(expectedUrl, selector, text, match, index, fill
     : Array.from(document.querySelectorAll("button,a,summary,input[type=submit],[role=button]")).slice(0, 201);
   if (candidates.length > 200) return { ambiguous: true };
   const matched = candidates.filter((node) => {
-    if (text === undefined) return true;
+    if (text == null) return true;
     const label = (node.innerText || node.textContent || node.value || "").trim();
     return match === "contains" ? label.includes(text) : label === text;
   });
   if (matched.length === 0) return { missing: true };
-  if (index === undefined && matched.length !== 1) return { ambiguous: true };
-  if (index !== undefined && (index < 0 || index >= matched.length)) return { missing: true };
+  if (index == null && matched.length !== 1) return { ambiguous: true };
+  if (index != null && (index < 0 || index >= matched.length)) return { missing: true };
   const element = matched[index ?? 0];
   const tag = element.tagName.toLowerCase();
   const type = (element.getAttribute("type") || "").toLowerCase();
@@ -1740,8 +1741,8 @@ async function directFrameAction(input, signal, filling) {
     [candidate] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId, frameIds: [frame.frameId] },
       func: probeDirectFrameControl,
-      args: [frame.result.url, input.selector ?? null, input.text,
-        input.match ?? "exact", input.index, filling],
+      args: [frame.result.url, input.selector ?? null, input.text ?? null,
+        input.match ?? "exact", input.index ?? null, filling],
     });
   } catch {
     throw coded("FRAME_NOT_READY", "The frame control cannot be inspected.");
@@ -1788,7 +1789,7 @@ async function directFrameAction(input, signal, filling) {
       }
       const [focused] = await chrome.scripting.executeScript({
         target: { tabId: chromeTabId, frameIds: [frame.frameId] },
-        func: confirmDirectFrameFocus, args: [frame.result.url, input.selector],
+        func: confirmDirectFrameFocus, args: [frame.result.url, input.selector ?? null],
       });
       if (!focused || focused.frameId !== frame.frameId ||
           (frame.documentId && focused.documentId !== frame.documentId) ||
@@ -2146,8 +2147,10 @@ async function domIndex(input, signal) {
   };
 }
 
-// Read-only legacy frame steps. Executed inside the selected document; no
-// synthetic DOM mutations, no credential field values and no cross-frame DOM access.
+// Legacy frame step probe. Executed inside the selected document; no synthetic
+// DOM mutations, no credential field values and no cross-frame DOM access.
+// Mutation steps only resolve, describe and scroll their target here; the
+// action itself is dispatched afterwards as trusted CDP input.
 function probePersonalLegacyReadStep(expectedUrl, step, selector) {
   if (location.href !== expectedUrl) return { stale: true };
   const locator = step.locator;
@@ -2157,10 +2160,15 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     return style.display !== "none" && style.visibility !== "hidden" &&
       style.opacity !== "0" && rect.width > 0 && rect.height > 0;
   };
+  const buttonInput = (element) => element.tagName === "INPUT" &&
+    ["submit", "button", "reset"].includes((element.getAttribute("type") || "").toLowerCase());
   const label = (element) =>
     (element.getAttribute("aria-label") || element.getAttribute("title") ||
-      (["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
-        ? element.getAttribute("placeholder") : (element.innerText || element.textContent)) ||
+      (buttonInput(element) ? element.value :
+        element.tagName === "INPUT" && (element.getAttribute("type") || "").toLowerCase() === "image"
+          ? element.getAttribute("alt") :
+          ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
+            ? element.getAttribute("placeholder") : (element.innerText || element.textContent)) ||
       "").trim();
   let candidates = [];
   if (locator) {
@@ -2198,6 +2206,50 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
   const isVisible = exists && visible(element);
   const enabled = exists && !element.disabled && element.getAttribute("aria-disabled") !== "true";
   const text = exists ? label(element).slice(0, 20000) : "";
+  if (["click", "fill", "select", "press"].includes(step.action)) {
+    if (!exists) return { found: false };
+    const tag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    // The bridge classifies this descriptor with the shared dangerous-action
+    // policy; it never contains field values.
+    const target = {
+      label: text.replace(/\\s+/gu, " ").slice(0, 200),
+      role: element.getAttribute("role") || (type ? tag + ":" + type : tag),
+      submitLike: type === "submit" || type === "image" ||
+        (tag === "button" && (!type || type === "submit") && !!element.form),
+    };
+    if (step.describeOnly) return { found: true, target };
+    if (!enabled) return { disabled: true };
+    const editable = tag === "textarea" || element.isContentEditable || (tag === "input" &&
+      !["file", "hidden", "submit", "button", "radio", "checkbox", "reset", "image", "range", "color"].includes(type));
+    if (step.action === "fill" && (!editable || element.readOnly)) return { notEditable: true };
+    let option;
+    if (step.action === "select") {
+      if (tag !== "select" || element.multiple) return { notEditable: true };
+      const options = Array.from(element.options || []).slice(0, 1000);
+      const matches = options.filter((candidate) => !candidate.disabled &&
+        (candidate.value === step.value ||
+          (candidate.textContent || "").replace(/\\s+/gu, " ").trim() === step.value));
+      if (matches.length !== 1) return matches.length ? { ambiguous: true } : { missingOption: true };
+      const chosen = options.indexOf(matches[0]);
+      option = { value: matches[0].value,
+        moves: options.slice(0, chosen).filter((candidate) => !candidate.disabled).length };
+    }
+    // "nearest" leaves visible targets alone; scrolling here can also scroll
+    // ancestor frames asynchronously, which the bridge waits out when mapping.
+    element.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (!visible(element) || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { invisible: true };
+    const hit = document.elementFromPoint(x, y);
+    if (hit !== element && !element.contains(hit)) return { obscured: true };
+    // Remember the resolved element in this extension world only, so focus
+    // and select results can be verified without re-resolving the locator.
+    globalThis.__mcpV3LegacyActionTarget = element;
+    return { found: true, target, point: { x, y }, editable,
+      viewport: { width: innerWidth, height: innerHeight }, ...(option ? { option } : {}) };
+  }
   const pageText = (document.body?.innerText || "").slice(0, 50000);
   const textMatches = !step.text || pageText.includes(step.text);
   const state = step.state || "exists";
@@ -2223,6 +2275,341 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
   return { found: true, value: result };
 }
 
+// Map a frame-local CSS point into the parent document. The host element is
+// matched by the child's window name or URL plus its exact viewport size, so
+// sibling frames cannot be confused; transformed, ambiguous or obscured hosts
+// fail closed instead of producing a misdirected native click.
+function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScroll) {
+  if (location.href !== expectedUrl) return { stale: true };
+  const hosts = Array.from(document.querySelectorAll("iframe,frame")).slice(0, 200);
+  let candidates = child.name ? hosts.filter((node) => node.getAttribute("name") === child.name) : [];
+  if (candidates.length === 0) candidates = hosts.filter((node) => node.src === child.url);
+  const metrics = (node) => {
+    const style = getComputedStyle(node);
+    return { style, rect: node.getBoundingClientRect(),
+      padLeft: parseFloat(style.paddingLeft) || 0, padTop: parseFloat(style.paddingTop) || 0,
+      width: node.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0),
+      height: node.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0) };
+  };
+  candidates = candidates.filter((node) => {
+    const measured = metrics(node);
+    return Math.abs(measured.width - child.width) <= 2 && Math.abs(measured.height - child.height) <= 2;
+  });
+  if (candidates.length !== 1) return { ambiguous: candidates.length > 1, missing: candidates.length === 0 };
+  const host = candidates[0];
+  const locate = () => {
+    const measured = metrics(host);
+    return { measured, x: measured.rect.left + host.clientLeft + measured.padLeft + localPoint.x,
+      y: measured.rect.top + host.clientTop + measured.padTop + localPoint.y };
+  };
+  let point = locate();
+  if (point.measured.style.transform !== "none" ||
+      Math.abs(point.measured.rect.width - host.offsetWidth) > 2 ||
+      Math.abs(point.measured.rect.height - host.offsetHeight) > 2) return { unsupported: true };
+  if (allowScroll && (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight)) {
+    host.scrollIntoView({ block: "nearest", inline: "nearest" });
+    point = locate();
+  }
+  if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) return { outside: true };
+  if (document.elementFromPoint(point.x, point.y) !== host) return { obscured: true };
+  return { x: point.x, y: point.y, viewport: { width: innerWidth, height: innerHeight } };
+}
+
+// Scrolls requested by a frame propagate to out-of-process ancestors
+// asynchronously, so the chain is re-measured until two passes agree.
+async function resolvePersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, signal) {
+  let previous = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, true);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await delay(50, signal);
+    const point = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, false);
+    if (Math.abs(point.x - previous.x) <= 1 && Math.abs(point.y - previous.y) <= 1) return point;
+    previous = point;
+  }
+  throw coded("STATE_NOT_REACHED", "Frame geometry did not settle; the page is still scrolling or animating.");
+}
+
+async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, allowScroll) {
+  let current = frame;
+  let point = localPoint;
+  let size = viewport;
+  for (let depth = 0; current.frameId !== 0; depth += 1) {
+    if (depth >= 16) throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Legacy frame nesting exceeds sixteen levels.");
+    const parent = graph.byId.get(current.parentFrameId);
+    if (!parent || parent.status !== "ready") {
+      throw coded("FRAME_NOT_READY", "A parent frame is not scriptable, so its geometry cannot be verified.");
+    }
+    let mapped;
+    try {
+      [mapped] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [parent.frameId] },
+        func: probePersonalChildFramePoint,
+        args: [parent.url, { name: current.data?.name || "", url: current.url,
+          width: size.width, height: size.height }, point, allowScroll],
+      });
+    } catch {
+      throw coded("FRAME_NOT_READY", "Parent frame geometry cannot be inspected.");
+    }
+    if (!mapped || mapped.frameId !== parent.frameId ||
+        (parent.documentId && mapped.documentId !== parent.documentId) || mapped.result?.stale) {
+      throw coded("FRAME_NOT_READY", "A parent frame navigated while mapping the action point.");
+    }
+    const result = mapped.result;
+    if (!Number.isFinite(result?.x) || !Number.isFinite(result?.y)) {
+      throw coded(result?.ambiguous ? "LOCATOR_AMBIGUOUS" : "BROWSER_CAPABILITY_UNSUPPORTED",
+        "The frame host is ambiguous, transformed, obscured or outside the viewport.");
+    }
+    point = { x: result.x, y: result.y };
+    size = result.viewport;
+    current = parent;
+  }
+  return point;
+}
+
+function verifyPersonalLegacyActionTarget(expectedUrl, mode, value) {
+  if (location.href !== expectedUrl) return false;
+  const element = globalThis.__mcpV3LegacyActionTarget;
+  if (!element?.isConnected) return false;
+  if (mode === "value") return element.value === value;
+  if (mode === "scriptFocus") element.focus({ preventScroll: true });
+  return document.activeElement === element ||
+    (element.isContentEditable && element.contains(document.activeElement));
+}
+
+// Observe frame navigations caused by one action. Settling waits for every
+// started navigation to finish, or for a short quiet period when none starts.
+function watchPersonalFrameNavigations(chromeTabId) {
+  const pending = new Set();
+  let navigations = 0;
+  const begin = (details) => {
+    if (details.tabId !== chromeTabId) return;
+    pending.add(details.frameId);
+    navigations += 1;
+  };
+  const end = (details) => {
+    if (details.tabId === chromeTabId) pending.delete(details.frameId);
+  };
+  chrome.webNavigation.onBeforeNavigate.addListener(begin);
+  chrome.webNavigation.onCompleted.addListener(end);
+  chrome.webNavigation.onErrorOccurred.addListener(end);
+  return {
+    async settle(deadline, signal, quietMs) {
+      const quietUntil = Date.now() + quietMs;
+      while (pending.size > 0 || (navigations === 0 && Date.now() < quietUntil)) {
+        if (Date.now() >= deadline) {
+          throw coded("STATE_NOT_REACHED", "A frame navigation started by a legacy action did not finish before the deadline.");
+        }
+        await delay(50, signal);
+      }
+    },
+    dispose() {
+      chrome.webNavigation.onBeforeNavigate.removeListener(begin);
+      chrome.webNavigation.onCompleted.removeListener(end);
+      chrome.webNavigation.onErrorOccurred.removeListener(end);
+    },
+  };
+}
+
+function personalLegacyEnter(key) {
+  return String(key).trim().split(/\\s+/u).some((chord) =>
+    /^(?:enter|return|numpadenter)$/iu.test(chord.split("+").pop().trim()));
+}
+
+// Resolve a mutation step's frame and target without acting. Frames that are
+// still loading after an earlier step are awaited until waitUntil.
+async function probePersonalLegacyTarget(input, chromeTabId, step, describeOnly, waitUntil, signal, started) {
+  const framePath = step.framePath || [];
+  while (true) {
+    throwIfAborted(signal, "frameSequence", started);
+    let graph;
+    try { graph = await inspectPersonalFrameGraph(chromeTabId); }
+    catch (error) {
+      if (error?.code !== "FRAME_NOT_READY" || Date.now() >= waitUntil) throw error;
+      await delay(150, signal);
+      continue;
+    }
+    const matches = [...graph.byId.values()].filter((entry) =>
+      JSON.stringify(entry.path) === JSON.stringify(framePath));
+    if (matches.length !== 1 || matches[0].status !== "ready") {
+      if (Date.now() >= waitUntil) throw coded("FRAME_NOT_READY", "Selected legacy frame is missing or inaccessible.");
+      await delay(150, signal);
+      continue;
+    }
+    const frame = matches[0];
+    let selector;
+    if (step.locator?.ref) {
+      const fresh = await domIndex({ tabId: input.tabId, framePath, limit: 2000 }, signal);
+      const refs = fresh.items.filter((item) => item.ref === step.locator.ref);
+      if (refs.length !== 1) throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
+      selector = refs[0].selector;
+    }
+    let observation;
+    try {
+      [observation] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+        func: probePersonalLegacyReadStep,
+        args: [frame.url, { ...step, describeOnly }, selector ?? null],
+      });
+    } catch {
+      throw coded("FRAME_NOT_READY", "Legacy frame document is not accessible.");
+    }
+    if (!observation || observation.frameId !== frame.frameId ||
+        (frame.documentId && observation.documentId !== frame.documentId) ||
+        observation.result?.stale) {
+      throw coded("FRAME_NOT_READY", "Legacy frame navigated while resolving the action target.");
+    }
+    const observed = observation.result;
+    if (observed?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy locator selector is not valid.");
+    if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator or option matched several candidates.");
+    if (observed?.missingOption) throw coded("INVALID_ARGUMENT", "Requested select option does not exist.");
+    if (!observed?.found) {
+      throw coded("LOCATOR_NOT_FOUND", "Legacy action target is missing, disabled, obscured, outside the viewport or not editable.");
+    }
+    return { graph, frame, observed };
+  }
+}
+
+// Describe every click/Enter target before any step runs, so the bridge can
+// require confirmation for dangerous targets without a partial batch.
+async function preflightPersonalLegacyTargets(input, chromeTabId, signal) {
+  const targets = [];
+  for (const [index, step] of input.steps.entries()) {
+    const enter = step.action === "press" && personalLegacyEnter(step.key);
+    if (step.action !== "click" && !enter) continue;
+    if (!step.locator) {
+      targets.push({ index, label: "keyboard:Enter", role: "keyboard", submitLike: true });
+      continue;
+    }
+    let resolved;
+    try {
+      resolved = await probePersonalLegacyTarget(input, chromeTabId, step, true, Date.now(), signal, false);
+    } catch (error) {
+      if (!["FRAME_NOT_READY", "LOCATOR_NOT_FOUND"].includes(error?.code)) throw error;
+      throw coded(error.code, "Click/Enter target of step " + index +
+        " must exist when the sequence starts so it can be confirmed; split the sequence after navigation. " +
+        String(error.message || ""));
+    }
+    targets.push({ index, ...resolved.observed.target });
+  }
+  return targets;
+}
+
+async function runPersonalLegacyMutation(input, chromeTabId, index, step, expected, deadline, signal, started) {
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The owned tab navigated away from the confirmed page.");
+  }
+  const enter = step.action === "press" && personalLegacyEnter(step.key);
+  const keys = step.action === "press" ? String(step.key).trim().split(/\\s+/u).map(parseChromeKey) : [];
+  if (keys.length > 100) throw coded("LIMIT_EXCEEDED", "Chrome key sequence exceeds 100 inputs.");
+  const resolved = step.action !== "press" || step.locator
+    ? await probePersonalLegacyTarget(input, chromeTabId, step, false,
+      Math.min(deadline, Date.now() + 10000), signal, started)
+    : undefined;
+  const observed = resolved?.observed;
+  if (step.action === "click" || enter) {
+    const target = observed?.target ?? { label: "keyboard:Enter", role: "keyboard", submitLike: true };
+    if (!expected || expected.label !== target.label || expected.role !== target.role ||
+        expected.submitLike !== target.submitLike) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "The legacy target of step " + index + " changed after preflight.");
+    }
+  }
+  const point = resolved
+    ? await resolvePersonalFramePoint(chromeTabId, resolved.graph, resolved.frame, observed.point,
+      observed.viewport, signal)
+    : undefined;
+  // Input routed into an out-of-process frame is acknowledged before that
+  // renderer applies it, so focus/value checks poll briefly before failing.
+  const verify = async (mode, value) => {
+    for (let attempt = 0; ; attempt += 1) {
+      const [check] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [resolved.frame.frameId] },
+        func: verifyPersonalLegacyActionTarget, args: [resolved.frame.url, mode, value ?? null],
+      });
+      if (!check || check.frameId !== resolved.frame.frameId ||
+          (resolved.frame.documentId && check.documentId !== resolved.frame.documentId)) return false;
+      if (check.result === true) return true;
+      if (attempt >= 10 || mode === "scriptFocus") return false;
+      await delay(50, signal);
+    }
+  };
+  const watcher = watchPersonalFrameNavigations(chromeTabId);
+  try {
+    const debuggee = { tabId: chromeTabId };
+    let attached = false;
+    try {
+      attached = await attachGuardedDebugger(debuggee);
+      throwIfAborted(signal, "frameSequence", started);
+      const current = await chrome.tabs.get(chromeTabId);
+      if (current.url !== input.guard.url) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The owned tab navigated before native input.");
+      }
+      const dispatchKey = async (key) => {
+        await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+          type: "keyDown", key: key.key, code: key.code,
+          windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
+          modifiers: key.modifiers, ...(key.text ? { text: key.text } : {}),
+        });
+        await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+          type: "keyUp", key: key.key, code: key.code,
+          windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
+          modifiers: key.modifiers,
+        });
+      };
+      const clickPoint = async () => {
+        for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+          await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+            type, x: point.x, y: point.y, button: type === "mouseMoved" ? "none" : "left",
+            buttons: type === "mousePressed" ? 1 : 0, clickCount: 1,
+          });
+        }
+      };
+      if (step.action === "click") {
+        await clickPoint();
+      } else if (step.action === "fill") {
+        await clickPoint();
+        if (!(await verify("focus"))) throw coded("FRAME_NOT_READY", "The legacy field did not receive native focus.");
+        await dispatchKey({ key: "a", code: "KeyA", keyCode: 65, modifiers: 2 });
+        await dispatchKey({ key: "Backspace", code: "Backspace", keyCode: 8, modifiers: 0 });
+        await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: step.value });
+      } else if (step.action === "select") {
+        if (!(await verify("value", observed.option.value))) {
+          await clickPoint();
+          await dispatchKey({ key: "Home", code: "Home", keyCode: 36, modifiers: 0 });
+          for (let move = 0; move < observed.option.moves; move += 1) {
+            throwIfAborted(signal, "frameSequence", true);
+            await dispatchKey({ key: "ArrowDown", code: "ArrowDown", keyCode: 40, modifiers: 0 });
+          }
+          await dispatchKey({ key: "Enter", code: "Enter", keyCode: 13, modifiers: 0 });
+          if (!(await verify("value", observed.option.value))) {
+            throw coded("STATE_NOT_REACHED", "The legacy select did not take the requested option.");
+          }
+        }
+      } else {
+        if (resolved) {
+          if (observed.editable) await clickPoint();
+          if (!(await verify(observed.editable ? "focus" : "scriptFocus"))) {
+            throw coded("FRAME_NOT_READY", "The legacy key target did not receive focus.");
+          }
+        }
+        for (const key of keys) {
+          throwIfAborted(signal, "frameSequence", true);
+          await dispatchKey(key);
+        }
+      }
+    } catch (error) {
+      if (error?.code) throw error;
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
+    } finally {
+      await detachGuardedDebugger(debuggee, attached).catch(() => undefined);
+    }
+    // Text entry rarely navigates; other actions get a short window to start one.
+    await watcher.settle(deadline, signal, step.action === "fill" ? 0 : 400);
+  } finally {
+    watcher.dispose();
+  }
+  return { index, action: step.action, completed: true, strategy: "chrome-frame-native-input" };
+}
+
 async function frameSequence(input, signal) {
   const started = performance.now();
   const chromeTabId = chromeTabIdFrom(input.tabId);
@@ -2230,19 +2617,59 @@ async function frameSequence(input, signal) {
   if (!Array.isArray(input.steps) || input.steps.length < 1 || input.steps.length > 20) {
     throw coded("INVALID_ARGUMENT", "Legacy sequence requires one to twenty steps.");
   }
-  // Preflight all operations before starting: mutation steps must not cause
-  // a partial read-only batch while native multi-frame actions are incomplete.
-  if (input.steps.some((step) => !["index", "extract", "assert", "waitFor"].includes(step.action))) {
-    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
-      "Legacy frame mutations require guarded native frame actions; this sequence is read-only.");
+  const reads = ["index", "extract", "assert", "waitFor"];
+  const mutations = input.steps.filter((step) => !reads.includes(step.action));
+  if (mutations.some((step) => !["click", "fill", "select", "press"].includes(step.action))) {
+    throw coded("INVALID_ARGUMENT", "Unknown legacy frame sequence action.");
+  }
+  // Mutations run only behind the bridge's page guard: a preflight call
+  // describes every click/Enter target, and the execute call must observe the
+  // same targets (now confirmed) before the first step runs.
+  if (mutations.length > 0 && (!input.guard?.url ||
+      (input.phase !== "preflight" && input.phase !== "execute"))) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Legacy frame mutations require a bridge page guard and preflight.");
+  }
+  const chromeTab = mutations.length > 0 ? await chrome.tabs.get(chromeTabId) : undefined;
+  if (chromeTab && chromeTab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The owned tab changed since the last snapshot.");
+  }
+  const targets = mutations.length > 0 ? await preflightPersonalLegacyTargets(input, chromeTabId, signal) : [];
+  if (input.phase === "preflight") {
+    return { tabId: input.tabId, completed: true,
+      steps: targets.map(({ index, ...target }) => ({ index, action: input.steps[index].action,
+        completed: true, value: target, strategy: "chrome-frame-preflight" })),
+      telemetry: { totalMs: Math.max(0, performance.now() - started),
+        strategy: "chrome-frame-preflight", retries: 0 } };
+  }
+  const expected = new Map((Array.isArray(input.expectedTargets) ? input.expectedTargets : [])
+    .map((target) => [target.index, target]));
+  if (expected.size !== targets.length || targets.some((target) => {
+    const confirmed = expected.get(target.index);
+    return !confirmed || confirmed.label !== target.label || confirmed.role !== target.role ||
+      confirmed.submitLike !== target.submitLike;
+  })) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Legacy click/Enter targets changed since preflight; nothing was executed.");
   }
   const timeout = Math.min(120000, Math.max(1, input.timeoutMs ?? 30000));
   const deadline = Date.now() + timeout;
   const done = [];
+  let mutated = false;
   for (const [index, step] of input.steps.entries()) {
-    throwIfAborted(signal, "frameSequence", index > 0);
+    throwIfAborted(signal, "frameSequence", mutated);
     if (Date.now() >= deadline) throw coded("STATE_NOT_REACHED", "Legacy frame sequence deadline exceeded.");
     const framePath = step.framePath || [];
+    if (!reads.includes(step.action)) {
+      mutated = true;
+      try {
+        done.push(await runPersonalLegacyMutation(input, chromeTabId, index, step,
+          expected.get(index), deadline, signal, done.length > 0));
+      } catch (error) {
+        if (done.length === 0 || !error?.code) throw error;
+        throw coded(error.code, error.message + " Completed step indexes: [" +
+          done.map((item) => item.index).join(",") + "].");
+      }
+      continue;
+    }
     if (step.action === "index") {
       const value = await domIndex({ tabId: input.tabId, framePath,
         rootSelector: step.rootSelector, query: step.query,
@@ -2288,7 +2715,7 @@ async function frameSequence(input, signal) {
         [observation] = await chrome.scripting.executeScript({
           target: { tabId: chromeTabId, frameIds: [frame.frameId] },
           func: probePersonalLegacyReadStep,
-          args: [frame.url, step, selector],
+          args: [frame.url, step, selector ?? null],
         });
       } catch {
         if (step.action !== "waitFor") throw coded("FRAME_NOT_READY", "Legacy frame document is not accessible.");
@@ -2324,7 +2751,7 @@ async function frameSequence(input, signal) {
   }
   return { tabId: input.tabId, completed: true, steps: done,
     telemetry: { totalMs: Math.max(0, performance.now() - started),
-      strategy: "chrome-frame-readonly", retries: 0 } };
+      strategy: mutated ? "chrome-frame-native-input" : "chrome-frame-readonly", retries: 0 } };
 }
 
 async function sequence(input, signal, timing) {
@@ -3674,8 +4101,8 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   if (focus) element.focus?.();
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
-  const x = coordinateX === undefined ? rect.left + rect.width / 2 : coordinateX;
-  const y = coordinateY === undefined ? rect.top + rect.height / 2 : coordinateY;
+  const x = coordinateX == null ? rect.left + rect.width / 2 : coordinateX;
+  const y = coordinateY == null ? rect.top + rect.height / 2 : coordinateY;
   if (!Number.isFinite(x) || !Number.isFinite(y) || x < rect.left || y < rect.top ||
       x >= rect.right || y >= rect.bottom || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
     return { error: "point_outside_target" };

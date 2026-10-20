@@ -140,7 +140,7 @@ describe("personal browser extension assets", () => {
     expect(waits).toBe(2);
   });
 
-  it("rejects legacy mutations before executing any read, and rejects stale indexed refs", async () => {
+  it("rejects unguarded legacy mutations before executing any read, and rejects stale indexed refs", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     let injected = 0;
     const context = vm.createContext({
@@ -165,7 +165,7 @@ describe("personal browser extension assets", () => {
     await expect(sequence({ tabId: "personal:7", steps: [
       { action: "assert", condition: "frameReady" },
       { action: "click", framePath: ["menu"], locator: { selector: "#danger" } },
-    ] })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    ] })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
     expect(injected).toBe(0);
     await expect(sequence({ tabId: "personal:7", steps: [
       { action: "extract", framePath: ["menu"], locator: { ref: "lref_deadbeef" } },
@@ -175,6 +175,216 @@ describe("personal browser extension assets", () => {
       { action: "assert", framePath: ["menu"], condition: "frameReady" },
     ] })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
     expect(injected).toBe(1);
+  });
+
+  it("describes legacy mutation targets without field values and resolves select options exactly", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const option = (value: string, text: string, disabled = false) =>
+      ({ value, textContent: text, disabled });
+    const options = [option("", "Escolha"), option("sp", "São Paulo"), option("rj", "Rio", true), option("mg", "Minas")];
+    const select = {
+      tagName: "SELECT", disabled: false, multiple: false, options, value: "SECRET_SELECTED", isContentEditable: false,
+      getAttribute: (name: string) => (name === "name" ? "uf" : null),
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 20 }),
+      scrollIntoView: () => undefined, innerText: "", textContent: "",
+    };
+    const button = {
+      tagName: "INPUT", disabled: false, value: "Salvar", isContentEditable: false, form: {},
+      getAttribute: (name: string) => ({ type: "submit" })[name as "type"] ?? null,
+      getBoundingClientRect: () => ({ left: 10, top: 40, width: 80, height: 20 }),
+      scrollIntoView: () => undefined, innerText: "", textContent: "",
+      contains: () => true,
+    };
+    let current: unknown = select;
+    const ctx = vm.createContext({
+      location: { href: "https://child.example/" }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      globalThis: {} as Record<string, unknown>,
+      document: { readyState: "complete", body: { innerText: "" },
+        querySelectorAll: () => [current], elementFromPoint: () => current },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), ctx);
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const url = "https://child.example/";
+    const chosen = probe(url, { action: "select", locator: { name: "uf" }, value: "Minas" }, undefined);
+    expect(chosen).toMatchObject({ found: true, point: { x: 60, y: 20 },
+      option: { value: "mg", moves: 2 } });
+    expect(JSON.stringify(chosen)).not.toContain("SECRET_SELECTED");
+    expect(probe(url, { action: "select", locator: { name: "uf" }, value: "Rio" }, undefined))
+      .toMatchObject({ missingOption: true });
+    expect(probe(url, { action: "select", locator: { name: "uf" }, value: "nope" }, undefined))
+      .toMatchObject({ missingOption: true });
+    current = button;
+    const locator = { selector: "#salvar" };
+    expect(probe(url, { action: "click", locator, describeOnly: true }, undefined))
+      .toEqual({ found: true, target: { label: "Salvar", role: "input:submit", submitLike: true } });
+    expect(probe(url, { action: "fill", locator, value: "v" }, undefined))
+      .toMatchObject({ notEditable: true });
+    button.contains = () => false;
+    (ctx as unknown as { document: { elementFromPoint: () => unknown } }).document.elementFromPoint = () => ({});
+    expect(probe(url, { action: "click", locator }, undefined)).toMatchObject({ obscured: true });
+    expect(probe("https://other.example/", { action: "click", locator }, undefined))
+      .toMatchObject({ stale: true });
+  });
+
+  it("maps a nested frame point through each verified parent host and rejects transformed hosts", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const host = (overrides: Record<string, unknown> = {}) => ({
+      src: "https://child.example/", clientLeft: 1, clientTop: 1, clientWidth: 200, clientHeight: 100,
+      offsetWidth: 202, offsetHeight: 102,
+      getAttribute: (name: string) => (name === "name" ? "inner" : null),
+      getBoundingClientRect: () => ({ left: 50, top: 60, width: 202, height: 102 }),
+      scrollIntoView: () => undefined, ...overrides,
+    });
+    let hosts = [host()];
+    let transform = "none";
+    const ctx = vm.createContext({
+      location: { href: "https://parent.example/" }, innerWidth: 800, innerHeight: 600, Math, parseFloat,
+      getComputedStyle: () => ({ transform, paddingLeft: "0px", paddingTop: "0px",
+        paddingRight: "0px", paddingBottom: "0px" }),
+      document: { querySelectorAll: () => hosts, elementFromPoint: () => hosts[0] },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalChildFramePoint"), ctx);
+    const map = vm.runInContext("probePersonalChildFramePoint", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const child = { name: "inner", url: "https://child.example/", width: 200, height: 100 };
+    expect(map("https://parent.example/", child, { x: 20, y: 30 }))
+      .toMatchObject({ x: 71, y: 91, viewport: { width: 800, height: 600 } });
+    expect(map("https://parent.example/", { ...child, width: 150 }, { x: 20, y: 30 }))
+      .toMatchObject({ missing: true });
+    hosts = [host(), host()];
+    expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ ambiguous: true });
+    hosts = [host()];
+    transform = "scale(2)";
+    expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ unsupported: true });
+    expect(map("https://elsewhere.example/", child, { x: 1, y: 1 })).toMatchObject({ stale: true });
+    // Out-of-view hosts are only scrolled on the first, scroll-allowed pass.
+    transform = "none";
+    let top = 900;
+    let scrolled = 0;
+    hosts = [host({ getBoundingClientRect: () => ({ left: 50, top, width: 202, height: 102 }),
+      scrollIntoView: () => { scrolled += 1; top = 100; } })];
+    expect(map("https://parent.example/", child, { x: 20, y: 30 }, false)).toMatchObject({ outside: true });
+    expect(scrolled).toBe(0);
+    expect(map("https://parent.example/", child, { x: 20, y: 30 }, true)).toMatchObject({ x: 71, y: 131 });
+    expect(scrolled).toBe(1);
+  });
+
+  it("runs guarded native fill, select, click and Enter inside a nested frame and waits for its navigation", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const listeners = { begin: new Set<(d: unknown) => void>(), end: new Set<(d: unknown) => void>() };
+    const parent = { frameId: 0, parentFrameId: -1, url: "https://parent.example/", status: "ready",
+      documentId: "d0", path: [], data: { name: "" } };
+    const mid = { frameId: 4, parentFrameId: 0, url: "https://mid.example/", status: "ready",
+      documentId: "d4", path: ["a"], data: { name: "a" } };
+    const leaf = { frameId: 9, parentFrameId: 4, url: "https://leaf.example/", status: "ready",
+      documentId: "d9", path: ["a", "b"], data: { name: "b" } };
+    const graph = { byId: new Map([[0, parent], [4, mid], [9, leaf]]) };
+    const labels: Record<string, { label: string; role: string; submitLike: boolean }> = {
+      "#nome": { label: "Nome", role: "input:text", submitLike: false },
+      "#uf": { label: "UF", role: "select", submitLike: false },
+      "#salvar": { label: "Salvar", role: "input:submit", submitLike: true },
+    };
+    const probed: string[] = [];
+    let changedLabel = false;
+    let selected = false;
+    const context = vm.createContext({
+      performance: { now: () => 5 }, Date, JSON, Math, setTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      delay: (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+      inspectPersonalFrameGraph: async () => graph,
+      domIndex: async () => ({ items: [] }),
+      attachGuardedDebugger: async () => true, detachGuardedDebugger: async () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      parseChromeKey: (key: string) => ({ key, code: key, keyCode: 13, modifiers: 0 }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://parent.example/" }) },
+        webNavigation: {
+          onBeforeNavigate: { addListener: (fn: (d: unknown) => void) => listeners.begin.add(fn),
+            removeListener: (fn: (d: unknown) => void) => listeners.begin.delete(fn) },
+          onCompleted: { addListener: (fn: (d: unknown) => void) => listeners.end.add(fn),
+            removeListener: (fn: (d: unknown) => void) => listeners.end.delete(fn) },
+          onErrorOccurred: { addListener: () => undefined, removeListener: () => undefined },
+        },
+        debugger: { attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_t: unknown, method: string, params: Record<string, unknown>) => {
+          commands.push({ method, params });
+          if (params.key === "Enter" && params.type === "keyDown") selected = true;
+          if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" &&
+              probed.at(-1) === "#salvar") {
+            for (const fn of listeners.begin) fn({ tabId: 7, frameId: 9 });
+            setTimeout(() => { for (const fn of listeners.end) fn({ tabId: 7, frameId: 9 }); }, 5);
+          }
+        } },
+        scripting: { executeScript: async ({ target, func, args }: {
+          target: { frameIds: number[] }; func: { name: string }; args: unknown[];
+        }) => {
+          const [frameId] = target.frameIds;
+          if (func.name === "probePersonalChildFramePoint") {
+            const childInfo = args[1] as { name: string };
+            return [{ frameId, documentId: frameId === 0 ? "d0" : "d4",
+              result: { x: frameId === 0 ? 300 : 100 + (childInfo.name === "b" ? 10 : 0),
+                y: frameId === 0 ? 200 : 50, viewport: { width: 800, height: 600 } } }];
+          }
+          if (func.name === "verifyPersonalLegacyActionTarget") {
+            return [{ frameId, documentId: "d9", result: args[1] === "value" ? selected : true }];
+          }
+          const step = args[1] as { action: string; locator: { selector: string }; describeOnly?: boolean; value?: string };
+          const selector = step.locator?.selector;
+          probed.push(selector);
+          const target2 = { ...labels[selector]!, ...(changedLabel && selector === "#salvar" ? { label: "Excluir" } : {}) };
+          if (step.describeOnly) return [{ frameId, documentId: "d9", result: { found: true, target: target2 } }];
+          return [{ frameId, documentId: "d9", result: { found: true, target: target2,
+            point: { x: 5, y: 6 }, viewport: { width: 400, height: 300 }, editable: selector === "#nome",
+            ...(step.action === "select" ? { option: { value: "mg", moves: 2 } } : {}) } }];
+        } },
+      },
+    });
+    for (const fn of ["probePersonalLegacyReadStep", "probePersonalChildFramePoint", "resolvePersonalFramePoint",
+      "mapPersonalFramePoint",
+      "verifyPersonalLegacyActionTarget", "personalLegacyEnter",
+      "watchPersonalFrameNavigations", "probePersonalLegacyTarget", "preflightPersonalLegacyTargets",
+      "runPersonalLegacyMutation", "frameSequence"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const sequence = vm.runInContext("frameSequence", context) as
+      (input: unknown) => Promise<{ steps: Array<Record<string, unknown>>; telemetry: Record<string, unknown> }>;
+    const steps = [
+      { action: "fill", framePath: ["a", "b"], locator: { selector: "#nome" }, value: "Maria" },
+      { action: "select", framePath: ["a", "b"], locator: { selector: "#uf" }, value: "Minas" },
+      { action: "click", framePath: ["a", "b"], locator: { selector: "#salvar" } },
+      { action: "press", framePath: ["a", "b"], key: "Enter" },
+    ];
+    const guard = { url: "https://parent.example/" };
+    const base = { tabId: "personal:7", steps, guard };
+    const described = await sequence({ ...base, phase: "preflight" });
+    const keyboard = { label: "keyboard:Enter", role: "keyboard", submitLike: true };
+    expect(described.steps).toEqual([
+      { index: 2, action: "click", completed: true, value: labels["#salvar"], strategy: "chrome-frame-preflight" },
+      { index: 3, action: "press", completed: true, value: keyboard, strategy: "chrome-frame-preflight" },
+    ]);
+    expect(commands).toHaveLength(0);
+    const expectedTargets = [{ index: 2, ...labels["#salvar"] }, { index: 3, ...keyboard }];
+    await expect(sequence({ ...base, phase: "execute", expectedTargets: [] }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    changedLabel = true;
+    await expect(sequence({ ...base, phase: "execute", expectedTargets }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands).toHaveLength(0);
+    changedLabel = false;
+    const done = await sequence({ ...base, phase: "execute", expectedTargets });
+    expect(done.steps.map((step) => step.action)).toEqual(["fill", "select", "click", "press"]);
+    expect(done.telemetry.strategy).toBe("chrome-frame-native-input");
+    expect(commands.filter((c) => c.method === "Input.insertText").map((c) => c.params.text)).toEqual(["Maria"]);
+    // Nested point: leaf (5,6) -> mid host (110,50) -> top host (300,200).
+    const pressed = commands.filter((c) => c.method === "Input.dispatchMouseEvent" && c.params.type === "mousePressed");
+    expect(pressed.map((c) => [c.params.x, c.params.y])).toEqual([[300, 200], [300, 200], [300, 200]]);
+    expect(commands.filter((c) => c.params.key === "ArrowDown")).toHaveLength(4);
+    expect(commands.filter((c) => c.params.key === "Enter")).toHaveLength(4);
+    expect(listeners.begin.size + listeners.end.size).toBe(0);
   });
 
   it("probes read-only legacy elements without exposing sensitive form field values", () => {
@@ -1866,7 +2076,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.8.0");
+    expect(parsedManifest.version).toBe("1.9.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

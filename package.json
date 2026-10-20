@@ -30,6 +30,7 @@
     "check:structure": "node tooling/structure/validate-repository-structure.mjs",
     "smoke:browser:advanced": "npm run build && tsx tooling/smoke/browser/advanced-browser-smoke.ts --via=mcp",
     "smoke:browser:advanced:direct": "npm run build && tsx tooling/smoke/browser/advanced-browser-smoke.ts",
+    "smoke:browser:personal-frames": "tsx tooling/smoke/browser/personal-frame-sequence-smoke.ts",
     "test:browser-worker": "npm test --workspace @vs-code-gpt/browser-worker",
     "test:browser-worker:unit": "npm run test:unit --workspace @vs-code-gpt/browser-worker",
     "test:browser-worker:integration": "npm run test:integration --workspace @vs-code-gpt/browser-worker",
