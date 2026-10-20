@@ -36,6 +36,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "goForward",
   "tabGroups",
   "guardedActionsV1",
+  "snapshotRevisionV1",
+  "openShadowDomV1",
   "closeTab",
   "finishTask",
 ] as const;
@@ -898,9 +900,9 @@ async function waitForTabComplete(tabId, timeoutMs, signal) {
 }
 
 function snapshotPage(generation) {
-  for (const stale of document.querySelectorAll("[data-mcp-v3-ref]")) {
-    stale.removeAttribute("data-mcp-v3-ref");
-  }
+  // Private isolated-world data: never mark, rewrite or clean the page's DOM.
+  globalThis.__mcpV3PageInstanceId ??= generation;
+  globalThis.__mcpV3StableElementRefs ??= new WeakMap();
   const selector = [
     "a[href]",
     "button",
@@ -927,13 +929,33 @@ function snapshotPage(generation) {
   const liveRefs = new Map();
   globalThis.__mcpV3OwnedRefElements = liveRefs;
   const refLines = [];
-  const elements = Array.from(document.querySelectorAll(selector)).slice(0, 2000);
+  const elements = [];
+  let visitedRoots = 0;
+  let inspectedNodes = 0;
+  const collect = (root, depth) => {
+    if (depth > 6 || ++visitedRoots > 128 || inspectedNodes >= 10000 || elements.length >= 2000) return;
+    for (const element of root.querySelectorAll(selector)) {
+      if (elements.length >= 2000) break;
+      elements.push(element);
+    }
+    // Open shadow roots are reachable through their host; closed roots and
+    // cross-origin frames are not, and must not be silently claimed.
+    for (const element of root.querySelectorAll("*")) {
+      if (++inspectedNodes > 10000 || elements.length >= 2000) break;
+      if (element.shadowRoot) collect(element.shadowRoot, depth + 1);
+    }
+  };
+  collect(document, 0);
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) continue;
-    const ref = "p-" + generation + "-" + (refs.length + 1);
+    let ref = globalThis.__mcpV3StableElementRefs.get(element);
+    if (!ref) {
+      ref = "p-" + generation + "-" + (refs.length + 1);
+      globalThis.__mcpV3StableElementRefs.set(element, ref);
+    }
     liveRefs.set(ref, element);
     const role = element.getAttribute("role") || defaultRole(element);
     const name = normalizeText(accessibleName(element)).slice(0, 500);
@@ -952,6 +974,7 @@ function snapshotPage(generation) {
   return {
     url: location.href,
     title: document.title || "",
+    pageInstanceId: globalThis.__mcpV3PageInstanceId,
     content: pageText + (refText ? "\\n\\nInteractive elements:\\n" + refText : ""),
     refs,
   };
@@ -1013,9 +1036,10 @@ function snapshotPage(generation) {
 
   function accessibleName(element) {
     const labelledBy = element.getAttribute("aria-labelledby");
+    const root = element.getRootNode?.() || document;
     const labelledByText = labelledBy
       ? labelledBy.split(/\\s+/u)
-        .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+        .map((id) => root.getElementById?.(id)?.innerText || root.getElementById?.(id)?.textContent || "")
         .filter(Boolean)
         .join(" ")
       : "";
@@ -1054,8 +1078,9 @@ function probeGuardedElement(ref, guard, focus) {
         type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
         type === "range" ? "slider" : type === "number" ? "spinbutton" : "textbox" : "generic");
   const labelledBy = element.getAttribute("aria-labelledby");
+  const root = element.getRootNode?.() || document;
   const labelledByText = labelledBy ? labelledBy.split(/\\s+/u)
-    .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+    .map((id) => root.getElementById?.(id)?.innerText || root.getElementById?.(id)?.textContent || "")
     .filter(Boolean).join(" ") : "";
   const labelsText = Array.from(element.labels || []).map((label) => label.innerText || label.textContent || "").filter(Boolean).join(" ");
   const safeButtonValue = tag === "input" && ["button","submit","reset"].includes(type) ? String(element.value || "") : "";
@@ -1073,7 +1098,12 @@ function probeGuardedElement(ref, guard, focus) {
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
-  const top = document.elementFromPoint(x, y);
+  let top = document.elementFromPoint(x, y);
+  for (let depth = 0; depth < 6; depth += 1) {
+    const inner = top?.shadowRoot?.elementFromPoint?.(x, y);
+    if (!inner || inner === top) break;
+    top = inner;
+  }
   if (!top || (top !== element && !element.contains(top))) return { error: "obscured" };
   return { x, y };
 }

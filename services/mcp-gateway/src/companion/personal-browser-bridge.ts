@@ -6,6 +6,7 @@ import {
   AppError,
   browserOperationResultSchemas,
   findBrowserElements,
+  projectBrowserSnapshot,
   errorCodes,
   type BrowserExecutor,
   type BrowserOperation,
@@ -25,6 +26,7 @@ import {
   PERSONAL_BROWSER_EXTENSION_VERSION,
 } from "./personal-browser-extension-assets.js";
 import { PersonalBrowserActionPolicy } from "./personal-browser-action-policy.js";
+import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -56,6 +58,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   private readonly pending = new Map<string, PendingCall>();
   private readonly actions = new PersonalBrowserActionPolicy();
+  private readonly snapshots = new PersonalBrowserSnapshotState();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -112,6 +115,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.socketGeneration = 0;
     this.peerInfo = undefined;
     this.actions.clear();
+    this.snapshots.clear();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -151,14 +155,26 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async navigate(...args: Parameters<BrowserExecutor["navigate"]>): ReturnType<BrowserExecutor["navigate"]> {
     const result = await this.call("navigate", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
+    this.snapshots.discard(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
 
   async snapshot(...args: Parameters<BrowserExecutor["snapshot"]>): ReturnType<BrowserExecutor["snapshot"]> {
-    const result = await this.call("snapshot", args[0], args[1]);
+    const [input, context] = args;
+    const filtered = input.filter !== undefined || input.depth !== undefined ||
+      input.refId !== undefined || input.maxChars !== undefined;
+    const result = await this.call("snapshot", {
+      tabId: input.tabId,
+      ...(filtered || input.forceFull ? { forceFull: true } : {}),
+    }, context);
+    // The original authenticated refs, not the projected text, own the guards.
     this.actions.observeSnapshot(result);
-    return result;
+    const tracked = this.snapshots.observe(result, {
+      ...input,
+      ...(filtered ? { forceFull: true } : {}),
+    });
+    return projectBrowserSnapshot(tracked, input);
   }
 
   async find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
@@ -305,6 +321,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async goBack(...args: Parameters<BrowserExecutor["goBack"]>): ReturnType<BrowserExecutor["goBack"]> {
     const result = await this.call("goBack", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
+    this.snapshots.discard(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
@@ -314,6 +331,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<BrowserExecutor["goForward"]> {
     const result = await this.call("goForward", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
+    this.snapshots.discard(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
   }
@@ -321,6 +339,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async closeTab(...args: Parameters<BrowserExecutor["closeTab"]>): ReturnType<BrowserExecutor["closeTab"]> {
     const result = await this.call("closeTab", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
+    this.snapshots.discard(args[0].tabId);
     return result;
   }
 
@@ -329,6 +348,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<BrowserExecutor["finishTask"]> {
     const result = await this.call("finishTask", args[0], args[1]);
     this.actions.finish(args[0].taskId);
+    for (const tabId of [...(result.closedTabIds ?? []), ...(result.releasedTabIds ?? [])]) {
+      this.snapshots.discard(tabId);
+    }
+    if (!args[0].taskId) this.snapshots.clear();
     return result;
   }
 
@@ -466,6 +489,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.socketGeneration = generation;
           this.peerInfo = peerInfo;
           this.actions.clear();
+          this.snapshots.clear();
           if (previous && previous !== socket) {
             this.rejectPendingForGeneration(
               previousGeneration,
@@ -504,6 +528,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.socket = undefined;
           this.socketGeneration = 0;
           this.peerInfo = undefined;
+          this.actions.clear();
+          this.snapshots.clear();
           this.rejectPendingForGeneration(
             generation,
             new AppError(

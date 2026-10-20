@@ -12,6 +12,8 @@ import {
   browserScrollInputSchema,
   browserClickInputSchema,
   browserPressInputSchema,
+  browserSnapshotInputSchema,
+  browserSnapshotResultSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserUploadFileSchema,
@@ -46,6 +48,21 @@ describe("browser mode contract", () => {
     expect(browserFinishTaskInputSchema.safeParse({
       keepOpen: true,
     }).success).toBe(false);
+  });
+});
+
+describe("browser snapshot filter contract", () => {
+  it("bounds filter depth, maxChars and reference selectors", () => {
+    expect(browserSnapshotInputSchema.safeParse({
+      tabId: "personal:7", filter: "interactive", depth: 4, refId: "p-1", maxChars: 300,
+    }).success).toBe(true);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", filter: "unknown" }).success).toBe(false);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", depth: 41 }).success).toBe(false);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", maxChars: 2_000_000 }).success).toBe(false);
+    expect(browserSnapshotResultSchema.safeParse({
+      tabId: "personal:7", url: "https://example.com/", content: "",
+      pageInstanceId: "private-page-id", truncated: true, refs: [],
+    }).success).toBe(true);
   });
 });
 

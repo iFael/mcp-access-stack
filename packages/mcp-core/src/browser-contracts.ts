@@ -366,6 +366,10 @@ export const browserSnapshotInputSchema = z
     tabId: tabIdSchema,
     knownRevision: knownRevisionSchema,
     forceFull: z.boolean().optional(),
+    filter: z.enum(["interactive", "all"]).optional(),
+    depth: z.number().int().min(1).max(40).optional(),
+    refId: z.string().min(1).max(128).optional(),
+    maxChars: z.number().int().min(50).max(200_000).optional(),
   })
   .strict();
 export type BrowserSnapshotInput = z.infer<typeof browserSnapshotInputSchema>;
@@ -374,7 +378,9 @@ export const browserSnapshotResultSchema = z
     tabId: tabIdSchema,
     url: z.url(),
     title: z.string().max(500).optional(),
+    pageInstanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u).optional(),
     content: z.string().max(2_000_000),
+    truncated: z.boolean().optional(),
     refs: z
       .array(
         z

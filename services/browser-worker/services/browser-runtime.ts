@@ -5,6 +5,7 @@ import {
   AppError,
   clickAuthorizationAction,
   findBrowserElements,
+  projectBrowserSnapshot,
   containsBrowserEnterKey,
   validateBrowserKeySequence,
   remainingOperationTimeMs,
@@ -849,16 +850,18 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserSnapshotResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     await this.selectTab(tab);
-    if (isDirectPlaywrightDriver(this.driver)) {
-      return this.captureDirectSnapshotSelected(
-        tab.tabId,
-        input.knownRevision,
-        input.forceFull,
-        0,
-        context,
-      );
-    }
-    return this.captureSnapshotSelected(tab.tabId);
+    const projected = input.filter !== undefined || input.depth !== undefined ||
+      input.refId !== undefined || input.maxChars !== undefined;
+    const result = isDirectPlaywrightDriver(this.driver)
+      ? await this.captureDirectSnapshotSelected(
+          tab.tabId,
+          projected ? undefined : input.knownRevision,
+          projected || input.forceFull === true,
+          0,
+          context,
+        )
+      : await this.captureSnapshotSelected(tab.tabId);
+    return projectBrowserSnapshot(result, input);
   }
 
   async find(

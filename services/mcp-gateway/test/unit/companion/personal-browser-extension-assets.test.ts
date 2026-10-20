@@ -143,7 +143,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.4.0");
+    expect(parsedManifest.version).toBe("0.4.1");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
@@ -297,6 +297,52 @@ describe("personal browser extension assets", () => {
     expect(result.refs[0]).toMatchObject({ role: "checkbox", name: "Remember me" });
     expect(result.content).toContain('checkbox "Remember me" [required] [checked] [ref=p-generation-semantic-1]');
     expect(JSON.stringify(result)).not.toContain("must-not-leak");
+  });
+
+  it("keeps stable refs and page identity across observations without modifying DOM attributes", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const element = fakeElement({
+      tagName: "BUTTON", text: "Submit",
+      attributes: { "data-mcp-v3-ref": "site-owned-value" },
+    });
+    const dom = createDom([element]);
+    const snapshotPage = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`,
+      dom.context,
+    ) as (generation: string) => {
+      pageInstanceId: string;
+      refs: Array<{ ref: string }>;
+    };
+    const first = snapshotPage("first-generation");
+    const second = snapshotPage("second-generation");
+    expect(second.pageInstanceId).toBe(first.pageInstanceId);
+    expect(second.refs[0]!.ref).toBe(first.refs[0]!.ref);
+    expect(element.getAttribute("data-mcp-v3-ref")).toBe("site-owned-value");
+    expect(element.clickCount).toBe(0);
+  });
+
+  it("includes controls inside open shadow roots without altering the host DOM", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const inside = fakeElement({ tagName: "BUTTON", text: "Inside shadow" });
+    const host = fakeElement({ tagName: "DIV" });
+    (host as FakeElement & { shadowRoot?: unknown }).shadowRoot = {
+      querySelectorAll: (_selector: string) => [inside],
+    };
+    const dom = createDom([host]);
+    const snapshotPage = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`,
+      dom.context,
+    ) as (generation: string) => {
+      refs: Array<{ ref: string; role: string; name: string }>;
+      content: string;
+    };
+    const result = snapshotPage("shadow-1");
+    expect(result.refs).toContainEqual(expect.objectContaining({
+      role: "button", name: "Inside shadow",
+    }));
+    expect(result.content).toContain("Inside shadow");
+    expect(inside.getAttribute("data-mcp-v3-ref")).toBeNull();
+    expect(host.getAttribute("data-mcp-v3-ref")).toBeNull();
   });
 
   it("invalidates refs from an older snapshot generation", () => {

@@ -4,6 +4,7 @@ export * from "./command-confirmation-contracts.js";
 export * from "./browser-contracts.js";
 export * from "./browser-confirmation.js";
 export * from "./browser-interaction.js";
+export * from "./browser-snapshot-projection.js";
 export * from "./browser-executor.js";
 export * from "./browser-idempotency.js";
 export * from "./browser-observability.js";

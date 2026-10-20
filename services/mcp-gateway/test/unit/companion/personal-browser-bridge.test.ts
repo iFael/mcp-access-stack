@@ -23,6 +23,50 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("projects personal snapshots while preserving full authenticated refs and revision history", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<Record<string, unknown>> = [];
+    let pageText = "Login page";
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request" || request.operation !== "snapshot") return;
+      requests.push(request.input as Record<string, unknown>);
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true, result: {
+          tabId: "personal:7", url: "https://example.com/",
+          pageInstanceId: "document-7",
+          content: pageText + '\nInteractive elements:\n- button "Continue" [ref=p-7]\n- link "Help" [ref=p-8]',
+          refs: [
+            { ref: "p-7", role: "button", name: "Continue" },
+            { ref: "p-8", role: "link", name: "Help" },
+          ],
+        },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      const first = await bridge.snapshot({ tabId: "personal:7" });
+      expect(first.state).toMatchObject({ kind: "full", documentId: "document-7", revision: 1 });
+      const second = await bridge.snapshot({ tabId: "personal:7", knownRevision: 1 });
+      expect(second.state?.kind).toBe("unchanged");
+      expect(second.content).toBe("");
+      pageText = "Updated";
+      const projected = await bridge.snapshot({
+        tabId: "personal:7", knownRevision: 1, filter: "interactive", maxChars: 110,
+      });
+      expect(projected.content).not.toContain("Updated");
+      expect(projected.content).toContain('button "Continue"');
+      expect(projected.state?.kind).toBe("full");
+      expect(projected.state?.snapshot).toBe(projected.content);
+      expect(projected.refs).toHaveLength(2);
+      expect(requests[2]).toMatchObject({ tabId: "personal:7", forceFull: true });
+      await expect(bridge.find({ tabId: "personal:7", query: "Continue", role: "button" }))
+        .resolves.toMatchObject({ matches: [{ ref: "p-7" }] });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
   it("finds fresh refs through the authenticated Chrome snapshot without a new extension operation", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const operations: string[] = [];
