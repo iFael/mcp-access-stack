@@ -82,6 +82,53 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("stages authorized Chrome uploads privately and removes temporary bytes after native selection", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    let stagePath = "";
+    try {
+      await primeReference(bridge, extension, tabId);
+      const input = { tabId, selector: "input[type=file]",
+        files: [{ name: "receipt.pdf", contentBase64: "aGVsbG8=" }] };
+      let confirmationId = "";
+      try {
+        await bridge.upload(input);
+      } catch (error) {
+        const typed = error as { code: string; message: string };
+        expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+        confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+        expect(typed.message).not.toContain("aGVsbG8");
+      }
+      expect(confirmationId).toBeTruthy();
+      const reply = async (data: WebSocket.RawData) => {
+        const request = JSON.parse(data.toString()) as WireMessage;
+        if (request.type !== "request" || request.operation !== "upload") return;
+        const info = request.input as { files: Array<{ name: string; path: string }>;
+          guard: { url: string }; totalBytes: number };
+        stagePath = info.files[0]!.path;
+        expect(info.guard.url).toBe("https://example.com/");
+        expect(stagePath).toContain("personal-artifacts");
+        expect(stagePath).toContain("uploads");
+        expect((await readFile(stagePath)).toString()).toBe("hello");
+        extension.send(JSON.stringify({
+          type: "response", id: request.id, ok: true,
+          result: { tabId, completed: true, fileCount: 1, totalBytes: info.totalBytes },
+        }));
+      };
+      extension.on("message", reply);
+      try {
+        await expect(bridge.upload({ ...input, confirmationId })).resolves.toEqual({
+          tabId, completed: true, fileCount: 1, totalBytes: 5,
+        });
+        await expect(readFile(stagePath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        extension.off("message", reply);
+      }
+    } finally {
+      await close();
+    }
+  });
+
   it("materializes a final screenshot after a sequence and keeps transport base64 out of the result", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const seen: string[] = [];

@@ -1,6 +1,6 @@
 import { createBrowserLatencyRecorder, extensionLatencyMetrics } from "@mcp-access-stack/edge-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
@@ -519,8 +519,52 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     throw unsupported("browser_download");
   }
 
-  upload(..._args: Parameters<BrowserExecutor["upload"]>): ReturnType<BrowserExecutor["upload"]> {
-    throw unsupported("browser_upload");
+  async upload(...args: Parameters<BrowserExecutor["upload"]>): ReturnType<BrowserExecutor["upload"]> {
+    this.requireGuardedActions();
+    const [input, context] = args;
+    const guard = this.actions.guardUpload(input);
+    const root = path.join(path.resolve(this.options.stateRoot), "browser", "personal-artifacts", "uploads");
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const staged = await mkdtemp(path.join(root, "staged-"));
+    let totalBytes = 0;
+    const stagedFiles: Array<{ name: string; path: string }> = [];
+    try {
+      if (input.files.length < 1 || input.files.length > 10) {
+        throw new AppError("INVALID_ARGUMENT", "Upload requires 1-10 authorized files.");
+      }
+      for (const file of input.files) {
+        if (!file.name || file.name === "." || file.name === ".." ||
+            /[<>:"\/\\|?*\x00-\x1f]/u.test(file.name) || /[. ]$/u.test(file.name) ||
+            /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:[.]|$)/iu.test(file.name)) {
+          throw new AppError("INVALID_ARGUMENT", "Invalid personal Chrome upload filename.");
+        }
+        if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(file.contentBase64)) {
+          throw new AppError("INVALID_ARGUMENT", "Upload payload is not canonical base64.");
+        }
+        const bytes = Buffer.from(file.contentBase64, "base64");
+        if (bytes.toString("base64") !== file.contentBase64 || bytes.length > 6 * 1024 * 1024) {
+          throw new AppError("LIMIT_EXCEEDED", "An individual upload exceeds its permitted size.");
+        }
+        totalBytes += bytes.length;
+        if (totalBytes > 60 * 1024 * 1024) {
+          throw new AppError("LIMIT_EXCEEDED", "Upload exceeds the maximum aggregate size.");
+        }
+        const absolutePath = path.join(staged, file.name);
+        await writeFile(absolutePath, bytes, { flag: "wx", mode: 0o600 });
+        stagedFiles.push({ name: file.name, path: absolutePath });
+      }
+      return await this.call("upload", {
+        tabId: input.tabId,
+        files: stagedFiles,
+        totalBytes,
+        ...(input.inputRef ? { inputRef: input.inputRef } : {}),
+        ...(input.triggerRef ? { triggerRef: input.triggerRef } : {}),
+        ...(input.selector ? { selector: input.selector } : {}),
+        guard,
+      }, context);
+    } finally {
+      await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async console(...args: Parameters<BrowserExecutor["console"]>): ReturnType<BrowserExecutor["console"]> {

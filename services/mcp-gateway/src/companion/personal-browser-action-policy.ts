@@ -79,6 +79,30 @@ export class PersonalBrowserActionPolicy {
     );
   }
 
+  guardUpload(input: import("@vs-code-gpt/shared").BrowserUploadInput): PersonalActionGuard {
+    const page = this.requirePage(input.tabId);
+    const ref = input.inputRef ?? input.triggerRef;
+    const reference = ref ? this.requireRef(input.tabId, ref, page) : undefined;
+    const digest = createHash("sha256")
+      .update(JSON.stringify([
+        input.inputRef, input.triggerRef, input.selector,
+        input.files.map((file) => [
+          file.name, file.mimeType,
+          createHash("sha256").update(file.contentBase64).digest("hex"),
+        ]),
+      ]))
+      .digest("hex");
+    this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+      { tabId: input.tabId, url: page.url },
+      "upload-file", "upload",
+      "sha256:" + digest,
+    ));
+    return {
+      url: page.url,
+      ...(reference ? { ref: reference.ref, role: reference.role, name: reference.name } : {}),
+    };
+  }
+
   guardEvaluate(input: BrowserEvaluateInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
     if (input.ref) this.requireRef(input.tabId, input.ref, page);

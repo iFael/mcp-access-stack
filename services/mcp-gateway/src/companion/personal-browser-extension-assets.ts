@@ -25,7 +25,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "selectTab", "dialog", "viewport", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
+  "open", "selectTab", "dialog", "viewport", "upload", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
   "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
@@ -35,6 +35,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "selectTab",
   "dialog",
   "viewport",
+  "upload",
   "open",
   "navigate",
   "snapshot",
@@ -297,6 +298,7 @@ async function perform(operation, input, signal, timing) {
     case "selectTab": return selectOwnedTab(input, signal);
     case "dialog": return observePersonalDialog(input, signal);
     case "viewport": return configurePersonalViewport(input, signal);
+    case "upload": return uploadPersonalFiles(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
@@ -1763,6 +1765,166 @@ async function inspectPersonalNetwork(input, signal) {
   const raw = typeof value === "string" ? value : JSON.stringify(value);
   return { tabId: input.tabId, text: sanitizePersonalDiagnosticText(raw.slice(0, 256 * 1024), 256 * 1024),
     truncated: raw.length > 256 * 1024, collectedAt: new Date().toISOString() };
+}
+
+async function uploadPersonalFiles(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "upload", false);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Upload must be bound to the inspected owned tab and URL.");
+  }
+  if (!Array.isArray(input.files) || input.files.length < 1 || input.files.length > 10 ||
+      input.files.some((item) => !item || typeof item.path !== "string" ||
+        item.path.length > 4096 || item.path.length < 4 ||
+        typeof item.name !== "string" || item.name.length < 1 || item.name.length > 255)) {
+    throw coded("INVALID_ARGUMENT", "Upload requires private staged file paths from the trusted companion.");
+  }
+  const totalBytes = Number(input.totalBytes);
+  if (!Number.isSafeInteger(totalBytes) || totalBytes < 0 || totalBytes > 60 * 1024 * 1024) {
+    throw coded("LIMIT_EXCEEDED", "Upload exceeds the aggregate file size budget.");
+  }
+  if (input.inputRef && input.guard.ref !== input.inputRef ||
+      input.triggerRef && input.guard.ref !== input.triggerRef ||
+      !input.inputRef && !input.triggerRef && !input.selector) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Upload target guard does not match the authorized element.");
+  }
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  let chooserListener;
+  let chooserIntercepted = false;
+  try {
+    attached = await attachGuardedDebugger(target);
+    await chrome.debugger.sendCommand(target, "DOM.enable");
+    const verifiedFileNode = async (options) => {
+      const described = await chrome.debugger.sendCommand(target, "DOM.describeNode", options);
+      const node = described?.node;
+      if (!node || String(node.nodeName ?? "").toUpperCase() !== "INPUT") {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Selected upload target is not a file input.");
+      }
+      const attrs = Array.isArray(node.attributes) ? node.attributes : [];
+      const typeAt = attrs.findIndex((value, index) => index % 2 === 0 && value === "type");
+      if (typeAt < 0 || String(attrs[typeAt + 1] ?? "").toLowerCase() !== "file") {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Selected upload input changed type.");
+      }
+      return options;
+    };
+    let node;
+    if (input.triggerRef) {
+      // CDP intercepts the page's real file chooser; no synthetic file input events.
+      await chrome.debugger.sendCommand(target, "Page.enable");
+      await chrome.debugger.sendCommand(target, "Page.setInterceptFileChooserDialog", { enabled: true });
+      chooserIntercepted = true;
+      let resolveChooser;
+      const chooser = new Promise((resolve, reject) => {
+        resolveChooser = resolve;
+        const timer = setTimeout(() => reject(coded("EXECUTION_STATE_INVALID", "No file chooser appeared on the authorized tab.")), 10000);
+        chooserListener = (source, method, params) => {
+          if (source?.tabId !== chromeTabId || method !== "Page.fileChooserOpened") return;
+          clearTimeout(timer);
+          if (!Number.isInteger(params?.backendNodeId)) {
+            reject(coded("BROWSER_CONFIRMATION_INVALID", "Chrome file chooser did not identify a file input."));
+          } else resolve(params.backendNodeId);
+        };
+        chrome.debugger.onEvent.addListener(chooserListener);
+      });
+      void chooser.catch(() => undefined);
+      // Dispatch trusted CDP mouse events while retaining this tab's debugger session.
+      let point;
+      if (input.triggerRef.startsWith("ax-")) {
+        point = await resolveGuardedAxPoint(chromeTabId, input.triggerRef, input.guard, target, false);
+      } else {
+        const [hit] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId }, func: probeGuardedElement,
+          args: [input.triggerRef, input.guard, false],
+        });
+        point = hit?.result;
+        if (!point || point.error) {
+          throw coded("BROWSER_CONFIRMATION_INVALID", "File chooser trigger is stale or obscured.");
+        }
+      }
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: point.x, y: point.y,
+      });
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: point.x, y: point.y,
+        button: "left", buttons: 1, clickCount: 1,
+      });
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: point.x, y: point.y,
+        button: "left", buttons: 0, clickCount: 1,
+      });
+      const backendNodeId = await chooser;
+      node = await verifiedFileNode({ backendNodeId });
+    } else if (input.inputRef && input.inputRef.startsWith("ax-")) {
+      const record = axTargetsByTab.get(chromeTabId);
+      const bound = record?.targets?.get(input.inputRef);
+      if (!bound || record.url !== tab.url) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Upload accessibility ref is stale.");
+      }
+      node = await verifiedFileNode({ backendNodeId: bound.backendDOMNodeId });
+    } else {
+      let selector = input.selector;
+      let position = 0;
+      if (input.inputRef) {
+        const [injection] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId },
+          func: (ref) => {
+            const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
+            if (!element || !element.isConnected || element.tagName !== "INPUT" ||
+                element.type !== "file") return null;
+            const candidates = [...document.querySelectorAll("input[type=file]")];
+            const index = candidates.indexOf(element);
+            return index < 0 ? null : index;
+          },
+          args: [input.inputRef],
+        });
+        if (!Number.isInteger(injection?.result) || injection.result < 0) {
+          throw coded("BROWSER_CONFIRMATION_INVALID", "Upload input ref changed; capture a fresh snapshot.");
+        }
+        selector = "input[type=file]";
+        position = injection.result;
+      }
+      if (!selector || selector.length > 2000) {
+        throw coded("INVALID_ARGUMENT", "A valid upload input selector is required.");
+      }
+      const document = await chrome.debugger.sendCommand(target, "DOM.getDocument", {
+        depth: 1, pierce: true,
+      });
+      const rootId = document?.root?.nodeId;
+      if (!Number.isInteger(rootId)) {
+        throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome DOM root is unavailable for native upload.");
+      }
+      const matches = await chrome.debugger.sendCommand(target, "DOM.querySelectorAll", {
+        nodeId: rootId, selector,
+      });
+      const ids = matches?.nodeIds;
+      if (!Array.isArray(ids) || !Number.isInteger(ids[position]) ||
+          (!input.inputRef && ids.length !== 1)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Native upload target was not found uniquely.");
+      }
+      node = await verifiedFileNode({ nodeId: ids[position] });
+    }
+    throwIfAborted(signal, "upload", false);
+    await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", {
+      ...node, files: input.files.map((item) => item.path),
+    });
+    throwIfAborted(signal, "upload", true);
+    return { tabId: input.tabId, completed: true, fileCount: input.files.length, totalBytes };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("upload", signal, true);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome native file chooser is unavailable for this owned tab.");
+  } finally {
+    if (chooserListener) chrome.debugger.onEvent.removeListener(chooserListener);
+    if (chooserIntercepted) {
+      await chrome.debugger.sendCommand(target, "Page.setInterceptFileChooserDialog", {
+        enabled: false,
+      }).catch(() => undefined);
+    }
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
+  }
 }
 
 async function printPersonalPdf(input, signal) {

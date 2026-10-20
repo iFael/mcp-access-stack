@@ -669,6 +669,107 @@ describe("personal browser extension assets", () => {
     expect(vm.runInContext("personalNetworkEntries.size", context)).toBe(0);
   });
 
+  it("intercepts a trusted upload trigger and selects the underlying Chrome file input natively", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(target: { tabId: number }, method: string, params: unknown) => void>();
+    const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      setTimeout, clearTimeout, Date,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      probeGuardedElement: () => undefined,
+      chrome: {
+        tabs: { get: async () => ({ url: "https://upload.example/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 10, y: 20 } }] },
+        debugger: {
+          attach: async () => undefined,
+          detach: async () => undefined,
+          onEvent: {
+            addListener: (fn: (target: { tabId: number }, method: string, params: unknown) => void) => { listeners.add(fn); },
+            removeListener: (fn: (target: { tabId: number }, method: string, params: unknown) => void) => { listeners.delete(fn); },
+          },
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            commands.push({ method, ...(params ? { params } : {}) });
+            if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
+              for (const listener of listeners) {
+                listener({ tabId: 7 }, "Page.fileChooserOpened", { backendNodeId: 99 });
+              }
+            }
+            if (method === "DOM.describeNode") {
+              return { node: { nodeName: "INPUT", attributes: ["type", "file"] } };
+            }
+            return {};
+          },
+        },
+      },
+    });
+    for (const fn of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "uploadPersonalFiles"]) vm.runInContext(extractFunction(serviceWorker, fn), context);
+    const upload = vm.runInContext("uploadPersonalFiles", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    await expect(upload({
+      tabId: "personal:7", triggerRef: "p-1",
+      guard: { url: "https://upload.example/", ref: "p-1", role: "button", name: "Attach" },
+      files: [{ name: "report.pdf", path: "C:\\Private\\report.pdf" }], totalBytes: 12,
+    })).resolves.toMatchObject({ completed: true, fileCount: 1, totalBytes: 12 });
+    expect(commands.find((command) => command.method === "Page.setInterceptFileChooserDialog" &&
+      command.params?.enabled === true)).toBeTruthy();
+    expect(commands.find((command) => command.method === "DOM.setFileInputFiles")?.params)
+      .toMatchObject({ backendNodeId: 99, files: ["C:\\Private\\report.pdf"] });
+    expect(commands.at(-1)).toMatchObject({ method: "Page.setInterceptFileChooserDialog", params: { enabled: false } });
+    expect(listeners.size).toBe(0);
+  });
+
+  it("selects a native file input in the owned Chrome tab through CDP and rejects changed targets", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://upload.example/" }) },
+        debugger: {
+          attach: async () => { commands.push({ method: "attach" }); },
+          detach: async () => { commands.push({ method: "detach" }); },
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            commands.push({ method, ...(params ? { params } : {}) });
+            if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+            if (method === "DOM.querySelectorAll") return { nodeIds: [42] };
+            if (method === "DOM.describeNode") return { node: {
+              nodeName: "INPUT", attributes: ["type", "file", "name", "document"],
+            } };
+            return {};
+          },
+        },
+      },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "uploadPersonalFiles"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const upload = vm.runInContext("uploadPersonalFiles", context) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const input = {
+      tabId: "personal:7", guard: { url: "https://upload.example/" },
+      files: [{ name: "test.pdf", path: "C:\\MCP-private\\staged-1\\test.pdf" }],
+      totalBytes: 300, selector: "input[type=file]",
+    };
+    await expect(upload(input)).resolves.toMatchObject({
+      tabId: "personal:7", completed: true, fileCount: 1, totalBytes: 300,
+    });
+    const setFiles = commands.find((command) => command.method === "DOM.setFileInputFiles");
+    expect(setFiles?.params).toMatchObject({ nodeId: 42,
+      files: ["C:\\MCP-private\\staged-1\\test.pdf"] });
+    expect(commands.filter((c) => c.method === "attach")).toHaveLength(1);
+    expect(commands.filter((c) => c.method === "detach")).toHaveLength(1);
+    await expect(upload({ ...input, guard: { url: "https://other.example/" } }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands.filter((c) => c.method === "DOM.setFileInputFiles")).toHaveLength(1);
+  });
+
   it("prints the single MCP-owned Chrome tab to a bounded CDP PDF", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
@@ -964,7 +1065,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.1.0");
+    expect(parsedManifest.version).toBe("1.2.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

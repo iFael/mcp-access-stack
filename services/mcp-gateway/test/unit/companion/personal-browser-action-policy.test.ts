@@ -19,6 +19,28 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("binds file upload confirmation to exact file bytes, target and owned origin", () => {
+    const policy = prepare();
+    const input = {
+      tabId: sample.tabId, selector: "input[type=file]",
+      files: [{ name: "receipt.pdf", contentBase64: "aGVsbG8=" }],
+    };
+    let confirmationId = "";
+    try {
+      policy.guardUpload(input);
+    } catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+      expect(typed.message).not.toContain("aGVsbG8=");
+    }
+    expect(confirmationId).toBeTruthy();
+    expect(() => policy.guardUpload({
+      ...input, files: [{ name: "receipt.pdf", contentBase64: "d3Jvbmc=" }], confirmationId,
+    })).toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardUpload({ ...input, confirmationId })).toEqual({ url: sample.url });
+  });
+
   it("requires bound confirmation for accepting confirm/prompt, but allows dismissing and alerts", () => {
     const policy = prepare();
     const input = { tabId: sample.tabId, action: "respond" as const,
