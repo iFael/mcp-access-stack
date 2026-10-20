@@ -12,6 +12,7 @@ import {
   sanitizeBrowserEvaluation,
   errorCodes,
   type BrowserExecutor,
+  type BrowserDragInput,
   type BrowserOperation,
   type OperationContext,
 } from "@vs-code-gpt/shared";
@@ -63,8 +64,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly pending = new Map<string, PendingCall>();
   private readonly actions = new PersonalBrowserActionPolicy();
   private readonly snapshots = new PersonalBrowserSnapshotState();
-  private readonly coordinateClicks = new Map<string, { x: number; y: number; ref: string; url: string }>();
-  private readonly coordinateDrags = new Map<string, { signature: string; fromRef: string; toRef: string }>();
+  private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
+  private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
+  private readonly coordinateDrags = new Map<string, {
+    signature: string;
+    from: { ref: string; x?: number; y?: number } | { x: number; y: number };
+    to: { ref: string; x?: number; y?: number } | { x: number; y: number };
+  }>();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -123,6 +129,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.actions.clear();
     this.snapshots.clear();
     this.coordinateClicks.clear();
+    this.pixelEvidence.clear();
     this.coordinateDrags.clear();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
@@ -187,6 +194,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
     this.coordinateClicks.delete(args[0].tabId);
+    this.pixelEvidence.delete(args[0].tabId);
     this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
@@ -245,12 +253,37 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         const snapshot = await this.snapshot({
           tabId: input.tabId, point: { x: input.x, y: input.y }, forceFull: true,
         }, context);
-        if (!snapshot.pointTarget) throw new AppError("LOCATOR_NOT_FOUND", "No observed control at those coordinates.");
-        point = { x: input.x, y: input.y, ref: snapshot.pointTarget.ref, url: snapshot.url };
+        if (snapshot.pointTarget) {
+          point = { x: input.x, y: input.y, ref: snapshot.pointTarget.ref, url: snapshot.url };
+        } else {
+          const evidence = this.pixelEvidence.get(input.tabId);
+          if (!evidence || evidence.url !== snapshot.url || Date.now() - evidence.observedAt > 60_000) {
+            throw new AppError("ACTION_BLOCKED_BY_POLICY",
+              "Capture a fresh browser_screenshot on the current tab before clicking a pixel with no semantic reference.");
+          }
+          point = { x: input.x, y: input.y, url: snapshot.url, pixel: true };
+        }
         this.coordinateClicks.set(input.tabId, point);
+      }
+      if (point.pixel) {
+        const evidence = this.pixelEvidence.get(input.tabId);
+        if (!evidence || evidence.url !== point.url || Date.now() - evidence.observedAt > 60_000) {
+          this.coordinateClicks.delete(input.tabId);
+          throw new AppError("ACTION_BLOCKED_BY_POLICY", "Pixel click requires a screenshot captured in the past minute.");
+        }
+        const guard = this.actions.guardPixelClick(input, point.url);
+        try {
+          const result = await this.call("click", { ...input, guard }, context);
+          this.coordinateClicks.delete(input.tabId);
+          return result;
+        } catch (error) {
+          this.coordinateClicks.delete(input.tabId);
+          throw error;
+        }
       }
       ref = point.ref;
     }
+    if (!ref) throw new AppError("LOCATOR_NOT_FOUND", "Missing actionable browser target.");
     const guardedInput = { ...input, ref };
     const guard = this.actions.guardClick(guardedInput);
     try {
@@ -284,28 +317,41 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
     this.requireGuardedActions();
     const [input, context] = args;
-    const signature = JSON.stringify([input.from, input.to]);
+    const signature = JSON.stringify([input.from, input.to, input.steps ?? 10]);
     let cached = this.coordinateDrags.get(input.tabId);
     if (!cached || cached.signature !== signature) {
-      const resolve = async (endpoint: typeof input.from): Promise<string> => {
-        if ("ref" in endpoint) return endpoint.ref;
+      const resolve = async (endpoint: BrowserDragInput["from"]) => {
+        if ("ref" in endpoint) return { ref: endpoint.ref };
         const snapshot = await this.snapshot({
           tabId: input.tabId, point: { x: endpoint.x, y: endpoint.y }, forceFull: true,
         }, context);
-        if (!snapshot.pointTarget) {
-          throw new AppError("LOCATOR_NOT_FOUND", "No observed interactive control at the drag endpoint.");
+        if (snapshot.pointTarget) {
+          return { x: endpoint.x, y: endpoint.y, ref: snapshot.pointTarget.ref };
         }
-        return snapshot.pointTarget.ref;
+        const evidence = this.pixelEvidence.get(input.tabId);
+        if (!evidence || evidence.url !== snapshot.url || Date.now() - evidence.observedAt > 60_000) {
+          throw new AppError("ACTION_BLOCKED_BY_POLICY",
+            "Capture a fresh browser_screenshot before dragging a pixel with no semantic reference.");
+        }
+        return { x: endpoint.x, y: endpoint.y };
       };
-      const fromRef = await resolve(input.from);
-      const toRef = await resolve(input.to);
-      cached = { signature, fromRef, toRef };
+      cached = { signature, from: await resolve(input.from), to: await resolve(input.to) };
       this.coordinateDrags.set(input.tabId, cached);
     }
-    const from = { ...input.from, ref: cached.fromRef };
-    const to = { ...input.to, ref: cached.toRef };
-    const resolved = { ...input, from, to };
-    const guards = this.actions.guardDrag(resolved);
+    const resolved = { ...input, from: cached.from, to: cached.to };
+    const hasPixel = !("ref" in cached.from) || !("ref" in cached.to);
+    let guards: { fromGuard: import("./personal-browser-action-policy.js").PersonalActionGuard;
+      toGuard: import("./personal-browser-action-policy.js").PersonalActionGuard };
+    if (hasPixel) {
+      const evidence = this.pixelEvidence.get(input.tabId);
+      if (!evidence || Date.now() - evidence.observedAt > 60_000) {
+        this.coordinateDrags.delete(input.tabId);
+        throw new AppError("ACTION_BLOCKED_BY_POLICY", "Pixel drag requires a screenshot from the past minute.");
+      }
+      guards = this.actions.guardPixelDrag(resolved, evidence.url);
+    } else {
+      guards = this.actions.guardDrag(resolved);
+    }
     try {
       const result = await this.call("drag", { ...resolved, ...guards }, context);
       this.coordinateDrags.delete(input.tabId);
@@ -472,6 +518,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     await mkdir(directory, { recursive: true });
     const absolutePath = path.join(directory, `${randomUUID()}.${extension}`);
     await writeFile(absolutePath, bytes, { mode: 0o600 });
+    // A screenshot is a prerequisite for pixel-only actions, never a grant.
+    // The separate one-use confirmation is still required for every click.
+    try {
+      const { url } = this.actions.guardPage(args[0].tabId);
+      this.pixelEvidence.set(args[0].tabId, { url, observedAt: Date.now() });
+    } catch {
+      this.pixelEvidence.delete(args[0].tabId);
+    }
     return {
       ...transport,
       path: absolutePath,
@@ -484,6 +538,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
     this.coordinateClicks.delete(args[0].tabId);
+    this.pixelEvidence.delete(args[0].tabId);
     this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
@@ -496,6 +551,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
     this.coordinateClicks.delete(args[0].tabId);
+    this.pixelEvidence.delete(args[0].tabId);
     this.coordinateDrags.delete(args[0].tabId);
     this.actions.observeTab(result.tab);
     return result;
@@ -505,6 +561,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("closeTab", args[0], args[1]);
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
+    this.pixelEvidence.delete(args[0].tabId);
+    this.coordinateClicks.delete(args[0].tabId);
     return result;
   }
 
@@ -515,8 +573,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.actions.finish(args[0].taskId);
     for (const tabId of [...(result.closedTabIds ?? []), ...(result.releasedTabIds ?? [])]) {
       this.snapshots.discard(tabId);
+      this.pixelEvidence.delete(tabId);
+      this.coordinateClicks.delete(tabId);
     }
-    if (!args[0].taskId) this.snapshots.clear();
+    if (!args[0].taskId) {
+      this.snapshots.clear();
+      this.pixelEvidence.clear();
+      this.coordinateClicks.clear();
+    }
     return result;
   }
 

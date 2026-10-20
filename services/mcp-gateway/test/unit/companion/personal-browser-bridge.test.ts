@@ -23,6 +23,101 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("binds physical canvas drags to fresh screenshot evidence and a one-use confirmation", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const sent: Array<Record<string, unknown>> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const req = JSON.parse(data.toString()) as WireMessage;
+      if (req.type !== "request") return;
+      const result = req.operation === "snapshot"
+        ? { tabId, url: "https://example.com/", content: "Map canvas", refs: [] }
+        : req.operation === "screenshot"
+          ? { tabId, path: "/private/s.png", mimeType: "image/png",
+            contentBase64: "aGVsbG8=", sizeBytes: 5 }
+          : { tabId, completed: true };
+      if (req.operation === "drag") sent.push(req.input as Record<string, unknown>);
+      extension.send(JSON.stringify({ type: "response", id: req.id, ok: true, result }));
+    };
+    extension.on("message", respond);
+    try {
+      const input = { tabId, from: { x: 110, y: 120 },
+        to: { x: 240, y: 260 }, steps: 8 };
+      await expect(bridge.drag(input))
+        .rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+      await bridge.screenshot({ tabId });
+      let confirmationId = "";
+      try { await bridge.drag(input); }
+      catch (error) {
+        const typed = error as { code: string; message: string };
+        expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+        confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+      }
+      expect(confirmationId).toBeTruthy();
+      expect(sent).toHaveLength(0);
+      await expect(bridge.drag({ ...input, confirmationId }))
+        .resolves.toMatchObject({ completed: true });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ from: input.from, to: input.to,
+        fromGuard: { url: "https://example.com/", pixel: true, x: 110, y: 120 },
+        toGuard: { url: "https://example.com/", pixel: true, x: 240, y: 260 } });
+      await expect(bridge.drag({ ...input, confirmationId }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      expect(sent).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("requires fresh screenshot and single-use confirmation before a pixel-only canvas click", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const dispatched: Array<Record<string, unknown>> = [];
+    const handler = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type !== "request") return;
+      const result = message.operation === "snapshot"
+        ? { tabId, url: "https://example.com/", content: "Canvas drawing",
+            refs: [], pointTarget: undefined }
+        : message.operation === "screenshot"
+          ? { tabId, path: "/private/screen.png", sizeBytes: 5,
+              mimeType: "image/png", contentBase64: "aGVsbG8=" }
+          : { tabId, completed: true };
+      if (message.operation === "click") dispatched.push(message.input as Record<string, unknown>);
+      extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, result }));
+    };
+    extension.on("message", handler);
+    try {
+      await expect(bridge.click({ tabId, x: 190, y: 120 }))
+        .rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+      await bridge.screenshot({ tabId });
+      let confirmationId = "";
+      try {
+        await bridge.click({ tabId, x: 190, y: 120, button: "right" });
+      } catch (error) {
+        const typed = error as { code: string; message: string };
+        expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+        confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+      }
+      expect(confirmationId).toBeTruthy();
+      expect(dispatched).toHaveLength(0);
+      await expect(bridge.click({ tabId, x: 190, y: 120,
+        button: "right", confirmationId })).resolves.toMatchObject({ completed: true });
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toMatchObject({ tabId, x: 190, y: 120,
+        button: "right", guard: { url: "https://example.com/", pixel: true, x: 190, y: 120 } });
+      await expect(bridge.click({ tabId, x: 190, y: 120,
+        button: "right", confirmationId })).rejects.toMatchObject({
+          code: "BROWSER_CONFIRMATION_INVALID",
+        });
+      expect(dispatched).toHaveLength(1);
+    } finally {
+      extension.off("message", handler);
+      await close();
+    }
+  });
+
   it("routes legacy page profiles and frame DOM indices only through the authenticated owned-tab Chrome bridge", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const received: Array<{ operation?: string; input?: unknown }> = [];

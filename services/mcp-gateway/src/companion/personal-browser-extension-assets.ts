@@ -869,15 +869,39 @@ async function resolveGuardedAxPoint(chromeTabId, ref, guard, target, focus) {
   return { x, y };
 }
 
+function probePersonalPixelTarget(x, y, expectedUrl) {
+  if (location.href !== expectedUrl) return { stale: true };
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 ||
+      x >= innerWidth || y >= innerHeight) return { outside: true };
+  if (!document.elementFromPoint(x, y)) return { empty: true };
+  return { x, y };
+}
+
 async function click(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "click", false);
-  if (!input.guard || input.guard.ref !== input.ref) {
-    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome interaction requires a bound element guard.");
+  const pixel = input.ref === undefined && input.guard?.pixel === true &&
+    input.guard.x === input.x && input.guard.y === input.y;
+  if (!input.guard || (!pixel && (!input.ref || input.guard.ref !== input.ref))) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome interaction requires a bound element or pixel guard.");
   }
   let point;
-  if (!input.ref.startsWith("ax-")) {
+  if (pixel) {
+    const tab = await chrome.tabs.get(chromeTabId);
+    if (tab.url !== input.guard.url) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "The Chrome page changed since the confirmed screenshot.");
+    }
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probePersonalPixelTarget,
+      args: [input.x, input.y, input.guard.url],
+    });
+    point = injection?.result;
+    if (!point || point.stale || point.outside || point.empty) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Pixel target is stale, empty or outside the observed page.");
+    }
+  } else if (!input.ref.startsWith("ax-")) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
@@ -891,7 +915,7 @@ async function click(input, signal) {
   try {
     attached = await attachGuardedDebugger(target);
     throwIfAborted(signal, "click", false);
-    if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    if (!pixel && input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     const button = input.button ?? "left";
     const clickCount = input.clickCount ?? 1;
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
@@ -952,8 +976,29 @@ async function drag(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   const resolve = async (endpoint, guard) => {
-    if (!endpoint || !endpoint.ref || !guard || guard.ref !== endpoint.ref) {
+    if (!endpoint || !guard) {
       throw coded("BROWSER_CONFIRMATION_INVALID", "Drag requires a bound source and destination.");
+    }
+    if (!endpoint.ref) {
+      if (!guard.pixel || endpoint.x !== guard.x || endpoint.y !== guard.y) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Physical drag endpoint is not bound to its confirmation.");
+      }
+      const tab = await chrome.tabs.get(chromeTabId);
+      if (tab.url !== guard.url) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The page changed since the pixel drag screenshot.");
+      }
+      const [probe] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId },
+        func: probePersonalPixelTarget,
+        args: [endpoint.x, endpoint.y, guard.url],
+      });
+      if (!Number.isInteger(probe?.result?.x) || !Number.isInteger(probe?.result?.y)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Physical drag endpoint is stale, empty or outside the viewport.");
+      }
+      return probe.result;
+    }
+    if (guard.ref !== endpoint.ref) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Drag reference changed since the snapshot.");
     }
     if (endpoint.ref.startsWith("ax-")) return undefined;
     const [probe] = await chrome.scripting.executeScript({
@@ -978,10 +1023,10 @@ async function drag(input, signal) {
   let pressed = false;
   try {
     attached = await attachGuardedDebugger(target);
-    if (input.from.ref.startsWith("ax-")) from = await resolveGuardedAxPoint(
+    if (input.from.ref?.startsWith("ax-")) from = await resolveGuardedAxPoint(
       chromeTabId, input.from.ref, input.fromGuard, target, false,
     );
-    if (input.to.ref.startsWith("ax-")) to = await resolveGuardedAxPoint(
+    if (input.to.ref?.startsWith("ax-")) to = await resolveGuardedAxPoint(
       chromeTabId, input.to.ref, input.toGuard, target, false,
     );
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {

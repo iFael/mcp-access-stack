@@ -6,6 +6,66 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("dispatches confirmed pixel clicks through native Chrome CDP on the unchanged owned tab", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let pageUrl = "https://example.com/";
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: pageUrl }) },
+        scripting: { executeScript: async ({ func, args }: {
+          func: { name: string }; args?: unknown[];
+        }) => func.name === "probePersonalPixelTarget"
+          ? [{ result: { x: args?.[0], y: args?.[1] } }] : [] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) =>
+            { events.push({ method, params }); },
+        },
+      },
+    });
+    for (const fn of ["probePersonalPixelTarget", "click"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const click = vm.runInContext("click", context) as (input: unknown) => Promise<unknown>;
+    await expect(click({ tabId: "personal:7", x: 220, y: 170,
+      button: "right", guard: { url: pageUrl, pixel: true, x: 220, y: 170 } }))
+      .resolves.toMatchObject({ completed: true });
+    expect(events.map(e => e.method)).toEqual([
+      "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
+    ]);
+    expect(events[1]?.params).toMatchObject({ type: "mousePressed",
+      x: 220, y: 170, button: "right", buttons: 2 });
+    events.length = 0;
+    await expect(click({ tabId: "personal:7", x: 220, y: 170,
+      guard: { url: pageUrl, pixel: true, x: 219, y: 170 } }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    pageUrl = "https://changed.example/";
+    await expect(click({ tabId: "personal:7", x: 220, y: 170,
+      guard: { url: "https://example.com/", pixel: true, x: 220, y: 170 } }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(events).toHaveLength(0);
+  });
+
+  it("rejects stale, empty and out-of-viewport pixel probes", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const location = { href: "https://example.com/" };
+    const doc = { elementFromPoint: (x: number, y: number) =>
+      (x >= 10 && y >= 10 ? { tagName: "CANVAS" } : null) };
+    const context = vm.createContext({ location, document: doc,
+      Number, innerWidth: 800, innerHeight: 600 });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalPixelTarget"), context);
+    const probe = vm.runInContext("probePersonalPixelTarget", context) as
+      (...args: unknown[]) => Record<string, unknown>;
+    expect(probe(20, 30, location.href)).toEqual({ x: 20, y: 30 });
+    expect(probe(1, 1, location.href)).toMatchObject({ empty: true });
+    expect(probe(900, 30, location.href)).toMatchObject({ outside: true });
+    expect(probe(20, 30, "https://older.example/")).toMatchObject({ stale: true });
+  });
+
   it("profiles exact Chrome webNavigation frame ancestry and indexes one owned frame without exposing private values", async () => {
     const { serviceWorker, manifest } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     expect((JSON.parse(manifest) as { permissions: string[] }).permissions).toContain("webNavigation");
@@ -535,6 +595,43 @@ describe("personal browser extension assets", () => {
     expect(inspect(21, 40)).toEqual({ ref: "p-7", role: "canvas", name: "Help" });
     expect(probe("p-7", { ...guard, role: "canvas" }, false, 21, 40))
       .toMatchObject({ x: 21, y: 40 });
+  });
+
+  it("drags across canvas pixels with native CDP and refuses unmatched screenshot guards", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const ctx = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async (request: { args: unknown[] }) => [{
+          result: { x: request.args[0], y: request.args[1] },
+        }] },
+        debugger: { attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            commands.push({ method, params });
+          } },
+      },
+    });
+    for (const fn of ["probePersonalPixelTarget", "drag"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), ctx);
+    }
+    const drag = vm.runInContext("drag", ctx) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", from: { x: 40, y: 60 },
+      to: { x: 210, y: 160 }, steps: 4,
+      fromGuard: { url: "https://example.com/", pixel: true, x: 40, y: 60 },
+      toGuard: { url: "https://example.com/", pixel: true, x: 210, y: 160 } };
+    await expect(drag(input)).resolves.toMatchObject({ completed: true });
+    expect(commands.find(e => e.params.type === "mousePressed")?.params)
+      .toMatchObject({ x: 40, y: 60, buttons: 1 });
+    expect(commands.find(e => e.params.type === "mouseReleased")?.params)
+      .toMatchObject({ x: 210, y: 160, buttons: 0 });
+    commands.length = 0;
+    await expect(drag({ ...input, fromGuard: { ...input.fromGuard, x: 41 } }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands).toHaveLength(0);
   });
 
   it("drags with trusted CDP events and always releases the mouse on abort", async () => {
@@ -1567,7 +1664,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.5.0");
+    expect(parsedManifest.version).toBe("1.6.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

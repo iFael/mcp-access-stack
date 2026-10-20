@@ -22,6 +22,9 @@ import {
 
 export interface PersonalActionGuard {
   url: string;
+  pixel?: true;
+  x?: number;
+  y?: number;
   ref?: string;
   role?: string;
   name?: string;
@@ -130,6 +133,34 @@ export class PersonalBrowserActionPolicy {
     return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
   }
 
+  guardPixelClick(
+    input: BrowserClickInput,
+    screenshotUrl: string,
+  ): PersonalActionGuard {
+    if (input.ref || input.x === undefined || input.y === undefined ||
+        !Number.isInteger(input.x) || !Number.isInteger(input.y)) {
+      throw new AppError("INVALID_ARGUMENT", "A physical pixel click requires exact viewport coordinates and no ref.");
+    }
+    const page = this.requirePage(input.tabId);
+    if (page.url !== screenshotUrl) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "The screenshot belongs to a different page.");
+    }
+    const target = createHash("sha256").update(JSON.stringify([
+      page.url, input.x, input.y, input.button ?? "left",
+      input.clickCount ?? 1, [...(input.modifiers ?? [])].sort(),
+    ])).digest("hex");
+    // Every pixel-only click may hit controls that AX cannot classify, including
+    // transactions and destructive controls. Require an exact, one-use human grant.
+    this.authorize(
+      input.confirmationId,
+      this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url },
+        "submit-form", "pixel-click", "sha256:" + target,
+      ),
+    );
+    return { url: page.url, pixel: true, x: input.x, y: input.y };
+  }
+
   guardPage(tabId: string): PersonalActionGuard {
     const page = this.requirePage(tabId);
     return { url: page.url };
@@ -145,6 +176,36 @@ export class PersonalBrowserActionPolicy {
     const page = this.requirePage(input.tabId);
     const reference = this.requireRef(input.tabId, input.ref, page);
     return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
+  }
+
+  guardPixelDrag(
+    input: BrowserDragInput,
+    screenshotUrl: string,
+  ): { fromGuard: PersonalActionGuard; toGuard: PersonalActionGuard } {
+    const page = this.requirePage(input.tabId);
+    if (page.url !== screenshotUrl) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "The pixel drag belongs to a different screenshot.");
+    }
+    const resolve = (endpoint: BrowserDragInput["from"]): PersonalActionGuard => {
+      if ("ref" in endpoint) return this.guardReference(input.tabId, endpoint.ref);
+      if (!Number.isInteger(endpoint.x) || !Number.isInteger(endpoint.y)) {
+        throw new AppError("INVALID_ARGUMENT", "Pixel drag endpoints must use bounded integer CSS coordinates.");
+      }
+      return { url: page.url, pixel: true, x: endpoint.x, y: endpoint.y };
+    };
+    const fromGuard = resolve(input.from);
+    const toGuard = resolve(input.to);
+    if (!fromGuard.pixel && !toGuard.pixel) {
+      throw new AppError("INVALID_ARGUMENT", "Pixel drag confirmation is limited to pixel-only endpoints.");
+    }
+    const target = createHash("sha256").update(JSON.stringify([
+      page.url, input.from, input.to, input.steps ?? 10,
+    ])).digest("hex");
+    this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+      { tabId: input.tabId, url: page.url },
+      "submit-form", "pixel-drag", "sha256:" + target,
+    ));
+    return { fromGuard, toGuard };
   }
 
   guardDrag(input: BrowserDragInput): { fromGuard: PersonalActionGuard; toGuard: PersonalActionGuard } {
