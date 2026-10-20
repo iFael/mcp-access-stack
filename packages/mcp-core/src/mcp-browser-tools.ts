@@ -19,7 +19,7 @@ import {
 } from "./timeout-policy.js";
 
 export const BROWSER_TOOL_NAMES = [
-  "browser_status", "browser_connect", "browser_tabs", "browser_select_tab", "browser_dialog", "browser_open",
+  "browser_status", "browser_connect", "browser_tabs", "browser_select_tab", "browser_dialog", "browser_viewport", "browser_open",
   "browser_open_authorized_site",
   "browser_navigate", "browser_snapshot", "browser_find", "browser_evaluate", "browser_click", "browser_hover", "browser_drag", "browser_scroll", "browser_fill", "browser_form_input", "browser_type",
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
@@ -362,6 +362,11 @@ function definitions(
       context,
       () => e.dialog(assumeParsed(v)),
       (activeContext) => e.dialog(assumeParsed(v), activeContext),
+    )),
+    d("browser_viewport", "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. No other Chrome tabs are modified.", c.browserViewportInputSchema, c.browserViewportResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.viewport(assumeParsed(v)),
+      (activeContext) => e.viewport(assumeParsed(v), activeContext),
     )),
     d("browser_open", "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
       context,

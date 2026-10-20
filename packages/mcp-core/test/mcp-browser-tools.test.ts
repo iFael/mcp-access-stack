@@ -8,6 +8,7 @@ import {
   browserFinishTaskInputSchema,
   browserTabActionInputSchema,
   browserDialogInputSchema,
+  browserViewportInputSchema,
   browserHoverInputSchema,
   browserFindInputSchema,
   browserFindResultSchema,
@@ -34,6 +35,20 @@ import {
 } from "../src/mcp-browser-tools.js";
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
+
+describe("browser viewport contracts", () => {
+  it("requires owned tab and coherent emulation settings", () => {
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", colorScheme: "dark" }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "tablet", touch: false }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "custom", width: 900, height: 700, deviceScaleFactor: 2 }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "custom", width: 900 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "reset", width: 600, height: 800 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", colorScheme: "wrong" }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "desktop", deviceScaleFactor: 6 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", userAgent: "My browser 1.0" }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "reset", userAgent: "bad" }).success).toBe(false);
+  });
+});
 
 describe("browser dialogue lifecycle contracts", () => {
   it("requires exact messages for responses and bounds prompt input", () => {

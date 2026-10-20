@@ -51,6 +51,8 @@ import type {
   BrowserTabActionInput,
   BrowserDialogInput,
   BrowserDialogResult,
+  BrowserViewportInput,
+  BrowserViewportResult,
   BrowserTraceInput,
   BrowserTraceStartResult,
   BrowserTraceStopResult,
@@ -82,6 +84,7 @@ export interface BrowserExecutor {
   tabs(input: BrowserTabsInput, context?: OperationContext): Promise<BrowserTabsResult>;
   selectTab(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
   dialog(input: BrowserDialogInput, context?: OperationContext): Promise<BrowserDialogResult>;
+  viewport(input: BrowserViewportInput, context?: OperationContext): Promise<BrowserViewportResult>;
   open(input: BrowserOpenInput, context?: OperationContext): Promise<BrowserTabResult>;
   openAuthorizedSite(
     input: BrowserOpenAuthorizedSiteInput,

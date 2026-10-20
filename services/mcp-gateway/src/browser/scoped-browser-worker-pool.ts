@@ -146,6 +146,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.dialog(...args));
   }
 
+  viewport(...args: Parameters<BrowserExecutor["viewport"]>): ReturnType<BrowserExecutor["viewport"]> {
+    return this.invoke(args[1], (client) => client.viewport(...args));
+  }
+
   open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
     const [input, context] = args;
     if (input.browserMode === "personal") {

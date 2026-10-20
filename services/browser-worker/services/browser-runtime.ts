@@ -80,6 +80,8 @@ import {
   type BrowserTabActionInput,
   type BrowserDialogInput,
   type BrowserDialogResult,
+  type BrowserViewportInput,
+  type BrowserViewportResult,
   type BrowserTabResult,
   type BrowserTabsInput,
   type BrowserTabsResult,
@@ -573,6 +575,20 @@ export class BrowserRuntime implements BrowserExecutor {
     }
     await this.selectBrowserTab(tab);
     const result = await this.driver.dialog(input);
+    await this.checkpoint();
+    return result;
+  }
+
+  async viewport(
+    input: BrowserViewportInput,
+    _context: OperationContext = {},
+  ): Promise<BrowserViewportResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (!this.driver.viewport) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support viewport emulation.");
+    }
+    await this.selectBrowserTab(tab);
+    const result = await this.driver.viewport(input);
     await this.checkpoint();
     return result;
   }

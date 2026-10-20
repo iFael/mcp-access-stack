@@ -663,6 +663,80 @@ describe("personal browser extension assets", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("persists mobile viewport, shares network CDP, and resets only the owned tab", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const methods: string[] = [];
+    let attached = 0;
+    let detached = 0;
+    const listeners = new Set<Function>();
+    const ctx = vm.createContext({
+      Date, Map, Promise,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async (id: number) => {
+          if (id !== 7) throw new Error("not owned");
+          return { url: "https://example.com/", width: 1280, height: 720 };
+        } },
+        debugger: {
+          attach: async () => { attached++; },
+          detach: async () => { detached++; },
+          onEvent: {
+            addListener: (fn: Function) => { listeners.add(fn); },
+            removeListener: (fn: Function) => { listeners.delete(fn); },
+          },
+          sendCommand: async (_target: unknown, method: string) => {
+            methods.push(method);
+            if (method === "Page.getLayoutMetrics") {
+              return { cssVisualViewport: { clientWidth: 1280, clientHeight: 720 } };
+            }
+            if (method === "Runtime.evaluate") {
+              return { result: { value: { dpr: 1.25, dark: true, ua: "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36", platform: "Win32" } } };
+            }
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext("const personalViewportSessions = new Map(); globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions; const personalDialogArms = new Map(); globalThis.__mcpV3PersonalDialogArms = personalDialogArms; const personalNetworkCaptures = new Map(); const personalNetworkEntries = new Map(); globalThis.__mcpV3PersonalNetworkCaptures = personalNetworkCaptures;", ctx);
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "resetPersonalViewport", "configurePersonalViewport", "startPersonalNetworkCapture",
+      "stopPersonalNetworkCapture"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const setViewport = vm.runInContext("configurePersonalViewport", ctx) as
+      (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    const attachDebugger = vm.runInContext("attachGuardedDebugger", ctx) as
+      (input: Record<string, unknown>) => Promise<boolean>;
+    const detachDebugger = vm.runInContext("detachGuardedDebugger", ctx) as
+      (input: Record<string, unknown>, attached: boolean) => Promise<void>;
+    const startNetwork = vm.runInContext("startPersonalNetworkCapture", ctx) as
+      (tabId: number, input: Record<string, unknown>) => Promise<void>;
+    const stopNetwork = vm.runInContext("stopPersonalNetworkCapture", ctx) as
+      (tabId: number) => Promise<void>;
+    await expect(setViewport({ tabId: "personal:7", preset: "mobile", colorScheme: "dark" }))
+      .resolves.toMatchObject({ width: 375, height: 812, deviceScaleFactor: 3,
+        touch: true, mobile: true, colorScheme: "dark", emulated: true });
+    expect(attached).toBe(1);
+    expect(await attachDebugger({ tabId: 7 })).toBe(false);
+    await detachDebugger({ tabId: 7 }, false);
+    await startNetwork(7, { captureHeaders: false, captureBodies: false });
+    expect(attached).toBe(1);
+    await stopNetwork(7);
+    expect(detached).toBe(0);
+    expect(methods).toContain("Emulation.setDeviceMetricsOverride");
+    expect(methods).toContain("Network.enable");
+    await expect(setViewport({ tabId: "personal:7", preset: "reset" }))
+      .resolves.toMatchObject({ width: 1280, height: 720,
+        deviceScaleFactor: 1.25, colorScheme: "dark", emulated: false });
+    expect(methods).toContain("Emulation.clearDeviceMetricsOverride");
+    expect(detached).toBe(1);
+    expect(listeners.size).toBe(0);
+    expect(vm.runInContext("personalViewportSessions.size", ctx)).toBe(0);
+  });
+
   it("observes, inspects and responds to Chrome JavaScript dialogs without blind acceptance", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const listeners = new Set<(source: { tabId: number }, method: string, params: Record<string, unknown>) => void>();
@@ -853,7 +927,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.0.0");
+    expect(parsedManifest.version).toBe("1.1.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

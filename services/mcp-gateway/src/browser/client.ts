@@ -51,6 +51,7 @@ import {
   type BrowserStatusInput,
   type BrowserTabActionInput,
   type BrowserDialogInput,
+  type BrowserViewportInput,
   type BrowserTraceInput,
   type BrowserTabsInput,
   type BrowserVideoStartInput,
@@ -120,6 +121,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   dialog(input: BrowserDialogInput, context?: OperationContext) {
     return this.call("dialog", input, context);
+  }
+
+  viewport(input: BrowserViewportInput, context?: OperationContext) {
+    return this.call("viewport", input, context);
   }
 
   open(input: BrowserOpenInput, context?: OperationContext) {

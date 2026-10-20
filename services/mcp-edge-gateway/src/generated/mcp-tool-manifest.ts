@@ -15061,6 +15061,154 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. No other Chrome tabs are modified.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "colorScheme": {
+          "enum": [
+            "light",
+            "dark",
+            "no-preference"
+          ],
+          "type": "string"
+        },
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "deviceScaleFactor": {
+          "maximum": 4,
+          "minimum": 0.5,
+          "type": "number"
+        },
+        "height": {
+          "maximum": 2160,
+          "minimum": 240,
+          "type": "integer"
+        },
+        "preset": {
+          "enum": [
+            "desktop",
+            "tablet",
+            "mobile",
+            "custom",
+            "reset"
+          ],
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "touch": {
+          "type": "boolean"
+        },
+        "userAgent": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^[\\x20-\\x7e]+$",
+          "type": "string"
+        },
+        "width": {
+          "maximum": 3840,
+          "minimum": 240,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tabId",
+        "preset"
+      ],
+      "type": "object"
+    },
+    "name": "browser_viewport",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "colorScheme": {
+          "enum": [
+            "light",
+            "dark",
+            "no-preference"
+          ],
+          "type": "string"
+        },
+        "deviceScaleFactor": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "emulated": {
+          "type": "boolean"
+        },
+        "height": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mobile": {
+          "type": "boolean"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "touch": {
+          "type": "boolean"
+        },
+        "userAgent": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "width": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tabId",
+        "width",
+        "height",
+        "deviceScaleFactor",
+        "mobile",
+        "touch",
+        "colorScheme",
+        "emulated",
+        "userAgent"
+      ],
+      "type": "object"
+    },
+    "title": "browser_viewport"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
@@ -24449,13 +24597,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ccc1f227a0a3cd59eeaa78a22cd016bdd620e2c1bbf864ad293bac5dcc355bab",
-  "serverVersion": "0.4.0-catalog.cccc1f227a0a3.sfef0fb5ccbef",
-  "toolCount": 108,
-  "toolSetRevision": "fef0fb5ccbef945f5ea562556d6fcee5a6bb1d413d9a706aa0016f3f950cdfd9"
+  "contractRevision": "d9ca10dc38f701cdfd3b625ef7937825a191ae092254dddfdfc7b592f1ef60d7",
+  "serverVersion": "0.4.0-catalog.cd9ca10dc38f7.saca8cfec86ad",
+  "toolCount": 109,
+  "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cccc1f227a0a3.sfef0fb5ccbef"
+  "version": "0.4.0-catalog.cd9ca10dc38f7.saca8cfec86ad"
 } as const;

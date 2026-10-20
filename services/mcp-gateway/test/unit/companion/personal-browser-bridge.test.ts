@@ -23,6 +23,33 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("routes the owned-tab viewport preset and reset without altering unrelated Chrome tabs", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input: unknown }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      requests.push({ ...(request.operation ? { operation: request.operation } : {}), input: request.input });
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", width: 375, height: 812, deviceScaleFactor: 3,
+          mobile: true, touch: true, colorScheme: "dark", emulated: true,
+          userAgent: "Mozilla/5.0 Chrome/155.0.0.0 Mobile Safari/537.36" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.viewport({ tabId: "personal:7", preset: "mobile", colorScheme: "dark" }))
+        .resolves.toMatchObject({ tabId: "personal:7", width: 375, mobile: true, emulated: true });
+      expect(requests).toEqual([{
+        operation: "viewport", input: { tabId: "personal:7", preset: "mobile", colorScheme: "dark" },
+      }]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("reads a dialog and dismisses only the exact observed message", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const actions: string[] = [];

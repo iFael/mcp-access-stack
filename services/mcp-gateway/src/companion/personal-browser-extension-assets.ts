@@ -25,7 +25,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "selectTab", "dialog", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
+  "open", "selectTab", "dialog", "viewport", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
   "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
@@ -34,6 +34,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
   "selectTab",
   "dialog",
+  "viewport",
   "open",
   "navigate",
   "snapshot",
@@ -115,9 +116,16 @@ const personalConsoleEntries = new Map();
 const personalNetworkEntries = new Map();
 const personalNetworkCaptures = new Map();
 const personalDialogArms = new Map();
+const personalViewportSessions = new Map();
+globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
 globalThis.__mcpV3PersonalDialogArms = personalDialogArms;
 function borrowPersonalDebugger(target) {
   const key = String(target.tabId);
+  const viewport = globalThis.__mcpV3PersonalViewportSessions?.get(key);
+  if (viewport) {
+    viewport.borrowers += 1;
+    return viewport;
+  }
   const dialog = globalThis.__mcpV3PersonalDialogArms?.get(key);
   if (dialog && !dialog.closing) {
     dialog.borrowers += 1;
@@ -141,6 +149,11 @@ async function detachGuardedDebugger(target, attached) {
     return;
   }
   const key = String(target.tabId);
+  const viewport = globalThis.__mcpV3PersonalViewportSessions?.get(key);
+  if (viewport && viewport.borrowers > 0) {
+    viewport.borrowers -= 1;
+    return;
+  }
   const dialog = globalThis.__mcpV3PersonalDialogArms?.get(key);
   if (dialog && dialog.borrowers > 0) {
     dialog.borrowers -= 1;
@@ -283,6 +296,7 @@ async function perform(operation, input, signal, timing) {
     case "tabs": return tabs(input, signal);
     case "selectTab": return selectOwnedTab(input, signal);
     case "dialog": return observePersonalDialog(input, signal);
+    case "viewport": return configurePersonalViewport(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
@@ -440,6 +454,121 @@ async function observePersonalDialog(input, signal) {
     await detachGuardedDebugger(target, attached).catch(() => undefined);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome could not arm its JavaScript dialog observer.");
+  }
+}
+
+async function resetPersonalViewport(chromeTabId, tabId = "personal:" + chromeTabId) {
+  const key = String(chromeTabId);
+  const session = personalViewportSessions.get(key);
+  if (!session) {
+    const tab = await chrome.tabs.get(chromeTabId);
+    const baseline = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: () => ({
+        userAgent: navigator.userAgent, dpr: window.devicePixelRatio || 1,
+        colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+      }),
+    }).catch(() => []);
+    return { tabId, width: tab.width || 1366, height: tab.height || 768,
+      deviceScaleFactor: baseline[0]?.result?.dpr || 1,
+      userAgent: String(baseline[0]?.result?.userAgent ?? "").slice(0, 512),
+      mobile: false, touch: false,
+      colorScheme: baseline[0]?.result?.colorScheme ?? "no-preference", emulated: false };
+  }
+  if (session.borrowers > 0) {
+    throw coded("EXECUTION_STATE_INVALID", "Viewport is still in use by another Chrome debugger operation.");
+  }
+  const target = { tabId: chromeTabId };
+  try {
+    await chrome.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
+    await chrome.debugger.sendCommand(target, "Emulation.setTouchEmulationEnabled", { enabled: false });
+    await chrome.debugger.sendCommand(target, "Emulation.setEmulatedMedia", { media: "", features: [] });
+    await chrome.debugger.sendCommand(target, "Emulation.setUserAgentOverride", {
+      userAgent: session.original.userAgent, platform: session.original.platform,
+    });
+  } finally {
+    personalViewportSessions.delete(key);
+    await detachGuardedDebugger(target, session.attached).catch(() => undefined);
+  }
+  return { tabId, ...session.original, mobile: false, touch: false,
+    colorScheme: session.original.colorScheme, emulated: false };
+}
+
+async function configurePersonalViewport(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "viewport", false);
+  if (input.preset === "reset") return resetPersonalViewport(chromeTabId, input.tabId);
+  const profiles = {
+    desktop: { width: 1366, height: 768, dpr: 1, mobile: false, touch: false },
+    tablet: { width: 768, height: 1024, dpr: 2, mobile: true, touch: true },
+    mobile: { width: 375, height: 812, dpr: 3, mobile: true, touch: true },
+    custom: { width: input.width ?? 1280, height: input.height ?? 720,
+      dpr: 1, mobile: false, touch: false },
+  };
+  const profile = profiles[input.preset];
+  if (!profile) throw coded("INVALID_ARGUMENT", "Unknown viewport preset.");
+  const width = profile.width;
+  const height = profile.height;
+  const deviceScaleFactor = input.deviceScaleFactor ?? profile.dpr;
+  const mobile = profile.mobile;
+  const touch = input.touch ?? profile.touch;
+  const colorScheme = input.colorScheme ?? "no-preference";
+  const key = String(chromeTabId);
+  const target = { tabId: chromeTabId };
+  let session = personalViewportSessions.get(key);
+  const created = !session;
+  let attached = false;
+  try {
+    if (!session) {
+      const tab = await chrome.tabs.get(chromeTabId);
+      attached = await attachGuardedDebugger(target);
+      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const evaluation = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+        expression: "({ dpr: window.devicePixelRatio, dark: matchMedia('(prefers-color-scheme: dark)').matches, ua: navigator.userAgent, platform: navigator.platform })",
+        returnByValue: true,
+      });
+      const original = {
+        width: Math.max(1, Math.round(metrics?.cssVisualViewport?.clientWidth ?? tab.width ?? 1366)),
+        height: Math.max(1, Math.round(metrics?.cssVisualViewport?.clientHeight ?? tab.height ?? 768)),
+        deviceScaleFactor: Math.max(0.1, Number(evaluation?.result?.value?.dpr) || 1),
+        colorScheme: evaluation?.result?.value?.dark ? "dark" : "light",
+        userAgent: String(evaluation?.result?.value?.ua ?? "").slice(0, 512),
+        platform: String(evaluation?.result?.value?.platform ?? "").slice(0, 100),
+      };
+      session = { attached, original, borrowers: 0 };
+      personalViewportSessions.set(key, session);
+    }
+    const chromeVersion = /Chrome\\/([\\d.]+)/u.exec(session.original.userAgent)?.[1];
+    const mobileUA = chromeVersion && (input.preset === "mobile" || input.preset === "tablet")
+      ? "Mozilla/5.0 (Linux; Android 14; " +
+        (input.preset === "mobile" ? "Pixel 7" : "Pixel Tablet") +
+        ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + chromeVersion +
+        (input.preset === "mobile" ? " Mobile " : " ") + "Safari/537.36"
+      : session.original.userAgent;
+    const userAgent = input.userAgent ?? mobileUA;
+    await chrome.debugger.sendCommand(target, "Emulation.setDeviceMetricsOverride", {
+      width, height, deviceScaleFactor, mobile, screenWidth: width, screenHeight: height,
+    });
+    await chrome.debugger.sendCommand(target, "Emulation.setTouchEmulationEnabled", {
+      enabled: touch, maxTouchPoints: touch ? 5 : 1,
+    });
+    await chrome.debugger.sendCommand(target, "Emulation.setEmulatedMedia", {
+      media: "screen", features: [{ name: "prefers-color-scheme", value: colorScheme }],
+    });
+    await chrome.debugger.sendCommand(target, "Emulation.setUserAgentOverride", {
+      userAgent, platform: mobile ? "Android" : session.original.platform,
+    });
+    throwIfAborted(signal, "viewport", true);
+    return { tabId: input.tabId, width, height, deviceScaleFactor, mobile, touch,
+      colorScheme, userAgent, emulated: true };
+  } catch (error) {
+    if (created && session) {
+      await resetPersonalViewport(chromeTabId, input.tabId).catch(() => undefined);
+    } else if (created && attached) {
+      await chrome.debugger.detach(target).catch(() => undefined);
+    }
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome viewport emulation is unavailable.");
   }
 }
 
@@ -1510,17 +1639,17 @@ async function startPersonalNetworkCapture(chromeTabId, input) {
   let attached = false;
   try {
     chrome.debugger.onEvent.addListener(listener);
-    await chrome.debugger.attach({ tabId: chromeTabId }, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger({ tabId: chromeTabId });
     await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Network.enable", {
       maxTotalBufferSize: 8 * 1024 * 1024, maxResourceBufferSize: 256 * 1024,
     });
+    state.attached = attached;
     personalNetworkCaptures.set(key, state);
     globalThis.__mcpV3PersonalNetworkCaptures = personalNetworkCaptures;
   } catch (error) {
     state.active = false;
     chrome.debugger.onEvent.removeListener(listener);
-    if (attached) await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+    await detachGuardedDebugger({ tabId: chromeTabId }, attached).catch(() => undefined);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for network capture.");
   }
@@ -1536,7 +1665,7 @@ async function stopPersonalNetworkCapture(chromeTabId) {
   chrome.debugger.onEvent.removeListener(state.listener);
   await Promise.allSettled([...state.pending]);
   personalNetworkEntries.set(key, { entries: state.entries, truncated: state.truncated });
-  await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  await detachGuardedDebugger({ tabId: chromeTabId }, state.attached === true).catch(() => undefined);
 }
 
 async function readPersonalNetwork(input, signal) {
@@ -1796,6 +1925,7 @@ async function closeTab(input) {
     throw coded("TAB_PROTECTED", "The personal browser tab is protected and cannot be closed directly.");
   }
   await finalizePersonalDialog(chromeTabId, true);
+  await resetPersonalViewport(chromeTabId).catch(() => undefined);
   await chrome.tabs.remove(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   return { tabId: input.tabId, completed: true };
@@ -1816,6 +1946,7 @@ async function finishTask(input) {
   for (const target of targets) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
+    await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
   }
   if (input.keepOpen === true) {
     const groupedTabIds = [];
@@ -2408,10 +2539,12 @@ function delay(ms, signal) {
 ${HANDOFF_WORKER_SOURCE}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  personalViewportSessions.delete(String(tabId));
   void removeOwnedTab(tabId);
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
+  personalViewportSessions.delete(key);
   const dialog = personalDialogArms.get(key);
   if (dialog) {
     clearTimeout(dialog.timer);

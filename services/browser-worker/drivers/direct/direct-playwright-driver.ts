@@ -230,6 +230,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   private readonly frameNavigationEpochs = new WeakMap<Frame, number>();
   private readonly pendingFileChoosers = new WeakMap<Page, FileChooser>();
   private readonly observedDialogs = new WeakMap<Page, ObservedJsDialog>();
+  private readonly viewportSessions = new WeakMap<Page, { session: CDPSession; original: { userAgent: string; platform: string; colorScheme: "light" | "dark" } }>();
   private readonly suppressedDiagnosticPages = new WeakSet<Page>();
   private readonly pageAllowedOrigins = new WeakMap<Page, Map<string, number>>();
   private readonly pageRequestPolicies = new WeakMap<Page, AuthorizedSitePolicy>();
@@ -575,6 +576,91 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       }
       return this.pageResponse(page);
     });
+  }
+
+  async viewport(input: import("@vs-code-gpt/shared").BrowserViewportInput): Promise<import("@vs-code-gpt/shared").BrowserViewportResult> {
+    const page = this.requireCurrentPage();
+    const current = this.viewportSessions.get(page);
+    const dimensions = async () => page.evaluate(() => {
+      const browser = globalThis as unknown as {
+        innerWidth: number; innerHeight: number; devicePixelRatio: number;
+        navigator: { userAgent: string; platform: string };
+        matchMedia: (query: string) => { matches: boolean };
+      };
+      return {
+        width: Math.max(1, browser.innerWidth),
+        height: Math.max(1, browser.innerHeight),
+        deviceScaleFactor: browser.devicePixelRatio || 1,
+        userAgent: browser.navigator.userAgent,
+        platform: browser.navigator.platform,
+        colorScheme: browser.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" as const : "light" as const,
+      };
+    });
+    if (input.preset === "reset") {
+      if (current) {
+        await current.session.send("Emulation.clearDeviceMetricsOverride");
+        await current.session.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+        await current.session.send("Emulation.setEmulatedMedia", { media: "", features: [] });
+        await current.session.send("Emulation.setUserAgentOverride", { userAgent: current.original.userAgent, platform: current.original.platform });
+        await current.session.detach();
+        this.viewportSessions.delete(page);
+      }
+      const original = await dimensions();
+      return { tabId: input.tabId, width: original.width, height: original.height,
+        deviceScaleFactor: original.deviceScaleFactor, userAgent: original.userAgent,
+        mobile: false, touch: false, colorScheme: original.colorScheme, emulated: false };
+    }
+    const presets = {
+      desktop: { width: 1366, height: 768, dpr: 1, mobile: false, touch: false },
+      tablet: { width: 768, height: 1024, dpr: 2, mobile: true, touch: true },
+      mobile: { width: 375, height: 812, dpr: 3, mobile: true, touch: true },
+      custom: { width: input.width ?? 1280, height: input.height ?? 720, dpr: 1, mobile: false, touch: false },
+    } as const;
+    const profile = presets[input.preset];
+    const width = profile.width;
+    const height = profile.height;
+    const deviceScaleFactor = input.deviceScaleFactor ?? profile.dpr;
+    const touch = input.touch ?? profile.touch;
+    const colorScheme = input.colorScheme ?? "no-preference";
+    let session = current?.session;
+    const created = !session;
+    const original = current?.original ?? await dimensions();
+    const chromeVersion = /Chrome\/([\d.]+)/u.exec(original.userAgent)?.[1];
+    const mobileUA = chromeVersion && (input.preset === "mobile" || input.preset === "tablet")
+      ? `Mozilla/5.0 (Linux; Android 14; ${input.preset === "mobile" ? "Pixel 7" : "Pixel Tablet"}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} ${input.preset === "mobile" ? "Mobile " : ""}Safari/537.36`
+      : original.userAgent;
+    const userAgent = input.userAgent ?? mobileUA;
+    if (!session) {
+      session = await page.context().newCDPSession(page);
+      this.viewportSessions.set(page, { session, original: { userAgent: original.userAgent, platform: original.platform, colorScheme: original.colorScheme } });
+      page.once("close", () => {
+        void session?.detach().catch(() => undefined);
+        this.viewportSessions.delete(page);
+      });
+    }
+    try {
+      await session.send("Emulation.setDeviceMetricsOverride", {
+        width, height, deviceScaleFactor, mobile: profile.mobile,
+        screenWidth: width, screenHeight: height,
+      });
+      await session.send("Emulation.setTouchEmulationEnabled", {
+        enabled: touch, maxTouchPoints: touch ? 5 : 1,
+      });
+      await session.send("Emulation.setEmulatedMedia", {
+        media: "screen", features: [{ name: "prefers-color-scheme", value: colorScheme }],
+      });
+      await session.send("Emulation.setUserAgentOverride", {
+        userAgent, platform: profile.mobile ? "Android" : original.platform,
+      });
+    } catch (error) {
+      if (created) {
+        await session.detach().catch(() => undefined);
+        this.viewportSessions.delete(page);
+      }
+      throw error;
+    }
+    return { tabId: input.tabId, width, height, deviceScaleFactor,
+      mobile: profile.mobile, touch, colorScheme, userAgent, emulated: true };
   }
 
   async dialog(input: BrowserDialogInput): Promise<BrowserDialogResult> {

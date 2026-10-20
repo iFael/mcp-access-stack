@@ -153,6 +153,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return result;
   }
 
+  async viewport(...args: Parameters<BrowserExecutor["viewport"]>): ReturnType<BrowserExecutor["viewport"]> {
+    return this.call("viewport", args[0], args[1]);
+  }
+
   async dialog(...args: Parameters<BrowserExecutor["dialog"]>): ReturnType<BrowserExecutor["dialog"]> {
     const [input, context] = args;
     if (input.action === "respond") {

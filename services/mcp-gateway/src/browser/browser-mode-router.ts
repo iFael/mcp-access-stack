@@ -113,6 +113,10 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.forTab(args[0].tabId).dialog(...args);
   }
 
+  viewport(...args: Parameters<BrowserExecutor["viewport"]>): ReturnType<BrowserExecutor["viewport"]> {
+    return this.forTab(args[0].tabId).viewport(...args);
+  }
+
   async open(
     ...args: Parameters<BrowserExecutor["open"]>
   ): ReturnType<BrowserExecutor["open"]> {

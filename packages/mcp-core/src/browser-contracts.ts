@@ -817,6 +817,40 @@ export const browserScreenshotTransportResultSchema = browserScreenshotResultSch
     }
   });
 
+export const browserViewportInputSchema = z.object({
+  tabId: tabIdSchema,
+  preset: z.enum(["desktop", "tablet", "mobile", "custom", "reset"]),
+  width: z.number().int().min(240).max(3840).optional(),
+  height: z.number().int().min(240).max(2160).optional(),
+  deviceScaleFactor: z.number().min(0.5).max(4).optional(),
+  colorScheme: z.enum(["light", "dark", "no-preference"]).optional(),
+  touch: z.boolean().optional(),
+  userAgent: z.string().min(1).max(512).regex(/^[\x20-\x7e]+$/u).optional(),
+}).strict().superRefine((input, ctx) => {
+  if (input.preset === "custom" && (input.width === undefined || input.height === undefined)) {
+    ctx.addIssue({ code: "custom", message: "Custom viewport requires width and height." });
+  }
+  if (input.preset !== "custom" && (input.width !== undefined || input.height !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Dimensions are only valid with custom viewport." });
+  }
+  if (input.preset === "reset" && (input.deviceScaleFactor !== undefined || input.colorScheme !== undefined || input.touch !== undefined || input.userAgent !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Reset does not allow emulation overrides." });
+  }
+});
+export type BrowserViewportInput = z.infer<typeof browserViewportInputSchema>;
+export const browserViewportResultSchema = z.object({
+  tabId: tabIdSchema,
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+  deviceScaleFactor: z.number().positive(),
+  mobile: z.boolean(),
+  touch: z.boolean(),
+  colorScheme: z.enum(["light", "dark", "no-preference"]),
+  emulated: z.boolean(),
+  userAgent: z.string().max(512),
+}).strict();
+export type BrowserViewportResult = z.infer<typeof browserViewportResultSchema>;
+
 export const browserDialogInputSchema = z.object({
   tabId: tabIdSchema,
   action: z.enum(["arm", "inspect", "respond", "cancel"]),
@@ -1211,6 +1245,7 @@ export const browserOperationSchema = z.enum([
   "tabs",
   "selectTab",
   "dialog",
+  "viewport",
   "open",
   "openAuthorizedSite",
   "navigate",
@@ -1290,6 +1325,7 @@ export const browserOperationInputSchemas = {
   tabs: browserTabsInputSchema,
   selectTab: browserTabActionInputSchema,
   dialog: browserDialogInputSchema,
+  viewport: browserViewportInputSchema,
   open: browserOpenInputSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteInputSchema,
   navigate: browserNavigateInputSchema,
@@ -1338,6 +1374,7 @@ export const browserOperationResultSchemas = {
   tabs: browserTabsResultSchema,
   selectTab: browserTabResultSchema,
   dialog: browserDialogResultSchema,
+  viewport: browserViewportResultSchema,
   open: browserTabResultSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteResultSchema,
   navigate: browserTabResultSchema,
