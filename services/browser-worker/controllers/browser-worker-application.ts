@@ -324,6 +324,7 @@ async function execute(
     case "openAuthorizedSite": return runtime.openAuthorizedSite(input as never, context);
     case "navigate": return runtime.navigate(input as never, context);
     case "snapshot": return runtime.snapshot(input as never, context);
+    case "find": return runtime.find(input as never, context);
     case "click": return runtime.click(input as never, context);
     case "hover": return runtime.hover(input as never, context);
     case "scroll": return runtime.scroll(input as never, context);
@@ -497,6 +498,7 @@ function isMutatingOperation(operation: BrowserOperation): boolean {
     "status",
     "tabs",
     "snapshot",
+    "find",
     "wait",
     "extract",
     "frameExtract",

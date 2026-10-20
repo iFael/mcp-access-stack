@@ -17,6 +17,8 @@ import type {
   BrowserExtractInput,
   BrowserExtractResult,
   BrowserFillInput,
+  BrowserFindInput,
+  BrowserFindResult,
   BrowserFinishTaskInput,
   BrowserFinishTaskResult,
   BrowserFrameClickInput,
@@ -78,6 +80,7 @@ export interface BrowserExecutor {
   ): Promise<BrowserOpenAuthorizedSiteResult>;
   navigate(input: BrowserNavigateInput, context?: OperationContext): Promise<BrowserTabResult>;
   snapshot(input: BrowserSnapshotInput, context?: OperationContext): Promise<BrowserSnapshotResult>;
+  find(input: BrowserFindInput, context?: OperationContext): Promise<BrowserFindResult>;
   click(input: BrowserClickInput, context?: OperationContext): Promise<BrowserActionResult>;
   hover(input: BrowserHoverInput, context?: OperationContext): Promise<BrowserActionResult>;
   scroll(input: BrowserScrollInput, context?: OperationContext): Promise<BrowserActionResult>;

@@ -40,6 +40,36 @@ export interface BrowserElementReference {
   name: string;
 }
 
+/** Rank only authenticated snapshot references. The page remains untrusted data. */
+export function findBrowserElements(
+  references: readonly BrowserElementReference[],
+  query: string,
+  role?: string,
+  limit = 10,
+): Array<BrowserElementReference & { score: number }> {
+  const normalized = normalizeFindText(query);
+  if (!normalized || limit < 1) return [];
+  const words = normalized.split(" ");
+  const normalizedRole = role?.toLowerCase();
+  return references.flatMap((reference, index) => {
+    if (normalizedRole && reference.role.toLowerCase() !== normalizedRole) return [];
+    const name = normalizeFindText(reference.name);
+    if (!name || !words.every((word) => name.includes(word))) return [];
+    const score = name === normalized ? 100 : name.startsWith(normalized) ? 90
+      : name.includes(normalized) ? 80 : 60;
+    return [{ ...reference, score, index }];
+  }).sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, Math.min(limit, 20))
+    .map(({ index: _index, ...reference }) => reference);
+}
+
+function normalizeFindText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/gu, "")
+    .replace(/[-\u2010-\u2015]/gu, "")
+    .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
+    .replace(/\s+/gu, " ");
+}
+
 export class BrowserInteractionContextService {
   private readonly references = new Map<
     string,

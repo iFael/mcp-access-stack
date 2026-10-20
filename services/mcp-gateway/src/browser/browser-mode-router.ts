@@ -147,6 +147,10 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.forTab(args[0].tabId).snapshot(...args);
   }
 
+  find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
+    return this.forTab(args[0].tabId).find(...args);
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.forTab(args[0].tabId).click(...args);
   }

@@ -24,6 +24,7 @@ import {
   type BrowserExecutor,
   type BrowserExtractInput,
   type BrowserFillInput,
+  type BrowserFindInput,
   type BrowserFinishTaskInput,
   type BrowserFrameClickInput,
   type BrowserFrameExtractInput,
@@ -125,6 +126,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   snapshot(input: BrowserSnapshotInput, context?: OperationContext) {
     return this.call("snapshot", input, context);
+  }
+
+  find(input: BrowserFindInput, context?: OperationContext) {
+    return this.call("find", input, context);
   }
 
   click(input: BrowserClickInput, context?: OperationContext) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   AppError,
   browserOperationResultSchemas,
+  findBrowserElements,
   errorCodes,
   type BrowserExecutor,
   type BrowserOperation,
@@ -158,6 +159,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("snapshot", args[0], args[1]);
     this.actions.observeSnapshot(result);
     return result;
+  }
+
+  async find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
+    // Refresh through the extension on each search: returned refs are live and
+    // stay under the same tab ownership and navigation checks as snapshots.
+    const [input, context] = args;
+    const snapshot = await this.snapshot({ tabId: input.tabId, forceFull: true }, context);
+    return {
+      tabId: input.tabId,
+      url: snapshot.url,
+      matches: findBrowserElements(snapshot.refs, input.query, input.role, input.limit),
+    };
   }
 
   async click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {

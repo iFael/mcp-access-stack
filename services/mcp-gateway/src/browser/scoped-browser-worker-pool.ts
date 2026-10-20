@@ -164,6 +164,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.snapshot(...args));
   }
 
+  find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
+    return this.invoke(args[1], (client) => client.find(...args));
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.invoke(args[1], (client) => client.click(...args));
   }

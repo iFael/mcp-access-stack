@@ -7,6 +7,8 @@ import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
   browserHoverInputSchema,
+  browserFindInputSchema,
+  browserFindResultSchema,
   browserScrollInputSchema,
   browserClickInputSchema,
   browserPressInputSchema,
@@ -48,6 +50,15 @@ describe("browser mode contract", () => {
 });
 
 describe("browser interaction parity contracts", () => {
+  it("accepts bounded fresh-reference search and rejects unbounded inputs", () => {
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: "Enviar", role: "button", limit: 5 }).success).toBe(true);
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: " " }).success).toBe(false);
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: "Enviar", limit: 21 }).success).toBe(false);
+    expect(browserFindResultSchema.safeParse({ tabId: "personal:7", url: "https://example.com", matches: [
+      { ref: "fresh-1", role: "button", name: "Enviar", score: 100 },
+    ] }).success).toBe(true);
+  });
+
   it("validates bounded hover, scroll, click and repeat keyboard arguments", () => {
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1" }).success).toBe(true);
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);

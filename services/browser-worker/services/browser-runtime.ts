@@ -4,6 +4,7 @@ import {
   abortSignalError,
   AppError,
   clickAuthorizationAction,
+  findBrowserElements,
   containsBrowserEnterKey,
   validateBrowserKeySequence,
   remainingOperationTimeMs,
@@ -27,6 +28,8 @@ import {
   type BrowserExtractInput,
   type BrowserExtractResult,
   type BrowserFillInput,
+  type BrowserFindInput,
+  type BrowserFindResult,
   type BrowserFinishTaskInput,
   type BrowserFinishTaskResult,
   type BrowserFrameClickInput,
@@ -856,6 +859,19 @@ export class BrowserRuntime implements BrowserExecutor {
       );
     }
     return this.captureSnapshotSelected(tab.tabId);
+  }
+
+  async find(
+    input: BrowserFindInput,
+    context: OperationContext = {},
+  ): Promise<BrowserFindResult> {
+    // snapshot() enforces tab ownership and refreshes the reference registry.
+    const snapshot = await this.snapshot({ tabId: input.tabId, forceFull: true }, context);
+    return {
+      tabId: input.tabId,
+      url: snapshot.url,
+      matches: findBrowserElements(snapshot.refs, input.query, input.role, input.limit),
+    };
   }
 
   async click(

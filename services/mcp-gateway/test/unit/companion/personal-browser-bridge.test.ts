@@ -23,6 +23,39 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("finds fresh refs through the authenticated Chrome snapshot without a new extension operation", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const operations: string[] = [];
+    const respond = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type !== "request") return;
+      operations.push(message.operation ?? "");
+      if (message.operation !== "snapshot") return;
+      extension.send(JSON.stringify({
+        type: "response", id: message.id, ok: true,
+        result: {
+          tabId: "personal:7", url: "https://example.com/",
+          content: '- button "Enviar" [ref=valid-1]',
+          refs: [
+            { ref: "valid-1", role: "button", name: "Enviar" },
+            { ref: "valid-2", role: "link", name: "Enviar relatório" },
+          ],
+        },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.find({ tabId: "personal:7", query: "enviar", role: "button" }))
+        .resolves.toMatchObject({
+          matches: [{ ref: "valid-1", role: "button", name: "Enviar", score: 100 }],
+        });
+      expect(operations).toEqual(["snapshot"]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("logs a safe peer error code with a terminal but never its private message", async () => {
     const events: Record<string, unknown>[]=[];
     const { bridge,extension,close }=await startAuthenticatedBridge(e => events.push(e));

@@ -84,6 +84,7 @@ function personalExecutor(connected = true): PersonalBrowserExecutor {
       content: "personal",
       refs: [],
     })),
+    find: jest.fn(async ({ tabId }) => ({ tabId, url: "https://chatgpt.com/", matches: [] })),
     tabs: jest.fn(async () => ({ tabs: [] })),
     finishTask: jest.fn(async ({ taskId }) => ({
       completed: true as const,
@@ -123,6 +124,9 @@ describe("BrowserModeRouter", () => {
     await expect(router.snapshot({ tabId: "personal:42" })).resolves.toMatchObject({
       content: "personal",
     });
+    const personalFound = await router.find({ tabId: "personal:42", query: "Enviar" });
+    expect(personalFound.tabId).toBe("personal:42");
+    expect(personal.find).toHaveBeenCalledWith({ tabId: "personal:42", query: "Enviar" });
     await expect(router.finishTask({ taskId: "single-profile-task", keepOpen: true })).resolves.toMatchObject({
       browserClosed: false,
     });

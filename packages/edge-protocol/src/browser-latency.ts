@@ -15,6 +15,7 @@ export const BROWSER_LATENCY_OPERATIONS = [
   "browser_open_authorized_site",
   "browser_navigate",
   "browser_snapshot",
+  "browser_find",
   "browser_click",
   "browser_hover",
   "browser_scroll",
@@ -74,7 +75,7 @@ export function browserLatencyOperation(body: unknown): string {
 const bridgeOperations: Readonly<Record<string, string>> = {
   status: "browser_status", connect: "browser_connect", tabs: "browser_tabs",
   open: "browser_open", openAuthorizedSite: "browser_open_authorized_site",
-  navigate: "browser_navigate", snapshot: "browser_snapshot", click: "browser_click",
+  navigate: "browser_navigate", snapshot: "browser_snapshot", find: "browser_find", click: "browser_click",
   hover: "browser_hover", scroll: "browser_scroll",
   fill: "browser_fill", press: "browser_press", wait: "browser_wait", extract: "browser_extract",
   sequence: "browser_sequence", frameExtract: "browser_frame_extract", frameClick: "browser_frame_click",

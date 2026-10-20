@@ -392,6 +392,26 @@ export const browserSnapshotResultSchema = z
   .strict();
 export type BrowserSnapshotResult = z.infer<typeof browserSnapshotResultSchema>;
 
+export const browserFindInputSchema = z.object({
+  tabId: tabIdSchema,
+  query: z.string().trim().min(1).max(200),
+  role: z.string().min(1).max(100).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+export type BrowserFindInput = z.infer<typeof browserFindInputSchema>;
+
+export const browserFindResultSchema = z.object({
+  tabId: tabIdSchema,
+  url: z.url(),
+  matches: z.array(z.object({
+    ref: z.string().min(1).max(128),
+    role: z.string().min(1).max(100),
+    name: z.string().max(500),
+    score: z.number().int().min(0).max(100),
+  }).strict()).max(20),
+}).strict();
+export type BrowserFindResult = z.infer<typeof browserFindResultSchema>;
+
 export const browserClickInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -1048,6 +1068,7 @@ export const browserOperationSchema = z.enum([
   "openAuthorizedSite",
   "navigate",
   "snapshot",
+  "find",
   "click",
   "hover",
   "scroll",
@@ -1120,6 +1141,7 @@ export const browserOperationInputSchemas = {
   openAuthorizedSite: browserOpenAuthorizedSiteInputSchema,
   navigate: browserNavigateInputSchema,
   snapshot: browserSnapshotInputSchema,
+  find: browserFindInputSchema,
   click: browserClickInputSchema,
   hover: browserHoverInputSchema,
   scroll: browserScrollInputSchema,
@@ -1161,6 +1183,7 @@ export const browserOperationResultSchemas = {
   openAuthorizedSite: browserOpenAuthorizedSiteResultSchema,
   navigate: browserTabResultSchema,
   snapshot: browserSnapshotResultSchema,
+  find: browserFindResultSchema,
   click: browserActionResultSchema,
   hover: browserActionResultSchema,
   scroll: browserActionResultSchema,
