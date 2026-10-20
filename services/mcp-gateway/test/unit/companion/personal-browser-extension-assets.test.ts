@@ -1,6 +1,6 @@
 import vm from "node:vm";
 import { describe, expect, it } from "@jest/globals";
-import { buildPersonalBrowserExtensionAssets, PERSONAL_BROWSER_MUTATING_OPERATIONS } from "../../../src/companion/personal-browser-extension-assets.js";
+import { buildPersonalBrowserExtensionAssets, sanitizePersonalDiagnosticText, PERSONAL_BROWSER_MUTATING_OPERATIONS } from "../../../src/companion/personal-browser-extension-assets.js";
 import { summarizeCdpAccessibility } from "../../../src/companion/personal-browser-accessibility.js";
 
 type FakeElement = ReturnType<typeof fakeElement>;
@@ -293,6 +293,41 @@ describe("personal browser extension assets", () => {
     expect(events[1]?.params).toMatchObject({ key: "Enter", type: "keyDown" });
   });
 
+  it("routes scroll through explicit CSS viewport coordinates with bounded Chrome wheel origin", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const origins: unknown[] = [];
+    const emitted: Array<Record<string, unknown>> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async (payload: { args?: unknown[] }) => {
+          origins.push(payload.args);
+          const x = payload.args?.[0], y = payload.args?.[1];
+          return [{ result: typeof x === "number" && x < 800 && typeof y === "number" && y < 600 ? { x, y } : null }];
+        } },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, _name: string, event: Record<string, unknown>) => { emitted.push(event); },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "scroll"), context);
+    const scroll = vm.runInContext("scroll", context) as (input: unknown) => Promise<unknown>;
+    await expect(scroll({ tabId: "personal:7", x: 160, y: 250,
+      direction: "down", amount: 300, guard: { url: "https://example.com/" },
+    })).resolves.toMatchObject({ completed: true });
+    expect(origins).toEqual([[160, 250]]);
+    expect(emitted).toEqual([{ type: "mouseWheel", x: 160, y: 250, deltaX: 0, deltaY: 300 }]);
+    await expect(scroll({ tabId: "personal:7", x: 850, y: 250,
+      direction: "up", amount: 50, guard: { url: "https://example.com/" },
+    })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(emitted).toHaveLength(1);
+  });
+
   it("uses guarded CDP movement and wheel events for hover and scroll", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -454,6 +489,53 @@ describe("personal browser extension assets", () => {
     })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
   });
 
+  it("captures and sanitizes CDP console on the MCP-owned Chrome tab with filters and cleanup", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(source: { tabId: number }, name: string, args: unknown) => void>();
+    const commands: string[] = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      setTimeout: (fn: () => void) => { fn(); return 1; },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      sanitizePersonalDiagnosticText,
+      chrome: { debugger: {
+        onEvent: {
+          addListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.add(fn); },
+          removeListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.delete(fn); },
+        },
+        attach: async () => { commands.push("attach"); },
+        detach: async () => { commands.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          commands.push(method);
+          if (method === "Runtime.enable") {
+            for (const listener of listeners) {
+              listener({ tabId: 999 }, "Runtime.consoleAPICalled", { type: "error", args: [{ value: "wrong tab" }] });
+              listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "log", args: [{ value: "ordinary event" }] });
+              listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "error", args: [{ value: "Authorization: Bearer hidden-key" }] });
+              listener({ tabId: 7 }, "Runtime.exceptionThrown", { exceptionDetails: { text: "TypeError: failed" } });
+            }
+          }
+          return {};
+        },
+      } },
+    });
+    vm.runInContext("const personalConsoleEntries = new Map();", context);
+    vm.runInContext(extractFunction(serviceWorker, "readPersonalConsole"), context);
+    const consoleRead = vm.runInContext("readPersonalConsole", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await consoleRead({ tabId: "personal:7", onlyErrors: true, pattern: "Authorization|TypeError", limit: 1, clear: true });
+    expect(result).toMatchObject({ tabId: "personal:7", truncated: true });
+    expect(result.text).toContain("Authorization: [redacted]");
+    expect(JSON.stringify(result)).not.toContain("hidden-key");
+    expect(JSON.stringify(result)).not.toContain("ordinary event");
+    expect(commands).toEqual(["attach", "Runtime.enable", "Log.enable", "detach"]);
+    expect(listeners.size).toBe(0);
+    expect(vm.runInContext("personalConsoleEntries.size", context)).toBe(0);
+    await expect(consoleRead({ tabId: "personal:7", pattern: "[" }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+
   it("captures a bounded CSS viewport region using page scroll offsets and device scale", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ name: string; params: Record<string, unknown> }> = [];
@@ -497,6 +579,34 @@ describe("personal browser extension assets", () => {
     expect(commands.some((c) => c.name === "Page.captureScreenshot")).toBe(false);
   });
 
+  it("activates only a verified MCP-owned tab and does not adopt another user's tab", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const updates: number[] = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: (tabId: string) => Number(tabId.replace("personal:", "")),
+      requireOwnedMetadata: async (tabId: number) => {
+        if (tabId !== 7) throw Object.assign(new Error("not owned"), { code: "TAB_PROTECTED" });
+        return { tabId: "personal:7", taskId: "t-1" };
+      },
+      throwIfAborted: () => undefined,
+      toBrowserTab: (metadata: unknown, tab: unknown) => ({ ...metadata as object, ...tab as object }),
+      chrome: {
+        tabs: { update: async (tabId: number, options: { active: boolean }) => {
+          expect(options).toEqual({ active: true });
+          updates.push(tabId);
+          return { id: tabId, url: "https://example.test/", active: true };
+        } },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "selectOwnedTab"), context);
+    const select = vm.runInContext("selectOwnedTab", context) as (input: unknown) => Promise<unknown>;
+    await expect(select({ tabId: "personal:7" })).resolves.toMatchObject({
+      tab: { tabId: "personal:7", active: true },
+    });
+    await expect(select({ tabId: "personal:8" })).rejects.toMatchObject({ code: "TAB_PROTECTED" });
+    expect(updates).toEqual([7]);
+  });
+
   it("announces a versioned capability handshake and blocks private navigation targets", () => {
     const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
       "x".repeat(43),
@@ -504,7 +614,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.6.1");
+    expect(parsedManifest.version).toBe("0.7.1");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

@@ -33,7 +33,7 @@ function makeRuntime(readOnly = false) {
       requireReference: jest.fn((_tabId: string, ref: string) => ({ ref })),
     },
     confirmations: { create, consume: confirm },
-    selectTab: jest.fn(async () => undefined),
+    selectBrowserTab: jest.fn(async () => undefined),
     driver: { evaluate, type },
     beginNavigation: jest.fn(async () => undefined),
     updateSelectedTab: jest.fn(() => tab),
@@ -80,5 +80,32 @@ describe("managed browser autonomous type and evaluate", () => {
     await expect(runtime.type({ tabId: tab.tabId, text: "query", submit: true, confirmationId: "allowed" }))
       .resolves.toMatchObject({ completed: true });
     expect(type).toHaveBeenCalledWith({ text: "query", submit: true });
+  });
+});
+
+describe("managed browser select tab", () => {
+  it("activates an existing owned tab and returns the public tab record", async () => {
+    const owned = {
+      tabId: "tab-7", ownership: "mcp", purpose: "test",
+      reusable: false, protected: false, sticky: false,
+      createdAt: "2026-10-20T10:00:00.000Z",
+      lastUsedAt: "2026-10-20T10:00:00.000Z",
+      url: "https://example.com/",
+    };
+    const selectBrowserTab = jest.fn(async (_tab: unknown) => ({ id: "remote-7" }));
+    const checkpoint = jest.fn(async () => undefined);
+    const runtime = Object.assign(Object.create(BrowserRuntime.prototype), {
+      tabsRegistry: { assertMcpOwned: (tabId: string) => {
+        if (tabId !== owned.tabId) throw Object.assign(new Error("Not owned"), { code: "TAB_NOT_FOUND" });
+        return owned;
+      } },
+      selectBrowserTab, checkpoint,
+    }) as BrowserRuntime;
+    await expect(runtime.selectTab({ tabId: "tab-7" })).resolves.toEqual({ tab: owned });
+    expect(selectBrowserTab).toHaveBeenCalledWith(owned);
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+    await expect(runtime.selectTab({ tabId: "user-tab" }))
+      .rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+    expect(selectBrowserTab).toHaveBeenCalledTimes(1);
   });
 });

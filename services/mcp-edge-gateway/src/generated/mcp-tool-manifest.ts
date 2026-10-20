@@ -14673,6 +14673,275 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Activates an existing MCP-owned tab in the current Chrome profile, without opening, adopting, or modifying any other tab.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "tabId"
+      ],
+      "type": "object"
+    },
+    "name": "browser_select_tab",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cacheAgeMs": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restoredFromCache": {
+          "type": "boolean"
+        },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "status": {
+                    "maximum": 999,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "maxLength": 10000,
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "console",
+                      "pageerror",
+                      "request",
+                      "response",
+                      "requestfailed",
+                      "dialog",
+                      "download",
+                      "filechooser"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "type",
+                  "timestamp"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
+        "tab": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "lastUsedAt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "lifecycle": {
+              "enum": [
+                "task-scoped",
+                "persistent",
+                "external"
+              ],
+              "type": "string"
+            },
+            "lockedUrl": {
+              "format": "uri",
+              "type": "string"
+            },
+            "ownership": {
+              "enum": [
+                "user",
+                "mcp"
+              ],
+              "type": "string"
+            },
+            "protected": {
+              "type": "boolean"
+            },
+            "purpose": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "requestedUrl": {
+              "format": "uri",
+              "type": "string"
+            },
+            "reusable": {
+              "type": "boolean"
+            },
+            "sticky": {
+              "type": "boolean"
+            },
+            "tabId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "taskId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "url": {
+              "format": "uri",
+              "type": "string"
+            },
+            "viewerUrl": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tabId",
+            "ownership",
+            "purpose",
+            "reusable",
+            "protected",
+            "sticky",
+            "createdAt",
+            "lastUsedAt"
+          ],
+          "type": "object"
+        },
+        "timing": {
+          "additionalProperties": false,
+          "properties": {
+            "actionMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "queueMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "snapshotMs": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "totalMs": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "actionMs",
+            "snapshotMs",
+            "totalMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "tab"
+      ],
+      "type": "object"
+    },
+    "title": "browser_select_tab"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
     "execution": {
       "taskSupport": "forbidden"
@@ -16865,7 +17134,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Scrolls by CSS pixels, optionally over an element ref, without clicking. Returns updated state.",
+    "description": "Scrolls by CSS pixels, optionally over an element ref or CSS viewport x/y (to scroll nested containers), without clicking. Returns updated state.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -16909,6 +17178,16 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
+        },
+        "x": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -24037,13 +24316,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1e263b649b6aac86e1dd2039f1f33c2159553691c407614433e993a8bc6fde12",
-  "serverVersion": "0.4.0-catalog.c1e263b649b6a.sffe3d39efd60",
-  "toolCount": 106,
-  "toolSetRevision": "ffe3d39efd602a939f3bb3264ede9a058394d0b6ef314460722f1a0ccd828c79"
+  "contractRevision": "65e9b0478b92f7e2301df76ad067070503f0395c8f5fd9e04cd26203872deabf",
+  "serverVersion": "0.4.0-catalog.c65e9b0478b92.s01315ddf6996",
+  "toolCount": 107,
+  "toolSetRevision": "01315ddf6996bce79f3c2fa045539e803d163e255f83fd3d2beb64798aaaa8c1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1e263b649b6a.sffe3d39efd60"
+  "version": "0.4.0-catalog.c65e9b0478b92.s01315ddf6996"
 } as const;

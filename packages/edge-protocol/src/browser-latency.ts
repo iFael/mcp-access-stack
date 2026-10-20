@@ -11,6 +11,7 @@ export const BROWSER_LATENCY_OPERATIONS = [
   "browser_status",
   "browser_connect",
   "browser_tabs",
+  "browser_select_tab",
   "browser_open",
   "browser_open_authorized_site",
   "browser_navigate",
@@ -77,7 +78,7 @@ export function browserLatencyOperation(body: unknown): string {
 // These are internal BrowserOperation RPC names, never accepted as MCP tool aliases.
 // Emit the corresponding canonical catalog name even at the bridge boundary.
 const bridgeOperations: Readonly<Record<string, string>> = {
-  status: "browser_status", connect: "browser_connect", tabs: "browser_tabs",
+  status: "browser_status", connect: "browser_connect", tabs: "browser_tabs", selectTab: "browser_select_tab",
   open: "browser_open", openAuthorizedSite: "browser_open_authorized_site",
   navigate: "browser_navigate", snapshot: "browser_snapshot", find: "browser_find", evaluate: "browser_evaluate", click: "browser_click",
   hover: "browser_hover", drag: "browser_drag", scroll: "browser_scroll",

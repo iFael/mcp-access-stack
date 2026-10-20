@@ -551,6 +551,16 @@ export class BrowserRuntime implements BrowserExecutor {
     });
   }
 
+  async selectTab(
+    input: BrowserTabActionInput,
+    _context: OperationContext = {},
+  ): Promise<BrowserTabResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    await this.selectBrowserTab(tab);
+    await this.checkpoint();
+    return { tab: this.tabsRegistry.assertMcpOwned(tab.tabId) };
+  }
+
   async tabs(
     input: BrowserTabsInput,
     context: OperationContext = {},
@@ -709,7 +719,7 @@ export class BrowserRuntime implements BrowserExecutor {
       );
       const exact = selectExactTabReuse(registeredTabs, reuseRequest);
       if (exact) {
-        await this.selectTab(exact.tab, remoteTabs);
+        await this.selectBrowserTab(exact.tab, remoteTabs);
         this.applyActivePageGrant(targetGrant);
         if (exact.shouldNavigate) {
           await this.beginNavigation(exact.tab.tabId, "navigate", targetUrl);
@@ -751,7 +761,7 @@ export class BrowserRuntime implements BrowserExecutor {
 
       const recyclable = selectRecyclableTab(registeredTabs, reuseRequest);
       if (recyclable) {
-        await this.selectTab(recyclable.tab, remoteTabs);
+        await this.selectBrowserTab(recyclable.tab, remoteTabs);
         this.applyActivePageGrant(targetGrant);
         if (recyclable.shouldNavigate) {
           await this.beginNavigation(recyclable.tab.tabId, "navigate", targetUrl);
@@ -830,7 +840,7 @@ export class BrowserRuntime implements BrowserExecutor {
     const tab = this.tabsRegistry.assertNavigable(input.tabId, input.url);
     const task = this.taskRegistry.assertTabAccess(tab.tabId, context);
     const targetGrant = this.requireTargetGrant(task, normalizeUrl(input.url));
-    await this.selectTab(tab, undefined, false);
+    await this.selectBrowserTab(tab, undefined, false);
     this.applyActivePageGrant(targetGrant);
     await this.beginNavigation(tab.tabId, "navigate", input.url);
     const actionStarted = performance.now();
@@ -859,7 +869,7 @@ export class BrowserRuntime implements BrowserExecutor {
     if (input.includeAccessibility) {
       throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Native CDP accessibility is only available in personal Chrome mode.");
     }
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const projected = input.filter !== undefined || input.depth !== undefined ||
       input.refId !== undefined || input.maxChars !== undefined;
     const result = isDirectPlaywrightDriver(this.driver)
@@ -900,7 +910,7 @@ export class BrowserRuntime implements BrowserExecutor {
       input.confirmationId,
       this.interactionContext.prepareConfirmation(tab, "execute-script", "evaluate", "sha256:" + hash),
     );
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     if (input.ref) this.interactionContext.requireReference(tab.tabId, input.ref);
     const result = await this.driver.evaluate({
       function: input.function,
@@ -915,7 +925,7 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     if (input.ref) this.assertBusinessReadOnlyReference(tab, input.ref, "click");
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const variant = clickAuthorizationAction(input);
     let action: Parameters<typeof this.driver.click>[0];
     if (input.ref) {
@@ -961,7 +971,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     if (!this.driver.hover) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support hover.");
     const target = input.ref
       ? { target: this.interactionContext.requireReference(tab.tabId, input.ref).ref }
@@ -984,7 +994,7 @@ export class BrowserRuntime implements BrowserExecutor {
       throw new AppError("ACTION_BLOCKED_BY_POLICY", "Dragging is blocked on business-read-only sites.");
     }
     if (!this.driver.drag) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support drag-and-drop.");
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const resolve = async (endpoint: BrowserDragInput["from"]) => {
       if ("ref" in endpoint) {
         const reference = this.interactionContext.requireReference(tab.tabId, endpoint.ref);
@@ -1024,7 +1034,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const target = input.ref ? this.interactionContext.requireReference(tab.tabId, input.ref).ref : undefined;
     if (!this.driver.scroll) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support scroll.");
     const started = performance.now();
@@ -1032,6 +1042,7 @@ export class BrowserRuntime implements BrowserExecutor {
       direction: input.direction,
       amount: input.amount,
       ...(target ? { target } : {}),
+      ...(input.x !== undefined && input.y !== undefined ? { x: input.x, y: input.y } : {}),
     });
     this.updateSelectedTab(tab.tabId, response);
     return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
@@ -1042,7 +1053,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const reference = this.interactionContext.requireReference(
       tab.tabId,
       input.ref,
@@ -1065,7 +1076,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const reference = this.interactionContext.requireReference(tab.tabId, input.ref);
     // Checking acceptance/contract controls is a deliberate commitment.
     if (typeof input.value === "boolean" && input.value === true) {
@@ -1097,7 +1108,7 @@ export class BrowserRuntime implements BrowserExecutor {
         this.interactionContext.prepareConfirmation(tab, "submit-form", "type", "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex")),
       );
     }
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     if (!this.driver.type) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support typing.");
     if (input.submit) await this.beginNavigation(tab.tabId, "press");
     const started = performance.now();
@@ -1119,7 +1130,7 @@ export class BrowserRuntime implements BrowserExecutor {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     validateBrowserKeySequence(input.key, input.repeat);
     this.assertBusinessReadOnlyKey(tab, input.key, "press");
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     if (containsBrowserEnterKey(input.key)) {
       this.authorizeAction(
         input.confirmationId,
@@ -1146,7 +1157,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const actionStarted = performance.now();
     await this.waitSelected(tab.tabId, input);
     return this.withActionState(
@@ -1162,7 +1173,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserExtractResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const format = input.format ?? "text";
     const extracted = await this.extractSelected(tab.tabId, input, context);
     return {
@@ -1181,7 +1192,7 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserSequenceResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     this.assertBusinessReadOnlySequence(tab, input);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const sequenceStarted = performance.now();
     const results: BrowserSequenceResult["steps"] = [];
     try {
@@ -1314,7 +1325,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserFrameExtractResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const extracted = await this.extractFrameSelected(input, context);
     return {
       tabId: tab.tabId,
@@ -1338,7 +1349,7 @@ export class BrowserRuntime implements BrowserExecutor {
       "frame-click",
       "frame-element",
     );
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const authorization = this.interactionContext.prepareDangerousTarget(
       tab,
       targetName,
@@ -1378,7 +1389,7 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserActionResult> {
     const actionStarted = performance.now();
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const response = await this.frameOperations.fill(input);
     this.updateSelectedTab(tab.tabId, response);
     await this.checkpoint();
@@ -1395,7 +1406,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context?: OperationContext,
   ): Promise<BrowserProfilePageResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const execution = await this.legacyAutomation.profilePage(input, context?.signal);
     this.updateSelectedTab(tab.tabId, execution.response);
     return { tabId: tab.tabId, ...execution.result };
@@ -1406,7 +1417,7 @@ export class BrowserRuntime implements BrowserExecutor {
     context?: OperationContext,
   ): Promise<BrowserDomIndexResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const execution = await this.legacyAutomation.domIndex(input, context?.signal);
     this.updateSelectedTab(tab.tabId, execution.response);
     return { tabId: tab.tabId, ...execution.result };
@@ -1418,7 +1429,7 @@ export class BrowserRuntime implements BrowserExecutor {
   ): Promise<BrowserFrameSequenceResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
     this.assertBusinessReadOnlyFrameSequence(tab, input);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const authorizedSteps = new Set<number>();
     for (const [index, step] of input.steps.entries()) {
       if (step.action !== "click" && !(step.action === "press" && step.key.toLowerCase() === "enter")) {
@@ -1509,7 +1520,7 @@ export class BrowserRuntime implements BrowserExecutor {
       "legacy-navigate-path",
       "legacy-menu-path",
     );
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     const authorization = this.interactionContext.prepareDangerousTarget(
       tab,
       target,
@@ -1559,7 +1570,7 @@ export class BrowserRuntime implements BrowserExecutor {
   }
   async screenshot(input: BrowserScreenshotInput): Promise<BrowserScreenshotResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     if (input.region && !isDirectPlaywrightDriver(this.driver)) {
       throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Region screenshots require the direct browser driver.");
     }
@@ -1588,7 +1599,7 @@ export class BrowserRuntime implements BrowserExecutor {
   async goBack(input: BrowserTabActionInput): Promise<BrowserTabResult> {
     const tab = this.tabsRegistry.assertNavigable(input.tabId);
     if (tab.sticky) throw new AppError("NAVIGATION_BLOCKED", "Sticky tabs cannot change history.");
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     await this.beginNavigation(tab.tabId, "go-back");
     const response = await this.driver.goBack();
     this.updateSelectedTab(tab.tabId, response);
@@ -1600,7 +1611,7 @@ export class BrowserRuntime implements BrowserExecutor {
   async goForward(input: BrowserTabActionInput): Promise<BrowserTabResult> {
     const tab = this.tabsRegistry.assertNavigable(input.tabId);
     if (tab.sticky) throw new AppError("NAVIGATION_BLOCKED", "Sticky tabs cannot change history.");
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     await this.beginNavigation(tab.tabId, "go-forward");
     const response = await this.driver.goForward();
     this.updateSelectedTab(tab.tabId, response);
@@ -1611,7 +1622,7 @@ export class BrowserRuntime implements BrowserExecutor {
 
   async closeTab(input: BrowserCloseTabInput): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertClosable(input.tabId);
-    const selected = await this.selectTab(tab, undefined, false);
+    const selected = await this.selectBrowserTab(tab, undefined, false);
     await this.driver.closeTab(selected.index);
     this.tabsRegistry.remove(tab.tabId);
     this.bindings.delete(tab.tabId);
@@ -1670,7 +1681,7 @@ export class BrowserRuntime implements BrowserExecutor {
         for (const tab of tabs) {
           if (this.driver.isConnected()) {
             try {
-              const selected = await this.selectTab(tab, undefined, false);
+              const selected = await this.selectBrowserTab(tab, undefined, false);
               await this.driver.closeTab(selected.index);
             } catch (error) {
               if (!(error instanceof AppError) || !["TAB_NOT_FOUND", "TAB_NOT_OWNED", "BROWSER_DISCONNECTED"].includes(error.code)) {
@@ -1715,7 +1726,7 @@ export class BrowserRuntime implements BrowserExecutor {
 
   async download(input: BrowserDownloadInput): Promise<BrowserDownloadResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     return this.fileTransfers.download(input, {
       tab,
       resolveReference: (ref) =>
@@ -1731,7 +1742,7 @@ export class BrowserRuntime implements BrowserExecutor {
         "Business read-only policy blocks file uploads.",
       );
     }
-    await this.selectTab(tab);
+    await this.selectBrowserTab(tab);
     return this.fileTransfers.upload(input, {
       tab,
       resolveReference: (ref) =>
@@ -2242,7 +2253,7 @@ export class BrowserRuntime implements BrowserExecutor {
       this.session.mode,
       this.driver,
     );
-    await this.selectTab(tab, undefined, enforcePrivateGrant);
+    await this.selectBrowserTab(tab, undefined, enforcePrivateGrant);
     return tab;
   }
 
@@ -2414,7 +2425,7 @@ export class BrowserRuntime implements BrowserExecutor {
           for (const tab of tabs) {
             if (this.driver.isConnected()) {
               try {
-                const selected = await this.selectTab(tab, undefined, false);
+                const selected = await this.selectBrowserTab(tab, undefined, false);
                 await this.driver.closeTab(selected.index);
               } catch (error) {
                 if (!(error instanceof AppError) || !["TAB_NOT_FOUND", "TAB_NOT_OWNED", "BROWSER_DISCONNECTED"].includes(error.code)) {
@@ -2865,7 +2876,7 @@ export class BrowserRuntime implements BrowserExecutor {
       knownRemoteTabs,
     );
   }
-  private async selectTab(
+  private async selectBrowserTab(
     tab: BrowserTab,
     knownRemoteTabs?: readonly BrowserDriverTab[],
     enforcePrivateGrant = true,

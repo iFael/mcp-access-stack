@@ -8,6 +8,16 @@ export interface PersonalBrowserExtensionAssets {
   popupScript: string;
 }
 
+export function sanitizePersonalDiagnosticText(value: string): string {
+  return value.slice(0, 8_000)
+    .replace(/(authorization\s*[:=]\s*)(?:bearer|basic)\s+[^\s,;]+/gi, "$1[redacted]")
+    .replace(/((?:set-)?cookie\s*[:=]\s*)[^\r\n]+/gi, "$1[redacted]")
+    .replace(/((?:x-)?api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]")
+    .replace(/([?&](?:access_?token|token|api_?key|secret|session|password)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/("(?:access_?token|token|apiKey|api_key|secret|password|cookie|authorization)"\s*:\s*")[^"]*(")/gi, "$1[redacted]$2")
+    .replace(/((?:access_?token|token|api_?key|secret|password)\s*[=:]\s*)[^\s,;]+/gi, "$1[redacted]");
+}
+
 export const PERSONAL_BROWSER_PROTOCOL_VERSION = 1;
 export const PERSONAL_BROWSER_EXTENSION_VERSION = HANDOFF_EXTENSION_VERSION;
 export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
@@ -15,12 +25,13 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "navigate", "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
+  "open", "selectTab", "navigate", "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
+  "selectTab",
   "open",
   "navigate",
   "snapshot",
@@ -37,6 +48,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "extract",
   "sequence",
   "screenshot",
+  "console",
   "goBack",
   "goForward",
   "tabGroups",
@@ -79,6 +91,7 @@ const PROTOCOL_VERSION = ${PERSONAL_BROWSER_PROTOCOL_VERSION};
 const EXTENSION_VERSION = ${JSON.stringify(PERSONAL_BROWSER_EXTENSION_VERSION)};
 const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
 const summarizeCdpAccessibility = (${summarizeCdpAccessibility.toString()});
+const sanitizePersonalDiagnosticText = (${sanitizePersonalDiagnosticText.toString()});
 const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs"; // gitleaks:allow -- public storage slot identifier, not a credential
@@ -93,6 +106,7 @@ const inFlightRequests = new Map();
 const mutationQueues = new Map();
 const taskGroups = new Map();
 const axTargetsByTab = new Map();
+const personalConsoleEntries = new Map();
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -215,6 +229,7 @@ async function runRequest(operation, input, signal, timing) {
 async function perform(operation, input, signal, timing) {
   switch (operation) {
     case "tabs": return tabs(input, signal);
+    case "selectTab": return selectOwnedTab(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
@@ -231,6 +246,7 @@ async function perform(operation, input, signal, timing) {
     case "extract": return extract(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
+    case "console": return readPersonalConsole(input, signal);
     case "goBack": return goBack(input, signal);
     case "goForward": return goForward(input, signal);
     case "closeTab": return closeTab(input, signal);
@@ -258,6 +274,15 @@ async function tabs(input) {
     if (changed) await writeOwnedTabs(owned);
     return { tabs: result };
   });
+}
+
+async function selectOwnedTab(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "selectTab", false);
+  const selected = await chrome.tabs.update(chromeTabId, { active: true });
+  const metadata = await requireOwnedMetadata(chromeTabId);
+  return { tab: toBrowserTab(metadata, selected) };
 }
 
 async function open(input, signal) {
@@ -710,11 +735,18 @@ async function scroll(input, signal) {
   } else if (!input.ref) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
-      func: () => ({ x: Math.floor(innerWidth / 2), y: Math.floor(innerHeight / 2) }),
+      func: (x, y) => {
+        const px = x ?? Math.floor(innerWidth / 2);
+        const py = y ?? Math.floor(innerHeight / 2);
+        if (!Number.isInteger(px) || !Number.isInteger(py) ||
+            px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) return null;
+        return { x: px, y: py };
+      },
+      args: [input.x, input.y],
     });
     point = injection?.result;
-    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome viewport is unavailable.");
+    if (!point) {
+      throw coded("INVALID_ARGUMENT", "Scroll coordinates are outside the current CSS viewport.");
     }
   }
   throwIfAborted(signal, "scroll", false);
@@ -1093,6 +1125,98 @@ async function sequence(input, signal, timing) {
   return response;
 }
 
+async function readPersonalConsole(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "console", false);
+  if (!chrome.debugger?.onEvent?.addListener || !chrome.debugger?.onEvent?.removeListener) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger console events are unavailable.");
+  }
+  const pattern = input.pattern;
+  if (pattern !== undefined && (typeof pattern !== "string" || pattern.length > 500 || /[\\r\\n\\0]/u.test(pattern))) {
+    throw coded("INVALID_ARGUMENT", "Invalid console pattern.");
+  }
+  let filter;
+  try {
+    filter = pattern ? new RegExp(pattern, "u") : undefined;
+  } catch {
+    throw coded("INVALID_ARGUMENT", "Console regex is not valid.");
+  }
+  const limit = input.limit ?? 200;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw coded("INVALID_ARGUMENT", "Console message limit must be between 1 and 1000.");
+  }
+  const tabKey = String(chromeTabId);
+  const recorded = personalConsoleEntries.get(tabKey) ?? [];
+  let attached = false;
+  let truncated = false;
+  const listener = (source, method, params) => {
+    if (source?.tabId !== chromeTabId) return;
+    let level;
+    let message;
+    if (method === "Runtime.consoleAPICalled") {
+      const type = params?.type;
+      level = type === "error" || type === "assert" ? "error" :
+        type === "warning" || type === "warn" ? "warning" :
+        type === "debug" || type === "verbose" ? "debug" : "info";
+      const values = Array.isArray(params?.args) ? params.args.slice(0, 12) : [];
+      message = values.map((entry) => {
+        if (entry?.value === null) return "null";
+        if (typeof entry?.value === "string") return entry.value.slice(0, 1800);
+        if (typeof entry?.value === "number" || typeof entry?.value === "boolean") return String(entry.value);
+        return String(entry?.description ?? "[object]").slice(0, 1800);
+      }).join(" ");
+    } else if (method === "Runtime.exceptionThrown") {
+      level = "error";
+      message = String(params?.exceptionDetails?.text ?? "Script exception");
+    } else if (method === "Log.entryAdded") {
+      const entry = params?.entry;
+      level = entry?.level === "error" ? "error" : entry?.level === "warning" ? "warning" :
+        entry?.level === "verbose" ? "debug" : "info";
+      message = String(entry?.text ?? "");
+    } else return;
+    const line = "[" + level + "] " + sanitizePersonalDiagnosticText(message.slice(0, 3000));
+    if (recorded.length >= 500) {
+      recorded.shift();
+      truncated = true;
+    }
+    recorded.push(line);
+  };
+  try {
+    chrome.debugger.onEvent.addListener(listener);
+    const target = { tabId: chromeTabId };
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Runtime.enable");
+    await chrome.debugger.sendCommand(target, "Log.enable");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    throwIfAborted(signal, "console", false);
+    personalConsoleEntries.set(tabKey, recorded);
+    const threshold = input.onlyErrors ? "error" : input.level;
+    const severities = { error: 0, warning: 1, info: 2, debug: 3 };
+    const output = recorded.filter((line) => {
+      const level = line.slice(1, line.indexOf("]"));
+      return (!threshold || (severities[level] ?? 3) <= severities[threshold]) &&
+        (!filter || filter.test(line));
+    });
+    const text = output.slice(0, limit).join("\\n").slice(0, 120000);
+    const result = {
+      tabId: input.tabId, text,
+      truncated: truncated || output.length > limit || output.join("\\n").length > 120000,
+      collectedAt: new Date().toISOString(),
+    };
+    if (input.clear === true) personalConsoleEntries.delete(tabKey);
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("console", signal, false);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger console capture is unavailable or occupied.");
+  } finally {
+    chrome.debugger.onEvent.removeListener(listener);
+    if (attached) await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  }
+}
+
 async function screenshot(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -1340,6 +1464,7 @@ async function updateMetadata(chromeTabId, metadata) {
 
 async function removeOwnedTab(chromeTabId) {
   axTargetsByTab.delete(chromeTabId);
+  personalConsoleEntries.delete(String(chromeTabId));
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     if (!owned[String(chromeTabId)]) return;

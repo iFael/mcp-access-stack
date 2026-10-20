@@ -6,6 +6,7 @@ import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
+  browserTabActionInputSchema,
   browserHoverInputSchema,
   browserFindInputSchema,
   browserFindResultSchema,
@@ -33,6 +34,11 @@ import {
 const collectedAt = "2026-07-02T00:00:00.000Z";
 
 describe("browser mode contract", () => {
+  it("accepts only an explicit owned tab reference for tab selection", () => {
+    expect(browserTabActionInputSchema.safeParse({ tabId: "personal:7" }).success).toBe(true);
+    expect(browserTabActionInputSchema.safeParse({ tabId: "personal:7", openNewTab: true }).success).toBe(false);
+    expect(browserTabActionInputSchema.safeParse({}).success).toBe(false);
+  });
   it("exposes browserMode only on browser_open", () => {
     expect(browserOpenInputSchema.safeParse({
       url: "https://chatgpt.com/",
@@ -145,6 +151,9 @@ describe("browser interaction parity contracts", () => {
     expect(browserClickInputSchema.safeParse({ tabId: "personal:1", y: 20 }).success).toBe(false);
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450 }).success).toBe(true);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, x: 50, y: 90 }).success).toBe(true);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, x: 50 }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, ref: "p-1", x: 50, y: 90 }).success).toBe(false);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: -1 }).success).toBe(false);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "diagonal", amount: 5 }).success).toBe(false);
     expect(browserClickInputSchema.safeParse({

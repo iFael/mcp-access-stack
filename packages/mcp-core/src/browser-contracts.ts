@@ -471,8 +471,11 @@ export const browserScrollInputSchema = z.object({
   direction: z.enum(["up", "down", "left", "right"]),
   amount: z.number().int().min(1).max(10000),
   ref: z.string().min(1).max(128).optional(),
+  x: browserPointSchema.shape.x.optional(),
+  y: browserPointSchema.shape.y.optional(),
   knownRevision: knownRevisionSchema,
-}).strict();
+}).strict().refine((v) => (v.x === undefined) === (v.y === undefined) &&
+  !(v.ref && v.x !== undefined), { message: "Provide a ref, CSS x/y, or neither." });
 export type BrowserScrollInput = z.infer<typeof browserScrollInputSchema>;
 
 export const browserFillInputSchema = z
@@ -1168,6 +1171,7 @@ export const browserOperationSchema = z.enum([
   "status",
   "connect",
   "tabs",
+  "selectTab",
   "open",
   "openAuthorizedSite",
   "navigate",
@@ -1245,6 +1249,7 @@ export const browserOperationInputSchemas = {
   status: browserStatusInputSchema,
   connect: browserConnectInputSchema,
   tabs: browserTabsInputSchema,
+  selectTab: browserTabActionInputSchema,
   open: browserOpenInputSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteInputSchema,
   navigate: browserNavigateInputSchema,
@@ -1291,6 +1296,7 @@ export const browserOperationResultSchemas = {
   status: browserStatusResultSchema,
   connect: browserConnectResultSchema,
   tabs: browserTabsResultSchema,
+  selectTab: browserTabResultSchema,
   open: browserTabResultSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteResultSchema,
   navigate: browserTabResultSchema,

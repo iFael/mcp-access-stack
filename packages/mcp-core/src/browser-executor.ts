@@ -78,6 +78,7 @@ export interface BrowserExecutor {
   status(input: BrowserStatusInput, context?: OperationContext): Promise<BrowserStatusResult>;
   connect(input: BrowserConnectInput, context?: OperationContext): Promise<BrowserConnectResult>;
   tabs(input: BrowserTabsInput, context?: OperationContext): Promise<BrowserTabsResult>;
+  selectTab(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
   open(input: BrowserOpenInput, context?: OperationContext): Promise<BrowserTabResult>;
   openAuthorizedSite(
     input: BrowserOpenAuthorizedSiteInput,

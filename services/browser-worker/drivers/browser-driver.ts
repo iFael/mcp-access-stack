@@ -70,6 +70,8 @@ export interface BrowserScrollRequest {
   direction: "up" | "down" | "left" | "right";
   amount: number;
   target?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface BrowserFillRequest {

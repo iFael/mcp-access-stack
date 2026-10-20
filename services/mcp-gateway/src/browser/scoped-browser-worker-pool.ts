@@ -138,6 +138,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.tabs(...args));
   }
 
+  selectTab(...args: Parameters<BrowserExecutor["selectTab"]>): ReturnType<BrowserExecutor["selectTab"]> {
+    return this.invoke(args[1], (client) => client.selectTab(...args));
+  }
+
   open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
     const [input, context] = args;
     if (input.browserMode === "personal") {

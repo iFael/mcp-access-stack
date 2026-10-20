@@ -23,6 +23,58 @@ afterEach(async () => {
 });
 
 describe("PersonalBrowserBridge", () => {
+  it("routes select_tab to the owned Chrome extension without touching other tabs", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input: unknown }> = [];
+    const handle = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      requests.push({ ...(request.operation ? { operation: request.operation } : {}), input: request.input });
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tab: {
+          tabId: "personal:7", url: "https://example.test/",
+          ownership: "mcp", lifecycle: "task-scoped", taskId: "task-1",
+          purpose: "test", reusable: false, protected: false, sticky: false,
+          createdAt: "2026-10-20T10:00:00.000Z", lastUsedAt: "2026-10-20T10:00:00.000Z",
+        } },
+      }));
+    };
+    extension.on("message", handle);
+    try {
+      await expect(bridge.selectTab({ tabId: "personal:7" }))
+        .resolves.toMatchObject({ tab: { tabId: "personal:7" } });
+      expect(requests).toEqual([{ operation: "selectTab", input: { tabId: "personal:7" } }]);
+    } finally {
+      extension.off("message", handle);
+      await close();
+    }
+  });
+
+  it("routes sanitized Chrome personal console reads through the authorized extension", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input?: unknown }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      requests.push({ ...(request.operation ? { operation: request.operation } : {}), input: request.input });
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", text: "[error] TypeError: failed", truncated: false, collectedAt: "2026-10-20T10:00:00.000Z" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.console({ tabId: "personal:7", pattern: "TypeError", onlyErrors: true, limit: 10 }))
+        .resolves.toMatchObject({ text: "[error] TypeError: failed" });
+      expect(requests).toEqual([{ operation: "console", input: { tabId: "personal:7", pattern: "TypeError", onlyErrors: true, limit: 10 } }]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+
   it("resolves viewport coordinates to authenticated structured refs before clicking or hovering", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: Record<string, unknown> }> = [];

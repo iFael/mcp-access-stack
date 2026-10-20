@@ -620,6 +620,18 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         const bounds = await target.boundingBox();
         if (!bounds) throw new AppError("LOCATOR_NOT_FOUND", "Scroll target is not visible.");
         await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      } else {
+        const viewport = await page.evaluate(() => {
+          const global = globalThis as unknown as { innerWidth: number; innerHeight: number };
+          return { width: global.innerWidth, height: global.innerHeight };
+        });
+        const px = input.x ?? Math.floor(viewport.width / 2);
+        const py = input.y ?? Math.floor(viewport.height / 2);
+        if (!Number.isInteger(px) || !Number.isInteger(py) ||
+            px < 0 || py < 0 || px >= viewport.width || py >= viewport.height) {
+          throw new AppError("INVALID_ARGUMENT", "Scroll coordinates are outside the CSS viewport.");
+        }
+        await page.mouse.move(px, py);
       }
       const x = input.direction === "left" ? -input.amount : input.direction === "right" ? input.amount : 0;
       const y = input.direction === "up" ? -input.amount : input.direction === "down" ? input.amount : 0;

@@ -145,6 +145,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("tabs", args[0], args[1]);
   }
 
+  async selectTab(...args: Parameters<BrowserExecutor["selectTab"]>): ReturnType<BrowserExecutor["selectTab"]> {
+    const result = await this.call("selectTab", args[0], args[1]);
+    this.actions.observeTab(result.tab);
+    return result;
+  }
+
   async open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
     const result = await this.call("open", args[0], args[1]);
     this.actions.observeTab(result.tab);
@@ -471,8 +477,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     throw unsupported("browser_upload");
   }
 
-  console(..._args: Parameters<BrowserExecutor["console"]>): ReturnType<BrowserExecutor["console"]> {
-    throw unsupported("browser_console");
+  async console(...args: Parameters<BrowserExecutor["console"]>): ReturnType<BrowserExecutor["console"]> {
+    return this.call("console", args[0], args[1]);
   }
 
   networkList(

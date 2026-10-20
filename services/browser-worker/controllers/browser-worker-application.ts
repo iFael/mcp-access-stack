@@ -320,6 +320,7 @@ async function execute(
     case "status": return runtime.status(input as never);
     case "connect": return runtime.connect(input as never, context);
     case "tabs": return runtime.tabs(input as never, context);
+    case "selectTab": return runtime.selectTab(input as never, context);
     case "open": return runtime.open(input as never, context);
     case "openAuthorizedSite": return runtime.openAuthorizedSite(input as never, context);
     case "navigate": return runtime.navigate(input as never, context);

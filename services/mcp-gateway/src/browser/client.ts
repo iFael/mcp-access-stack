@@ -113,6 +113,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
     return this.call("tabs", input, context);
   }
 
+  selectTab(input: BrowserTabActionInput, context?: OperationContext) {
+    return this.call("selectTab", input, context);
+  }
+
   open(input: BrowserOpenInput, context?: OperationContext) {
     return this.call("open", input, context);
   }
@@ -496,7 +500,14 @@ const BROWSER_EFFECTFUL_OPERATIONS = new Set<BrowserOperation>([
   "open",
   "openAuthorizedSite",
   "navigate",
+  "selectTab",
+  "evaluate",
   "click",
+  "hover",
+  "drag",
+  "scroll",
+  "formInput",
+  "type",
   "fill",
   "press",
   "sequence",

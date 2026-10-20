@@ -19,7 +19,7 @@ import {
 } from "./timeout-policy.js";
 
 export const BROWSER_TOOL_NAMES = [
-  "browser_status", "browser_connect", "browser_tabs", "browser_open",
+  "browser_status", "browser_connect", "browser_tabs", "browser_select_tab", "browser_open",
   "browser_open_authorized_site",
   "browser_navigate", "browser_snapshot", "browser_find", "browser_evaluate", "browser_click", "browser_hover", "browser_drag", "browser_scroll", "browser_fill", "browser_form_input", "browser_type",
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
@@ -350,6 +350,11 @@ function definitions(
       () => e.tabs(assumeParsed(v)),
       (activeContext) => e.tabs(assumeParsed(v), activeContext),
     )),
+    d("browser_select_tab", "Activates an existing MCP-owned tab in the current Chrome profile, without opening, adopting, or modifying any other tab.", c.browserTabActionInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.selectTab(assumeParsed(v)),
+      (activeContext) => e.selectTab(assumeParsed(v), activeContext),
+    )),
     d("browser_open", "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.", c.browserOpenInputSchema, c.browserTabResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.open(assumeParsed(v)),
@@ -395,7 +400,7 @@ function definitions(
       () => e.drag(assumeParsed(v)),
       (activeContext) => e.drag(assumeParsed(v), activeContext),
     )),
-    d("browser_scroll", "Scrolls by CSS pixels, optionally over an element ref, without clicking. Returns updated state.", c.browserScrollInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_scroll", "Scrolls by CSS pixels, optionally over an element ref or CSS viewport x/y (to scroll nested containers), without clicking. Returns updated state.", c.browserScrollInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.scroll(assumeParsed(v)),
       (activeContext) => e.scroll(assumeParsed(v), activeContext),
