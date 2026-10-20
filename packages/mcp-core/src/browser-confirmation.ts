@@ -11,7 +11,8 @@ export type BrowserConfirmationCategory =
   | "purchase-or-payment"
   | "change-credentials"
   | "accept-terms-or-contract"
-  | "upload-file";
+  | "upload-file"
+  | "execute-script";
 
 export interface BrowserConfirmationBinding {
   tabId: string;

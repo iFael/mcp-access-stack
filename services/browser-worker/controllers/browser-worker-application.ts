@@ -325,10 +325,12 @@ async function execute(
     case "navigate": return runtime.navigate(input as never, context);
     case "snapshot": return runtime.snapshot(input as never, context);
     case "find": return runtime.find(input as never, context);
+    case "evaluate": return runtime.evaluate(input as never, context);
     case "click": return runtime.click(input as never, context);
     case "hover": return runtime.hover(input as never, context);
     case "scroll": return runtime.scroll(input as never, context);
     case "fill": return runtime.fill(input as never, context);
+    case "type": return runtime.type(input as never, context);
     case "press": return runtime.press(input as never, context);
     case "wait": return runtime.wait(input as never, context);
     case "extract": return runtime.extract(input as never, context);

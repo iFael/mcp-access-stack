@@ -24,7 +24,9 @@ import {
   type BrowserExecutor,
   type BrowserExtractInput,
   type BrowserFillInput,
+  type BrowserTypeInput,
   type BrowserFindInput,
+  type BrowserEvaluateInput,
   type BrowserFinishTaskInput,
   type BrowserFrameClickInput,
   type BrowserFrameExtractInput,
@@ -132,6 +134,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
     return this.call("find", input, context);
   }
 
+  evaluate(input: BrowserEvaluateInput, context?: OperationContext) {
+    return this.call("evaluate", input, context);
+  }
+
   click(input: BrowserClickInput, context?: OperationContext) {
     return this.call("click", input, context);
   }
@@ -146,6 +152,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   fill(input: BrowserFillInput, context?: OperationContext) {
     return this.call("fill", input, context);
+  }
+
+  type(input: BrowserTypeInput, context?: OperationContext) {
+    return this.call("type", input, context);
   }
 
   press(input: BrowserPressInput, context?: OperationContext) {

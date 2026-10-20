@@ -62,6 +62,12 @@ export interface BrowserFillRequest {
   submit?: boolean;
 }
 
+export interface BrowserTypeRequest {
+  text: string;
+  slowly?: boolean;
+  submit?: boolean;
+}
+
 export interface BrowserPressRequest {
   key: string;
   repeat?: number;
@@ -155,6 +161,7 @@ export interface BrowserDriver {
     input: BrowserFillRequest,
     options?: BrowserDriverCallOptions,
   ): Promise<BrowserDriverResponse>;
+  type?(input: BrowserTypeRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   press(
     input: BrowserPressRequest,
     options?: BrowserDriverCallOptions,

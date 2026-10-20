@@ -1,11 +1,13 @@
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   abortSignalError,
   AppError,
   clickAuthorizationAction,
   findBrowserElements,
   projectBrowserSnapshot,
+  sanitizeBrowserEvaluation,
   containsBrowserEnterKey,
   validateBrowserKeySequence,
   remainingOperationTimeMs,
@@ -29,7 +31,10 @@ import {
   type BrowserExtractInput,
   type BrowserExtractResult,
   type BrowserFillInput,
+  type BrowserTypeInput,
   type BrowserFindInput,
+  type BrowserEvaluateInput,
+  type BrowserEvaluateResult,
   type BrowserFindResult,
   type BrowserFinishTaskInput,
   type BrowserFinishTaskResult,
@@ -849,6 +854,9 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserSnapshotResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (input.includeAccessibility) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Native CDP accessibility is only available in personal Chrome mode.");
+    }
     await this.selectTab(tab);
     const projected = input.filter !== undefined || input.depth !== undefined ||
       input.refId !== undefined || input.maxChars !== undefined;
@@ -875,6 +883,28 @@ export class BrowserRuntime implements BrowserExecutor {
       url: snapshot.url,
       matches: findBrowserElements(snapshot.refs, input.query, input.role, input.limit),
     };
+  }
+
+  async evaluate(
+    input: BrowserEvaluateInput,
+    _context: OperationContext = {},
+  ): Promise<BrowserEvaluateResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (this.isBusinessReadOnlyTab(tab)) {
+      throw new AppError("ACTION_BLOCKED_BY_POLICY", "Evaluating JavaScript is blocked in business-read-only mode.");
+    }
+    const hash = createHash("sha256").update(input.function).digest("hex");
+    this.authorizeAction(
+      input.confirmationId,
+      this.interactionContext.prepareConfirmation(tab, "execute-script", "evaluate", "sha256:" + hash),
+    );
+    await this.selectTab(tab);
+    if (input.ref) this.interactionContext.requireReference(tab.tabId, input.ref);
+    const result = await this.driver.evaluate({
+      function: input.function,
+      ...(input.ref ? { target: input.ref } : {}),
+    });
+    return { tabId: input.tabId, value: sanitizeBrowserEvaluation(result.result) };
   }
 
   async click(
@@ -965,6 +995,33 @@ export class BrowserRuntime implements BrowserExecutor {
     const actionMs = elapsedMs(actionStarted);
     this.updateSelectedTab(tab.tabId, response);
     return this.withActionState(tab.tabId, input.knownRevision, actionMs, context);
+  }
+
+  async type(
+    input: BrowserTypeInput,
+    context: OperationContext = {},
+  ): Promise<BrowserActionResult> {
+    const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (input.submit) {
+      this.assertBusinessReadOnlyKey(tab, "Enter", "type");
+      this.authorizeAction(
+        input.confirmationId,
+        this.interactionContext.prepareConfirmation(tab, "submit-form", "type", "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex")),
+      );
+    }
+    await this.selectTab(tab);
+    if (!this.driver.type) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support typing.");
+    if (input.submit) await this.beginNavigation(tab.tabId, "press");
+    const started = performance.now();
+    const response = await this.driver.type({
+      text: input.text,
+      ...(input.slowly !== undefined ? { slowly: input.slowly } : {}),
+      ...(input.submit !== undefined ? { submit: input.submit } : {}),
+    });
+    this.updateSelectedTab(tab.tabId, response);
+    this.updateRequestedUrl(tab.tabId);
+    await this.checkpoint();
+    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(started), context);
   }
 
   async press(

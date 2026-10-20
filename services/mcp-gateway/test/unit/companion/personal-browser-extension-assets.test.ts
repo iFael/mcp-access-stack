@@ -1,6 +1,7 @@
 import vm from "node:vm";
 import { describe, expect, it } from "@jest/globals";
 import { buildPersonalBrowserExtensionAssets, PERSONAL_BROWSER_MUTATING_OPERATIONS } from "../../../src/companion/personal-browser-extension-assets.js";
+import { summarizeCdpAccessibility } from "../../../src/companion/personal-browser-accessibility.js";
 
 type FakeElement = ReturnType<typeof fakeElement>;
 
@@ -103,6 +104,67 @@ describe("personal browser extension assets", () => {
     expect(attachCount).toBe(3);
   });
 
+  it("evaluates confirmed JavaScript via native CDP", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: { attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            calls.push({ method, params });
+            return { result: { type: "object", value: { title: "Hello" } } };
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "evaluatePage"), context);
+    const evaluate = vm.runInContext("evaluatePage", context) as (input: unknown) => Promise<unknown>;
+    await expect(evaluate({ tabId: "personal:7", function: "() => 1" }))
+      .rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    await expect(evaluate({
+      tabId: "personal:7", function: "() => document.title",
+      guard: { url: "https://example.com/" },
+    })).resolves.toMatchObject({ tabId: "personal:7", value: { title: "Hello" } });
+    expect(calls.map((entry) => entry.method)).toEqual(["Runtime.evaluate"]);
+    expect(calls[0]?.params).toMatchObject({
+      expression: "(() => document.title)()", returnByValue: true, awaitPromise: true,
+    });
+  });
+
+  it("types through Chrome trusted input and submits only under a page guard", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: Array<{ method: string; params: unknown }> = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: unknown) => {
+            events.push({ method, params });
+          },
+        },
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+    });
+    vm.runInContext(extractFunction(serviceWorker, "typeText"), context);
+    const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
+    await expect(typeText({ tabId: "personal:7", text: "hello" }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    await typeText({ tabId: "personal:7", text: "hello", submit: true, guard: { url: "https://example.com/" } });
+    expect(events.map((e) => e.method)).toEqual([
+      "Input.insertText", "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
+    ]);
+    expect(events[0]?.params).toEqual({ text: "hello" });
+    expect(events[1]?.params).toMatchObject({ key: "Enter", type: "keyDown" });
+  });
+
   it("uses guarded CDP movement and wheel events for hover and scroll", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -136,6 +198,134 @@ describe("personal browser extension assets", () => {
     });
   });
 
+  it("returns sanitized CDP AX for an MCP-owned tab only when explicitly requested", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: string[] = [];
+    let attaches = 0;
+    let detaches = 0;
+    let actualUrl = "https://example.com/";
+    let failTree = false;
+    const context = vm.createContext({
+      crypto: { randomUUID: () => "document-uuid" },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      snapshotPage: () => undefined,
+      summarizeCdpAccessibility,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: actualUrl }) },
+        scripting: { executeScript: async () => [{ result: {
+          url: "https://example.com/", title: "Example", pageInstanceId: "document-uuid",
+          content: "Visible UI", refs: [{ ref: "p-1", role: "button", name: "Save" }],
+        } }] },
+        debugger: {
+          attach: async () => { attaches += 1; },
+          detach: async () => { detaches += 1; },
+          sendCommand: async (_target: unknown, method: string) => {
+            commands.push(method);
+            if (method === "Accessibility.getFullAXTree") {
+              if (failTree) throw new Error("DevTools unavailable");
+              return { nodes: [
+                { nodeId: "1", role: { value: "RootWebArea" }, childIds: ["2"] },
+                { nodeId: "2", role: { value: "textbox" }, name: { value: "Password" }, value: { value: "user-private-value" } },
+              ] };
+            }
+            if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext("const axTargetsByTab = new Map();", context);
+    for (const fn of ["readNativeAccessibility", "snapshot"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const snapshot = vm.runInContext("snapshot", context) as (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    const ordinary = await snapshot({ tabId: "personal:7" });
+    expect(ordinary).toMatchObject({ pageInstanceId: "document-uuid" });
+    expect(ordinary.accessibility).toBeUndefined();
+    expect(attaches).toBe(0);
+    const native = await snapshot({ tabId: "personal:7", includeAccessibility: true });
+    expect(native.accessibility).toMatchObject({
+      source: "cdp", coverage: "main-frame-only", frameCount: 1,
+      nodes: [expect.objectContaining({ role: "RootWebArea" }), expect.objectContaining({ role: "textbox", name: "Password" })],
+    });
+    expect(JSON.stringify(native)).not.toContain("user-private-value");
+    expect(commands).toEqual(["Accessibility.enable", "Accessibility.getFullAXTree", "Page.getFrameTree"]);
+    expect(attaches).toBe(1);
+    expect(detaches).toBe(1);
+    failTree = true;
+    await expect(snapshot({ tabId: "personal:7", includeAccessibility: true })).rejects.toMatchObject({
+      code: "BROWSER_CAPABILITY_UNSUPPORTED",
+    });
+    expect(detaches).toBe(2);
+    failTree = false;
+    actualUrl = "https://other.example.com/";
+    await expect(snapshot({ tabId: "personal:7", includeAccessibility: true })).rejects.toMatchObject({
+      code: "BROWSER_DISCONNECTED",
+    });
+    expect(detaches).toBe(3);
+  });
+
+  it("turns native AX nodes into guarded actionable refs and rejects stale targets", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const inputs: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const context = vm.createContext({
+      Map, Set, Number, Array, String, crypto: { randomUUID: () => "uuidax" },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      summarizeCdpAccessibility,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: "document-7" }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            inputs.push({ method, params });
+            if (method === "Accessibility.getFullAXTree") return { nodes: [
+              { nodeId: "root", role: { value: "RootWebArea" }, childIds: ["button"] },
+              { nodeId: "button", role: { value: "button" },
+                name: { value: "Delete account" }, backendDOMNodeId: 42 },
+            ] };
+            if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+            if (method === "Accessibility.getPartialAXTree") return { nodes: [
+              { backendDOMNodeId: 42, role: { value: "button" }, name: { value: "Delete account" } },
+            ] };
+            if (method === "DOM.getBoxModel") return { model: { content: [20,30,120,30,120,60,20,60] } };
+            if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
+            if (method === "DOM.getNodeForLocation") return { backendNodeId: 42 };
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext("const axTargetsByTab = new Map();", context);
+    for (const name of ["readNativeAccessibility", "resolveGuardedAxPoint", "click"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const read = vm.runInContext("readNativeAccessibility", context) as
+      (tab: number, url: string, doc: string) => Promise<{ refs: Array<{ ref: string; role: string; name: string }> }>;
+    const native = await read(7, "https://example.com/", "document-7");
+    expect(native.refs).toHaveLength(1);
+    const ref = native.refs[0]!;
+    expect(ref).toMatchObject({ role: "button", name: "Delete account" });
+    expect(JSON.stringify(native)).not.toContain("backendDOMNodeId");
+    const click = vm.runInContext("click", context) as (input: unknown) => Promise<unknown>;
+    await click({
+      tabId: "personal:7", ref: ref.ref,
+      guard: { url: "https://example.com/", ...ref },
+    });
+    expect(inputs.filter((x) => x.method === "Input.dispatchMouseEvent").map((x) => x.params.type))
+      .toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    await expect(click({
+      tabId: "personal:7", ref: ref.ref,
+      guard: { url: "https://example.com/", ...ref, name: "Wrong name" },
+    })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+  });
+
   it("announces a versioned capability handshake and blocks private navigation targets", () => {
     const { manifest, serviceWorker } = buildPersonalBrowserExtensionAssets(
       "x".repeat(43),
@@ -143,7 +333,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.4.1");
+    expect(parsedManifest.version).toBe("0.5.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");

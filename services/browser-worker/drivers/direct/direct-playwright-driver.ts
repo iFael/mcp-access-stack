@@ -521,6 +521,24 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     });
   }
 
+  async type(
+    input: { text: string; slowly?: boolean; submit?: boolean },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("type", options, async (page) => {
+      if (input.slowly) {
+        if (Array.from(input.text).length > 2_000) {
+          throw new AppError("LIMIT_EXCEEDED", "Slow typing is limited to 2,000 characters.");
+        }
+        await page.keyboard.type(input.text, { delay: 15 });
+      } else {
+        await page.keyboard.insertText(input.text);
+      }
+      if (input.submit) await page.keyboard.press("Enter");
+      return this.pageResponse(page);
+    });
+  }
+
   async press(
     input: BrowserPressRequest,
     options: BrowserDriverCallOptions = {},

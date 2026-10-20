@@ -9,8 +9,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(102);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(102);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(104);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(104);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
         ...MCP_REPOSITORY_TOOL_NAMES,

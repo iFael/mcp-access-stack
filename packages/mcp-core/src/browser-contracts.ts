@@ -361,6 +361,19 @@ export const browserNavigateInputSchema = z
   .strict();
 export type BrowserNavigateInput = z.infer<typeof browserNavigateInputSchema>;
 
+export const browserAccessibilitySummarySchema = z.object({
+  source: z.literal("cdp"),
+  coverage: z.literal("main-frame-only"),
+  frameCount: z.number().int().min(0).max(200),
+  nodes: z.array(z.object({
+    role: z.string().max(100),
+    name: z.string().max(500),
+    depth: z.number().int().min(0).max(40),
+  }).strict()).max(1000),
+  truncated: z.boolean(),
+}).strict();
+export type BrowserAccessibilitySummary = z.infer<typeof browserAccessibilitySummarySchema>;
+
 export const browserSnapshotInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -370,6 +383,7 @@ export const browserSnapshotInputSchema = z
     depth: z.number().int().min(1).max(40).optional(),
     refId: z.string().min(1).max(128).optional(),
     maxChars: z.number().int().min(50).max(200_000).optional(),
+    includeAccessibility: z.boolean().optional(),
   })
   .strict();
 export type BrowserSnapshotInput = z.infer<typeof browserSnapshotInputSchema>;
@@ -379,6 +393,7 @@ export const browserSnapshotResultSchema = z
     url: z.url(),
     title: z.string().max(500).optional(),
     pageInstanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u).optional(),
+    accessibility: browserAccessibilitySummarySchema.optional(),
     content: z.string().max(2_000_000),
     truncated: z.boolean().optional(),
     refs: z
@@ -457,6 +472,30 @@ export const browserFillInputSchema = z
   })
   .strict();
 export type BrowserFillInput = z.infer<typeof browserFillInputSchema>;
+
+export const browserEvaluateInputSchema = z.object({
+  tabId: tabIdSchema,
+  function: z.string().trim().min(5).max(8192),
+  ref: z.string().min(1).max(128).optional(),
+  confirmationId: confirmationIdSchema,
+}).strict();
+export type BrowserEvaluateInput = z.infer<typeof browserEvaluateInputSchema>;
+
+export const browserEvaluateResultSchema = z.object({
+  tabId: tabIdSchema,
+  value: z.unknown(),
+}).strict();
+export type BrowserEvaluateResult = z.infer<typeof browserEvaluateResultSchema>;
+
+export const browserTypeInputSchema = z.object({
+  tabId: tabIdSchema,
+  text: z.string().max(100_000),
+  slowly: z.boolean().optional(),
+  submit: z.boolean().optional(),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserTypeInput = z.infer<typeof browserTypeInputSchema>;
 
 export const browserPressInputSchema = z
   .object({
@@ -1075,10 +1114,12 @@ export const browserOperationSchema = z.enum([
   "navigate",
   "snapshot",
   "find",
+  "evaluate",
   "click",
   "hover",
   "scroll",
   "fill",
+  "type",
   "press",
   "wait",
   "extract",
@@ -1148,10 +1189,12 @@ export const browserOperationInputSchemas = {
   navigate: browserNavigateInputSchema,
   snapshot: browserSnapshotInputSchema,
   find: browserFindInputSchema,
+  evaluate: browserEvaluateInputSchema,
   click: browserClickInputSchema,
   hover: browserHoverInputSchema,
   scroll: browserScrollInputSchema,
   fill: browserFillInputSchema,
+  type: browserTypeInputSchema,
   press: browserPressInputSchema,
   wait: browserWaitInputSchema,
   extract: browserExtractInputSchema,
@@ -1190,10 +1233,12 @@ export const browserOperationResultSchemas = {
   navigate: browserTabResultSchema,
   snapshot: browserSnapshotResultSchema,
   find: browserFindResultSchema,
+  evaluate: browserEvaluateResultSchema,
   click: browserActionResultSchema,
   hover: browserActionResultSchema,
   scroll: browserActionResultSchema,
   fill: browserActionResultSchema,
+  type: browserActionResultSchema,
   press: browserActionResultSchema,
   wait: browserActionResultSchema,
   extract: browserExtractResultSchema,

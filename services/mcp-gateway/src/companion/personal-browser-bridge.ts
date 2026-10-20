@@ -7,6 +7,7 @@ import {
   browserOperationResultSchemas,
   findBrowserElements,
   projectBrowserSnapshot,
+  sanitizeBrowserEvaluation,
   errorCodes,
   type BrowserExecutor,
   type BrowserOperation,
@@ -162,11 +163,15 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async snapshot(...args: Parameters<BrowserExecutor["snapshot"]>): ReturnType<BrowserExecutor["snapshot"]> {
     const [input, context] = args;
+    if (input.includeAccessibility && !this.peerInfo?.capabilities.includes("cdpAccessibilityV1")) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Personal Chrome extension must support cdpAccessibilityV1. Reload the updated extension.");
+    }
     const filtered = input.filter !== undefined || input.depth !== undefined ||
       input.refId !== undefined || input.maxChars !== undefined;
     const result = await this.call("snapshot", {
       tabId: input.tabId,
       ...(filtered || input.forceFull ? { forceFull: true } : {}),
+      ...(input.includeAccessibility ? { includeAccessibility: true } : {}),
     }, context);
     // The original authenticated refs, not the projected text, own the guards.
     this.actions.observeSnapshot(result);
@@ -187,6 +192,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       url: snapshot.url,
       matches: findBrowserElements(snapshot.refs, input.query, input.role, input.limit),
     };
+  }
+
+  async evaluate(...args: Parameters<BrowserExecutor["evaluate"]>): ReturnType<BrowserExecutor["evaluate"]> {
+    const guard = this.actions.guardEvaluate(args[0]);
+    const output = await this.call("evaluate", { ...args[0], guard }, args[1]);
+    return { tabId: args[0].tabId, value: sanitizeBrowserEvaluation(output.value) };
   }
 
   async click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
@@ -212,6 +223,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.requireGuardedActions();
     const guard = this.actions.guardFill(args[0]);
     return this.call("fill", { ...args[0], guard }, args[1]);
+  }
+
+  async type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
+    this.requireGuardedActions();
+    const guard = this.actions.guardType(args[0]);
+    return this.call("type", { ...args[0], guard }, args[1]);
   }
 
   async press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {

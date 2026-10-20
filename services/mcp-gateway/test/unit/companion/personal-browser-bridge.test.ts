@@ -335,6 +335,7 @@ describe("PersonalBrowserBridge", () => {
       });
       older = await connectExtension(port, token, ["tabs", "open", "navigate", "snapshot", "click", "fill", "press", "closeTab", "finishTask"], "0.2.0");
       expect(bridge.connectionInfo().extensionVersion).toBe("0.2.0");
+      await expect(bridge.snapshot({ tabId: "personal:7", includeAccessibility: true })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
       await expect(bridge.wait({ tabId: "personal:7", timeoutMs: 100 })).rejects.toMatchObject({
         code: "BROWSER_CAPABILITY_UNSUPPORTED",
         message: expect.stringContaining("0.2.0"),

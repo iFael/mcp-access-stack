@@ -1,4 +1,5 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
+import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 
 export interface PersonalBrowserExtensionAssets {
   manifest: string;
@@ -14,7 +15,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "navigate", "click", "hover", "scroll", "fill", "press", "sequence",
+  "open", "navigate", "evaluate", "click", "hover", "scroll", "fill", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -23,10 +24,12 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "open",
   "navigate",
   "snapshot",
+  "evaluate",
   "click",
   "hover",
   "scroll",
   "fill",
+  "type",
   "press",
   "wait",
   "extract",
@@ -38,6 +41,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "guardedActionsV1",
   "snapshotRevisionV1",
   "openShadowDomV1",
+  "cdpAccessibilityV1",
   "closeTab",
   "finishTask",
 ] as const;
@@ -72,6 +76,7 @@ const BRIDGE_URL = "ws://127.0.0.1:" + BRIDGE_PORT + "/?token=" + encodeURICompo
 const PROTOCOL_VERSION = ${PERSONAL_BROWSER_PROTOCOL_VERSION};
 const EXTENSION_VERSION = ${JSON.stringify(PERSONAL_BROWSER_EXTENSION_VERSION)};
 const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
+const summarizeCdpAccessibility = (${summarizeCdpAccessibility.toString()});
 const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
 const OWNED_TABS_KEY = "mcpV3OwnedTabs"; // gitleaks:allow -- public storage slot identifier, not a credential
@@ -85,6 +90,7 @@ let ownershipTail = Promise.resolve();
 const inFlightRequests = new Map();
 const mutationQueues = new Map();
 const taskGroups = new Map();
+const axTargetsByTab = new Map();
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -210,10 +216,12 @@ async function perform(operation, input, signal, timing) {
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal);
+    case "evaluate": return evaluatePage(input, signal);
     case "click": return click(input, signal);
     case "hover": return hover(input, signal);
     case "scroll": return scroll(input, signal);
     case "fill": return fill(input, signal);
+    case "type": return typeText(input, signal);
     case "press": return press(input, signal);
     case "wait": return wait(input, signal);
     case "extract": return extract(input, signal);
@@ -322,6 +330,7 @@ async function open(input, signal) {
 
 async function navigate(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
+  axTargetsByTab.delete(chromeTabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
   const targetUrl = assertPersonalNavigationTarget(input.url);
   if (metadata.sticky && metadata.lockedUrl && targetUrl !== metadata.lockedUrl) {
@@ -341,9 +350,10 @@ async function navigate(input, signal) {
   return { tab: toBrowserTab(metadata, tab) };
 }
 
-async function snapshot(input) {
+async function snapshot(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "snapshot", false);
   const generation = crypto.randomUUID().replaceAll("-", "");
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
@@ -351,13 +361,165 @@ async function snapshot(input) {
     args: [generation],
   });
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
+  axTargetsByTab.delete(chromeTabId);
+  const native = input.includeAccessibility
+    ? await readNativeAccessibility(chromeTabId, injection.result.url, injection.result.pageInstanceId, signal)
+    : undefined;
+  const nativeRefs = native?.refs ?? [];
   return {
     tabId: input.tabId,
     url: injection.result.url,
     ...(injection.result.title ? { title: injection.result.title } : {}),
-    content: injection.result.content,
-    refs: injection.result.refs,
+    ...(injection.result.pageInstanceId ? { pageInstanceId: injection.result.pageInstanceId } : {}),
+    content: injection.result.content + (nativeRefs.length
+      ? "\\n\\nNative accessibility controls:\\n" +
+        nativeRefs.map((r) => "- " + r.role + " " + JSON.stringify(r.name) + " [ref=" + r.ref + "]").join("\\n")
+      : ""),
+    refs: [...injection.result.refs, ...nativeRefs],
+    ...(native ? { accessibility: native.summary } : {}),
   };
+}
+
+/**
+ * Native AX observation returns bounded semantic data and privately bound main-frame refs.
+ * OOPIF AX targets remain unavailable until session-qualified action routing is implemented.
+ */
+async function readNativeAccessibility(chromeTabId, expectedUrl, pageInstanceId, signal) {
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    throwIfAborted(signal, "snapshot", false);
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Accessibility.enable");
+    throwIfAborted(signal, "snapshot", false);
+    const tree = await chrome.debugger.sendCommand(target, "Accessibility.getFullAXTree");
+    const frames = await chrome.debugger.sendCommand(target, "Page.getFrameTree");
+    const result = summarizeCdpAccessibility(tree, frames);
+    const refs = [];
+    const targets = new Map();
+    const roles = new Set(["button", "link", "textbox", "searchbox", "checkbox", "radio", "combobox", "listbox", "option", "menuitem", "tab", "switch", "slider", "spinbutton"]);
+    for (const node of (Array.isArray(tree?.nodes) ? tree.nodes : []).slice(0, 1500)) {
+      const role = node?.role?.value;
+      const name = node?.name?.value;
+      const backendDOMNodeId = node?.backendDOMNodeId;
+      if (node.ignored || !roles.has(role) || !Number.isInteger(backendDOMNodeId) ||
+          backendDOMNodeId < 1 || typeof name !== "string") continue;
+      if (refs.length >= 500) break;
+      const ref = "ax-" + crypto.randomUUID().replaceAll("-", "") + "-" + (refs.length + 1);
+      const normalized = name.replace(/\\s+/gu, " ").trim().slice(0, 500);
+      targets.set(ref, { backendDOMNodeId, role, name: normalized });
+      refs.push({ ref, role, name: normalized });
+    }
+    const current = await chrome.tabs.get(chromeTabId);
+    if (!current || current.url !== expectedUrl) {
+      throw coded("BROWSER_DISCONNECTED", "Chrome navigated during accessibility observation; capture a fresh snapshot.");
+    }
+    throwIfAborted(signal, "snapshot", false);
+    if (pageInstanceId) {
+      axTargetsByTab.set(chromeTabId, {
+        url: expectedUrl, pageInstanceId, targets,
+      });
+    }
+    return { summary: result, refs: pageInstanceId ? refs : [] };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("snapshot", signal, false);
+    if (error && typeof error.code === "string") throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native Chrome accessibility requires available debugger access on this MCP-owned tab.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function evaluatePage(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  const current = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || input.guard.url !== current.url || input.ref) {
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome page evaluation requires a current page guard and no ref.");
+  }
+  throwIfAborted(signal, "evaluate", false);
+  const source = String(input.function || "").trim();
+  if (!/^(?:async\\s+)?(?:function\\b|\\([^)]*\\)\\s*=>|[A-Za-z_$][\\w$]*\\s*=>)/u.test(source)) {
+    throw coded("INVALID_ARGUMENT", "Evaluation must contain a JavaScript function expression.");
+  }
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    const output = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+      expression: "(" + source + ")()",
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: false,
+      timeout: 10000,
+    });
+    if (output?.exceptionDetails || !output?.result || output.result.subtype === "undefined") {
+      throw coded("INVALID_ARGUMENT", "Chrome evaluation did not return serializable JSON.");
+    }
+    const value = output?.result?.value ?? null;
+    if (JSON.stringify(value).length > 262144) {
+      throw coded("LIMIT_EXCEEDED", "Chrome evaluation exceeded 256 KiB.");
+    }
+    return { tabId: input.tabId, value };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function resolveGuardedAxPoint(chromeTabId, ref, guard, target, focus) {
+  const record = axTargetsByTab.get(chromeTabId);
+  const bound = record?.targets.get(ref);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!record || !bound || !guard || guard.url !== record.url ||
+      tab.url !== record.url || guard.ref !== ref ||
+      guard.role !== bound.role || guard.name !== bound.name) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The native accessibility reference is stale or not authorized.");
+  }
+  const [page] = await chrome.scripting.executeScript({
+    target: { tabId: chromeTabId },
+    func: () => globalThis.__mcpV3PageInstanceId ?? null,
+  });
+  if (page?.result !== record.pageInstanceId) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The Chrome document changed since the accessibility snapshot.");
+  }
+  if (focus && !["textbox", "searchbox", "spinbutton", "combobox"].includes(bound.role)) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Native accessibility reference is not an editable field.");
+  }
+  await chrome.debugger.sendCommand(target, "Accessibility.enable");
+  const refreshed = await chrome.debugger.sendCommand(target, "Accessibility.getPartialAXTree", {
+    backendNodeId: bound.backendDOMNodeId, fetchRelatives: false,
+  });
+  const current = (refreshed?.nodes ?? []).find((node) => node.backendDOMNodeId === bound.backendDOMNodeId);
+  if (!current || current.ignored || current.role?.value !== bound.role ||
+      String(current.name?.value ?? "").replace(/\\s+/gu, " ").trim().slice(0, 500) !== bound.name) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The native accessibility control changed.");
+  }
+  const box = await chrome.debugger.sendCommand(target, "DOM.getBoxModel", {
+    backendNodeId: bound.backendDOMNodeId,
+  });
+  const quad = box?.model?.content;
+  if (!Array.isArray(quad) || quad.length !== 8 || quad.some((n) => !Number.isFinite(n))) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The native accessibility control is not visible.");
+  }
+  const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+  const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+  const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+  const viewport = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+  if (!viewport || x < 0 || y < 0 || x >= viewport.clientWidth || y >= viewport.clientHeight) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The native accessibility target is outside the viewport.");
+  }
+  const hit = await chrome.debugger.sendCommand(target, "DOM.getNodeForLocation", {
+    x: Math.round(x), y: Math.round(y), ignorePointerEventsNone: true,
+  });
+  if (hit?.backendNodeId !== bound.backendDOMNodeId) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The native accessibility target is obscured or changed.");
+  }
+  return { x, y };
 }
 
 async function click(input, signal) {
@@ -367,19 +529,23 @@ async function click(input, signal) {
   if (!input.guard || input.guard.ref !== input.ref) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome interaction requires a bound element guard.");
   }
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId: chromeTabId },
-    func: probeGuardedElement,
-    args: [input.ref, input.guard, false],
-  });
-  const point = injection?.result;
-  if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
+  let point;
+  if (!input.ref.startsWith("ax-")) {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probeGuardedElement,
+      args: [input.ref, input.guard, false],
+    });
+    point = injection?.result;
+    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
+  }
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
     await chrome.debugger.attach(target, "1.3");
     attached = true;
     throwIfAborted(signal, "click", false);
+    if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     const button = input.button ?? "left";
     const clickCount = input.clickCount ?? 1;
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
@@ -408,19 +574,23 @@ async function hover(input, signal) {
   if (!input.guard || input.guard.ref !== input.ref) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Hover requires a guard from the current snapshot.");
   }
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId: chromeTabId },
-    func: probeGuardedElement,
-    args: [input.ref, input.guard, false],
-  });
-  const point = injection?.result;
-  if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Hover reference is stale or obscured.");
+  let point;
+  if (!input.ref.startsWith("ax-")) {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probeGuardedElement,
+      args: [input.ref, input.guard, false],
+    });
+    point = injection?.result;
+    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Hover reference is stale or obscured.");
+  }
   throwIfAborted(signal, "hover", false);
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
     await chrome.debugger.attach(target, "1.3");
     attached = true;
+    if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, button: "none",
     });
@@ -441,7 +611,7 @@ async function scroll(input, signal) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll requires a guard from the current page.");
   }
   let point;
-  if (input.ref) {
+  if (input.ref && !input.ref.startsWith("ax-")) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: probeGuardedElement,
@@ -449,7 +619,7 @@ async function scroll(input, signal) {
     });
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll target is stale or obscured.");
-  } else {
+  } else if (!input.ref) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: () => ({ x: Math.floor(innerWidth / 2), y: Math.floor(innerHeight / 2) }),
@@ -467,6 +637,7 @@ async function scroll(input, signal) {
   try {
     await chrome.debugger.attach(target, "1.3");
     attached = true;
+    if (input.ref?.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: point.x, y: point.y, deltaX, deltaY,
     });
@@ -485,13 +656,15 @@ async function fill(input, signal) {
   if (!input.guard || input.guard.ref !== input.ref) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome field input requires a bound element guard.");
   }
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId: chromeTabId },
-    func: probeGuardedElement,
-    args: [input.ref, input.guard, true],
-  });
-  if (!injection?.result || injection.result.error) {
-    throw coded("BROWSER_CONFIRMATION_INVALID", "The field changed since the personal browser snapshot.");
+  if (!input.ref.startsWith("ax-")) {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      func: probeGuardedElement,
+      args: [input.ref, input.guard, true],
+    });
+    if (!injection?.result || injection.result.error) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "The field changed since the personal browser snapshot.");
+    }
   }
   throwIfAborted(signal, "fill", false);
   const target = { tabId: chromeTabId };
@@ -499,6 +672,14 @@ async function fill(input, signal) {
   try {
     await chrome.debugger.attach(target, "1.3");
     attached = true;
+    if (input.ref.startsWith("ax-")) {
+      const point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
+      for (const [type, button] of [["mouseMoved", "none"], ["mousePressed", "left"], ["mouseReleased", "left"]]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+          type, x: point.x, y: point.y, button, clickCount: 1,
+        });
+      }
+    }
     // Select the focused field's existing content using trusted keyboard input.
     for (const event of [
       { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 },
@@ -509,6 +690,48 @@ async function fill(input, signal) {
     await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
     return { tabId: input.tabId, completed: true };
   } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+  }
+}
+
+async function typeText(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (!input.guard || tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome type input requires a bound page guard.");
+  }
+  if (input.slowly && Array.from(input.text).length > 2000) {
+    throw coded("LIMIT_EXCEEDED", "Slow typing is limited to 2,000 characters.");
+  }
+  throwIfAborted(signal, "type", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    if (input.slowly) {
+      for (const char of input.text) {
+        throwIfAborted(signal, "type", true);
+        await chrome.debugger.sendCommand(target, "Input.insertText", { text: char });
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    } else {
+      await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.text });
+    }
+    if (input.submit) {
+      for (const kind of ["keyDown", "keyUp"]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          type: kind, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13,
+        });
+      }
+    }
+    return { tabId: input.tabId, completed: true };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("type", signal, true);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
@@ -741,6 +964,7 @@ async function finishTask(input) {
       }));
   });
 
+  for (const target of targets) axTargetsByTab.delete(target.chromeTabId);
   if (input.keepOpen === true) {
     const groupedTabIds = [];
     for (const target of targets) {
@@ -835,6 +1059,7 @@ async function updateMetadata(chromeTabId, metadata) {
 }
 
 async function removeOwnedTab(chromeTabId) {
+  axTargetsByTab.delete(chromeTabId);
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     if (!owned[String(chromeTabId)]) return;

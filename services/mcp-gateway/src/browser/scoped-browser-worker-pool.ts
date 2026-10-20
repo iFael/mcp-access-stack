@@ -168,6 +168,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.find(...args));
   }
 
+  evaluate(...args: Parameters<BrowserExecutor["evaluate"]>): ReturnType<BrowserExecutor["evaluate"]> {
+    return this.invoke(args[1], (client) => client.evaluate(...args));
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.invoke(args[1], (client) => client.click(...args));
   }
@@ -182,6 +186,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
 
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.invoke(args[1], (client) => client.fill(...args));
+  }
+
+  type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
+    return this.invoke(args[1], (client) => client.type(...args));
   }
 
   press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {

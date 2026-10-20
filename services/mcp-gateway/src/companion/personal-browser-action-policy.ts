@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   AppError,
   clickAuthorizationAction,
@@ -8,6 +9,8 @@ import {
   type BrowserClickInput,
   type BrowserFillInput,
   type BrowserPressInput,
+  type BrowserTypeInput,
+  type BrowserEvaluateInput,
   type BrowserSnapshotResult,
   type BrowserSequenceInput,
   type BrowserTab,
@@ -48,6 +51,20 @@ export class PersonalBrowserActionPolicy {
     this.confirmations.discardTabs([result.tabId]);
   }
 
+  guardEvaluate(input: BrowserEvaluateInput): PersonalActionGuard {
+    const page = this.requirePage(input.tabId);
+    if (input.ref) this.requireRef(input.tabId, input.ref, page);
+    const digest = createHash("sha256").update(input.function).digest("hex");
+    this.authorize(
+      input.confirmationId,
+      this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url },
+        "execute-script", "evaluate", "sha256:" + digest,
+      ),
+    );
+    return { url: page.url, ...(input.ref ? { ref: input.ref } : {}) };
+  }
+
   guardClick(input: BrowserClickInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
     const reference = this.requireRef(input.tabId, input.ref, page);
@@ -75,6 +92,20 @@ export class PersonalBrowserActionPolicy {
     const page = this.requirePage(input.tabId);
     const reference = this.requireRef(input.tabId, input.ref, page);
     return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
+  }
+
+  guardType(input: BrowserTypeInput): PersonalActionGuard {
+    const page = this.requirePage(input.tabId);
+    if (input.submit) {
+      this.authorize(
+        input.confirmationId,
+        this.interactions.prepareConfirmation(
+          { tabId: input.tabId, url: page.url },
+          "submit-form", "type", "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex"),
+        ),
+      );
+    }
+    return { url: page.url };
   }
 
   guardPress(input: BrowserPressInput): PersonalActionGuard {

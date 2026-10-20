@@ -151,6 +151,10 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.forTab(args[0].tabId).find(...args);
   }
 
+  evaluate(...args: Parameters<BrowserExecutor["evaluate"]>): ReturnType<BrowserExecutor["evaluate"]> {
+    return this.forTab(args[0].tabId).evaluate(...args);
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.forTab(args[0].tabId).click(...args);
   }
@@ -165,6 +169,10 @@ export class BrowserModeRouter implements BrowserExecutor {
 
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.forTab(args[0].tabId).fill(...args);
+  }
+
+  type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
+    return this.forTab(args[0].tabId).type(...args);
   }
 
   press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {

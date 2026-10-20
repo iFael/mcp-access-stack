@@ -12,6 +12,8 @@ import {
   browserScrollInputSchema,
   browserClickInputSchema,
   browserPressInputSchema,
+  browserTypeInputSchema,
+  browserEvaluateInputSchema,
   browserSnapshotInputSchema,
   browserSnapshotResultSchema,
   browserNavigateInputSchema,
@@ -74,6 +76,18 @@ describe("browser interaction parity contracts", () => {
     expect(browserFindResultSchema.safeParse({ tabId: "personal:7", url: "https://example.com", matches: [
       { ref: "fresh-1", role: "button", name: "Enviar", score: 100 },
     ] }).success).toBe(true);
+  });
+
+  it("bounds JavaScript evaluation and forbids unknown arguments", () => {
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: "() => document.title" }).success).toBe(true);
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: " " }).success).toBe(false);
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: "() => 1", unsafe: true }).success).toBe(false);
+  });
+
+  it("bounds autonomous typing and submission", () => {
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "hello", slowly: true, submit: true }).success).toBe(true);
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "x".repeat(100001) }).success).toBe(false);
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "a", unknown: true }).success).toBe(false);
   });
 
   it("validates bounded hover, scroll, click and repeat keyboard arguments", () => {

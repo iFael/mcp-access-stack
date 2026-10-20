@@ -19,6 +19,39 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("binds JavaScript confirmation to the exact function digest", () => {
+    const policy = prepare();
+    let confirmationId = "";
+    try {
+      policy.guardEvaluate({ tabId: "personal:7", function: "() => 1" });
+    } catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+    }
+    expect(confirmationId).toBeTruthy();
+    expect(() => policy.guardEvaluate({ tabId: "personal:7", function: "() => 2", confirmationId }))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardEvaluate({ tabId: "personal:7", function: "() => 1", confirmationId }))
+      .toEqual({ url: sample.url });
+  });
+
+  it("requires a bound confirmation when typing submits the focused form", () => {
+    const policy = prepare();
+    expect(policy.guardType({ tabId: "personal:7", text: "hello" })).toEqual({ url: sample.url });
+    let confirmationId = "";
+    try { policy.guardType({ tabId: "personal:7", text: "hello", submit: true }); }
+    catch (error) {
+      const typed = error as { code: string; message: string };
+      expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+      confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId;
+    }
+    expect(() => policy.guardType({ tabId: "personal:7", text: "different", submit: true, confirmationId }))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardType({ tabId: "personal:7", text: "hello", submit: true, confirmationId }))
+      .toMatchObject({ url: sample.url });
+  });
+
   it("requires a confirmation bound to the exact tab, URL, category and control", () => {
     const policy = prepare();
     let confirmationId = "";

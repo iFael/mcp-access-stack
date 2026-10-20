@@ -17,8 +17,11 @@ import type {
   BrowserExtractInput,
   BrowserExtractResult,
   BrowserFillInput,
+  BrowserTypeInput,
   BrowserFindInput,
   BrowserFindResult,
+  BrowserEvaluateInput,
+  BrowserEvaluateResult,
   BrowserFinishTaskInput,
   BrowserFinishTaskResult,
   BrowserFrameClickInput,
@@ -81,10 +84,12 @@ export interface BrowserExecutor {
   navigate(input: BrowserNavigateInput, context?: OperationContext): Promise<BrowserTabResult>;
   snapshot(input: BrowserSnapshotInput, context?: OperationContext): Promise<BrowserSnapshotResult>;
   find(input: BrowserFindInput, context?: OperationContext): Promise<BrowserFindResult>;
+  evaluate(input: BrowserEvaluateInput, context?: OperationContext): Promise<BrowserEvaluateResult>;
   click(input: BrowserClickInput, context?: OperationContext): Promise<BrowserActionResult>;
   hover(input: BrowserHoverInput, context?: OperationContext): Promise<BrowserActionResult>;
   scroll(input: BrowserScrollInput, context?: OperationContext): Promise<BrowserActionResult>;
   fill(input: BrowserFillInput, context?: OperationContext): Promise<BrowserActionResult>;
+  type(input: BrowserTypeInput, context?: OperationContext): Promise<BrowserActionResult>;
   press(input: BrowserPressInput, context?: OperationContext): Promise<BrowserActionResult>;
   wait(input: BrowserWaitInput, context?: OperationContext): Promise<BrowserActionResult>;
   extract(input: BrowserExtractInput, context?: OperationContext): Promise<BrowserExtractResult>;
