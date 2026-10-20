@@ -34,6 +34,16 @@ const pages: Record<string, (url: URL, port: number) => string> = {
       <p id="ok">Salvo ${url.searchParams.get("nome")} ${url.searchParams.get("uf")}</p>
       <input id="busca" onkeydown="if(event.key==='Enter'){document.getElementById('ok').textContent='Enter recebido: '+this.value}">`;
   },
+  "menu-site.test/": (_url, port) => `<html><head><title>Legacy</title></head>
+    <frameset cols="220,*"><frame name="menu" src="http://menu-site.test:${port}/menu">
+    <frame name="main" src="http://content-site.test:${port}/home"></frameset></html>`,
+  "menu-site.test/menu": (_url, port) => `<!doctype html><title>Menu</title><body>
+    <table><tr><td onclick="document.getElementById('sub').style.display='block'">Cadastros</td></tr></table>
+    <div id="sub" style="display:none"><a href="http://content-site.test:${port}/clientes" target="main">Clientes</a></div>
+    <a href="#" onclick="document.getElementById('log').textContent='apagado';return false">Excluir registros</a>
+    <p id="log">intacto</p>`,
+  "content-site.test/home": () => `<!doctype html><title>Home</title><h1 id="title">Início</h1>`,
+  "content-site.test/clientes": () => `<!doctype html><title>Clientes</title><h1 id="title">Clientes</h1>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -130,6 +140,30 @@ async function main(): Promise<void> {
     if (!JSON.stringify(entered.steps.at(-1)).includes("Enter recebido: pedido 42")) {
       throw new Error("Enter did not reach the nested field.");
     }
+
+    // Legacy frameset menu: expand a submenu, follow a link targeting another
+    // (cross-site) frame, and do not collapse an already expanded level.
+    const legacy = await bridge.open({ url: `http://menu-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
+    await bridge.snapshot({ tabId: legacy.tab.tabId });
+    const route = { tabId: legacy.tab.tabId, path: ["Cadastros", "Clientes"], sourceFramePath: ["menu"],
+      targetFramePath: ["main"], checkpoint: { action: "extract" as const, framePath: ["main"], locator: { id: "title" } } };
+    const navigated = await bridge.navigatePath!(route);
+    report("legacy menu path", navigated);
+    if (navigated.checkpoint?.step.value !== "Clientes") throw new Error("Menu path did not load the target frame.");
+    const again = await bridge.navigatePath!(route);
+    if (again.resolved[0]?.strategy !== "already-expanded") throw new Error("An expanded menu level was clicked again.");
+    const danger = { tabId: legacy.tab.tabId, path: ["Excluir registros"], sourceFramePath: ["menu"],
+      checkpoint: { action: "extract" as const, framePath: ["menu"], locator: { id: "log" } } };
+    let pathConfirmation = "";
+    try {
+      await bridge.navigatePath!(danger);
+      throw new Error("A dangerous menu label ran without confirmation.");
+    } catch (error) {
+      pathConfirmation = confirmationIdOf(error);
+    }
+    const deleted = await bridge.navigatePath!({ ...danger, confirmationId: pathConfirmation });
+    report("confirmed dangerous menu path", deleted.checkpoint);
+    if (deleted.checkpoint?.step.value !== "apagado") throw new Error("Confirmed menu path did not run.");
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });

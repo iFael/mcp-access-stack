@@ -26,7 +26,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
   "open", "selectTab", "dialog", "viewport", "upload", "download", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
-  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill", "frameSequence",
+  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill", "frameSequence", "navigatePath",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -57,6 +57,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "profilePage",
   "domIndex",
   "frameSequence",
+  "navigatePath",
   "sequence",
   "screenshot",
   "console",
@@ -328,6 +329,7 @@ async function perform(operation, input, signal, timing) {
     case "profilePage": return profilePage(input, signal);
     case "domIndex": return domIndex(input, signal);
     case "frameSequence": return frameSequence(input, signal);
+    case "navigatePath": return navigatePath(input, signal);
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
@@ -2177,7 +2179,7 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       else if (locator.selector) candidates = Array.from(document.querySelectorAll(locator.selector));
       else if (locator.id) candidates = Array.from(document.querySelectorAll("[id]")).filter((e) => e.id === locator.id);
       else if (locator.name) candidates = Array.from(document.querySelectorAll("[name]")).filter((e) => e.getAttribute("name") === locator.name);
-      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable]")).slice(0, 2001);
+      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable],[onclick]")).slice(0, 2001);
     } catch { return { invalidSelector: true }; }
     if (candidates.length > 2000) return { ambiguous: true };
     candidates = candidates.filter((element) => {
@@ -2197,6 +2199,17 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       if (locator.ancestorText && !element.parentElement?.innerText?.includes(locator.ancestorText)) return false;
       return true;
     });
+    if (step.rootSelector) {
+      let root;
+      try { root = document.querySelector(step.rootSelector); } catch { return { invalidSelector: true }; }
+      candidates = root ? candidates.filter((element) => root.contains(element)) : [];
+    }
+    // A legacy menu cell with an onclick often wraps a link with the same
+    // text; keep the innermost match instead of reporting ambiguity.
+    if (locator.text) {
+      candidates = candidates.filter((element) =>
+        !candidates.some((other) => other !== element && element.contains(other)));
+    }
     if (locator.index !== undefined) {
       candidates = candidates[locator.index] ? [candidates[locator.index]] : [];
     } else if (candidates.length > 1) return { ambiguous: true };
@@ -2752,6 +2765,105 @@ async function frameSequence(input, signal) {
   return { tabId: input.tabId, completed: true, steps: done,
     telemetry: { totalMs: Math.max(0, performance.now() - started),
       strategy: mutated ? "chrome-frame-native-input" : "chrome-frame-readonly", retries: 0 } };
+}
+
+// Legacy menu paths. Each label is awaited (menus expand asynchronously),
+// described and clicked with trusted input; a level whose next label is
+// already visible is not clicked again, so an expanded menu is not collapsed.
+// Form submit controls are refused unless the bridge confirmed the path.
+async function navigatePath(input, signal) {
+  const started = performance.now();
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  if (!input.guard?.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Legacy navigation requires a bridge page guard.");
+  }
+  const tab = await chrome.tabs.get(chromeTabId);
+  if (tab.url !== input.guard.url) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "The owned tab changed since the last snapshot.");
+  }
+  const segmented = Array.isArray(input.segments) && input.segments.length > 0;
+  const segments = segmented ? input.segments : [{ framePath: input.sourceFramePath || [], path: input.path,
+    ...(input.targetFramePath ? { targetFramePath: input.targetFramePath } : {}) }];
+  if (segments.length > 10 || segments.some((segment) => !Array.isArray(segment.path) || segment.path.length < 1) ||
+      segments.reduce((total, segment) => total + segment.path.length, 0) > 10) {
+    throw coded("INVALID_ARGUMENT", "A legacy path has one to ten levels in at most ten segments.");
+  }
+  const deadline = Date.now() + Math.min(120000, Math.max(1, input.timeoutMs ?? 60000));
+  const remaining = () => Math.max(1, deadline - Date.now());
+  const read = (step) => frameSequence({ tabId: input.tabId, steps: [step], timeoutMs: remaining() }, signal);
+  const resolved = [];
+  const segmentResults = [];
+  let level = 0;
+  let mutated = false;
+  try {
+    for (const [segmentIndex, segment] of segments.entries()) {
+      const segmentStarted = performance.now();
+      const framePath = segment.framePath || [];
+      const scope = { framePath, ...(segment.rootSelector ? { rootSelector: segment.rootSelector } : {}) };
+      for (const [position, label] of segment.path.entries()) {
+        throwIfAborted(signal, "navigatePath", mutated);
+        if (Date.now() >= deadline) throw coded("NAVIGATION_TIMEOUT", "Legacy navigation path exceeded its deadline.");
+        await read({ action: "waitFor", ...scope, locator: { text: label }, state: "visible", timeoutMs: remaining() });
+        let expanded = false;
+        const next = segment.path[position + 1];
+        if (next !== undefined) {
+          try {
+            await read({ action: "assert", ...scope, locator: { text: next }, condition: "visible" });
+            expanded = true;
+          } catch (error) {
+            if (!["STATE_NOT_REACHED", "LOCATOR_NOT_FOUND", "LOCATOR_AMBIGUOUS"].includes(error?.code)) throw error;
+          }
+        }
+        const step = { action: "click", ...scope, locator: { text: label } };
+        const described = await probePersonalLegacyTarget(input, chromeTabId, step, true, Date.now(), signal, mutated);
+        const target = described.observed.target;
+        if (target.submitLike && input.authorized !== true) {
+          throw coded("ACTION_BLOCKED_BY_POLICY", "Legacy path level " + level +
+            " is a form submit control; use browser_frame_sequence so the submit can be confirmed.");
+        }
+        if (!expanded) {
+          mutated = true;
+          await runPersonalLegacyMutation(input, chromeTabId, level, step, target, deadline, signal, true);
+        }
+        resolved.push({ level, label,
+          ref: "lpath_" + personalLegacySignature([framePath, level, label, target.role]),
+          selector: (target.role + ":text=" + label).slice(0, 2000),
+          strategy: expanded ? "already-expanded" : "chrome-frame-native-input",
+          ...(segmented ? { segment: segmentIndex } : {}), framePath });
+        level += 1;
+      }
+      if (segment.targetFramePath?.length) {
+        await read({ action: "waitFor", framePath: segment.targetFramePath, state: "ready", timeoutMs: remaining() });
+      }
+      if (segment.waitFor) {
+        const { timeoutMs, ...wait } = segment.waitFor;
+        await read({ action: "waitFor", framePath: segment.targetFramePath || framePath, ...wait,
+          timeoutMs: Math.min(timeoutMs ?? 10000, remaining()) });
+      }
+      segmentResults.push({ index: segmentIndex, framePath, path: segment.path,
+        ...(segment.targetFramePath ? { targetFramePath: segment.targetFramePath } : {}),
+        destinationReady: true,
+        telemetry: { totalMs: Math.max(0, performance.now() - segmentStarted) } });
+    }
+    let checkpoint;
+    if (input.checkpoint) {
+      const checkpointStarted = performance.now();
+      const observed = await read(input.checkpoint);
+      checkpoint = { step: observed.steps[0],
+        telemetry: { totalMs: Math.max(0, performance.now() - checkpointStarted) } };
+    }
+    return { tabId: input.tabId, completed: true, path: input.path, resolved, destinationReady: true,
+      ...(segmented ? { segments: segmentResults } : {}),
+      cache: { hit: false, revalidated: false, invalidated: false },
+      ...(checkpoint ? { checkpoint } : {}),
+      telemetry: { totalMs: Math.max(0, performance.now() - started),
+        strategy: "chrome-frame-native-input", retries: 0 } };
+  } catch (error) {
+    if (!mutated || !error?.code) throw error;
+    throw coded(error.code, error.message + " Completed path levels: [" +
+      resolved.map((item) => item.level).join(",") + "].");
+  }
 }
 
 async function sequence(input, signal, timing) {

@@ -16,6 +16,7 @@ import {
   type BrowserTypeInput,
   type BrowserEvaluateInput,
   type BrowserFrameSequenceInput,
+  type BrowserNavigatePathInput,
   type BrowserSnapshotResult,
   type BrowserSequenceInput,
   type BrowserTab,
@@ -348,6 +349,27 @@ export class PersonalBrowserActionPolicy {
     const missing = required.find((entry) => entry.confirmationId === undefined);
     if (missing) this.authorize(undefined, missing.binding);
     for (const entry of required) this.authorize(entry.confirmationId, entry.binding);
+  }
+
+  /**
+   * A legacy menu path needs one confirmation when any requested label is
+   * dangerous; the extension separately refuses unconfirmed submit controls.
+   */
+  guardNavigatePath(input: BrowserNavigatePathInput): boolean {
+    const page = this.requirePage(input.tabId);
+    const tab = { tabId: input.tabId, url: page.url };
+    const category = input.path
+      .map((label) => this.interactions.prepareDangerousTarget(
+        tab, label, "legacy-navigate-path", "legacy-menu-path")?.category)
+      .find((value) => value !== undefined);
+    if (!category) return false;
+    const frames = input.segments
+      ? input.segments.map((segment) => segment.framePath.join("/"))
+      : [(input.sourceFramePath ?? []).join("/")];
+    this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+      tab, category, "legacy-navigate-path", `${frames.join(",")}|${input.path.join(" > ")}`,
+    ));
+    return true;
   }
 
   discard(tabIds: readonly string[]): void {

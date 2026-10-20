@@ -387,6 +387,66 @@ describe("personal browser extension assets", () => {
     expect(listeners.begin.size + listeners.end.size).toBe(0);
   });
 
+  it("walks legacy menu paths with trusted clicks, keeps expanded levels and refuses unconfirmed submits", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const reads: Array<Record<string, unknown>> = [];
+    const clicks: string[] = [];
+    const visible = new Set(["Cadastros"]);
+    let submitLabel = "";
+    const context = vm.createContext({
+      performance: { now: () => 1 }, Date, Math, JSON,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}), throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { tabs: { get: async () => ({ url: "https://legacy.example/" }) } },
+      frameSequence: async (input: { steps: Array<Record<string, unknown>> }) => {
+        const step = input.steps[0]!;
+        reads.push(step);
+        const label = (step.locator as { text?: string } | undefined)?.text;
+        if (step.action === "assert" && (!label || !visible.has(label))) {
+          throw Object.assign(new Error("not visible"), { code: "STATE_NOT_REACHED" });
+        }
+        return { steps: [{ index: 0, action: step.action, completed: true,
+          ...(step.action === "extract" ? { value: "Clientes" } : {}) }] };
+      },
+      probePersonalLegacyTarget: async (_input: unknown, _tab: number, step: { locator: { text: string } }) => ({
+        observed: { target: { label: step.locator.text, role: step.locator.text === submitLabel ? "input:submit" : "a",
+          submitLike: step.locator.text === submitLabel } } }),
+      runPersonalLegacyMutation: async (_input: unknown, _tab: number, _level: number,
+        step: { locator: { text: string } }) => {
+        clicks.push(step.locator.text);
+        if (step.locator.text === "Cadastros") visible.add("Clientes");
+        return { completed: true };
+      },
+    });
+    for (const fn of ["personalLegacySignature", "navigatePath"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const navigatePath = vm.runInContext("navigatePath", context) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const route = { tabId: "personal:7", guard: { url: "https://legacy.example/" },
+      path: ["Cadastros", "Clientes"], sourceFramePath: ["menu"], targetFramePath: ["main"],
+      checkpoint: { action: "extract", framePath: ["main"], locator: { id: "title" } } };
+    await expect(navigatePath({ ...route, guard: undefined }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    const first = await navigatePath(route);
+    expect(clicks).toEqual(["Cadastros", "Clientes"]);
+    expect(first).toMatchObject({ completed: true, destinationReady: true,
+      resolved: [{ level: 0, label: "Cadastros", strategy: "chrome-frame-native-input", framePath: ["menu"] },
+        { level: 1, label: "Clientes" }],
+      checkpoint: { step: { action: "extract", value: "Clientes" } } });
+    expect(reads).toContainEqual(expect.objectContaining({ action: "waitFor", framePath: ["main"], state: "ready" }));
+    clicks.length = 0;
+    const second = await navigatePath(route) as { resolved: Array<{ strategy: string }> };
+    expect(clicks).toEqual(["Clientes"]);
+    expect(second.resolved[0]!.strategy).toBe("already-expanded");
+    clicks.length = 0;
+    submitLabel = "Clientes";
+    await expect(navigatePath(route)).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+    expect(clicks).toEqual([]);
+    await expect(navigatePath({ ...route, authorized: true })).resolves.toMatchObject({ completed: true });
+    expect(clicks).toEqual(["Clientes"]);
+  });
+
   it("probes read-only legacy elements without exposing sensitive form field values", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const node = {

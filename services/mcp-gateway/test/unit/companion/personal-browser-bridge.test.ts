@@ -142,6 +142,56 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("routes legacy menu paths with a page guard and one confirmation for dangerous labels", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const sent: Array<Record<string, unknown>> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const req = JSON.parse(data.toString()) as WireMessage;
+      if (req.type !== "request") return;
+      const input = req.input as { path?: string[] };
+      let result: unknown = { tabId, url: "https://legacy.example/", content: "Legacy", refs: [] };
+      if (req.operation === "navigatePath") {
+        sent.push(req.input as Record<string, unknown>);
+        result = { tabId, completed: true, path: input.path,
+          resolved: (input.path ?? []).map((label, level) => ({ level, label, ref: `lpath_${level}`,
+            selector: `a:text=${label}`, strategy: "chrome-frame-native-input", framePath: ["menu"] })),
+          destinationReady: true, cache: { hit: false, revalidated: false, invalidated: false },
+          telemetry: { totalMs: 4, strategy: "chrome-frame-native-input", retries: 0 } };
+      }
+      extension.send(JSON.stringify({ type: "response", id: req.id, ok: true, result }));
+    };
+    extension.on("message", respond);
+    try {
+      const route = { tabId, path: ["Cadastros", "Clientes"], sourceFramePath: ["menu"] };
+      await expect(bridge.navigatePath(route)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      expect(sent).toHaveLength(0);
+      await bridge.snapshot({ tabId });
+      await expect(bridge.navigatePath(route)).resolves.toMatchObject({ completed: true });
+      expect(sent[0]).toMatchObject({ authorized: false, guard: { url: "https://legacy.example/" } });
+      const danger = { tabId, path: ["Pedidos", "Excluir pedido"], sourceFramePath: ["menu"] };
+      let confirmationId = "";
+      try {
+        await bridge.navigatePath(danger);
+      } catch (error) {
+        const typed = error as { code: string; message: string };
+        expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+        const parsed = JSON.parse(typed.message.slice(typed.message.indexOf("{")));
+        expect(parsed).toMatchObject({ category: "delete-or-cancel", action: "legacy-navigate-path",
+          target: "menu|Pedidos > Excluir pedido" });
+        confirmationId = parsed.confirmationId;
+      }
+      expect(sent).toHaveLength(1);
+      await expect(bridge.navigatePath({ ...danger, confirmationId })).resolves.toMatchObject({ completed: true });
+      expect(sent[1]).toMatchObject({ authorized: true });
+      await expect(bridge.navigatePath({ ...danger, confirmationId }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("refuses legacy frame mutations when the extension lacks the mutation capability", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);

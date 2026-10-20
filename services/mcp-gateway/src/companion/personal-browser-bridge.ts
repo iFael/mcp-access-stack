@@ -497,10 +497,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("frameSequence", { ...input, guard, phase: "execute", expectedTargets: targets }, context);
   }
 
-  navigatePath(
-    ..._args: Parameters<NonNullable<BrowserExecutor["navigatePath"]>>
+  async navigatePath(
+    ...args: Parameters<NonNullable<BrowserExecutor["navigatePath"]>>
   ): ReturnType<NonNullable<BrowserExecutor["navigatePath"]>> {
-    throw unsupported("browser_navigate_path");
+    const [input, context] = args;
+    this.requireGuardedActions();
+    const guard = this.actions.guardPage(input.tabId);
+    const authorized = this.actions.guardNavigatePath(input);
+    return this.call("navigatePath", { ...input, guard, authorized }, context);
   }
 
   async screenshot(
@@ -1306,6 +1310,11 @@ function resolveCallTimeoutMs(
   if (operation === "frameSequence" && isRecord(input) &&
       typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
     timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);
+  }
+  if (operation === "navigatePath" && isRecord(input)) {
+    const pathTimeout = typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
+      ? input.timeoutMs : 60_000;
+    timeoutMs = Math.max(timeoutMs, Math.min(120_000, pathTimeout) + 5_000);
   }
   if (operation === "wait" && isRecord(input) &&
       typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
