@@ -1036,6 +1036,9 @@ export const browserNetworkListInputSchema = z
     tabId: tabIdSchema,
     includeStatic: z.boolean().optional(),
     filter: browserNetworkFilterSchema.optional(),
+    capture: z.enum(["start", "read", "stop"]).optional(),
+    captureHeaders: z.boolean().optional(),
+    captureBodies: z.boolean().optional(),
     clear: z.boolean().optional(),
   })
   .strict();
@@ -1139,6 +1142,13 @@ export const browserPdfResultSchema = browserArtifactSchema
   })
   .strict();
 export type BrowserPdfResult = z.infer<typeof browserPdfResultSchema>;
+export const browserPdfTransportResultSchema = z.object({
+  tabId: tabIdSchema,
+  kind: z.literal("pdf"),
+  contentBase64: z.string().min(12).max(17 * 1024 * 1024),
+  sizeBytes: z.number().int().min(8).max(12 * 1024 * 1024),
+  createdAt: z.string().datetime(),
+}).strict();
 
 export const browserDiagnosticsInputSchema = z
   .object({

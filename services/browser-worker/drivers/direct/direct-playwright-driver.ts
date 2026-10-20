@@ -1145,7 +1145,21 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         value = response ? await response.allHeaders() : {};
         break;
       case "response-body":
-        value = "Response bodies are not retained by the direct engine.";
+        if (!response) {
+          value = "[no response]";
+          break;
+        }
+        {
+          const mime = (response.headers()["content-type"] ?? "").toLowerCase();
+          if (!/^(?:application\/(?:json|(?:[\w.-]+\+)?json|xml|(?:[\w.-]+\+)?xml|javascript|x-www-form-urlencoded)|text\/)/u.test(mime)) {
+            value = "[binary response not available as text]";
+            break;
+          }
+          const body = await response.body();
+          value = body.byteLength > 256 * 1024
+            ? body.subarray(0, 256 * 1024).toString("utf8") + "\n[truncated]"
+            : body.toString("utf8");
+        }
         break;
     }
     return this.normalizeDiagnostic(value);

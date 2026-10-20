@@ -80,6 +80,9 @@ const browserNetworkToolInputSchema = z
     tabId: c.browserTraceInputSchema.shape.tabId,
     includeStatic: c.browserNetworkListInputSchema.shape.includeStatic,
     filter: c.browserNetworkListInputSchema.shape.filter,
+    capture: c.browserNetworkListInputSchema.shape.capture,
+    captureHeaders: c.browserNetworkListInputSchema.shape.captureHeaders,
+    captureBodies: c.browserNetworkListInputSchema.shape.captureBodies,
     clear: c.browserNetworkListInputSchema.shape.clear,
     index: c.browserNetworkInspectInputSchema.shape.index.optional(),
     detail: c.browserNetworkInspectInputSchema.shape.detail,
@@ -99,7 +102,7 @@ const browserNetworkToolInputSchema = z
     }
     rejectDefinedFields(
       input,
-      ["includeStatic", "filter", "clear"],
+      ["includeStatic", "filter", "capture", "captureHeaders", "captureBodies", "clear"],
       context,
       "inspect",
     );
@@ -511,7 +514,7 @@ function definitions(
       () => e.console(assumeParsed(v)),
       (activeContext) => e.console(assumeParsed(v), activeContext),
     )),
-    d("browser_network", "Lists sanitized network request metadata from an MCP-owned tab in interactive or diagnostic mode. Detailed request inspection remains diagnostic-only.", browserNetworkToolInputSchema, c.browserNetworkResultSchema, false, (v, context) => runNetworkTool(e, assumeParsed(v), context)),
+    d("browser_network", "Capture network events on the owned tab (action=list, capture=start), read while browsing (capture=read), then stop (capture=stop). Optional captureHeaders/captureBodies opt into bounded sanitized header and textual request/response body inspection; action=inspect with index/detail retrieves one stored request. Never returns cookies, credentials, raw binary or authentication secrets.", browserNetworkToolInputSchema, c.browserNetworkResultSchema, false, (v, context) => runNetworkTool(e, assumeParsed(v), context)),
     d("browser_trace", "Starts or stops trace recording for an MCP-owned tab in diagnostic mode.", browserTraceToolInputSchema, browserTraceToolResultSchema, false, (v, context) => runTraceTool(e, assumeParsed(v), context)),
     d("browser_video", "Starts or stops video recording for an MCP-owned tab in diagnostic mode.", browserVideoToolInputSchema, browserVideoToolResultSchema, false, (v, context) => runVideoTool(e, assumeParsed(v), context)),
     d("browser_pdf", "Stores a PDF of an MCP-owned tab in private runtime storage in diagnostic mode.", c.browserPdfInputSchema, c.browserPdfResultSchema, false, (v, context) => callWithOptionalContext(
@@ -606,6 +609,9 @@ async function runNetworkTool(
         ? {}
         : { includeStatic: input.includeStatic }),
       ...(input.filter === undefined ? {} : { filter: input.filter }),
+      ...(input.capture === undefined ? {} : { capture: input.capture }),
+      ...(input.captureHeaders === undefined ? {} : { captureHeaders: input.captureHeaders }),
+      ...(input.captureBodies === undefined ? {} : { captureBodies: input.captureBodies }),
       ...(input.clear === undefined ? {} : { clear: input.clear }),
     });
     return callWithOptionalContext(

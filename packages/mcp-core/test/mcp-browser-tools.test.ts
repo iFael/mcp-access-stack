@@ -20,6 +20,7 @@ import {
   browserSnapshotInputSchema,
   browserScreenshotInputSchema,
   browserConsoleInputSchema,
+  browserNetworkListInputSchema,
   browserSnapshotResultSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
@@ -95,6 +96,20 @@ describe("browser targeted screenshot and console contracts", () => {
     expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "(" }).success).toBe(false);
     expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "x".repeat(501) }).success).toBe(false);
     expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", limit: 1001 }).success).toBe(false);
+  });
+});
+
+describe("browser network capture contract", () => {
+  it("supports explicit continuous capture with bounded detail permissions", () => {
+    expect(browserNetworkListInputSchema.safeParse({
+      tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({
+      tabId: "personal:7", capture: "read", filter: "api[.]example",
+    }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", capture: "stop" }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", capture: "forever" }).success).toBe(false);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", captureBodies: "yes" }).success).toBe(false);
   });
 });
 
@@ -324,6 +339,29 @@ async function callTool(
 }
 
 describe("registerBrowserTools", () => {
+  it("forwards the network start/read/stop and detail options through the public browser_network tool", async () => {
+    const executor = mockExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    await callTool(server, "browser_network", {
+      action: "list", tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    });
+    expect(executor.networkList).toHaveBeenCalledWith({
+      tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    });
+    await callTool(server, "browser_network", {
+      action: "inspect", tabId: "personal:7", index: 1, detail: "response-body",
+    });
+    expect(executor.networkInspect).toHaveBeenCalledWith({
+      tabId: "personal:7", index: 1, detail: "response-body",
+    });
+    const countBefore = (executor.networkInspect as jest.Mock).mock.calls.length;
+    await callTool(server, "browser_network", {
+      action: "inspect", tabId: "personal:7", index: 1, captureBodies: true,
+    });
+    expect((executor.networkInspect as jest.Mock).mock.calls).toHaveLength(countBefore);
+  });
+
   it("registers the complete explicit browser tool surface", () => {
     const server = new McpServer(
       { name: "test", version: "0.0.0" },

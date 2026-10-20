@@ -23735,7 +23735,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Lists sanitized network request metadata from an MCP-owned tab in interactive or diagnostic mode. Detailed request inspection remains diagnostic-only.",
+    "description": "Capture network events on the owned tab (action=list, capture=start), read while browsing (capture=read), then stop (capture=stop). Optional captureHeaders/captureBodies opt into bounded sanitized header and textual request/response body inspection; action=inspect with index/detail retrieves one stored request. Never returns cookies, credentials, raw binary or authentication secrets.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -23749,6 +23749,20 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "inspect"
           ],
           "type": "string"
+        },
+        "capture": {
+          "enum": [
+            "start",
+            "read",
+            "stop"
+          ],
+          "type": "string"
+        },
+        "captureBodies": {
+          "type": "boolean"
+        },
+        "captureHeaders": {
+          "type": "boolean"
         },
         "clear": {
           "type": "boolean"
@@ -24316,13 +24330,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "65e9b0478b92f7e2301df76ad067070503f0395c8f5fd9e04cd26203872deabf",
-  "serverVersion": "0.4.0-catalog.c65e9b0478b92.s01315ddf6996",
+  "contractRevision": "03a726b4cdd70a8b30beee542b01a0fc219f15ba476052bd6d9d7f8400cba91f",
+  "serverVersion": "0.4.0-catalog.c03a726b4cdd7.s01315ddf6996",
   "toolCount": 107,
   "toolSetRevision": "01315ddf6996bce79f3c2fa045539e803d163e255f83fd3d2beb64798aaaa8c1"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c65e9b0478b92.s01315ddf6996"
+  "version": "0.4.0-catalog.c03a726b4cdd7.s01315ddf6996"
 } as const;

@@ -8,8 +8,8 @@ export interface PersonalBrowserExtensionAssets {
   popupScript: string;
 }
 
-export function sanitizePersonalDiagnosticText(value: string): string {
-  return value.slice(0, 8_000)
+export function sanitizePersonalDiagnosticText(value: string, maxChars = 8_000): string {
+  return value.slice(0, maxChars)
     .replace(/(authorization\s*[:=]\s*)(?:bearer|basic)\s+[^\s,;]+/gi, "$1[redacted]")
     .replace(/((?:set-)?cookie\s*[:=]\s*)[^\r\n]+/gi, "$1[redacted]")
     .replace(/((?:x-)?api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]")
@@ -25,7 +25,8 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
-  "open", "selectTab", "navigate", "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
+  "open", "selectTab", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
+  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -49,6 +50,9 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "sequence",
   "screenshot",
   "console",
+  "networkList",
+  "networkInspect",
+  "pdf",
   "goBack",
   "goForward",
   "tabGroups",
@@ -107,6 +111,31 @@ const mutationQueues = new Map();
 const taskGroups = new Map();
 const axTargetsByTab = new Map();
 const personalConsoleEntries = new Map();
+const personalNetworkEntries = new Map();
+const personalNetworkCaptures = new Map();
+function borrowPersonalDebugger(target) {
+  const session = globalThis.__mcpV3PersonalNetworkCaptures?.get(String(target.tabId));
+  if (!session) return null;
+  session.borrowers = (session.borrowers ?? 0) + 1;
+  return session;
+}
+
+async function attachGuardedDebugger(target) {
+  if (borrowPersonalDebugger(target)) return false;
+  await chrome.debugger.attach(target, "1.3");
+  return true;
+}
+
+async function detachGuardedDebugger(target, attached) {
+  if (attached) {
+    await chrome.debugger.detach(target);
+    return;
+  }
+  const borrowed = globalThis.__mcpV3PersonalNetworkCaptures?.get(String(target.tabId));
+  if (borrowed) borrowed.borrowers = Math.max(0, (borrowed.borrowers ?? 0) - 1);
+}
+
+
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -247,6 +276,9 @@ async function perform(operation, input, signal, timing) {
     case "sequence": return sequence(input, signal, timing);
     case "screenshot": return screenshot(input, signal);
     case "console": return readPersonalConsole(input, signal);
+    case "networkList": return readPersonalNetwork(input, signal);
+    case "networkInspect": return inspectPersonalNetwork(input, signal);
+    case "pdf": return printPersonalPdf(input, signal);
     case "goBack": return goBack(input, signal);
     case "goForward": return goForward(input, signal);
     case "closeTab": return closeTab(input, signal);
@@ -428,8 +460,7 @@ async function readNativeAccessibility(chromeTabId, expectedUrl, pageInstanceId,
   let attached = false;
   try {
     throwIfAborted(signal, "snapshot", false);
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     await chrome.debugger.sendCommand(target, "Accessibility.enable");
     throwIfAborted(signal, "snapshot", false);
     const tree = await chrome.debugger.sendCommand(target, "Accessibility.getFullAXTree");
@@ -466,7 +497,7 @@ async function readNativeAccessibility(chromeTabId, expectedUrl, pageInstanceId,
     if (error && typeof error.code === "string") throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native Chrome accessibility requires available debugger access on this MCP-owned tab.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -485,8 +516,7 @@ async function evaluatePage(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     const output = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
       expression: "(" + source + ")()",
       awaitPromise: true,
@@ -506,7 +536,7 @@ async function evaluatePage(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -581,8 +611,7 @@ async function click(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     throwIfAborted(signal, "click", false);
     if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     const button = input.button ?? "left";
@@ -603,7 +632,7 @@ async function click(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -627,8 +656,7 @@ async function hover(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, button: "none",
@@ -638,7 +666,7 @@ async function hover(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -671,8 +699,7 @@ async function drag(input, signal) {
   let attached = false;
   let pressed = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (input.from.ref.startsWith("ax-")) from = await resolveGuardedAxPoint(
       chromeTabId, input.from.ref, input.fromGuard, target, false,
     );
@@ -706,12 +733,12 @@ async function drag(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for drag-and-drop.");
   } finally {
-    if (attached) {
+    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId))) {
       if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
         button: "left", buttons: 0,
       }).catch(() => undefined);
-      await chrome.debugger.detach(target).catch(() => undefined);
+      await detachGuardedDebugger(target, attached).catch(() => undefined);
     }
   }
 }
@@ -755,8 +782,7 @@ async function scroll(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (input.ref?.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: point.x, y: point.y, deltaX, deltaY,
@@ -766,7 +792,7 @@ async function scroll(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -790,8 +816,7 @@ async function fill(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (input.ref.startsWith("ax-")) {
       const point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
       for (const [type, button] of [["mouseMoved", "none"], ["mousePressed", "left"], ["mouseReleased", "left"]]) {
@@ -813,7 +838,7 @@ async function fill(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -872,8 +897,7 @@ async function formInput(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (ax) {
       point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
       const kind = input.guard.role;
@@ -972,7 +996,7 @@ async function formInput(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome form control input is unavailable.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -990,8 +1014,7 @@ async function typeText(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     if (input.slowly) {
       for (const char of input.text) {
         throwIfAborted(signal, "type", true);
@@ -1014,7 +1037,7 @@ async function typeText(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -1033,8 +1056,7 @@ async function press(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     for (let n = 0; n < repeat; n += 1) {
       for (const key of keys) {
         throwIfAborted(signal, "press", true);
@@ -1055,7 +1077,7 @@ async function press(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -1185,8 +1207,7 @@ async function readPersonalConsole(input, signal) {
   try {
     chrome.debugger.onEvent.addListener(listener);
     const target = { tabId: chromeTabId };
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     await chrome.debugger.sendCommand(target, "Runtime.enable");
     await chrome.debugger.sendCommand(target, "Log.enable");
     await new Promise((resolve) => setTimeout(resolve, 120));
@@ -1213,7 +1234,296 @@ async function readPersonalConsole(input, signal) {
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger console capture is unavailable or occupied.");
   } finally {
     chrome.debugger.onEvent.removeListener(listener);
+    await detachGuardedDebugger({ tabId: chromeTabId }, attached).catch(() => undefined);
+  }
+}
+
+function safeNetworkUrl(raw) {
+  try {
+    const url = new URL(String(raw));
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "[unsupported URL]";
+    return (url.origin + url.pathname).slice(0, 1500);
+  } catch {
+    return "[invalid URL]";
+  }
+}
+
+function safeNetworkHeaders(raw) {
+  const sanitized = {};
+  if (!raw || typeof raw !== "object") return sanitized;
+  for (const [key, value] of Object.entries(raw).slice(0, 100)) {
+    const name = String(key).slice(0, 90);
+    if (!/^[A-Za-z0-9-]+$/u.test(name)) continue;
+    if (/^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-csrf-token|x-xsrf-token|sec-websocket-protocol)$/iu.test(name) ||
+        /(?:token|secret|key|password|credential|session|auth)/iu.test(name)) {
+      sanitized[name] = "[redacted]";
+    } else {
+      sanitized[name] = sanitizePersonalDiagnosticText(String(value).slice(0, 1200));
+    }
+  }
+  return sanitized;
+}
+
+function safeNetworkBody(raw, mime, base64Encoded) {
+  const contentType = String(mime ?? "").toLowerCase();
+  if (!/^(?:text\\/|application\\/(?:json|(?:[\\w.-]+\\+)?json|xml|(?:[\\w.-]+\\+)?xml|javascript|x-www-form-urlencoded))/u.test(contentType)) {
+    return "[binary response omitted]";
+  }
+  let text = String(raw ?? "");
+  if (base64Encoded) {
+    if (text.length > 350000 || typeof atob !== "function") return "[response exceeds decoding limit]";
+    try {
+      const decoded = atob(text);
+      const bytes = Uint8Array.from(decoded, (c) => c.charCodeAt(0));
+      text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } catch {
+      return "[response decode unavailable]";
+    }
+  }
+  if (text.length > 256 * 1024) text = text.slice(0, 256 * 1024) + "[truncated]";
+  return sanitizePersonalDiagnosticText(text, 256 * 1024).slice(0, 256 * 1024);
+}
+
+async function startPersonalNetworkCapture(chromeTabId, input) {
+  const key = String(chromeTabId);
+  if (personalNetworkCaptures.has(key)) {
+    throw coded("INVALID_ARGUMENT", "Network capture already running on this tab. Read it or stop before restarting.");
+  }
+  const state = {
+    entries: [], totalBytes: 0, truncated: false, pending: new Set(),
+    captureHeaders: input.captureHeaders === true,
+    captureBodies: input.captureBodies === true,
+    active: true, listener: undefined,
+  };
+  const listener = (source, method, params) => {
+    if (source?.tabId !== chromeTabId || !state.active) return;
+    const id = String(params?.requestId ?? "").slice(0, 128);
+    if (!id) return;
+    let entry = state.entries.find((item) => item.id === id);
+    if (method === "Network.requestWillBeSent") {
+      if (!params?.request?.url) return;
+      if (state.entries.length >= 256) {
+        state.entries.shift();
+        state.truncated = true;
+      }
+      entry = {
+        id, method: String(params.request.method ?? "GET").slice(0, 16),
+        url: safeNetworkUrl(params.request.url),
+        resourceType: String(params.type ?? "Other").slice(0, 30),
+        status: "pending", at: new Date().toISOString(), mime: "",
+      };
+      if (state.captureHeaders) entry.requestHeaders = safeNetworkHeaders(params.request.headers);
+      if (state.captureBodies && params.request.postData !== undefined) {
+        entry.requestBody = safeNetworkBody(params.request.postData,
+          params.request.headers?.["Content-Type"] ?? params.request.headers?.["content-type"] ?? "text/plain", false);
+      }
+      const recordBytes = JSON.stringify(entry).length;
+      if (state.totalBytes + recordBytes > 8 * 1024 * 1024) {
+        state.truncated = true;
+        return;
+      }
+      state.totalBytes += recordBytes;
+      state.entries.push(entry);
+    } else if (entry && method === "Network.responseReceived") {
+      const status = Number(params?.response?.status);
+      entry.status = Number.isInteger(status) && status >= 100 && status <= 599 ? String(status) : "unknown";
+      entry.mime = String(params?.response?.mimeType ?? "").toLowerCase().slice(0, 150);
+      if (state.captureHeaders) {
+        const safe = safeNetworkHeaders(params.response.headers);
+        const size = JSON.stringify(safe).length;
+        if (state.totalBytes + size <= 8 * 1024 * 1024) {
+          entry.responseHeaders = safe;
+          state.totalBytes += size;
+        } else {
+          state.truncated = true;
+        }
+      }
+    } else if (entry && method === "Network.loadingFailed") {
+      entry.status = "failed";
+    } else if (entry && method === "Network.loadingFinished" && state.captureBodies && state.totalBytes < 8 * 1024 * 1024) {
+      if (!/^(?:text\\/|application\\/(?:json|(?:[\\w.-]+\\+)?json|xml|(?:[\\w.-]+\\+)?xml|javascript|x-www-form-urlencoded))/u.test(entry.mime)) {
+        entry.responseBody = "[binary response omitted]";
+        return;
+      }
+      const target = { tabId: chromeTabId };
+      const record = entry;
+      const pending = chrome.debugger.sendCommand(target, "Network.getResponseBody", { requestId: id })
+        .then((result) => {
+          if (!result || typeof result.body !== "string") return;
+          if (result.body.length > 400000) {
+            record.responseBody = "[response exceeds size limit]";
+            state.truncated = true;
+            return;
+          }
+          const body = safeNetworkBody(result.body, record.mime, result.base64Encoded === true);
+          const len = body.length;
+          if (state.totalBytes + len > 8 * 1024 * 1024) {
+            record.responseBody = "[capture quota exceeded]";
+            state.truncated = true;
+            return;
+          }
+          state.totalBytes += len;
+          record.responseBody = body;
+        }).catch(() => {
+          record.responseBody = "[response unavailable]";
+        }).finally(() => state.pending.delete(pending));
+      state.pending.add(pending);
+    }
+  };
+  state.listener = listener;
+  state.borrowers = 0;
+  let attached = false;
+  try {
+    chrome.debugger.onEvent.addListener(listener);
+    await chrome.debugger.attach({ tabId: chromeTabId }, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Network.enable", {
+      maxTotalBufferSize: 8 * 1024 * 1024, maxResourceBufferSize: 256 * 1024,
+    });
+    personalNetworkCaptures.set(key, state);
+    globalThis.__mcpV3PersonalNetworkCaptures = personalNetworkCaptures;
+  } catch (error) {
+    state.active = false;
+    chrome.debugger.onEvent.removeListener(listener);
     if (attached) await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for network capture.");
+  }
+}
+
+async function stopPersonalNetworkCapture(chromeTabId) {
+  const key = String(chromeTabId);
+  const state = personalNetworkCaptures.get(key);
+  if (!state) return;
+  if ((state.borrowers ?? 0) > 0) throw coded("EXECUTION_STATE_INVALID", "Network capture is still in use by a browser interaction.");
+  personalNetworkCaptures.delete(key);
+  state.active = false;
+  chrome.debugger.onEvent.removeListener(state.listener);
+  await Promise.allSettled([...state.pending]);
+  personalNetworkEntries.set(key, { entries: state.entries, truncated: state.truncated });
+  await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+}
+
+async function readPersonalNetwork(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "networkList", false);
+  const key = String(chromeTabId);
+  const capture = input.capture ?? "read";
+  if (capture === "start") {
+    await startPersonalNetworkCapture(chromeTabId, input);
+  } else if (capture === "stop") {
+    await stopPersonalNetworkCapture(chromeTabId);
+  } else if (!personalNetworkCaptures.has(key) && !personalNetworkEntries.has(key)) {
+    await startPersonalNetworkCapture(chromeTabId, input);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    } finally {
+      await stopPersonalNetworkCapture(chromeTabId);
+    }
+  }
+  throwIfAborted(signal, "networkList", false);
+  const state = personalNetworkCaptures.get(key) ?? personalNetworkEntries.get(key) ?? { entries: [], truncated: false };
+  let expression;
+  try {
+    const filter = input.filter;
+    if (filter !== undefined && (typeof filter !== "string" || filter.length > 500 || filter.includes(String.fromCharCode(10)) ||
+      filter.includes(String.fromCharCode(13)) || filter.includes(String.fromCharCode(0)))) {
+      throw coded("INVALID_ARGUMENT", "Invalid network filter.");
+    }
+    expression = filter ? new RegExp(filter, "u") : undefined;
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("INVALID_ARGUMENT", "Invalid network regular expression.");
+  }
+  const lines = [];
+  for (const [index, entry] of state.entries.entries()) {
+    if (!input.includeStatic && ["Image", "Font", "Stylesheet", "Media"].includes(entry.resourceType)) continue;
+    if (expression && !expression.test(entry.url)) continue;
+    lines.push(String(index + 1) + ". " + entry.method + " " + entry.url + " " + entry.status);
+  }
+  const full = lines.join(String.fromCharCode(10));
+  const result = {
+    tabId: input.tabId, text: sanitizePersonalDiagnosticText(full.slice(0, 120000), 120000),
+    truncated: state.truncated || full.length > 120000,
+    collectedAt: new Date().toISOString(),
+  };
+  if (input.clear === true) {
+    await stopPersonalNetworkCapture(chromeTabId);
+    personalNetworkEntries.delete(key);
+  }
+  return result;
+}
+
+async function inspectPersonalNetwork(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "networkInspect", false);
+  if (!Number.isInteger(input.index) || input.index < 1) {
+    throw coded("INVALID_ARGUMENT", "Network index must be positive.");
+  }
+  const data = personalNetworkCaptures.get(String(chromeTabId)) ?? personalNetworkEntries.get(String(chromeTabId));
+  if (input.detail === "response-body" && data?.pending?.size) {
+    await Promise.allSettled([...data.pending]);
+  }
+  const item = data?.entries?.[input.index - 1];
+  if (!item) throw coded("INVALID_ARGUMENT", "Network request index was not found.");
+  const detail = input.detail ?? "request";
+  let value;
+  if (detail === "request") value = {
+    method: item.method, url: item.url, resourceType: item.resourceType,
+    status: item.status, timestamp: item.at,
+  };
+  else if (detail === "request-headers" || detail === "response-headers") {
+    const key = detail === "request-headers" ? "requestHeaders" : "responseHeaders";
+    if (!Object.hasOwn(item, key)) {
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Headers were not captured. Start network capture with captureHeaders=true.");
+    }
+    value = item[key];
+  } else if (detail === "request-body" || detail === "response-body") {
+    const key = detail === "request-body" ? "requestBody" : "responseBody";
+    if (!Object.hasOwn(item, key)) {
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Body was not captured. Start network capture with captureBodies=true, then retry.");
+    }
+    value = item[key];
+  } else throw coded("INVALID_ARGUMENT", "Unsupported network detail.");
+  const raw = typeof value === "string" ? value : JSON.stringify(value);
+  return { tabId: input.tabId, text: sanitizePersonalDiagnosticText(raw.slice(0, 256 * 1024), 256 * 1024),
+    truncated: raw.length > 256 * 1024, collectedAt: new Date().toISOString() };
+}
+
+async function printPersonalPdf(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "pdf", false);
+  const target = { tabId: chromeTabId };
+  let attached = false;
+  try {
+    attached = await attachGuardedDebugger(target);
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    const response = await chrome.debugger.sendCommand(target, "Page.printToPDF", {
+      printBackground: true,
+      preferCSSPageSize: true,
+      transferMode: "ReturnAsBase64",
+    });
+    throwIfAborted(signal, "pdf", false);
+    const data = response?.data;
+    if (typeof data !== "string" || data.length < 12 ||
+        data.length > 17 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(data)) {
+      throw coded("LIMIT_EXCEEDED", "Chrome returned an invalid or oversized PDF payload.");
+    }
+    const sizeBytes = base64ByteLength(data);
+    if (!Number.isFinite(sizeBytes) || sizeBytes > 12 * 1024 * 1024) {
+      throw coded("LIMIT_EXCEEDED", "Chrome PDF exceeds the 12 MiB private artifact budget.");
+    }
+    return { tabId: input.tabId, kind: "pdf", contentBase64: data, sizeBytes,
+      createdAt: new Date().toISOString() };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("pdf", signal, false);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome cannot print this MCP-owned tab to PDF.");
+  } finally {
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -1224,8 +1534,7 @@ async function screenshot(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
-    await chrome.debugger.attach(target, "1.3");
-    attached = true;
+    attached = await attachGuardedDebugger(target);
     await chrome.debugger.sendCommand(target, "Page.enable");
     let clip;
     if (input.region) {
@@ -1308,7 +1617,7 @@ async function screenshot(input, signal) {
       "Personal browser screenshot requires Chrome debugger access for the MCP-owned tab.",
     );
   } finally {
-    if (attached) await chrome.debugger.detach(target).catch(() => undefined);
+    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -1465,6 +1774,8 @@ async function updateMetadata(chromeTabId, metadata) {
 async function removeOwnedTab(chromeTabId) {
   axTargetsByTab.delete(chromeTabId);
   personalConsoleEntries.delete(String(chromeTabId));
+  await stopPersonalNetworkCapture(chromeTabId);
+  personalNetworkEntries.delete(String(chromeTabId));
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     if (!owned[String(chromeTabId)]) return;
@@ -1959,6 +2270,15 @@ ${HANDOFF_WORKER_SOURCE}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void removeOwnedTab(tabId);
+});
+chrome.debugger?.onDetach?.addListener((source) => {
+  const key = String(source?.tabId);
+  const capture = personalNetworkCaptures.get(key);
+  if (!capture) return;
+  capture.active = false;
+  personalNetworkCaptures.delete(key);
+  chrome.debugger.onEvent.removeListener(capture.listener);
+  personalNetworkEntries.set(key, { entries: capture.entries, truncated: true });
 });
 
 setInterval(() => {

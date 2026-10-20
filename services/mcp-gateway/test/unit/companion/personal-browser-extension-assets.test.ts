@@ -489,6 +489,180 @@ describe("personal browser extension assets", () => {
     })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
   });
 
+  it("records full request and response detail across subsequent browser operations in one Chrome CDP session", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(target: { tabId: number }, method: string, params: unknown) => void>();
+    const commands: string[] = [];
+    const context = vm.createContext({
+      URL, Date, Map, Object, String, Promise, Number, Uint8Array, TextDecoder, atob,
+      setTimeout: (fn: () => void) => { fn(); return 1; },
+      crypto: { randomUUID: () => "uuid" },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      sanitizePersonalDiagnosticText,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { debugger: {
+        onEvent: {
+          addListener(listener: (target: { tabId: number }, method: string, params: unknown) => void) { listeners.add(listener); },
+          removeListener(listener: (target: { tabId: number }, method: string, params: unknown) => void) { listeners.delete(listener); },
+        },
+        attach: async () => { commands.push("attach"); },
+        detach: async () => { commands.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          commands.push(method);
+          if (method === "Network.getResponseBody") {
+            return { body: '{"token":"secret-token","message":"ok"}', base64Encoded: false };
+          }
+          return {};
+        },
+      } },
+    });
+    vm.runInContext("const personalNetworkEntries = new Map(); const personalNetworkCaptures = new Map();", context);
+    vm.runInContext(extractFunction(serviceWorker, "readPersonalNetwork"), context);
+    vm.runInContext(extractFunction(serviceWorker, "inspectPersonalNetwork"), context);
+    for (const fn of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const read = vm.runInContext("readPersonalNetwork", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    const inspect = vm.runInContext("inspectPersonalNetwork", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    await read({ tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true });
+    expect(commands).toEqual(["attach", "Network.enable"]);
+    for (const listener of listeners) {
+      listener({ tabId: 7 }, "Network.requestWillBeSent", {
+        requestId: "req-1", type: "Fetch",
+        request: { url: "https://secure.test/login?password=private",
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer private-bearer", Cookie: "session=private-cookie" },
+          postData: '{"api_key":"secret-request","payload":"hello"}' },
+      });
+      listener({ tabId: 7 }, "Network.responseReceived", { requestId: "req-1",
+        response: { status: 202, mimeType: "application/json", headers: { "Content-Type": "application/json", "Set-Cookie": "secret-cookie", "X-Test": "safe" } },
+      });
+      listener({ tabId: 7 }, "Network.loadingFinished", { requestId: "req-1" });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    const list = await read({ tabId: "personal:7", capture: "read" });
+    expect(list.text).toContain("POST https://secure.test/login 202");
+    expect(JSON.stringify(list)).not.toMatch(/private|secret-token|secret-request|bearer/);
+    const reqHeaders = await inspect({ tabId: "personal:7", index: 1, detail: "request-headers" });
+    expect(reqHeaders.text).toContain("redacted");
+    expect(reqHeaders.text).toContain("Content-Type");
+    expect(reqHeaders.text).not.toMatch(/private-bearer|private-cookie/);
+    const resHeaders = await inspect({ tabId: "personal:7", index: 1, detail: "response-headers" });
+    expect(resHeaders.text).toContain('"X-Test":"safe"');
+    expect(resHeaders.text).not.toContain("secret-cookie");
+    const reqBody = await inspect({ tabId: "personal:7", index: 1, detail: "request-body" });
+    expect(reqBody.text).toContain("[redacted]");
+    expect(reqBody.text).not.toContain("secret-request");
+    const resBody = await inspect({ tabId: "personal:7", index: 1, detail: "response-body" });
+    expect(resBody.text).toContain('"message":"ok"');
+    expect(resBody.text).not.toContain("secret-token");
+    // Borrowing while recording must not attach a second Chrome debugger.
+    const borrow = vm.runInContext("attachGuardedDebugger", context) as (target: unknown) => Promise<boolean>;
+    const release = vm.runInContext("detachGuardedDebugger", context) as (target: unknown, owns: boolean) => Promise<void>;
+    expect(await borrow({ tabId: 7 })).toBe(false);
+    expect(commands.filter((name) => name === "attach")).toHaveLength(1);
+    await expect(read({ tabId: "personal:7", capture: "stop" })).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+    await release({ tabId: 7 }, false);
+    await read({ tabId: "personal:7", capture: "stop" });
+    expect(commands.filter((name) => name === "detach")).toHaveLength(1);
+    expect(listeners.size).toBe(0);
+    expect((await inspect({ tabId: "personal:7", index: 1, detail: "response-body" })).text).toContain("ok");
+    await read({ tabId: "personal:7", clear: true });
+    expect(vm.runInContext("personalNetworkEntries.size", context)).toBe(0);
+  });
+
+  it("lists and inspects bounded Chrome-owned network metadata without retaining credentials", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(source: { tabId: number }, method: string, params: unknown) => void>();
+    const commands: string[] = [];
+    const context = vm.createContext({
+      URL, Date, Map, String,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      setTimeout: (fn: () => void) => { fn(); return 1; },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      sanitizePersonalDiagnosticText,
+      chrome: { debugger: {
+        onEvent: {
+          addListener(fn: (source: { tabId: number }, method: string, params: unknown) => void) { listeners.add(fn); },
+          removeListener(fn: (source: { tabId: number }, method: string, params: unknown) => void) { listeners.delete(fn); },
+        },
+        attach: async () => { commands.push("attach"); },
+        detach: async () => { commands.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          commands.push(method);
+          if (method === "Network.enable") {
+            for (const listener of listeners) {
+              listener({ tabId: 99 }, "Network.requestWillBeSent", { requestId: "wrong-tab", request: { method: "GET", url: "https://secret.test/admin" } });
+              listener({ tabId: 7 }, "Network.requestWillBeSent", { requestId: "id-1", type: "Fetch",
+                request: { method: "POST", url: "https://api.test/submit?token=mySecret&session=private#fragment", headers: { authorization: "Bearer forbidden" }, postData: "private body" } });
+              listener({ tabId: 7 }, "Network.responseReceived", { requestId: "id-1",
+                response: { status: 201, headers: { cookie: "private-cookie" } } });
+              listener({ tabId: 7 }, "Network.requestWillBeSent", { requestId: "id-2", type: "Image",
+                request: { method: "GET", url: "https://cdn.test/image.png?apikey=private" } });
+            }
+          }
+          return {};
+        },
+      } },
+    });
+    vm.runInContext("const personalNetworkEntries = new Map(); const personalNetworkCaptures = new Map();", context);
+    for (const fn of ["readPersonalNetwork", "inspectPersonalNetwork"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const list = vm.runInContext("readPersonalNetwork", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    const inspect = vm.runInContext("inspectPersonalNetwork", context) as (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await list({ tabId: "personal:7", filter: "api[.]test", includeStatic: false });
+    expect(result).toMatchObject({ tabId: "personal:7", truncated: false });
+    expect(result.text).toContain("1. POST https://api.test/submit 201");
+    expect(JSON.stringify(result)).not.toMatch(/mySecret|private|forbidden|cookie|secret\.test|apikey|cdn\.test/);
+    expect(commands).toEqual(["attach", "Network.enable", "detach"]);
+    expect(listeners.size).toBe(0);
+    await expect(inspect({ tabId: "personal:7", index: 1 })).resolves.toMatchObject({
+      text: expect.stringContaining('"status":"201"'),
+    });
+    await expect(inspect({ tabId: "personal:7", index: 1, detail: "response-body" }))
+      .rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    await expect(inspect({ tabId: "personal:7", index: 99 }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await list({ tabId: "personal:7", clear: true });
+    expect(vm.runInContext("personalNetworkEntries.size", context)).toBe(0);
+  });
+
+  it("prints the single MCP-owned Chrome tab to a bounded CDP PDF", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    const ctx = vm.createContext({
+      chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
+      requireOwnedMetadata: async (id: number) => {
+        if (id !== 7) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_FOUND" });
+      },
+      throwIfAborted: () => undefined,
+      base64ByteLength: (data: string) => Buffer.from(data, "base64").length,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        detach: async () => { calls.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          calls.push(method);
+          return method === "Page.printToPDF" ? { data: "JVBERi0xLjQK" } : {};
+        },
+      } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "printPersonalPdf"), ctx);
+    const print = vm.runInContext("printPersonalPdf", ctx) as (input: unknown) => Promise<Record<string, unknown>>;
+    const result = await print({ tabId: "personal:7" });
+    expect(result).toMatchObject({
+      tabId: "personal:7", kind: "pdf", contentBase64: "JVBERi0xLjQK", sizeBytes: 9,
+    });
+    expect(calls).toEqual(["attach", "Page.enable", "Page.printToPDF", "detach"]);
+    await expect(print({ tabId: "personal:8" })).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+    expect(calls).toHaveLength(4);
+  });
+
   it("captures and sanitizes CDP console on the MCP-owned Chrome tab with filters and cleanup", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const listeners = new Set<(source: { tabId: number }, name: string, args: unknown) => void>();
@@ -614,7 +788,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("0.7.1");
+    expect(parsedManifest.version).toBe("0.9.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
@@ -1024,7 +1198,21 @@ function extractFunction(source: string, name: string): string {
     if (char === "{") depth += 1;
     else if (char === "}") {
       depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
+      if (depth === 0) {
+        const body = source.slice(start, index + 1);
+        if (name === "readPersonalNetwork") {
+          return ["safeNetworkUrl", "safeNetworkHeaders", "safeNetworkBody",
+            "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
+            .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
+        }
+        if (name !== "attachGuardedDebugger" && name !== "detachGuardedDebugger" &&
+            name !== "borrowPersonalDebugger" &&
+            (body.includes("attachGuardedDebugger(") || body.includes("detachGuardedDebugger("))) {
+          return ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger"]
+            .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
+        }
+        return body;
+      }
     }
   }
   throw new Error(`Function body is incomplete: ${name}`);

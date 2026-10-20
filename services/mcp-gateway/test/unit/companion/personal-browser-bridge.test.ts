@@ -51,6 +51,94 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("materializes a private PDF artifact and rejects corrupt Chrome payloads", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    let invalid = false;
+    const handle = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", kind: "pdf",
+          contentBase64: invalid ? "YmFk" : "JVBERi0xLjQKZW5k",
+          sizeBytes: invalid ? 3 : 12,
+          createdAt: "2026-10-20T11:00:00.000Z" },
+      }));
+    };
+    extension.on("message", handle);
+    try {
+      const pdf = await bridge.pdf({ tabId: "personal:7", filename: "report.pdf" });
+      expect(pdf).toMatchObject({ kind: "pdf", tabId: "personal:7", sizeBytes: 12 });
+      expect(pdf.path).toContain("personal-artifacts");
+      expect(pdf.path).toContain("pdfs");
+      expect(pdf.path).toContain("report.pdf");
+      expect((await readFile(pdf.path)).toString("ascii").startsWith("%PDF-")).toBe(true);
+      invalid = true;
+      await expect(bridge.pdf({ tabId: "personal:7" })).rejects.toMatchObject({ code: "RELAY_PROTOCOL_ERROR" });
+    } finally {
+      extension.off("message", handle);
+      await close();
+    }
+  });
+
+  it("collects personal Chrome diagnostics serially without competing CDP debugger attachments", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const seen: string[] = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      if (request.operation) seen.push(request.operation);
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", text: request.operation === "console" ? "[error] Failed" : "1. GET https://api.test/ 500",
+          truncated: false, collectedAt: "2026-10-20T11:00:00.000Z" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.diagnostics({
+        tabId: "personal:7", consoleLevel: "error", requestFilter: "api[.]test",
+      })).resolves.toMatchObject({
+        console: { text: "[error] Failed" },
+        network: { text: "1. GET https://api.test/ 500" },
+        traceActive: false, videoActive: false,
+      });
+      expect(seen).toEqual(["console", "networkList"]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("routes network list and request inspection without exposing tab data through another tab", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const requests: Array<{ operation?: string; input?: unknown }> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      requests.push({ ...(request.operation ? { operation: request.operation } : {}), input: request.input });
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", text: "1. GET https://example.test/api 200",
+          truncated: false, collectedAt: "2026-10-20T10:00:00.000Z" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.networkList({ tabId: "personal:7", filter: "example" }))
+        .resolves.toMatchObject({ tabId: "personal:7", truncated: false });
+      await expect(bridge.networkInspect({ tabId: "personal:7", index: 1, detail: "request" }))
+        .resolves.toMatchObject({ tabId: "personal:7" });
+      expect(requests).toEqual([
+        { operation: "networkList", input: { tabId: "personal:7", filter: "example" } },
+        { operation: "networkInspect", input: { tabId: "personal:7", index: 1, detail: "request" } },
+      ]);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("routes sanitized Chrome personal console reads through the authorized extension", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input?: unknown }> = [];

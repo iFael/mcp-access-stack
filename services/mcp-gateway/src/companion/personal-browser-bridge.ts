@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   AppError,
   browserOperationResultSchemas,
+  browserPdfTransportResultSchema,
   findBrowserElements,
   projectBrowserSnapshot,
   sanitizeBrowserEvaluation,
@@ -32,7 +33,8 @@ import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
-const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+// A 12 MiB PDF needs up to 16 MiB of base64 transport. Other results retain their schemas.
+const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
 const ERROR_CODES = new Set<string>(errorCodes);
 
@@ -481,16 +483,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("console", args[0], args[1]);
   }
 
-  networkList(
-    ..._args: Parameters<BrowserExecutor["networkList"]>
-  ): ReturnType<BrowserExecutor["networkList"]> {
-    throw unsupported("browser_network");
+  async networkList(...args: Parameters<BrowserExecutor["networkList"]>): ReturnType<BrowserExecutor["networkList"]> {
+    return this.call("networkList", args[0], args[1]);
   }
 
-  networkInspect(
-    ..._args: Parameters<BrowserExecutor["networkInspect"]>
-  ): ReturnType<BrowserExecutor["networkInspect"]> {
-    throw unsupported("browser_network");
+  async networkInspect(...args: Parameters<BrowserExecutor["networkInspect"]>): ReturnType<BrowserExecutor["networkInspect"]> {
+    return this.call("networkInspect", args[0], args[1]);
   }
 
   traceStart(
@@ -517,14 +515,67 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     throw unsupported("browser_video");
   }
 
-  pdf(..._args: Parameters<BrowserExecutor["pdf"]>): ReturnType<BrowserExecutor["pdf"]> {
-    throw unsupported("browser_pdf");
+  async pdf(...args: Parameters<BrowserExecutor["pdf"]>): ReturnType<BrowserExecutor["pdf"]> {
+    const [input, context] = args;
+    const transport = await this.call("pdf", input, context) as {
+      tabId: string; kind: "pdf"; contentBase64?: string; sizeBytes?: number; createdAt: string;
+    };
+    if (transport.kind !== "pdf" || !transport.contentBase64 ||
+        transport.contentBase64.length > 17 * 1024 * 1024 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/u.test(transport.contentBase64)) {
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Chrome returned an invalid PDF payload.");
+    }
+    const bytes = Buffer.from(transport.contentBase64, "base64");
+    if (bytes.length < 8 || bytes.length > 12 * 1024 * 1024 ||
+        bytes.subarray(0, 5).toString("ascii") !== "%PDF-" ||
+        bytes.toString("base64") !== transport.contentBase64 ||
+        bytes.length !== transport.sizeBytes) {
+      throw new AppError("RELAY_PROTOCOL_ERROR", "Chrome PDF failed private artifact integrity checks.");
+    }
+    if (input.filename && (input.filename.includes("/") || input.filename.includes("\\") ||
+        input.filename.includes("..") || /[\r\n\0]/u.test(input.filename))) {
+      throw new AppError("INVALID_ARGUMENT", "PDF filename must not contain path separators.");
+    }
+    const directory = path.join(
+      path.resolve(this.options.stateRoot), "browser", "personal-artifacts", "pdfs",
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const filename = `${randomUUID()}-${input.filename ?? "page.pdf"}`;
+    const absolutePath = path.join(directory, filename);
+    await writeFile(absolutePath, bytes, { flag: "wx", mode: 0o600 });
+    return { tabId: input.tabId, kind: "pdf", path: absolutePath,
+      sizeBytes: bytes.length, createdAt: transport.createdAt };
   }
 
-  diagnostics(
-    ..._args: Parameters<BrowserExecutor["diagnostics"]>
+  async diagnostics(
+    ...args: Parameters<BrowserExecutor["diagnostics"]>
   ): ReturnType<BrowserExecutor["diagnostics"]> {
-    throw unsupported("browser_diagnostics");
+    const [input, context] = args;
+    // These reads share a Chrome debugger target: never start both simultaneously.
+    const consoleResult = await this.console({
+      tabId: input.tabId,
+      ...(input.consoleLevel === undefined ? {} : { level: input.consoleLevel }),
+      ...(input.clearAfterRead === undefined ? {} : { clear: input.clearAfterRead }),
+    }, context);
+    const networkResult = await this.networkList({
+      tabId: input.tabId,
+      ...(input.requestFilter === undefined ? {} : { filter: input.requestFilter }),
+      ...(input.includeStaticRequests === undefined ? {} : { includeStatic: input.includeStaticRequests }),
+      ...(input.clearAfterRead === undefined ? {} : { clear: input.clearAfterRead }),
+    }, context);
+    return {
+      tabId: input.tabId,
+      console: {
+        text: consoleResult.text, truncated: consoleResult.truncated,
+        collectedAt: consoleResult.collectedAt,
+      },
+      network: {
+        text: networkResult.text, truncated: networkResult.truncated,
+        collectedAt: networkResult.collectedAt,
+      },
+      traceActive: false, videoActive: false,
+      collectedAt: new Date().toISOString(),
+    };
   }
 
   private async initialize(): Promise<void> {
@@ -719,6 +770,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     if (message.type !== "response" || typeof message.id !== "string") return;
     const pending = this.pending.get(message.id);
     if (!pending || pending.generation !== generation) return;
+    if (Buffer.byteLength(raw, "utf8") > 4 * 1024 * 1024 && pending.operation !== "pdf") {
+      this.pending.delete(message.id);
+      clearTimeout(pending.timeout);
+      pending.abort?.();
+      pending.reject(new AppError("RELAY_PROTOCOL_ERROR", "Personal browser returned an oversized payload."));
+      return;
+    }
     this.pending.delete(message.id);
     clearTimeout(pending.timeout);
     pending.abort?.();
@@ -836,7 +894,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         timeout,
         resolve: (value) => {
           try {
-            const parsed = browserOperationResultSchemas[operation].parse(value);
+            const parsed = operation === "pdf"
+              ? browserPdfTransportResultSchema.parse(value)
+              : browserOperationResultSchemas[operation].parse(value);
             latency.finish("success", { ...metrics, responseBytes: pending.responseBytes, ...extensionLatencyMetrics(pending.timing) });
             resolve(parsed as never);
           } catch {
