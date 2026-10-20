@@ -1,0 +1,113 @@
+import {describe,expect,it,jest} from "@jest/globals";
+import {createOracleActiveReadPort} from "../../../src/release/oracle-active-host-port.js";
+import type {LocalAgent} from "../../../src/local-agent.js";
+const tag="v1.1.0-beta.90",sha="a".repeat(40),digest="b".repeat(64);
+const config={workspaceId:"mcp-access-stack" as const,ownerScope:"trusted:oracle-active-read"};
+const pointers={version:1,active:{releaseId:tag.slice(1),manifestSha256:digest},
+  previous:{releaseId:"1.1.0-beta.89",manifestSha256:"c".repeat(64)},
+  candidate:null};
+type ActiveHost=Pick<LocalAgent,"oracleInspectActive"|"oracleInspectActiveState"|"oracleInspectActiveHealth">;
+const healthy={status:"healthy",releaseId:"1.1.0-beta.90",
+  manifestSha256:digest,processId:1234,observedAt:"2026-10-18T04:00:00.000Z"};
+const health=async()=>healthy;
+describe("private audited active-artifact host port",()=>{
+  it("pins workspace, ownerScope, tag and commit for a real agent read",async()=>{
+    const reader=jest.fn(async(_input:unknown,_context:unknown)=>({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:13,
+    }));
+    const stateReader=jest.fn(async(_input:unknown,_context:unknown)=>({state:pointers}));
+    const port=createOracleActiveReadPort({
+      oracleInspectActive:reader,oracleInspectActiveState:stateReader,
+      oracleInspectActiveHealth:health,
+    } as unknown as ActiveHost,config);
+    expect(await port.inspectActive(tag,sha)).toMatchObject({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:13,
+    });
+    expect(reader).toHaveBeenCalledWith({
+      workspaceId:config.workspaceId,tag,commitSha:sha,
+    },{ownerScope:config.ownerScope});
+    expect(await port.getState()).toEqual({
+      active:pointers.active,previous:pointers.previous,candidate:null,
+    });
+    expect(stateReader).toHaveBeenCalledWith(
+      {workspaceId:config.workspaceId},{ownerScope:config.ownerScope});
+  });
+  it("rejects forged or incomplete receipts, and caller paths",async()=>{
+    const reader=jest.fn(async(_input:unknown,_context:unknown)=>({
+      releaseTag:tag,sourceCommitSha:sha,
+      manifestSha256:"invalid",verifiedArtifactCount:13,
+    }));
+    const stateReader=jest.fn(async(_input:unknown,_context:unknown)=>({state:pointers}));
+    const port=createOracleActiveReadPort({
+      oracleInspectActive:reader,oracleInspectActiveState:stateReader,
+      oracleInspectActiveHealth:health,
+    } as unknown as ActiveHost,config);
+    await expect(port.inspectActive(tag,sha)).rejects.toThrow("RECEIPT_INVALID");
+    await expect(port.inspectActive("../private",sha)).rejects.toThrow("REQUEST_INVALID");
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+  it("rejects forged native pointer observations and absent state reader",async()=>{
+    const inspect=async()=>({releaseTag:tag,sourceCommitSha:sha,
+      manifestSha256:digest,verifiedArtifactCount:13});
+    const invalid=createOracleActiveReadPort({
+      oracleInspectActive:inspect,
+      oracleInspectActiveState:async()=>({state:{...pointers,
+        active:{...pointers.active,manifestSha256:"invalid"}}}),
+      oracleInspectActiveHealth:health,
+    } as unknown as ActiveHost,config);
+    await expect(invalid.getState()).rejects.toThrow("ORACLE_ACTIVE_STATE_INVALID");
+    expect(()=>createOracleActiveReadPort({
+      oracleInspectActive:inspect,
+    } as unknown as ActiveHost,config)).toThrow("ORACLE_ACTIVE_HOST_INVALID");
+  });
+  it("projects native pointer metadata to an exact, non-sensitive wire state",async()=>{
+    const host={oracleInspectActive:async()=>({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:2,
+    }),oracleInspectActiveState:async()=>({state:{
+      ...pointers,
+      active:{...pointers.active,materializedAt:"2026-10-17T00:00:00Z",
+        privatePath:"/private/release"},
+      previous:{...pointers.previous,materializedAt:"2026-10-16T00:00:00Z"},
+    }}),oracleInspectActiveHealth:health} as unknown as ActiveHost;
+    const wire=await createOracleActiveReadPort(host,config).getState();
+    expect(wire).toEqual({active:pointers.active,previous:pointers.previous,candidate:null});
+    expect(JSON.stringify(wire)).not.toContain("private");
+    expect(JSON.stringify(wire)).not.toContain("materializedAt");
+  });
+  it("pins health to the same scope and rejects forged process health",async()=>{
+    const reader=jest.fn(async(_input:unknown,_context:unknown)=>healthy);
+    const host={oracleInspectActive:async()=>({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:5,
+    }),oracleInspectActiveState:async()=>({state:pointers}),
+      oracleInspectActiveHealth:reader} as unknown as ActiveHost;
+    const port=createOracleActiveReadPort(host,config);
+    expect(await port.getHealth()).toEqual(healthy);
+    expect(reader).toHaveBeenCalledWith({workspaceId:"mcp-access-stack"},
+      {ownerScope:config.ownerScope});
+    reader.mockResolvedValueOnce({...healthy,processId:0});
+    await expect(port.getHealth()).rejects.toThrow("ORACLE_ACTIVE_HEALTH_INVALID");
+  });
+  it("does not accept the generic lifecycle reader in place of active policy",()=>{
+    const host={oracleInspectActive:async()=>({
+      releaseTag:tag,sourceCommitSha:sha,manifestSha256:digest,
+      verifiedArtifactCount:13,
+    }),getReleaseState:async()=>({state:pointers})} as unknown as ActiveHost;
+    expect(()=>createOracleActiveReadPort(host,config))
+      .toThrow("ORACLE_ACTIVE_HOST_INVALID");
+  });
+  it("fails closed on invalid or caller-selected host identity",()=>{
+    const reader=async()=>({releaseTag:tag,sourceCommitSha:sha,
+      manifestSha256:digest,verifiedArtifactCount:13});
+    const host={oracleInspectActive:reader,
+      oracleInspectActiveState:async()=>({state:pointers}),
+      oracleInspectActiveHealth:health} as unknown as ActiveHost;
+    expect(()=>createOracleActiveReadPort(host,{...config,
+      workspaceId:"untrusted" as "mcp-access-stack"})).toThrow("HOST_INVALID");
+    expect(()=>createOracleActiveReadPort(host,{...config,
+      ownerScope:"invalid\nscope"})).toThrow("HOST_INVALID");
+  });
+});

@@ -15,11 +15,23 @@ import {
 import { verifyOperationHmac } from "./operation-hmac.js";
 import { verifyOracleControlRequest } from "./oracle-control-auth.js";
 import { verifyOracleSourceRequest } from "./oracle-source-auth.js";
+import {verifyOracleCandidateRequest} from "./oracle-candidate-auth.js";
+import {verifyOracleActiveRequest} from "./oracle-active-auth.js";
+import {verifyWindowsReadRequest} from "./windows-read-auth.js";
 import { verifyOracleWorkflowRequest } from "./oracle-workflow-auth.js";
 import {ORACLE_WORKFLOW_CONNECT_PATH,ORACLE_WORKFLOW_DISPATCH_PATH,ORACLE_WORKFLOW_RPC_PATH,
   ORACLE_WORKFLOW_SCOPE,ORACLE_WORKFLOW_MAX_RESULT_BYTES} from "@mcp-access-stack/update-control-contract";
 import {ORACLE_SOURCE_CONNECT_PATH,ORACLE_SOURCE_DISPATCH_PATH,ORACLE_SOURCE_RPC_PATH,
-  ORACLE_SOURCE_SCOPE,ORACLE_SOURCE_MAX_RESULT_BYTES} from "@mcp-access-stack/update-control-contract";
+  ORACLE_SOURCE_SCOPE,ORACLE_SOURCE_MAX_RESULT_BYTES,
+  ORACLE_CANDIDATE_CONNECT_PATH,ORACLE_CANDIDATE_DISPATCH_PATH,
+  ORACLE_CANDIDATE_RPC_PATH,ORACLE_CANDIDATE_SCOPE,
+  ORACLE_CANDIDATE_MAX_RESULT_BYTES,
+  ORACLE_ACTIVE_CONNECT_PATH,ORACLE_ACTIVE_DISPATCH_PATH,
+  ORACLE_ACTIVE_RPC_PATH,ORACLE_ACTIVE_SCOPE,
+  ORACLE_ACTIVE_MAX_RESULT_BYTES,
+  WINDOWS_READ_CONNECT_PATH,WINDOWS_READ_DISPATCH_PATH,
+  WINDOWS_READ_RPC_PATH,WINDOWS_READ_SCOPE,WINDOWS_READ_MAX_RESULT_BYTES}
+  from "@mcp-access-stack/update-control-contract";
 import { ORACLE_CONTROL_CONNECT_PATH, ORACLE_CONTROL_DISPATCH_PATH, ORACLE_CONTROL_RPC_PATH, ORACLE_CONTROL_SCOPE } from "@mcp-access-stack/update-control-contract";
 import {
   ORACLE_CHANNEL_CONNECT_PATH,
@@ -52,6 +64,12 @@ export interface UpdateControlWorkerEnv extends UpdateControlEnvironment {
   readonly UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY?: string;
   readonly UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN?: string;
   readonly UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY?: string;
+  readonly UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_CANDIDATE_HMAC_KEY?: string;
+  readonly UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_ORACLE_ACTIVE_HMAC_KEY?: string;
+  readonly UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN?: string;
+  readonly UPDATE_CONTROL_WINDOWS_READ_HMAC_KEY?: string;
 }
 
 export class UpdateControlAuthState {
@@ -97,6 +115,28 @@ function withTrustedInternalMarker(
   return new Request(request, { headers });
 }
 
+function windowsReadCredentialsIsolated(env:UpdateControlWorkerEnv):boolean{
+  const key=env.UPDATE_CONTROL_WINDOWS_READ_HMAC_KEY;
+  const token=env.UPDATE_CONTROL_WINDOWS_READ_PROVIDER_TOKEN;
+  if(!/^[a-f0-9]{64}$/u.test(key??"") ||
+    !/^[A-Za-z0-9_.-]{32,256}$/u.test(token??"") || key===token)return false;
+  const others=[
+    env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN,
+    env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN,
+    env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN,
+    env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN,
+    env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN,
+    env.UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN,
+    env.UPDATE_CONTROL_ADMIN_HMAC_KEY,
+    env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY,
+    env.UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY,
+    env.UPDATE_CONTROL_ORACLE_CANDIDATE_HMAC_KEY,
+    env.UPDATE_CONTROL_ORACLE_ACTIVE_HMAC_KEY,
+    env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY,
+  ];
+  return others.every(value=>value!==key && value!==token);
+}
+
 const updateControlWorker = {
   async fetch(request: Request, env: UpdateControlWorkerEnv): Promise<Response> {
     let url: URL;
@@ -116,6 +156,163 @@ const updateControlWorker = {
       }
       const id = channel.idFromName(ORACLE_CHANNEL_SCOPE);
       return channel.get(id).fetch(withoutClientInternalAuthMarkers(request));
+    }
+
+    if(url.pathname===ORACLE_CANDIDATE_CONNECT_PATH){
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_candidate_not_configured"},503);
+      return channel.get(channel.idFromName(ORACLE_CANDIDATE_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+    if(url.pathname===ORACLE_CANDIDATE_DISPATCH_PATH){
+      const key=env.UPDATE_CONTROL_ORACLE_CANDIDATE_HMAC_KEY;
+      if(!key || [env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_ACTIVE_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY,
+        env.UPDATE_CONTROL_ADMIN_HMAC_KEY].some(other=>other===key))
+        return jsonResponse({error:"oracle_candidate_not_configured"},503);
+      const command=await verifyOracleCandidateRequest(request,key);
+      if(!command)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_candidate_not_configured"},503);
+      const rpc=await channel.get(channel.idFromName(ORACLE_CANDIDATE_SCOPE)).fetch(new Request(
+        "https://oracle-candidate.internal"+ORACLE_CANDIDATE_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify(command),redirect:"error",cache:"no-store",
+        }));
+      const contentLength=rpc.headers.get("content-length");
+      if(contentLength && (!/^\d+$/u.test(contentLength) ||
+        Number(contentLength)>ORACLE_CANDIDATE_MAX_RESULT_BYTES))
+        return jsonResponse({error:"oracle_candidate_unavailable"},503);
+      const reader=rpc.body?.getReader();
+      if(!reader)return jsonResponse({error:"oracle_candidate_unavailable"},503);
+      let size=0;const chunks:Uint8Array[]=[];
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          size+=chunk.value.byteLength;
+          if(size>ORACLE_CANDIDATE_MAX_RESULT_BYTES){
+            await reader.cancel();
+            return jsonResponse({error:"oracle_candidate_unavailable"},503);
+          }
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
+    }
+
+    if(url.pathname===WINDOWS_READ_CONNECT_PATH){
+      if(!windowsReadCredentialsIsolated(env))
+        return jsonResponse({error:"windows_read_not_configured"},503);
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"windows_read_not_configured"},503);
+      return channel.get(channel.idFromName(WINDOWS_READ_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+    if(url.pathname===WINDOWS_READ_DISPATCH_PATH){
+      if(!windowsReadCredentialsIsolated(env))
+        return jsonResponse({error:"windows_read_not_configured"},503);
+      const command=await verifyWindowsReadRequest(request,
+        env.UPDATE_CONTROL_WINDOWS_READ_HMAC_KEY);
+      if(!command)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"windows_read_not_configured"},503);
+      const rpc=await channel.get(channel.idFromName(WINDOWS_READ_SCOPE)).fetch(new Request(
+        "https://windows-read.internal"+WINDOWS_READ_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify(command),redirect:"error",cache:"no-store",
+        }));
+      const declared=rpc.headers.get("content-length");
+      if(declared && (!/^\d+$/u.test(declared) ||
+        Number(declared)>WINDOWS_READ_MAX_RESULT_BYTES))
+        return jsonResponse({error:"windows_read_unavailable"},503);
+      const reader=rpc.body?.getReader();
+      if(!reader)return jsonResponse({error:"windows_read_unavailable"},503);
+      let size=0;const chunks:Uint8Array[]=[];
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          size+=chunk.value.byteLength;
+          if(size>WINDOWS_READ_MAX_RESULT_BYTES){
+            await reader.cancel();
+            return jsonResponse({error:"windows_read_unavailable"},503);
+          }
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
+    }
+
+    if(url.pathname===ORACLE_ACTIVE_CONNECT_PATH){
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_active_not_configured"},503);
+      return channel.get(channel.idFromName(ORACLE_ACTIVE_SCOPE))
+        .fetch(withoutClientInternalAuthMarkers(request));
+    }
+    if(url.pathname===ORACLE_ACTIVE_DISPATCH_PATH){
+      const key=env.UPDATE_CONTROL_ORACLE_ACTIVE_HMAC_KEY;
+      if(!key || [env.UPDATE_CONTROL_ORACLE_CHANNEL_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CONTROL_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_SOURCE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_WORKFLOW_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_ACTIVE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CANDIDATE_PROVIDER_TOKEN,
+        env.UPDATE_CONTROL_ORACLE_CANDIDATE_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_SOURCE_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_WORKFLOW_HMAC_KEY,
+        env.UPDATE_CONTROL_ORACLE_CONTROL_HMAC_KEY,
+        env.UPDATE_CONTROL_ADMIN_HMAC_KEY].some(other=>other===key))
+        return jsonResponse({error:"oracle_active_not_configured"},503);
+      const command=await verifyOracleActiveRequest(request,key);
+      if(!command)return operationAuthRequired();
+      const channel=env.UPDATE_CONTROL_ORACLE_CHANNEL;
+      if(!channel)return jsonResponse({error:"oracle_active_not_configured"},503);
+      const rpc=await channel.get(channel.idFromName(ORACLE_ACTIVE_SCOPE)).fetch(new Request(
+        "https://oracle-active.internal"+ORACLE_ACTIVE_RPC_PATH,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify(command),redirect:"error",cache:"no-store",
+        }));
+      const contentLength=rpc.headers.get("content-length");
+      if(contentLength && (!/^\d+$/u.test(contentLength) ||
+        Number(contentLength)>ORACLE_ACTIVE_MAX_RESULT_BYTES))
+        return jsonResponse({error:"oracle_active_unavailable"},503);
+      const reader=rpc.body?.getReader();
+      if(!reader)return jsonResponse({error:"oracle_active_unavailable"},503);
+      let size=0;const chunks:Uint8Array[]=[];
+      try{
+        while(true){
+          const chunk=await reader.read();
+          if(chunk.done)break;
+          size+=chunk.value.byteLength;
+          if(size>ORACLE_ACTIVE_MAX_RESULT_BYTES){
+            await reader.cancel();
+            return jsonResponse({error:"oracle_active_unavailable"},503);
+          }
+          chunks.push(chunk.value);
+        }
+      }finally{reader.releaseLock();}
+      const bytes=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+      return new Response(bytes,{status:rpc.status,headers:{
+        "content-type":"application/json; charset=utf-8","cache-control":"no-store",
+      }});
     }
 
     if(url.pathname===ORACLE_SOURCE_CONNECT_PATH){

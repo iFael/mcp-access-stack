@@ -21,18 +21,21 @@ describe("isolated Oracle -> Worker authenticated workflow client",()=>{
       const command=parseOracleWorkflowCommand(raw);
       calls.push(command);
       if(command.method==="verify_lightweight_tag")return success(true);
+      if(command.method==="inspect_distribution")return success({sourceCommitSha:sha,releaseTag:input.tag,workflowRunId:123,integrityVerified:true,releasePublished:true,verifiedAssetCount:5,assetInventorySha256:"b".repeat(64)});
       return success({status:"observed",operationId:id,runId:123,state:"completed",conclusion:"success"});
     });
     const port=new OracleRemoteWorkflowPort({...repo,endpoint:url,key:async()=>key,
       fetchImpl:fetchImpl as unknown as typeof fetch});
     expect(await port.workflowOperation(input)).toMatchObject({status:"observed",runId:123});
     expect(await port.verifyLightweightTag(input.tag,sha)).toBe(true);
+    expect(await port.inspectDistribution(123,input.tag,sha)).toMatchObject({assetInventorySha256:"b".repeat(64)});
     expect(calls).toEqual([
       {method:"workflow_operation",arguments:{
         workflow:"release-tag-bootstrap.yml",mode:"reconcile",tag:input.tag,
         expectedMainSha:sha,operationId:id,
       }},
       {method:"verify_lightweight_tag",arguments:{tag:input.tag,commitSha:sha}},
+      {method:"inspect_distribution",arguments:{runId:123,tag:input.tag,commitSha:sha}},
     ]);
   });
   it("rejects foreign repository, invalid release dispatch, mismatch and untrusted URL",async()=>{

@@ -10,6 +10,7 @@ const request={workflow:"release-tag-bootstrap.yml" as const,mode:"dispatch" as 
   tag:"v1.1.0-beta.90",expectedMainSha:sha,operationId};
 const allow:OracleReleaseGitHubWorkflowPolicy={
   authorizeWorkflow:async()=>true,authorizeTagRead:async()=>true,
+  authorizeDistribution:async()=>true,
 };
 describe("Oracle workflow reloadable LocalAgent",()=>{
   it("refuses unconfigured agent before any dispatch",async()=>{
@@ -45,6 +46,7 @@ describe("Oracle workflow reloadable LocalAgent",()=>{
       releaseVerifyGitHubLightweightTag:tag} as unknown as LocalAgent;inner.generation=1;
     const denied:OracleReleaseGitHubWorkflowPolicy={
       authorizeWorkflow:async()=>false,authorizeTagRead:async()=>false,
+      authorizeDistribution:async()=>false,
     };
     const port=reloadable.oracleWorkflowPort(config,denied);
     await expect(port.workflowOperation(request)).rejects.toThrow("NOT_AUTHORIZED");

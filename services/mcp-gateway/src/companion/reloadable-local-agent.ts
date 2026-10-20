@@ -1,3 +1,4 @@
+import type {OracleWorkflowProviderPort} from "../edge/oracle-workflow-provider.js";
 import {
   AppError,
   TypedConfirmationRegistry,
@@ -11,6 +12,10 @@ import {
   LocalAgent,
   type LocalAgentOptions,
   createOracleReleaseGitHubReadPort,
+  createOracleCandidateReadPort,
+  createOracleActiveReadPort,
+  type OracleCandidateHostConfig,
+  type OracleCandidateReadResult,
   createOracleReleaseGitHubWorkflowPort,
   type OracleReleaseGitHubWorkflowPolicy,
   type OracleReleaseGitHubReadConfig,
@@ -74,11 +79,50 @@ export class ReloadableLocalAgent {
     },config);
   }
 
+  /** Confidential read-only candidate port. No WSS or public MCP exposure;
+   * discard a receipt if policy reloads before its read finishes. */
+  oracleCandidateReadPort(config:OracleCandidateHostConfig):{
+    readCandidate(tag:string,commitSha:string):Promise<OracleCandidateReadResult>;
+  }{
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const agent=this.currentAgent,epoch=this.generation;
+      if(!agent)throw new AppError("WORKSPACE_NOT_FOUND","Oracle candidate host offline.");
+      const value=await operation(agent);
+      if(epoch!==this.generation || agent!==this.currentAgent)
+        throw new AppError("PERMISSION_DENIED","Oracle candidate policy changed during read.");
+      return value;
+    };
+    return createOracleCandidateReadPort({
+      oracleInspectCandidate:(input,context)=>checked(agent=>
+        agent.oracleInspectCandidate(input,context)),
+    },config);
+  }
+
+  /** Separately scoped active-release manifest inspection. */
+  oracleActiveReadPort(config:OracleCandidateHostConfig){
+    const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
+      const agent=this.currentAgent,epoch=this.generation;
+      if(!agent)throw new AppError("WORKSPACE_NOT_FOUND","Oracle active host offline.");
+      const value=await operation(agent);
+      if(epoch!==this.generation || agent!==this.currentAgent)
+        throw new AppError("PERMISSION_DENIED","Oracle active policy changed during read.");
+      return value;
+    };
+    return createOracleActiveReadPort({
+      oracleInspectActive:(input,context)=>checked(agent=>
+        agent.oracleInspectActive(input,context)),
+      oracleInspectActiveState:(input,context)=>checked(agent=>
+        agent.oracleInspectActiveState(input,context)),
+      oracleInspectActiveHealth:(input,context)=>checked(agent=>
+        agent.oracleInspectActiveHealth(input,context)),
+    },config);
+  }
+
   /** Every workflow RPC uses the current LocalAgent, not the previous policy
    * generation. If reload races an in-flight dispatch, the result is
    * outcome_unknown; never issue the request again under a new generation. */
   oracleWorkflowPort(config:OracleReleaseGitHubReadConfig,
-    policy:OracleReleaseGitHubWorkflowPolicy) {
+    policy:OracleReleaseGitHubWorkflowPolicy):OracleWorkflowProviderPort {
     const checked=async<T>(operation:(agent:LocalAgent)=>Promise<T>):Promise<T>=>{
       const active=this.currentAgent,epoch=this.generation;
       if(!active)throw new AppError("WORKSPACE_NOT_FOUND","Oracle workflow host offline.");
@@ -93,9 +137,12 @@ export class ReloadableLocalAgent {
         agent.githubWorkflowOperation(input,context)),
       releaseVerifyGitHubLightweightTag:(input,tag,sha,context)=>checked(agent=>
         agent.releaseVerifyGitHubLightweightTag(input,tag,sha,context)),
+      releaseInspectGitHubPublicDistribution:(input,runId,tag,sha,context)=>checked(agent=>
+        agent.releaseInspectGitHubPublicDistribution(input,runId,tag,sha,context)),
     },config,{
       authorizeWorkflow:input=>checked(async()=>policy.authorizeWorkflow(input)),
       authorizeTagRead:(tag,sha)=>checked(async()=>policy.authorizeTagRead(tag,sha)),
+      authorizeDistribution:(runId,tag,sha)=>checked(async()=>policy.authorizeDistribution(runId,tag,sha)),
     });
     // A workflow frame can never select the GitHub account, repository, scope
     // or workspace: these exist only in the trusted host enrollment.
@@ -106,6 +153,7 @@ export class ReloadableLocalAgent {
           repository:config.repository,
         }),
       verifyLightweightTag:(tag:string,sha:string)=>pinned.verifyLightweightTag(tag,sha),
+      inspectDistribution:(runId:number,tag:string,sha:string)=>pinned.inspectDistribution(runId,tag,sha),
     };
   }
 

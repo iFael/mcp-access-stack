@@ -21,6 +21,12 @@ import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
 import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-provider-host.js";
 import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
 import {loadOracleWorkflowProviderFromEnvironment} from "./edge/oracle-workflow-provider-host.js";
+import {loadOracleCandidateReadEnrollment} from "./edge/oracle-candidate-read-host.js";
+import {loadOracleActiveReadEnrollment} from "./edge/oracle-active-read-host.js";
+import {OracleCandidateProviderConnector} from "./edge/oracle-candidate-provider.js";
+import {loadOracleCandidateProviderFromEnvironment} from "./edge/oracle-candidate-provider-host.js";
+import {OracleActiveProviderConnector} from "./edge/oracle-active-provider.js";
+import {loadOracleActiveProviderFromEnvironment} from "./edge/oracle-active-provider-host.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
 import { closeLoopbackGateway, startLoopbackGateway } from "./edge/loopback-server.js";
 import { createMcpServer, getMcpServerCatalogMetadata } from "./mcp/server.js";
@@ -57,7 +63,17 @@ async function main(): Promise<void> {
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
   const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
-  const reloadable = new ReloadableLocalAgent(oracleControl ? {oracleControl} : {});
+  const candidateRead=loadOracleCandidateReadEnrollment(process.env);
+  const activeRead=loadOracleActiveReadEnrollment(process.env);
+  let activeRuntimeReady=false;
+  const reloadable = new ReloadableLocalAgent({
+    ...(oracleControl ? {oracleControl} : {}),
+    ...(candidateRead ? {oracleCandidateRead:candidateRead.policy} : {}),
+    ...(activeRead ? {oracleActiveRead:{...activeRead.policy,
+      authorizeHealth:async(scope:string)=>activeRuntimeReady &&
+        activeRead.policy.authorizeHealth(scope),
+    }} : {}),
+  });
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
     const managedPolicy = await repositories.buildPolicy();
@@ -79,6 +95,14 @@ async function main(): Promise<void> {
     (config,policy)=>reloadable.oracleWorkflowPort(config,policy));
   const workflowConnector=workflowOptions===undefined?undefined:
     new OracleWorkflowProviderConnector(workflowOptions);
+  const candidateOptions=await loadOracleCandidateProviderFromEnvironment(process.env,
+    config=>reloadable.oracleCandidateReadPort(config));
+  const candidateConnector=candidateOptions===undefined?undefined:
+    new OracleCandidateProviderConnector(candidateOptions);
+  const activeOptions=await loadOracleActiveProviderFromEnvironment(process.env,
+    config=>reloadable.oracleActiveReadPort(config));
+  const activeConnector=activeOptions===undefined?undefined:
+    new OracleActiveProviderConnector(activeOptions);
 
   let browserPool: ScopedBrowserWorkerPool | undefined;
   try {
@@ -153,6 +177,7 @@ async function main(): Promise<void> {
   const controller = new AbortController();
   const stop = (signal: NodeJS.Signals) => {
     writeLog({ event: "edge_connector_process_signal", signal });
+    activeRuntimeReady=false;
     controller.abort();
     connector.stop();
   };
@@ -177,6 +202,7 @@ async function main(): Promise<void> {
 
   try {
     await assertLoopbackMcpCompatibility(localBaseUrl, internalAssertion);
+    activeRuntimeReady=true;
     writeLog({ event: "edge_connector_loopback_health_passed" });
     let providerFailure:unknown;
     const providerFailed=(error:unknown)=>{
@@ -186,14 +212,17 @@ async function main(): Promise<void> {
     };
     const sourceTask=sourceConnector?.run(controller.signal).catch(providerFailed);
     const workflowTask=workflowConnector?.run(controller.signal).catch(providerFailed);
+    const candidateTask=candidateConnector?.run(controller.signal).catch(providerFailed);
+    const activeTask=activeConnector?.run(controller.signal).catch(providerFailed);
     try{
       await connector.run(controller.signal);
     }finally{
       controller.abort();
-      await Promise.all([sourceTask,workflowTask]);
+      await Promise.all([sourceTask,workflowTask,candidateTask,activeTask]);
     }
     if(providerFailure!==undefined)throw providerFailure;
   } finally {
+    activeRuntimeReady=false;
     connector.stop();
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);

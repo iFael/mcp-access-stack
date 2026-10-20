@@ -38,6 +38,8 @@ export interface TypedReleaseVerificationPort {
 export interface ReleaseVerificationBinding {
   readonly port: TypedReleaseVerificationPort;
   readonly authorize: (action: VerificationAction, run: ReleaseRunSnapshot) => Promise<boolean>;
+  /** Explicit subset when independently authenticated release assets have a dedicated verifier. */
+  readonly actions?: readonly VerificationAction[];
 }
 const DIGEST = /^[a-f0-9]{64}$/u;
 const SOURCES = new Set([
@@ -68,7 +70,11 @@ function bound(action:VerificationAction,intent:StepIntent,run:ReleaseRunSnapsho
 export function bindReleaseVerificationReads(
   binding:ReleaseVerificationBinding,
 ): ReadonlyMap<VerificationAction,ReleaseStepCapability> {
-  const entries=(Object.keys(REQUIRED_KINDS) as VerificationAction[]).map(action => {
+  const actions=binding.actions??(Object.keys(REQUIRED_KINDS) as VerificationAction[]);
+  if(actions.length<1 || new Set(actions).size!==actions.length ||
+    actions.some(action=>!Object.hasOwn(REQUIRED_KINDS,action)))
+    throw new Error("RELEASE_VERIFICATION_ACTION_SET_INVALID");
+  const entries=actions.map(action => {
     async function inspect(run:ReleaseRunSnapshot) {
       const result=await binding.port.inspect(action,run);
       return validReceipt(action,run,result) ? result.evidence : null;

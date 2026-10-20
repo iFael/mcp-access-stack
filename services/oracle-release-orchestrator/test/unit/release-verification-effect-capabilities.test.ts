@@ -64,6 +64,23 @@ describe("read-only authenticated release witness bindings",()=>{
       expect(await capability.reconcile(intent,run)).toMatchObject({outcome:"applied"});
     }
   });
+  it("supports explicit typed verifier subset, preventing duplicate asset verification",()=>{
+    const binding={authorize:async()=>true,port:{
+      inspect:async(action:VerificationAction,run:ReleaseRunSnapshot)=>({
+        action,sourceCommitSha:run.sourceCommitSha,
+        releaseTag:run.targetRelease,status:"verified" as const,
+        evidence:required[action].map(evidence),
+      }),
+    }};
+    const remaining=Object.keys(required).filter(action=>
+      action!=="verify_release_assets") as VerificationAction[];
+    expect(bindReleaseVerificationReads({...binding,actions:remaining}).size).toBe(7);
+    expect(()=>bindReleaseVerificationReads({...binding,actions:[]})).toThrow("ACTION_SET_INVALID");
+    expect(()=>bindReleaseVerificationReads({...binding,
+      actions:["verify_edge_health","verify_edge_health"]})).toThrow("ACTION_SET_INVALID");
+    expect(()=>bindReleaseVerificationReads({...binding,
+      actions:["arbitrary_shell" as never]})).toThrow("ACTION_SET_INVALID");
+  });
   it("rejects stale SHA, missing signature, invalid digest and disabled host authorization",async()=>{
     let enabled=true,shaValue=sha,missing=false,source="mcp_v3_verified_oracle";
     const binding=bindReleaseVerificationReads({authorize:async()=>enabled,

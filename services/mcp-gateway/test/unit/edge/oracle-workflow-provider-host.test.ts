@@ -30,7 +30,7 @@ describe("Oracle workflow host enrollment and independent release gate",()=>{
   it("is disabled by default, rejects partial enrollment and untrusted URL",async()=>{
     const factory=jest.fn(()=>({
       workflowOperation:async()=>({status:"outcome_unknown" as const,operationId}),
-      verifyLightweightTag:async()=>false,
+      verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)}),
     }));
     expect(await loadOracleWorkflowProviderFromEnvironment({},factory)).toBeUndefined();
     await expect(loadOracleWorkflowProviderFromEnvironment({
@@ -49,7 +49,7 @@ describe("Oracle workflow host enrollment and independent release gate",()=>{
     const factory=jest.fn((_config:unknown,policy:NonNullable<typeof gate>)=>{
       gate=policy;
       return {workflowOperation:async()=>({status:"outcome_unknown" as const,operationId}),
-        verifyLightweightTag:async()=>false};
+        verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)})};
     });
     const options=await loadOracleWorkflowProviderFromEnvironment(env,factory);
     expect(options?.url.pathname).toBe(ORACLE_WORKFLOW_CONNECT_PATH);
@@ -61,6 +61,7 @@ describe("Oracle workflow host enrollment and independent release gate",()=>{
     expect(await gate!.authorizeWorkflow(workflow)).toBe(false);
     expect(await gate!.authorizeWorkflow({...workflow,mode:"reconcile"})).toBe(true);
     expect(await gate!.authorizeTagRead(workflow.tag,workflow.expectedMainSha)).toBe(true);
+    expect(await gate!.authorizeDistribution(123,workflow.tag,workflow.expectedMainSha)).toBe(true);
     const enabled={...env,MCP_V3_ORACLE_WORKFLOW_PROVIDER_DISPATCH_ENABLED:"1"};
     await loadOracleWorkflowProviderFromEnvironment(enabled,factory);
     expect(await gate!.authorizeWorkflow(workflow)).toBe(true);
@@ -70,7 +71,7 @@ describe("Oracle workflow host enrollment and independent release gate",()=>{
   it("rejects reused or unprotected credentials, symlinks and invalid policy",async()=>{
     if(process.platform!=="linux")return;
     const factory=()=>({workflowOperation:async()=>({status:"outcome_unknown" as const,operationId}),
-      verifyLightweightTag:async()=>false});
+      verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)})});
     const env=make(0o644);
     await expect(loadOracleWorkflowProviderFromEnvironment(env,factory)).rejects.toThrow(
       "credential unavailable");

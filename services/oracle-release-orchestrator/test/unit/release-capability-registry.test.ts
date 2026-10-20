@@ -48,6 +48,62 @@ describe("single canonical release capability registry",()=>{
     expect(()=>composeReleaseCapabilities({other:[{...mutation,action:"arbitrary_shell" as never}]}))
       .toThrow("RELEASE_CAPABILITY_UNRECOGNIZED");
   });
+  it("wires real Edge health once and rejects a duplicate generic health binding",()=>{
+    const edgeHealth={endpoint:"https://mcp-access-stack.workers.dev/health",
+      authorize:async()=>true};
+    const registry=composeReleaseCapabilities({sourceControl:source,edgeHealth});
+    expect(registry.capabilities.has("verify_edge_health")).toBe(true);
+    expect(registry.ready).toBe(false);
+    expect(registry.missingActions).not.toContain("verify_edge_health");
+    expect(()=>composeReleaseCapabilities({edgeHealth,verifications:{
+      actions:["verify_edge_health"],authorize:async()=>true,
+      port:{inspect:async()=>({
+        action:"verify_edge_health" as const,sourceCommitSha:"a".repeat(40),
+        releaseTag:"v1.1.0-beta.90",status:"pending" as const,evidence:[],
+      })},
+    }})).toThrow("RELEASE_CAPABILITY_DUPLICATE");
+  });
+  it("registers two independently authenticated pointer readers without starting a cutover",()=>{
+    const state={active:{releaseId:"1.1.0-beta.90",manifestSha256:"a".repeat(64)},
+      previous:{releaseId:"1.1.0-beta.89",manifestSha256:"b".repeat(64)},
+      candidate:null};
+    const pointerReconciliation={oracle:{getState:async()=>state},
+      windows:{getState:async()=>state},authorize:async()=>true};
+    const registry=composeReleaseCapabilities({pointerReconciliation});
+    expect([...registry.capabilities.keys()]).toEqual(["reconcile_final_pointers"]);
+    expect(registry.ready).toBe(false);
+    expect(()=>registry.createExecutor(null as never)).toThrow("RELEASE_CAPABILITY_INCOMPLETE");
+  });
+  it("registers exact Oracle and Windows active health verifiers, no duplicate owners",()=>{
+    const state={active:{releaseId:"1.1.0-beta.90",manifestSha256:"a".repeat(64)},
+      previous:{releaseId:"1.1.0-beta.89",manifestSha256:"b".repeat(64)},
+      candidate:null};
+    const port={
+      inspectActive:async()=>({releaseTag:"v1.1.0-beta.90",
+        sourceCommitSha:"a".repeat(40),manifestSha256:"a".repeat(64),
+        verifiedArtifactCount:1}),
+      getState:async()=>state,
+      getHealth:async()=>({status:"healthy" as const,
+        releaseId:"1.1.0-beta.90",manifestSha256:"a".repeat(64),
+        processId:100,observedAt:"2026-10-17T18:00:00Z"}),
+    };
+    const binding={port,authorize:async()=>true};
+    const registry=composeReleaseCapabilities({
+      oracleActiveHealth:binding,windowsActiveHealth:binding,
+    });
+    expect([...registry.capabilities.keys()]).toEqual([
+      "verify_oracle_health","verify_windows_health"]);
+    expect(registry.missingActions).not.toContain("verify_oracle_health");
+    expect(registry.missingActions).not.toContain("verify_windows_health");
+    expect(registry.ready).toBe(false);
+    expect(()=>composeReleaseCapabilities({
+      oracleActiveHealth:binding,
+      verifications:{actions:["verify_oracle_health"],authorize:async()=>true,
+        port:{inspect:async()=>({action:"verify_oracle_health" as const,
+          sourceCommitSha:"a".repeat(40),releaseTag:"v1.1.0-beta.90",
+          status:"pending" as const,evidence:[]})}},
+    })).toThrow("RELEASE_CAPABILITY_DUPLICATE");
+  });
   it("permits full registration only with exact typed actions",()=>{
     const actions=new Map(beta80ReleaseBlueprint.steps.map(step => [
       step.action,step,

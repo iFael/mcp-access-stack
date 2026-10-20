@@ -9,12 +9,13 @@ import type {LocalAgent} from "../local-agent.js";
 import {assertOracleReleaseGitHubConfig,
   type OracleReleaseGitHubReadConfig} from "./oracle-github-read-port.js";
 
-type WorkflowHost=Pick<LocalAgent,"githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag">;
+type WorkflowHost=Pick<LocalAgent,"githubWorkflowOperation"|"releaseVerifyGitHubLightweightTag"|"releaseInspectGitHubPublicDistribution">;
 type WorkflowInput=Omit<GitHubWorkflowOperationInput,"root">;
 export interface OracleReleaseGitHubWorkflowPolicy {
   /** Distinct host-owned release gate, rechecked for dispatch and reconcile. */
   authorizeWorkflow(input:GitHubWorkflowOperationInput):Promise<boolean>;
   authorizeTagRead(tag:string,sha:string):Promise<boolean>;
+  authorizeDistribution(runId:number,tag:string,sha:string):Promise<boolean>;
 }
 
 /** Host-local provider for the existing Oracle bootstrap/publication workflow
@@ -27,7 +28,8 @@ export function createOracleReleaseGitHubWorkflowPort(
 ){
   assertOracleReleaseGitHubConfig(config);
   if(!policy || typeof policy.authorizeWorkflow!=="function" ||
-      typeof policy.authorizeTagRead!=="function") {
+      typeof policy.authorizeTagRead!=="function" ||
+      typeof policy.authorizeDistribution!=="function") {
     throw new Error("ORACLE_RELEASE_WORKFLOW_POLICY_REQUIRED");
   }
   const context:OperationContext={ownerScope:config.ownerScope};
@@ -60,6 +62,22 @@ export function createOracleReleaseGitHubWorkflowPort(
         throw new Error("ORACLE_RELEASE_WORKFLOW_RECEIPT_MISMATCH");
       }
       return output;
+    },
+    async inspectDistribution(runId:number,tag:string,commitSha:string){
+      if(!Number.isSafeInteger(runId) || runId<1 ||
+         !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(tag) ||
+         tag.includes("-oracle.") || tag.includes("-companion.") ||
+         !/^[a-f0-9]{40}$/u.test(commitSha))
+        throw new Error("ORACLE_RELEASE_DISTRIBUTION_IDENTITY_INVALID");
+      if(!await policy.authorizeDistribution(runId,tag,commitSha))
+        throw new Error("ORACLE_RELEASE_DISTRIBUTION_NOT_AUTHORIZED");
+      const result=await host.releaseInspectGitHubPublicDistribution(repo,runId,tag,commitSha,context);
+      if(result.workflowRunId!==runId || result.releaseTag!==tag ||
+         result.sourceCommitSha!==commitSha || !result.integrityVerified ||
+         !result.releasePublished || result.verifiedAssetCount!==5 ||
+         !/^[a-f0-9]{64}$/u.test(result.assetInventorySha256))
+        throw new Error("ORACLE_RELEASE_DISTRIBUTION_PROOF_INVALID");
+      return result;
     },
     async verifyLightweightTag(tag:string,commitSha:string){
       if(!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(tag) ||

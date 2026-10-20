@@ -41,6 +41,17 @@ describe("separate authenticated Oracle release workflow transport",()=>{
     const success={status:"observed",operationId:id,runId:12,state:"completed",conclusion:"success"};
     expect(parseOracleWorkflowResult("workflow_operation",success)).toEqual(success);
     expect(parseOracleWorkflowResult("verify_lightweight_tag",false)).toBe(false);
+    const proof={sourceCommitSha:sha,releaseTag:"v1.1.0-beta.90",workflowRunId:12,
+      integrityVerified:true,releasePublished:true,verifiedAssetCount:5,
+      assetInventorySha256:"c".repeat(64)};
+    expect(parseOracleWorkflowCommand({method:"inspect_distribution",
+      arguments:{runId:12,tag:proof.releaseTag,commitSha:sha}})).toMatchObject({
+      method:"inspect_distribution"});
+    expect(parseOracleWorkflowResult("inspect_distribution",proof)).toEqual(proof);
+    expect(()=>parseOracleWorkflowResult("inspect_distribution",
+      {...proof,verifiedAssetCount:4})).toThrow();
+    expect(()=>parseOracleWorkflowResult("inspect_distribution",
+      {...proof,releasePublished:false})).toThrow();
     for(const bad of [
       {...success,operationId:"wrong"},
       {...success,runId:0},

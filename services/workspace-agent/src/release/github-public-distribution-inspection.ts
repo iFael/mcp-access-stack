@@ -24,14 +24,14 @@ export interface GitHubPublicDistributionInspection {
   readonly assetInventorySha256:string;
 }
 
-/** Authenticated GitHub metadata and small checksum sidecars are verified
- * without shell, downloads of unbounded binaries or blind trust in CI status.
+/** Authenticated GitHub metadata, small checksum sidecars and streamed bounded
+ * package bytes are hashed independently; never trust a CI success alone.
  * SHA-256 is a consistency check, not independent evidence of the publisher.
  * Do not promote this observation to an unconditional Oracle GO.
  */
 export async function inspectGitHubPublicReleaseAssets(
   client:Pick<GitHubWorkflowApiClient,
-    "getWorkflowRun"|"getReleaseByTag"|"getTagRef"|"getReleaseAssetChecksum">,
+    "getWorkflowRun"|"getReleaseByTag"|"getTagRef"|"getReleaseAssetChecksum"|"getReleaseAssetSha256">,
   owner:string,repository:string,runId:number,tag:string,commitSha:string,
   context?:OperationContext,
 ):Promise<GitHubPublicDistributionInspection>{
@@ -42,7 +42,7 @@ export async function inspectGitHubPublicReleaseAssets(
     !SHA.test(commitSha))
     throw new Error("GITHUB_PUBLIC_INSPECTION_IDENTITY_INVALID");
   if(!client.getWorkflowRun || !client.getReleaseByTag ||
-    !client.getTagRef || !client.getReleaseAssetChecksum)
+    !client.getTagRef || !client.getReleaseAssetChecksum || !client.getReleaseAssetSha256)
     throw new Error("GITHUB_PUBLIC_INSPECTION_UNAVAILABLE");
 
   const [run,release,ref]=await Promise.all([
@@ -91,6 +91,7 @@ export async function inspectGitHubPublicReleaseAssets(
     if(!artifact || !sidecar || sidecar.size>512)
       throw new Error("GITHUB_PUBLIC_INSPECTION_ASSET_MISSING");
     const body=await client.getReleaseAssetChecksum(owner,repository,sidecar.id,context);
+    const actualDigest=await client.getReleaseAssetSha256(owner,repository,artifact.id,artifact.size,context);
     // Byte-accurate SHA of the sidecar itself (GitHub's reported asset digest)
     // and the published checksum's asserted package SHA must both match.
     if(typeof body!=="string" || Buffer.byteLength(body,"utf8")>512 ||
@@ -98,7 +99,7 @@ export async function inspectGitHubPublicReleaseAssets(
       throw new Error("GITHUB_PUBLIC_INSPECTION_SIDECAR_DIGEST_MISMATCH");
     const line=body.endsWith("\n")?body.slice(0,-1):body;
     const prefix=artifact.digest.slice(7);
-    if(!line.startsWith(prefix+" ") ||
+    if(actualDigest!==prefix || !line.startsWith(prefix+" ") ||
       ![prefix+" *"+filename,prefix+"  "+filename].includes(line))
       throw new Error("GITHUB_PUBLIC_INSPECTION_PACKAGE_DIGEST_MISMATCH");
     inventory.push(filename+":"+prefix);

@@ -681,6 +681,86 @@ function Read-McpWindowsExecutionNodeState {
     return $state
 }
 
+
+# Durable local operation correlation, not an authenticated remote receipt.
+# Writes are serialized by the existing Windows operation mutex AND state.lock.
+function Get-McpWindowsCandidatePrepareWitnessPath {
+    param([Parameter(Mandatory = $true)][string]$InstallationRoot)
+    return Join-Path ([IO.Path]::GetFullPath($InstallationRoot)) 'state\candidate-prepare-witness.v1.json'
+}
+
+function Read-McpWindowsCandidatePrepareWitness {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $file = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($file.PSIsContainer -or
+        0 -ne ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        [long]$file.Length -lt 2 -or [long]$file.Length -gt 4096) {
+        throw 'Windows prepare witness is redirected or oversized.'
+    }
+    $record = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
+    $expected = @('version', 'kind', 'runId', 'prepareOperationId',
+        'releaseId', 'sourceCommitSha', 'manifestSha256', 'preparedAt')
+    $names = @($record.PSObject.Properties.Name)
+    # ConvertFrom-Json may parse ISO timestamps into a DateTime object, whose
+    # default string cast is locale-dependent. Canonicalize before validation.
+    $time = $record.preparedAt
+    $canonicalTime = if ($time -is [DateTime] -or $time -is [DateTimeOffset]) {
+        $time.ToString('O', [Globalization.CultureInfo]::InvariantCulture)
+    } else { [string]$time }
+    if ($names.Count -ne $expected.Count -or
+        @($names | Where-Object { $_ -cnotin $expected }).Count -ne 0 -or
+        [int]$record.version -ne 1 -or
+        [string]$record.kind -cne 'local_candidate_prepare' -or
+        [string]$record.runId -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$' -or
+        [string]$record.prepareOperationId -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$' -or
+        [string]$record.releaseId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or
+        [string]$record.sourceCommitSha -cnotmatch '^[a-f0-9]{40}$' -or
+        [string]$record.manifestSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $canonicalTime -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T') {
+        throw 'Windows prepare witness contract invalid.'
+    }
+    try { $null = [DateTimeOffset]::Parse($canonicalTime, [Globalization.CultureInfo]::InvariantCulture) }
+    catch { throw 'Windows prepare witness timestamp invalid.' }
+    return $record
+}
+
+function Write-McpWindowsCandidatePrepareWitness {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Witness
+    )
+    # Caller must already own the operation mutex + state.lock. Use atomic
+    # replace; readers observe either prior or new complete JSON, never partial.
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $temp = "$pathFull.tmp.$([guid]::NewGuid().ToString('N'))"
+    $backup = "$pathFull.bak.$([guid]::NewGuid().ToString('N'))"
+    try {
+        [IO.File]::WriteAllText($temp,
+            (($Witness | ConvertTo-Json -Depth 4 -Compress) + [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false))
+        if (Test-Path -LiteralPath $pathFull) {
+            $null = Read-McpWindowsCandidatePrepareWitness -Path $pathFull
+            [IO.File]::Replace($temp, $pathFull, $backup)
+        }
+        else { [IO.File]::Move($temp, $pathFull) }
+        $verified = Read-McpWindowsCandidatePrepareWitness -Path $pathFull
+        if ([string]$verified.runId -cne [string]$Witness.runId -or
+            [string]$verified.prepareOperationId -cne [string]$Witness.prepareOperationId -or
+            [string]$verified.releaseId -cne [string]$Witness.releaseId -or
+            [string]$verified.manifestSha256 -cne [string]$Witness.manifestSha256) {
+            throw 'Windows prepare witness failed verification after write.'
+        }
+    }
+    finally {
+        foreach ($file in @($temp, $backup)) {
+            if (Test-Path -LiteralPath $file) {
+                Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 function Write-McpWindowsExecutionNodeState {
     param(
         [Parameter(Mandatory = $true)][string]$Path,

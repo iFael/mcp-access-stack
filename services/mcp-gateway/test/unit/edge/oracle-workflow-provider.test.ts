@@ -31,7 +31,7 @@ describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
     const tag=jest.fn(async(_tag:string,_commitSha:string)=>true);
     const ctrl=new AbortController();
     const connector=new OracleWorkflowProviderConnector({url,token,port:{
-      workflowOperation:workflow,verifyLightweightTag:tag,
+      workflowOperation:workflow,verifyLightweightTag:tag,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)}),
     }},{socketFactory:(_url,opts)=>{
       expect(opts.origin).toBe(ORACLE_WORKFLOW_ORIGIN);
       expect(opts.headers).toEqual({authorization:"Bearer "+token});
@@ -52,6 +52,13 @@ describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
       arguments:{tag:argumentsForWorkflow.tag,commitSha:sha}});
     await flush();
     expect(tag).toHaveBeenCalledWith(argumentsForWorkflow.tag,sha);
+    const id3="11111111-2222-4333-8444-555555555557";
+    socket.feed({version:1,type:"request",requestId:id3,method:"inspect_distribution",
+      arguments:{runId:77,tag:argumentsForWorkflow.tag,commitSha:sha}});
+    await flush();
+    expect(JSON.parse(socket.sent[2]!)).toMatchObject({requestId:id3,outcome:"success",
+      result:{workflowRunId:77,assetInventorySha256:"b".repeat(64)}});
+
     expect(JSON.parse(socket.sent[1]!)).toMatchObject({
       requestId:id2,outcome:"success",result:true,
     });
@@ -62,7 +69,7 @@ describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
     const workflow=jest.fn(async()=>({status:"outcome_unknown" as const,operationId}));
     const ctrl=new AbortController();
     const connector=new OracleWorkflowProviderConnector({url,token,port:{
-      workflowOperation:workflow,verifyLightweightTag:async()=>false,
+      workflowOperation:workflow,verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)}),
     }},{socketFactory:()=>{queueMicrotask(()=>socket.emit("open"));return socket as unknown as WebSocket;}});
     const task=connector.run(ctrl.signal);await flush();
     socket.feed({version:1,type:"request",requestId:id,method:"workflow_operation",
@@ -78,7 +85,7 @@ describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
     const connector=new OracleWorkflowProviderConnector({url,token,port:{
       workflowOperation:async()=>({status:"submitted",operationId:
         "22222222-2222-4222-8222-222222222223"}),
-      verifyLightweightTag:async()=>false,
+      verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)}),
     }},{socketFactory:()=>{queueMicrotask(()=>socket.emit("open"));return socket as unknown as WebSocket;}});
     const task=connector.run(ctrl.signal);await flush();
     socket.feed({version:1,type:"request",requestId:id,method:"workflow_operation",
@@ -90,7 +97,7 @@ describe("separately authenticated Oracle GitHub workflow provider WSS",()=>{
   });
   it("rejects untrusted WSS endpoints and weak tokens",()=>{
     const port={workflowOperation:async()=>({status:"outcome_unknown" as const,operationId}),
-      verifyLightweightTag:async()=>false};
+      verifyLightweightTag:async()=>false,inspectDistribution:async(runId:number,tag:string,sourceCommitSha:string)=>({workflowRunId:runId,releaseTag:tag,sourceCommitSha,integrityVerified:true as const,releasePublished:true as const,verifiedAssetCount:5 as const,assetInventorySha256:"b".repeat(64)})};
     expect(()=>validateOracleWorkflowProviderOptions({url,token:"short",port})).toThrow();
     expect(()=>validateOracleWorkflowProviderOptions({url:new URL(
       "ws://mcp-v3-update-control.workers.dev"+ORACLE_WORKFLOW_CONNECT_PATH),token,port})).toThrow();

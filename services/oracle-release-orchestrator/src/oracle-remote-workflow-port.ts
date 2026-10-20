@@ -1,7 +1,7 @@
 import {
   ORACLE_WORKFLOW_DISPATCH_PATH,ORACLE_WORKFLOW_MAX_RESULT_BYTES,
   parseOracleWorkflowCommand,parseOracleWorkflowResult,signOracleWorkflowRequest,
-  type OracleWorkflowCommand,type OracleWorkflowObservation,
+  type OracleWorkflowCommand,type OracleWorkflowObservation,type OracleDistributionInspection,
 } from "@mcp-access-stack/update-control-contract";
 import type {TypedTagBootstrapPort} from "./release-tag-bootstrap-capability.js";
 import type {TypedPublicDistributionPort,PublicWorkflowRequest} from "./release-public-distribution-capability.js";
@@ -56,7 +56,7 @@ async function readBounded(response:Response):Promise<unknown>{
  * MUST be reconciled using the same Oracle-ledger operationId, never retried
  * using an alternate id. Does not verify signed artifact publication. */
 export class OracleRemoteWorkflowPort implements TypedTagBootstrapPort,
-    Pick<TypedPublicDistributionPort,"workflowOperation"> {
+    TypedPublicDistributionPort {
   private readonly url:string;
   get workspaceId(){return this.options.workspaceId;}
   get owner(){return this.options.owner;}
@@ -68,7 +68,7 @@ export class OracleRemoteWorkflowPort implements TypedTagBootstrapPort,
       !/^[A-Za-z0-9._-]{1,100}$/u.test(options.repository))
       throw new Error("ORACLE_WORKFLOW_HOST_IDENTITY_INVALID");
   }
-  private async request(command:OracleWorkflowCommand):Promise<OracleWorkflowObservation|boolean>{
+  private async request(command:OracleWorkflowCommand):Promise<OracleWorkflowObservation|boolean|OracleDistributionInspection>{
     const parsed=parseOracleWorkflowCommand(command);
     const signed=await signOracleWorkflowRequest(parsed,await this.options.key());
     // HMAC authenticates this exact bounded intent; do not redirect, retry,
@@ -100,9 +100,20 @@ export class OracleRemoteWorkflowPort implements TypedTagBootstrapPort,
         ? {bootstrapOperationId:input.bootstrapOperationId}:{}),
     };
     const result=await this.request({method:"workflow_operation",arguments:args});
-    if(typeof result!=="object" || result.operationId!==input.operationId)
+    if(typeof result!=="object" || result===null || !("operationId" in result) ||
+      result.operationId!==input.operationId)
       throw new Error("ORACLE_WORKFLOW_RECEIPT_MISMATCH");
     return result;
+  }
+  async inspectDistribution(runId:number,tag:string,commitSha:string):Promise<OracleDistributionInspection>{
+    const result=await this.request({method:"inspect_distribution",
+      arguments:{runId,tag,commitSha}});
+    if(typeof result!=="object" || result===null || !("workflowRunId" in result) ||
+      result.workflowRunId!==runId ||
+      result.releaseTag!==tag || result.sourceCommitSha!==commitSha ||
+      !("assetInventorySha256" in result))
+      throw new Error("ORACLE_WORKFLOW_DISTRIBUTION_MISMATCH");
+    return result as OracleDistributionInspection;
   }
   async verifyLightweightTag(tag:string,commitSha:string):Promise<boolean>{
     const result=await this.request({method:"verify_lightweight_tag",
