@@ -568,6 +568,40 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("asks Chrome for a site approval and honors only approvals the extension reports", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request" || request.operation !== "evaluate") return;
+      extension.send(JSON.stringify({ type: "response", id: request.id, ok: true, result: { tabId, value: "Example" } }));
+    };
+    try {
+      await primeReference(bridge, extension, tabId);
+      const script = { tabId, function: "() => document.title" };
+      const asked = nextWireMessage(extension, (message) => message.type === "site-approval-request");
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      await expect(asked).resolves.toEqual({
+        type: "site-approval-request", tabId, origin: "https://example.com", category: "execute-script",
+      });
+      extension.on("message", respond);
+      // A report granting a category that is never approvable per site is ignored as a whole.
+      extension.send(JSON.stringify({ type: "site-approvals", autoSites: [], grants: [
+        { origin: "https://example.com", category: "execute-script", expiresAt: Date.now() + 60_000 },
+        { origin: "https://example.com", category: "delete-or-cancel", expiresAt: Date.now() + 60_000 },
+      ] }));
+      await settle();
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: ["example.com"] }));
+      await settle();
+      await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Example" });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("binds drop zone uploads to their ref and drops staged bytes on failure or shutdown", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";

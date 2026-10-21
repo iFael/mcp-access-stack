@@ -213,6 +213,75 @@ describe("personal browser authorization", () => {
       .toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
   });
 
+  it("skips one-use confirmations only where the user approved the site in Chrome, never for destructive actions", () => {
+    const requests: unknown[] = [];
+    const policy = new PersonalBrowserActionPolicy((request) => requests.push(request));
+    policy.observeTab({ tabId: sample.tabId, url: sample.url, taskId: "task-1" });
+    policy.observeSnapshot({ ...sample, refs: [...sample.refs, { ref: "p-3", role: "button", name: "Save draft" }] });
+    const outcome = (action: () => unknown) => {
+      try {
+        action();
+        return "allowed";
+      } catch (error) {
+        return (error as { code: string }).code;
+      }
+    };
+    const message = (action: () => unknown) => {
+      try {
+        action();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return "";
+    };
+    const upload = { tabId: sample.tabId, selector: "input[type=file]", files: [{ name: "a.txt", contentBase64: "aGVsbG8=" }] };
+    const script = { tabId: sample.tabId, function: "() => document.title" };
+    const now = Date.now();
+    const grant = { origin: "https://example.com", category: "upload-file", taskId: "task-1", expiresAt: now + 60_000 };
+
+    // Without an approval, Chrome is asked to offer one and the caller learns how it works.
+    expect(message(() => policy.guardUpload(upload)))
+      .toContain('"siteApproval":"Alternatively the user can allow upload-file on https://example.com for 30 minutes');
+    expect(requests).toEqual([{ tabId: sample.tabId, origin: "https://example.com", category: "upload-file" }]);
+
+    // A grant covers its origin, category and task until it expires.
+    policy.setSiteApprovals({ grants: [grant], autoSites: [] });
+    expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
+    expect(outcome(() => policy.guardEvaluate(script))).toBe("ACTION_REQUIRES_CONFIRMATION");
+    for (const other of [{ ...grant, taskId: "task-2" }, { ...grant, expiresAt: now - 1 },
+      { ...grant, origin: "https://other.example" }, { ...grant, origin: "http://example.com" }]) {
+      policy.setSiteApprovals({ grants: [other], autoSites: [] });
+      expect(outcome(() => policy.guardUpload(upload))).toBe("ACTION_REQUIRES_CONFIRMATION");
+    }
+    const { taskId: _taskId, ...anyTask } = grant;
+    policy.setSiteApprovals({ grants: [anyTask], autoSites: [] });
+    expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
+
+    // Automatic approval covers the listed host for forms, uploads and scripts only.
+    requests.length = 0;
+    policy.setSiteApprovals({ grants: [], autoSites: ["example.com"] });
+    expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
+    expect(outcome(() => policy.guardEvaluate(script))).toBe("allowed");
+    expect(outcome(() => policy.guardClick({ tabId: sample.tabId, ref: "p-3" }))).toBe("allowed");
+    expect(message(() => policy.guardClick({ tabId: sample.tabId, ref: "p-1" })))
+      .toMatch(/^Confirmation required: \{(?!.*siteApproval).*"category":"delete-or-cancel"/u);
+    expect(outcome(() => policy.guardPress({ tabId: sample.tabId, key: "Enter" }))).toBe("ACTION_REQUIRES_CONFIRMATION");
+    expect(outcome(() => policy.guardType({ tabId: sample.tabId, text: "oi", submit: true }))).toBe("ACTION_REQUIRES_CONFIRMATION");
+    expect(outcome(() => policy.guardPixelClick({ tabId: sample.tabId, x: 4, y: 5 }, sample.url)))
+      .toBe("ACTION_REQUIRES_CONFIRMATION");
+    expect(outcome(() => policy.authorizeDialogResponse(
+      { tabId: sample.tabId, action: "respond", response: "accept", expectedMessage: "Save?", promptText: "x" },
+      { tabId: sample.tabId, state: "open", dialogType: "prompt", message: "Save?" },
+    ))).toBe("ACTION_REQUIRES_CONFIRMATION");
+    expect(requests).toEqual([]);
+
+    // Approvals end with the extension connection.
+    policy.clear();
+    policy.observeTab({ tabId: sample.tabId, url: sample.url, taskId: "task-1" });
+    policy.observeSnapshot(sample);
+    expect(outcome(() => policy.guardUpload(upload))).toBe("ACTION_REQUIRES_CONFIRMATION");
+  });
+
   it("preflights every sensitive sequence step before execution", () => {
     const policy = prepare();
     expect(() => policy.guardSequence({ tabId: sample.tabId, steps: [

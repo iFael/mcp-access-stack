@@ -1,8 +1,9 @@
 /**
  * Popup controls for sharing the user's own tabs with MCP V3, handing a tab
- * back after a login or CAPTCHA, task notifications, and requiring an approved
- * plan before MCP acts. Only the user, clicking in the extension popup, can do
- * any of this; neither the bridge nor a page can reach these messages.
+ * back after a login or CAPTCHA, task notifications, requiring an approved
+ * plan before MCP acts, and approvals per site. Only the user, clicking in the
+ * extension popup, can do any of this; neither the bridge nor a page can reach
+ * these messages.
  */
 export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
 (() => {
@@ -13,7 +14,19 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const resume = document.getElementById("tab-resume");
   const notify = document.getElementById("tab-notify");
   const requirePlan = document.getElementById("tab-require-plan");
-  const controls = [share, unshare, context, resume, notify, requirePlan];
+  const approval = document.getElementById("tab-approval");
+  const approve = document.getElementById("tab-approve");
+  const grants = document.getElementById("tab-grants");
+  const revoke = document.getElementById("tab-revoke");
+  const autoRow = document.getElementById("tab-auto-row");
+  const auto = document.getElementById("tab-auto");
+  const autoSites = document.getElementById("tab-auto-sites");
+  const controls = [share, unshare, context, resume, notify, requirePlan, approve, revoke, auto];
+  const LABELS = {
+    "submit-form": "salvar e confirmar formulários",
+    "upload-file": "enviar arquivos",
+    "execute-script": "executar JavaScript",
+  };
   let tabId;
   async function call(type, extra) {
     const response = await chrome.runtime.sendMessage({ type, tabId, ...extra });
@@ -24,6 +37,17 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     context.checked = state.context === true;
     notify.checked = state.notify === true;
     requirePlan.checked = state.requirePlan === true;
+    approval.hidden = approve.hidden = typeof state.approval !== "string";
+    approval.textContent = state.approval ? "O MCP pediu permissão para " + LABELS[state.approval] + " neste site." : "";
+    const granted = Array.isArray(state.grants) ? state.grants : [];
+    grants.hidden = revoke.hidden = granted.length === 0;
+    grants.textContent = "Liberado neste site: " + granted.map((grant) => LABELS[grant.category] + " até " +
+      new Date(grant.expiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })).join("; ") + ".";
+    autoRow.hidden = state.autoEligible !== true;
+    auto.checked = state.auto === true;
+    const sites = Array.isArray(state.autoSites) ? state.autoSites : [];
+    autoSites.hidden = sites.length === 0;
+    autoSites.textContent = "Aprovação automática em: " + sites.join(", ") + ".";
     share.hidden = !(state.shareable && !state.shared);
     unshare.hidden = !state.shared;
     resume.hidden = typeof state.waiting !== "string";
@@ -64,5 +88,8 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   notify.addEventListener("change", () => void act("mcp-tab-notify", { enabled: notify.checked }));
   requirePlan.addEventListener("change", () => void act("mcp-tab-require-plan", { enabled: requirePlan.checked }));
   resume.addEventListener("click", () => void act("mcp-tab-resume"));
+  approve.addEventListener("click", () => void act("mcp-tab-approve"));
+  revoke.addEventListener("click", () => void act("mcp-tab-revoke"));
+  auto.addEventListener("change", () => void act("mcp-tab-auto", { enabled: auto.checked }));
   void refresh();
 })();`;

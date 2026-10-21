@@ -20,6 +20,8 @@ import {
   type BrowserSnapshotResult,
   type BrowserSequenceInput,
   type BrowserTab,
+  type BrowserConfirmationBinding,
+  type BrowserConfirmationCategory,
 } from "@vs-code-gpt/shared";
 
 export interface PersonalActionGuard {
@@ -31,6 +33,29 @@ export interface PersonalActionGuard {
   role?: string;
   name?: string;
 }
+
+/**
+ * Approvals the user gave in Chrome: a category on one origin for 30 minutes
+ * (and no longer than its task), or every approvable category on a host the
+ * user listed for automatic approval. Only the extension reports them.
+ */
+export interface PersonalSiteApprovals {
+  grants: ReadonlyArray<{ origin: string; category: string; taskId?: string; expiresAt: number }>;
+  autoSites: readonly string[];
+}
+
+export interface PersonalSiteApprovalRequest {
+  tabId: string;
+  origin: string;
+  category: BrowserConfirmationCategory;
+}
+
+// Deleting, paying, sending, publishing, credentials and contracts always need
+// a one-use confirmation. So do pixel-only input, dialog acceptance and Enter,
+// which may delete, pay or send without a label anyone can classify.
+export const PERSONAL_SITE_APPROVABLE_CATEGORIES: ReadonlySet<BrowserConfirmationCategory> =
+  new Set(["submit-form", "upload-file", "execute-script"]);
+const ONE_USE_ACTIONS: ReadonlySet<string> = new Set(["pixel-click", "pixel-drag", "dialog-accept"]);
 
 /** Element descriptor returned by the extension preflight; never a field value. */
 export interface PersonalLegacyFrameTarget {
@@ -44,6 +69,13 @@ export class PersonalBrowserActionPolicy {
   private readonly confirmations = new BrowserConfirmationRegistry();
   private readonly interactions = new BrowserInteractionContextService();
   private readonly pages = new Map<string, { url: string; refs: Set<string>; taskId?: string }>();
+  private siteApprovals: PersonalSiteApprovals | undefined;
+
+  constructor(private readonly requestSiteApproval?: (request: PersonalSiteApprovalRequest) => void) {}
+
+  setSiteApprovals(approvals: PersonalSiteApprovals | undefined): void {
+    this.siteApprovals = approvals;
+  }
 
   observeTab(tab: Pick<BrowserTab, "tabId" | "url" | "taskId">): void {
     if (!tab.url) return;
@@ -348,9 +380,10 @@ export class PersonalBrowserActionPolicy {
           step.action === "press" ? `keyboard:Enter|${scope}` : scope),
       });
     }
-    const missing = required.find((entry) => entry.confirmationId === undefined);
+    const needed = required.filter((entry) => entry.confirmationId !== undefined || !this.approvedBySite(entry.binding));
+    const missing = needed.find((entry) => entry.confirmationId === undefined);
     if (missing) this.authorize(undefined, missing.binding);
-    for (const entry of required) this.authorize(entry.confirmationId, entry.binding);
+    for (const entry of needed) this.authorize(entry.confirmationId, entry.binding);
   }
 
   /**
@@ -391,6 +424,7 @@ export class PersonalBrowserActionPolicy {
     this.confirmations.clear();
     this.interactions.clearReferences();
     this.pages.clear();
+    this.siteApprovals = undefined;
   }
 
   private requirePage(tabId: string): { url: string; refs: Set<string> } {
@@ -408,15 +442,41 @@ export class PersonalBrowserActionPolicy {
     return this.interactions.requireReference(tabId, ref);
   }
 
-  private authorize(confirmationId: string | undefined, binding: Parameters<BrowserConfirmationRegistry["create"]>[0]): void {
+  private siteApprovable(binding: BrowserConfirmationBinding): boolean {
+    return PERSONAL_SITE_APPROVABLE_CATEGORIES.has(binding.category) && !ONE_USE_ACTIONS.has(binding.action) &&
+      !binding.target.startsWith("keyboard:") && /^https?:\/\//u.test(binding.origin);
+  }
+
+  private approvedBySite(binding: BrowserConfirmationBinding): boolean {
+    const approvals = this.siteApprovals;
+    if (!approvals || !this.siteApprovable(binding)) return false;
+    const taskId = this.pages.get(binding.tabId)?.taskId;
+    const now = Date.now();
+    if (approvals.grants.some((grant) => grant.origin === binding.origin && grant.category === binding.category &&
+        grant.expiresAt > now && (grant.taskId === undefined || grant.taskId === taskId))) return true;
+    return approvals.autoSites.includes(new URL(binding.origin).hostname);
+  }
+
+  private authorize(confirmationId: string | undefined, binding: BrowserConfirmationBinding): void {
     if (confirmationId) {
       this.confirmations.consume(confirmationId, binding);
       return;
     }
+    if (this.approvedBySite(binding)) return;
     const confirmation = this.confirmations.create(binding);
+    const siteApprovable = this.siteApprovable(binding);
+    if (siteApprovable) {
+      this.requestSiteApproval?.({ tabId: binding.tabId, origin: binding.origin, category: binding.category });
+    }
     throw new AppError(
       "ACTION_REQUIRES_CONFIRMATION",
-      `Confirmation required: ${JSON.stringify({ ...confirmation, category: binding.category, action: binding.action, target: binding.target })}`,
+      `Confirmation required: ${JSON.stringify({
+        ...confirmation, category: binding.category, action: binding.action, target: binding.target,
+        ...(siteApprovable ? {
+          siteApproval: `Alternatively the user can allow ${binding.category} on ${binding.origin} for 30 minutes ` +
+            "from the MCP V3 notification or popup in Chrome; then retry without confirmationId.",
+        } : {}),
+      })}`,
     );
   }
 }

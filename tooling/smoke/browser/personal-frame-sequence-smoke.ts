@@ -510,6 +510,52 @@ async function main(): Promise<void> {
       throw new Error("The plan did not bound MCP to what the user approved.");
     }
 
+    // A refused script asks Chrome for a site approval; once the user allows it in
+    // the popup, scripts on that site run for the task without a confirmation, and
+    // automatic approval covers a host the user listed. Both end as the user says.
+    const popupTab = (type: string, chromeTabId: number, extra: Record<string, unknown> = {}) => popup.evaluate(
+      `chrome.runtime.sendMessage(${JSON.stringify({ type, tabId: chromeTabId, ...extra })})`) as Promise<Record<string, unknown>>;
+    const until = async <T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
+      for (let attempt = 0; ; attempt += 1) {
+        const value = await read();
+        if (done(value) || attempt >= 40) return value;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+    const approvalTask = "personal-approval-smoke";
+    const siteTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
+    const siteChromeId = Number(siteTab.slice("personal:".length));
+    await bridge.snapshot({ tabId: siteTab });
+    const title = { tabId: siteTab, function: "() => document.title" };
+    const firstScript = await bridge.evaluate(title).then(() => "allowed", (error: Error & { code?: string }) =>
+      error.code + (error.message.includes("siteApproval") ? "+siteApproval" : ""));
+    const asked = await until(() => popupTab("mcp-tab-status", siteChromeId), (state) => state.approval === "execute-script");
+    const approvedState = await popupTab("mcp-tab-approve", siteChromeId);
+    const granted = await until(() => bridge.evaluate(title).then((result) => result.value, errorCode),
+      (value) => value === "Minha aba");
+    const autoTab = (await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
+    const autoChromeId = Number(autoTab.slice("personal:".length));
+    await bridge.snapshot({ tabId: autoTab });
+    const autoTitle = { tabId: autoTab, function: "() => document.title" };
+    const beforeAuto = await bridge.evaluate(autoTitle).then(() => "allowed", errorCode);
+    const autoState = await popupTab("mcp-tab-auto", autoChromeId, { enabled: true });
+    const automatic = await until(() => bridge.evaluate(autoTitle).then((result) => result.value, errorCode),
+      (value) => value === "Plain");
+    await popupTab("mcp-tab-auto", autoChromeId, { enabled: false });
+    await bridge.finishTask({ taskId: approvalTask });
+    const nextTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
+    await bridge.snapshot({ tabId: nextTab });
+    const afterTask = await bridge.evaluate({ ...title, tabId: nextTab }).then(() => "allowed", errorCode);
+    await bridge.finishTask({ taskId: approvalTask });
+    report("site approvals", { firstScript, asked: asked.approval, approvedState: approvedState.grants, granted,
+      beforeAuto, autoSites: autoState.autoSites, automatic, afterTask });
+    if (firstScript !== "ACTION_REQUIRES_CONFIRMATION+siteApproval" || asked.approval !== "execute-script" ||
+        !Array.isArray(approvedState.grants) || approvedState.grants.length !== 1 || granted !== "Minha aba" ||
+        beforeAuto !== "ACTION_REQUIRES_CONFIRMATION" || JSON.stringify(autoState.autoSites) !== '["plain-site.test"]' ||
+        automatic !== "Plain" || afterTask !== "ACTION_REQUIRES_CONFIRMATION") {
+      throw new Error("Site approvals did not follow what the user allowed in Chrome.");
+    }
+
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     await context?.close().catch(() => undefined);

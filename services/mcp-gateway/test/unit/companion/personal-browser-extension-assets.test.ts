@@ -2720,6 +2720,7 @@ describe("personal browser extension assets", () => {
       axTargetsByTab: new Map(),
       taskGroups: new Map(),
       clearPersonalPlans: async () => undefined,
+      clearPersonalTaskApprovals: async () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
         tabs: {
@@ -2745,9 +2746,13 @@ describe("personal browser extension assets", () => {
     vm.runInContext('const BLOCKED_PRIVATE_ORIGINS = new Set(); const PERSONAL_PREFIX = "personal:"; ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
-      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context);
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; ' +
+      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' +
+      'const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
       "personalTabContextEnabled", "personalPlanRequired", "listPersonalOpenTabs", "personalTabSharingDispatch",
+      "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
+      "clearPersonalApprovalRequest",
       "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask",
       "readPersonalHandoff", "resumePersonalHandoff", "clearPersonalHandoff", "settlePersonalHandoffSignals",
       "notifyPersonalTaskFinished"]) {
@@ -2762,6 +2767,7 @@ describe("personal browser extension assets", () => {
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
+      autoEligible: true, auto: false, autoSites: [], grants: [],
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
@@ -2837,10 +2843,12 @@ describe("personal browser extension assets", () => {
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
       'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,AA=="; ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const BLOCKED_PRIVATE_ORIGINS = new Set(); ' +
-      'const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context);
+      'const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; ' +
+      'const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["readPersonalHandoff", "refuseDuringPersonalHandoff", "waitForUser", "resumePersonalHandoff",
       "clearPersonalHandoff", "settlePersonalHandoffSignals", "setPersonalSharedBadge", "notifyPersonalTaskFinished",
       "personalTabContextEnabled", "personalPlanRequired", "personalTabSharingDispatch",
+      "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
       "isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
     }
@@ -2914,17 +2922,19 @@ describe("personal browser extension assets", () => {
     })]]);
   });
 
-  it("hands the turn back only from the handoff notification's button and focuses the tab on a body click", async () => {
+  it("hands the turn back or grants a site approval only from a notification button and focuses the tab on a body click", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const start = serviceWorker.indexOf("chrome.notifications?.onButtonClicked");
     const end = serviceWorker.indexOf("\n});\n", serviceWorker.indexOf("chrome.notifications?.onClicked")) + 4;
     let onButton: ((id: string) => void) | undefined;
     let onBody: ((id: string) => void) | undefined;
     const resumed: number[] = [];
+    const granted: number[] = [];
     const focused: unknown[] = [];
     const context = vm.createContext({
       Number,
       resumePersonalHandoff: async (id: number) => { resumed.push(id); },
+      grantPersonalSiteApproval: async (id: number) => { granted.push(id); },
       chrome: {
         notifications: {
           onButtonClicked: { addListener: (fn: typeof onButton) => { onButton = fn; } },
@@ -2937,10 +2947,14 @@ describe("personal browser extension assets", () => {
     vm.runInContext(serviceWorker.slice(start, end), context);
     onButton!("mcp-finished:1");
     onButton!("mcp-handoff:7");
+    onButton!("mcp-approval:12");
     onBody!("mcp-handoff:9");
     await new Promise((resolve) => setImmediate(resolve));
+    onBody!("mcp-approval:12");
+    await new Promise((resolve) => setImmediate(resolve));
     expect(resumed).toEqual([7]);
-    expect(focused).toEqual([["tab", 9], ["window", 4, { focused: true }]]);
+    expect(granted).toEqual([12]);
+    expect(focused).toEqual([["tab", 9], ["window", 4, { focused: true }], ["tab", 12], ["window", 4, { focused: true }]]);
   });
 
   it("answers tab sharing messages only from the extension popup", async () => {
@@ -3132,6 +3146,116 @@ describe("personal browser extension assets", () => {
     await clear("t1");
     await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
     await expect(enforce("click", { tabId: "personal:7" })).rejects.toMatchObject(blocked("requires"));
+  });
+
+  it("offers site approvals only in Chrome, grants them only from the user's click and reports them to the bridge", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const start = serviceWorker.indexOf("const PERSONAL_SITE_GRANTS_KEY");
+    const end = serviceWorker.indexOf("async function releasePersonalSharedTab");
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>();
+    const storageArea = (map: Map<string, unknown>) => ({
+      get: async (key: string) => ({ [key]: map.get(key) }),
+      set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
+      remove: async (key: string) => { map.delete(key); },
+    });
+    const owned: Record<string, Record<string, unknown>> = {
+      "7": { tabId: "personal:7", ownership: "mcp", taskId: "t1" },
+      "8": { tabId: "personal:8", ownership: "user" },
+    };
+    const urls: Record<number, string> = { 7: "https://shop.example/cart", 8: "https://docs.example/d/1", 9: "http://intranet.local/" };
+    const sent: Array<Record<string, unknown>> = [];
+    const notifications: Array<[string, string, Record<string, unknown>?]> = [];
+    const context = vm.createContext({
+      URL, Date, Number, String, Math, Promise, Array, Object, Set,
+      PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
+      send: (message: Record<string, unknown>) => { sent.push(message); },
+      chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
+      readOwnedTabs: async () => owned,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async (id: number) => {
+          if (!urls[id]) throw new Error("No tab");
+          return { id, url: urls[id] };
+        } },
+        storage: { session: storageArea(session), local: storageArea(local) },
+        notifications: {
+          create: async (id: string, options: Record<string, unknown>) => { notifications.push(["create", id, options]); },
+          clear: async (id: string) => { notifications.push(["clear", id]); },
+        },
+      },
+    });
+    vm.runInContext(serviceWorker.slice(start, end), context);
+    vm.runInContext('const PERSONAL_PREFIX = "personal:"; const BLOCKED_PRIVATE_ORIGINS = new Set(); ' +
+      'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context);
+    for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "readPersonalHandoff",
+      "personalTabContextEnabled", "personalPlanRequired", "personalApprovalStatus", "personalTabSharingDispatch"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const record = vm.runInContext("recordPersonalApprovalRequest", context) as (message: Record<string, unknown>) => Promise<void>;
+    const grant = vm.runInContext("grantPersonalSiteApproval", context) as (chromeTabId: number) => Promise<boolean>;
+    const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
+      (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
+    const dispatch = vm.runInContext("personalTabSharingDispatch", context) as
+      (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    const ask = (tabId: string, origin: string, category = "upload-file") =>
+      record({ type: "site-approval-request", tabId, origin, category });
+
+    // Requests for tabs MCP does not hold, for another origin, or for categories that always ask are dropped.
+    await ask("personal:9", "http://intranet.local");
+    await ask("personal:7", "https://other.example");
+    await ask("personal:7", "https://shop.example", "purchase-or-payment");
+    expect(notifications).toEqual([]);
+    await ask("personal:7", "https://shop.example");
+    expect(notifications).toEqual([["create", "mcp-approval:7", expect.objectContaining({
+      title: "O MCP pede permissão em shop.example", buttons: [{ title: "Permitir por 30 min" }], requireInteraction: true,
+      message: "Enviar arquivos. Permitir libera isso neste site por 30 minutos, no máximo até a tarefa acabar.",
+    })]]);
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
+      approval: "upload-file", grants: [], auto: false, autoEligible: true });
+
+    // If the tab left the site before the click, nothing is granted.
+    urls[7] = "https://other.example/";
+    await expect(grant(7)).resolves.toBe(false);
+    expect(sent).toEqual([]);
+    urls[7] = "https://shop.example/cart";
+    await ask("personal:7", "https://shop.example");
+    const before = Date.now();
+    await expect(grant(7)).resolves.toBe(true);
+    const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown> & { expiresAt: number }>; autoSites: string[] };
+    expect(report).toEqual({ type: "site-approvals", autoSites: [],
+      grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1", expiresAt: expect.any(Number) }] });
+    expect(report.grants[0]!.expiresAt - before).toBeGreaterThanOrEqual(30 * 60 * 1000);
+    expect(report.grants[0]!.expiresAt - before).toBeLessThan(30 * 60 * 1000 + 5_000);
+    expect(notifications.at(-1)).toEqual(["clear", "mcp-approval:7"]);
+    await expect(grant(7)).resolves.toBe(false);
+    await expect(dispatch({ type: "mcp-tab-approve", tabId: 7 })).rejects.toThrow("not-requested");
+
+    // A shared tab's grant lasts only its 30 minutes; the popup can grant, show and revoke.
+    await ask("personal:8", "https://docs.example", "execute-script");
+    await expect(dispatch({ type: "mcp-tab-approve", tabId: 8 })).resolves.toMatchObject({
+      grants: [{ category: "execute-script", expiresAt: expect.any(Number) }] });
+    expect(session.has("mcpV3ApprovalRequest:8")).toBe(false);
+
+    // Finishing the task ends its grants and pending requests, but not time-only ones.
+    await ask("personal:7", "https://shop.example", "submit-form");
+    await clearTask("t1", [7]);
+    expect(session.has("mcpV3ApprovalRequest:7")).toBe(false);
+    expect((sent.at(-1) as typeof report).grants).toEqual([
+      { origin: "https://docs.example", category: "execute-script", expiresAt: expect.any(Number) }]);
+    await dispatch({ type: "mcp-tab-revoke", tabId: 8 });
+    expect((sent.at(-1) as typeof report).grants).toEqual([]);
+
+    // Automatic approval is set per public host from the popup and reported to the bridge.
+    await expect(dispatch({ type: "mcp-tab-auto", tabId: 9, enabled: true })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
+    await expect(dispatch({ type: "mcp-tab-auto", tabId: 7, enabled: true })).resolves.toMatchObject({
+      auto: true, autoSites: ["shop.example"] });
+    await dispatch({ type: "mcp-tab-auto", tabId: 8, enabled: true });
+    expect(sent.at(-1)).toEqual({ type: "site-approvals", grants: [], autoSites: ["docs.example", "shop.example"] });
+    await dispatch({ type: "mcp-tab-auto", tabId: 7, enabled: false });
+    expect(local.get("mcpV3AutoApproveSites")).toEqual(["docs.example"]);
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
   });
 
   it("answers plan window messages only from the extension's plan page", async () => {

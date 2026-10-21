@@ -12,6 +12,7 @@ import {
   projectBrowserSnapshot,
   sanitizeBrowserEvaluation,
   errorCodes,
+  type BrowserConfirmationCategory,
   type BrowserExecutor,
   type BrowserDragInput,
   type BrowserFrameSequenceInput,
@@ -32,8 +33,11 @@ import {
   PERSONAL_BROWSER_EXTENSION_VERSION,
 } from "./personal-browser-extension-assets.js";
 import {
+  PERSONAL_SITE_APPROVABLE_CATEGORIES,
   PersonalBrowserActionPolicy,
   type PersonalLegacyFrameTarget,
+  type PersonalSiteApprovalRequest,
+  type PersonalSiteApprovals,
 } from "./personal-browser-action-policy.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 
@@ -69,7 +73,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   readonly port: number;
 
   private readonly pending = new Map<string, PendingCall>();
-  private readonly actions = new PersonalBrowserActionPolicy();
+  private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
@@ -1053,6 +1057,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     });
   }
 
+  // Asks Chrome to offer the user a site approval; the user decides there.
+  private requestSiteApproval(request: PersonalSiteApprovalRequest): void {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify({ type: "site-approval-request", ...request }));
+    } catch {
+      // The confirmation error still reaches the caller.
+    }
+  }
+
   private authorize(requestUrl: string | undefined): boolean {
     if (!requestUrl) return false;
     try {
@@ -1080,6 +1095,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "heartbeat-ack" }));
       }
+      return;
+    }
+    if (message.type === "site-approvals") {
+      const approvals = parsePersonalSiteApprovals(message);
+      if (approvals) this.actions.setSiteApprovals(approvals);
       return;
     }
     if (message.type !== "response" || typeof message.id !== "string") return;
@@ -1451,6 +1471,25 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
       const info = await stat(directory).catch(() => undefined);
       if (info && info.mtimeMs < cutoff) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }));
+}
+
+function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
+  const { grants, autoSites } = message;
+  if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200) return undefined;
+  const parsedGrants: Array<PersonalSiteApprovals["grants"][number]> = [];
+  for (const grant of grants) {
+    if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
+        typeof grant.category !== "string" ||
+        !PERSONAL_SITE_APPROVABLE_CATEGORIES.has(grant.category as BrowserConfirmationCategory) ||
+        typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt) ||
+        (grant.taskId !== undefined && (typeof grant.taskId !== "string" || grant.taskId.length < 1 || grant.taskId.length > 128))) {
+      return undefined;
+    }
+    parsedGrants.push({ origin: grant.origin, category: grant.category, expiresAt: grant.expiresAt,
+      ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : {}) });
+  }
+  if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
+  return { grants: parsedGrants, autoSites: [...autoSites] as string[] };
 }
 
 function sendCancel(socket: WebSocket, id: string): void {

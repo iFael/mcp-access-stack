@@ -18,6 +18,7 @@ button:disabled { opacity: .55; } #status { min-height: 24px; padding-top: 8px; 
 .warning { color: #f2ce81; } code { user-select: all; }
 label { display: flex; gap: 8px; align-items: flex-start; color: #bdbdbd; margin: 6px 0; }
 hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
+[hidden] { display: none !important; }
 </style></head>
 <body>
 <h1>MCP V3 · Esta aba</h1>
@@ -25,9 +26,15 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <button id="tab-resume" type="button" hidden>Pronto, pode continuar</button>
 <button id="tab-share" type="button" hidden>Compartilhar esta aba com o MCP</button>
 <button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
+<p id="tab-approval" class="warning" hidden></p>
+<button id="tab-approve" type="button" hidden>Permitir por 30 min neste site</button>
+<p id="tab-grants" hidden></p>
+<button id="tab-revoke" type="button" hidden>Revogar as permissões deste site</button>
 <label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
 <label><input id="tab-notify" type="checkbox"> Avisar quando o MCP terminar uma tarefa</label>
 <label><input id="tab-require-plan" type="checkbox"> Pedir minha aprovação de um plano antes de o MCP agir</label>
+<label id="tab-auto-row" hidden><input id="tab-auto" type="checkbox"> Aprovar automaticamente neste site. Excluir, pagar, enviar, publicar, senhas e contratos continuam pedindo confirmação.</label>
+<p id="tab-auto-sites" hidden></p>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>
