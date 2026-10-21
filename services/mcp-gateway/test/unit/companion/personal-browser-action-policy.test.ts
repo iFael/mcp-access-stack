@@ -281,6 +281,34 @@ describe("personal browser authorization", () => {
     expect(outcome(() => policy.guardUpload(upload))).toBe("ACTION_REQUIRES_CONFIRMATION");
   });
 
+  it("treats saving or going on as the page's own risk on checkout pages, even on automatic sites", () => {
+    const policy = new PersonalBrowserActionPolicy();
+    const refs = [{ ref: "c-1", role: "button", name: "Confirmar" }, { ref: "c-2", role: "button", name: "Salvar endereço" }];
+    const category = (action: () => unknown) => {
+      try {
+        action();
+        return "allowed";
+      } catch (error) {
+        const message = (error as Error).message;
+        return (error as { code: string }).code + ":" + (/"category":"([a-z-]+)"/u.exec(message)?.[1] ?? "");
+      }
+    };
+    policy.setSiteApprovals({ grants: [], autoSites: ["shop.example"] });
+    policy.observeTab({ tabId: sample.tabId, url: "https://shop.example/conta", taskId: "task-1" });
+    policy.observeSnapshot({ ...sample, url: "https://shop.example/conta", title: "Minha conta", refs });
+    expect(category(() => policy.guardClick({ tabId: sample.tabId, ref: "c-2" }))).toBe("allowed");
+    expect(category(() => policy.guardClick({ tabId: sample.tabId, ref: "c-1" }))).toBe("allowed");
+
+    // The same controls on the checkout pay; the title alone is enough.
+    policy.observeSnapshot({ ...sample, url: "https://shop.example/p/77", title: "Finalizar compra", refs });
+    expect(category(() => policy.guardClick({ tabId: sample.tabId, ref: "c-1" })))
+      .toBe("ACTION_REQUIRES_CONFIRMATION:purchase-or-payment");
+    expect(category(() => policy.guardClick({ tabId: sample.tabId, ref: "c-2" })))
+      .toBe("ACTION_REQUIRES_CONFIRMATION:purchase-or-payment");
+    expect(category(() => policy.guardPress({ tabId: sample.tabId, key: "Enter" })))
+      .toBe("ACTION_REQUIRES_CONFIRMATION:purchase-or-payment");
+  });
+
   it("preflights every sensitive sequence step before execution", () => {
     const policy = prepare();
     expect(() => policy.guardSequence({ tabId: sample.tabId, steps: [

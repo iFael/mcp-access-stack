@@ -148,6 +148,36 @@ describe("BrowserInteractionContextService", () => {
     }
   });
 
+  it("judges generic and save controls by the page they are on", () => {
+    const service = new BrowserInteractionContextService();
+    const button = (name: string): BrowserElementReference => ({ ref: "b", role: "button", name });
+    const on = (url: string, title?: string) => ({ ...tab, url, ...(title ? { title } : {}) });
+    const category = (page: Pick<BrowserTab, "tabId" | "url" | "title">, reference: BrowserElementReference) =>
+      service.prepareDangerousAction(page, reference, "click")?.category;
+
+    // Checkout, account deletion and security pages, by host label, path or title.
+    expect(category(on("https://shop.example/checkout/review"), button("Confirmar"))).toBe("purchase-or-payment");
+    expect(category(on("https://pay.example/session/1"), button("Continue"))).toBe("purchase-or-payment");
+    expect(category(on("https://loja.example/p/1", "Pagamento - Loja"), button("Próximo"))).toBe("purchase-or-payment");
+    expect(category(on("https://app.example/settings/close-account"), button("Continuar"))).toBe("delete-or-cancel");
+    expect(category(on("https://app.example/conta/excluir"), button("Salvar"))).toBe("delete-or-cancel");
+    expect(category(on("https://app.example/settings/security"), button("Save"))).toBe("change-credentials");
+    expect(category(on("https://app.example/minha-conta/seguran%C3%A7a"), button("Salvar"))).toBe("change-credentials");
+    // A label that already names a risk keeps it; links and unlabeled risk stay as they were.
+    expect(category(on("https://shop.example/checkout"), button("Remove item"))).toBe("delete-or-cancel");
+    expect(category(on("https://shop.example/checkout"), { ref: "l", role: "link", name: "Continue shopping" })).toBeUndefined();
+    expect(category(on("https://shop.example/checkout"), button("Ver detalhes"))).toBeUndefined();
+    expect(category(on("https://app.example/profile"), button("Continuar"))).toBeUndefined();
+    expect(category(on("https://app.example/profile"), button("Salvar"))).toBe("submit-form");
+    // Orders, subscriptions and transfers are payments wherever they are.
+    for (const name of ["Confirmar pedido", "Finalizar pedido", "Assinar plano", "Transferir agora",
+      "Confirmar transferência", "Subscribe", "Doar"]) {
+      expect(category(on("https://app.example/profile"), button(name))).toBe("purchase-or-payment");
+    }
+    expect(service.pageRiskCategory(on("https://shop.example/carrinho"))).toBe("purchase-or-payment");
+    expect(service.pageRiskCategory(on("https://shop.example/produtos"))).toBeUndefined();
+  });
+
   it("returns no authorization for safe targets and prepares frame targets", () => {
     const service = new BrowserInteractionContextService();
 

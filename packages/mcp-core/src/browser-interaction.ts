@@ -168,11 +168,11 @@ export class BrowserInteractionContextService {
   }
 
   prepareDangerousAction(
-    tab: Pick<BrowserTab, "tabId" | "url">,
+    tab: Pick<BrowserTab, "tabId" | "url" | "title">,
     reference: BrowserElementReference,
     action: string,
   ): BrowserConfirmationBinding | undefined {
-    const category = classifyDangerousAction(reference);
+    const category = classifyDangerousAction(reference, tab);
     if (!category) return undefined;
     return this.prepareConfirmation(
       tab,
@@ -183,7 +183,7 @@ export class BrowserInteractionContextService {
   }
 
   prepareDangerousTarget(
-    tab: Pick<BrowserTab, "tabId" | "url">,
+    tab: Pick<BrowserTab, "tabId" | "url" | "title">,
     target: string,
     action: string,
     role = "element",
@@ -192,9 +192,17 @@ export class BrowserInteractionContextService {
       ref: role,
       role,
       name: target,
-    });
+    }, tab);
     if (!category) return undefined;
     return this.prepareConfirmation(tab, category, action, target);
+  }
+
+  /**
+   * What submitting anything on this page amounts to when the page itself is a
+   * checkout, an account deletion or a security page; undefined elsewhere.
+   */
+  pageRiskCategory(tab: Pick<BrowserTab, "url" | "title">): BrowserConfirmationCategory | undefined {
+    return classifyPageContext(tab);
   }
 
   prepareConfirmation(
@@ -244,12 +252,63 @@ function parseElementReferences(content: string): BrowserElementReference[] {
   return references;
 }
 
+function foldText(value: string): string {
+  return value.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+}
+
+// Generic "go on" controls carry no risk in their label; the page decides.
+const PROCEED_LABEL =
+  /\b(continue|next|ok|yes|confirm|finish|done|proceed|submit|continuar|proximo|sim|confirmar|finalizar|concluir|prosseguir|avancar)\b/u;
+// Links only navigate; the controls that pay, delete or save are buttons.
+const CLICKABLE_ROLE = /button|menuitem|submit/u;
+
+/**
+ * The page a control sits on: checkout, account deletion or security pages,
+ * read from the address (host label and path) and the title.
+ */
+function classifyPageContext(
+  context: Pick<BrowserTab, "url" | "title"> | undefined,
+): BrowserConfirmationCategory | undefined {
+  let place = "";
+  try {
+    const url = new URL(context?.url ?? "");
+    place = url.hostname.split(".")[0] + " " + decodeURIComponent(url.pathname);
+  } catch {
+    // An unparsable address adds nothing; the title may still say enough.
+  }
+  const text = foldText(place + " " + (context?.title ?? "")).replace(/[-_/.+]+/gu, " ");
+  if (/\b(delete|deactivate|terminate|unsubscribe|cancel|close account|close my account|excluir|apagar|encerrar|desativar|cancelar|descadastrar)\b/u.test(text)) {
+    return "delete-or-cancel";
+  }
+  if (/\b(checkout|payment|payments|pay|billing|cart|basket|pagamento|pagar|carrinho|pix|boleto|finalizar compra|place order|revisar pedido)\b/u.test(text)) {
+    return "purchase-or-payment";
+  }
+  if (/\b(password|security|2fa|mfa|credentials|senha|seguranca)\b/u.test(text)) return "change-credentials";
+  return undefined;
+}
+
 function classifyDangerousAction(
   reference: BrowserElementReference,
+  context?: Pick<BrowserTab, "url" | "title">,
 ): BrowserConfirmationCategory | undefined {
-  const value = `${reference.role} ${reference.name}`.toLowerCase();
-  if (/\b(delete|remove|cancel|terminate|unsubscribe|deactivate|excluir|remover|cancelar)\b/.test(value)) return "delete-or-cancel";
-  if (/\b(buy|purchase|pay|checkout|order|comprar|pagar|pagamento|finalizar compra)\b/.test(value)) return "purchase-or-payment";
+  const value = foldText(`${reference.role} ${reference.name}`);
+  const byLabel = classifyDangerousLabel(value);
+  // A control that only saves or goes on is as risky as the page it is on:
+  // "Confirmar" on a checkout is a payment, "Continue" on a close-account page
+  // deletes it. Such pages are never approved per site.
+  if (byLabel && byLabel !== "submit-form") return byLabel;
+  if (byLabel === "submit-form" ||
+      (CLICKABLE_ROLE.test(reference.role.toLowerCase()) && PROCEED_LABEL.test(value))) {
+    return classifyPageContext(context) ?? byLabel;
+  }
+  return byLabel;
+}
+
+function classifyDangerousLabel(value: string): BrowserConfirmationCategory | undefined {
+  if (/\b(delete|remove|cancel|terminate|unsubscribe|deactivate|excluir|remover|cancelar|apagar|encerrar|desativar|descadastrar)\b/.test(value)) return "delete-or-cancel";
+  if (/\b(buy|purchase|pay|checkout|order|subscribe|donate|comprar|pagar|pagamento|finalizar compra|assinar|contratar|doar)\b/.test(value) ||
+      /\btransfer/.test(value) ||
+      /\b(fazer|finalizar|confirmar|concluir|efetuar|enviar) pedido\b/.test(value)) return "purchase-or-payment";
   if (/\b(send|message|email|enviar|mensagem)\b/.test(value)) return "send-message";
   if (/\b(publish|post|publicar|postar)\b/.test(value)) return "publish-content";
   if (/\b(password|credential|security|senha|credencial)\b/.test(value)) return "change-credentials";
