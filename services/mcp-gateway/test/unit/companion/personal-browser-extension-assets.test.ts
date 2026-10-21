@@ -2244,13 +2244,87 @@ describe("personal browser extension assets", () => {
     expect(detached).toBe(0);
     expect(methods).toContain("Emulation.setDeviceMetricsOverride");
     expect(methods).toContain("Network.enable");
+    // The reset result must satisfy the strict viewport result contract.
     await expect(setViewport({ tabId: "personal:7", preset: "reset" }))
-      .resolves.toMatchObject({ width: 1280, height: 720,
-        deviceScaleFactor: 1.25, colorScheme: "dark", emulated: false });
+      .resolves.toEqual({ tabId: "personal:7", width: 1280, height: 720,
+        deviceScaleFactor: 1.25, colorScheme: "dark", emulated: false, mobile: false, touch: false,
+        userAgent: "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36" });
     expect(methods).toContain("Emulation.clearDeviceMetricsOverride");
     expect(detached).toBe(1);
     expect(listeners.size).toBe(0);
     expect(vm.runInContext("personalViewportSessions.size", ctx)).toBe(0);
+  });
+
+  it("resizes a real window only after moving a shared owned tab into its own window", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: Array<[string, unknown]> = [];
+    let windowId = 1;
+    let tabCount = 3;
+    let pageWidth = 1280;
+    const resets: number[] = [];
+    const ctx = vm.createContext({
+      Map, Promise,
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      delay: async () => undefined,
+      resetPersonalViewport: async (chromeTabId: number) => {
+        resets.push(chromeTabId);
+        vm.runInContext("personalViewportSessions.clear()", ctx);
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ id: 7, windowId, url: "https://example.com/" }) },
+        windows: {
+          get: async (id: number, options: unknown) => {
+            calls.push(["get", { id, options }]);
+            return { id, type: "normal", tabs: Array.from({ length: tabCount }, (_, index) => ({ id: index })) };
+          },
+          create: async (options: Record<string, unknown>) => {
+            calls.push(["create", options]);
+            windowId = 2;
+            tabCount = 1;
+            return { id: 2 };
+          },
+          update: async (id: number, options: Record<string, unknown>) => {
+            calls.push(["update", { id, ...options }]);
+            pageWidth = Number(options.width) - 16;
+            return { id, width: options.width, height: options.height };
+          },
+        },
+        scripting: {
+          executeScript: async () => [{ result: {
+            width: pageWidth, height: 600, dpr: 1.5, userAgent: "Mozilla/5.0 Chrome/155.0.0.0",
+            touch: false, colorScheme: "light",
+          } }],
+        },
+      },
+    });
+    vm.runInContext("const personalViewportSessions = new Map([['7', { borrowers: 0 }]]);", ctx);
+    for (const name of ["resizePersonalWindow", "configurePersonalViewport"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const setViewport = vm.runInContext("configurePersonalViewport", ctx) as
+      (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+    await expect(setViewport({ tabId: "personal:7", preset: "window", width: 900, height: 700 }))
+      .resolves.toEqual({
+        tabId: "personal:7", width: 884, height: 600, deviceScaleFactor: 1.5, mobile: false, touch: false,
+        colorScheme: "light", userAgent: "Mozilla/5.0 Chrome/155.0.0.0", emulated: false,
+        window: { width: 900, height: 700 },
+      });
+    expect(resets).toEqual([7]);
+    expect(calls).toEqual([
+      ["get", { id: 1, options: { populate: true } }],
+      ["create", { tabId: 7, focused: false, state: "normal", width: 900, height: 700 }],
+      ["update", { id: 2, state: "normal", width: 900, height: 700 }],
+    ]);
+
+    calls.length = 0;
+    await expect(setViewport({ tabId: "personal:7", preset: "window", width: 1024, height: 768 }))
+      .resolves.toMatchObject({ width: 1008, window: { width: 1024, height: 768 } });
+    expect(calls.map(([kind]) => kind)).toEqual(["get", "update"]);
+    expect(resets).toEqual([7]);
   });
 
   it("observes, inspects and responds to Chrome JavaScript dialogs without blind acceptance", async () => {

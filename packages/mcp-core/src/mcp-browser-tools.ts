@@ -364,7 +364,7 @@ function definitions(
       () => e.dialog(assumeParsed(v)),
       (activeContext) => e.dialog(assumeParsed(v), activeContext),
     )),
-    d("browser_viewport", "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. No other Chrome tabs are modified.", c.browserViewportInputSchema, c.browserViewportResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_viewport", "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. In personal Chrome, preset=window resizes a real Chrome window instead: an owned tab sharing the user's window first moves, unfocused, into a window of its own, so the user's window is never resized; the result reports the page viewport and the window size. No other Chrome tabs are modified.", c.browserViewportInputSchema, c.browserViewportResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.viewport(assumeParsed(v)),
       (activeContext) => e.viewport(assumeParsed(v), activeContext),

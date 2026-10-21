@@ -508,8 +508,65 @@ async function resetPersonalViewport(chromeTabId, tabId = "personal:" + chromeTa
     personalViewportSessions.delete(key);
     await detachGuardedDebugger(target, session.attached).catch(() => undefined);
   }
-  return { tabId, ...session.original, mobile: false, touch: false,
-    colorScheme: session.original.colorScheme, emulated: false };
+  const { width, height, deviceScaleFactor, userAgent, colorScheme } = session.original;
+  return { tabId, width, height, deviceScaleFactor, userAgent, mobile: false, touch: false,
+    colorScheme, emulated: false };
+}
+
+// A real window resize must never reshape the user's own browsing window, so an
+// owned tab that shares a window first moves, unfocused, into a window of its own.
+// Later resizes reuse that window, and it closes with the tab.
+async function resizePersonalWindow(chromeTabId, input, signal) {
+  const width = input.width, height = input.height;
+  if (!Number.isInteger(width) || !Number.isInteger(height)) {
+    throw coded("INVALID_ARGUMENT", "A window resize requires width and height.");
+  }
+  if (personalViewportSessions.has(String(chromeTabId))) {
+    // Emulated metrics would hide the real window size from the page.
+    await resetPersonalViewport(chromeTabId, input.tabId);
+  }
+  const readPage = async () => (await chrome.scripting.executeScript({
+    target: { tabId: chromeTabId }, func: () => ({
+      width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio || 1,
+      userAgent: navigator.userAgent, touch: (navigator.maxTouchPoints || 0) > 0,
+      colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    }),
+  }))[0]?.result;
+  try {
+    const before = await readPage();
+    const tab = await chrome.tabs.get(chromeTabId);
+    const current = await chrome.windows.get(tab.windowId, { populate: true });
+    let windowId = tab.windowId;
+    if (current.type !== "normal" || (current.tabs || []).length !== 1) {
+      const created = await chrome.windows.create({
+        tabId: chromeTabId, focused: false, state: "normal", width, height,
+      });
+      windowId = created.id;
+    }
+    throwIfAborted(signal, "viewport", true);
+    const resized = await chrome.windows.update(windowId, { state: "normal", width, height });
+    // The page sees the new size asynchronously; wait for it to change and hold,
+    // or to hold still when Chrome kept or clamped the size.
+    let page;
+    let stable = 0;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await delay(50, signal);
+      const next = await readPage();
+      stable = next && page && next.width === page.width && next.height === page.height ? stable + 1 : 0;
+      page = next;
+      const changed = before && page && (page.width !== before.width || page.height !== before.height);
+      if ((changed && stable >= 1) || stable >= 4) break;
+    }
+    if (!page) throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "The resized page could not be measured.");
+    return { tabId: input.tabId, width: Math.max(1, Math.round(page.width)),
+      height: Math.max(1, Math.round(page.height)), deviceScaleFactor: page.dpr,
+      mobile: false, touch: page.touch === true, colorScheme: page.colorScheme,
+      userAgent: String(page.userAgent ?? "").slice(0, 512), emulated: false,
+      window: { width: Math.max(1, resized.width ?? width), height: Math.max(1, resized.height ?? height) } };
+  } catch (error) {
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome cannot resize the owned tab's window.");
+  }
 }
 
 async function configurePersonalViewport(input, signal) {
@@ -517,6 +574,7 @@ async function configurePersonalViewport(input, signal) {
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "viewport", false);
   if (input.preset === "reset") return resetPersonalViewport(chromeTabId, input.tabId);
+  if (input.preset === "window") return resizePersonalWindow(chromeTabId, input, signal);
   const profiles = {
     desktop: { width: 1366, height: 768, dpr: 1, mobile: false, touch: false },
     tablet: { width: 768, height: 1024, dpr: 2, mobile: true, touch: true },

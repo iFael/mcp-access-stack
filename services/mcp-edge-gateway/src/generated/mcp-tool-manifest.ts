@@ -15061,7 +15061,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. No other Chrome tabs are modified.",
+    "description": "Set desktop, tablet, mobile or custom viewport emulation on one owned browser tab, including DPR, touch and color scheme. Reset restores the original tab settings. In personal Chrome, preset=window resizes a real Chrome window instead: an owned tab sharing the user's window first moves, unfocused, into a window of its own, so the user's window is never resized; the result reports the page viewport and the window size. No other Chrome tabs are modified.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -15097,6 +15097,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "tablet",
             "mobile",
             "custom",
+            "window",
             "reset"
           ],
           "type": "string"
@@ -15175,6 +15176,26 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maximum": 9007199254740991,
           "minimum": 1,
           "type": "integer"
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "width": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -24951,13 +24972,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "59eddbca71bb0ed84fb5db73d6336ff8afc3e21a0925baf52e7046dc9eedc071",
-  "serverVersion": "0.4.0-catalog.c59eddbca71bb.saca8cfec86ad",
+  "contractRevision": "1d24a515a620be784d81528f9644cc64a526fb4f393e4b0a645583c7c0b691df",
+  "serverVersion": "0.4.0-catalog.c1d24a515a620.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c59eddbca71bb.saca8cfec86ad"
+  "version": "0.4.0-catalog.c1d24a515a620.saca8cfec86ad"
 } as const;

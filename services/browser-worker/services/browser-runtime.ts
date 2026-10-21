@@ -584,6 +584,9 @@ export class BrowserRuntime implements BrowserExecutor {
     _context: OperationContext = {},
   ): Promise<BrowserViewportResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (input.preset === "window") {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Real window resize is available in personal Chrome mode.");
+    }
     if (!this.driver.viewport) {
       throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Browser driver does not support viewport emulation.");
     }

@@ -163,6 +163,8 @@ async function main(): Promise<void> {
     context = await chromium.launchPersistentContext(path.join(root, "profile"), {
       channel: "chromium",
       headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
+      // No Playwright viewport emulation: page size follows the real window, as in a personal Chrome.
+      viewport: null,
       ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
       args: [
         `--disable-extensions-except=${bridge.extensionDirectory}`,
@@ -170,6 +172,7 @@ async function main(): Promise<void> {
         "--host-resolver-rules=MAP *.test 127.0.0.1",
         "--no-proxy-server",
         "--site-per-process",
+        "--window-size=1280,900",
       ],
     });
     for (let attempt = 0; attempt < 100 && !bridge.isConnected(); attempt += 1) {
@@ -370,6 +373,23 @@ async function main(): Promise<void> {
     const shown = await bridge.extract({ tabId: plain.tab.tabId, selector: "#out" });
     report("plain ref click", shown);
     if (!JSON.stringify(shown).includes("Mostrado")) throw new Error("Plain ref click did not run.");
+
+    // A real window resize moves the owned tab out of the shared window first,
+    // so the window the user browses in keeps its size.
+    const userPage = context.pages()[0]!;
+    const outerSize = () => userPage.evaluate<string>("[outerWidth, outerHeight].join('x')");
+    const userWindowBefore = await outerSize();
+    const firstSize = await bridge.viewport({ tabId: plain.tab.tabId, preset: "window", width: 900, height: 700 });
+    const secondSize = await bridge.viewport({ tabId: plain.tab.tabId, preset: "window", width: 1100, height: 760 });
+    const sharedWindowTab = await bridge.viewport({ tabId: typing.tab.tabId, preset: "desktop" });
+    await bridge.viewport({ tabId: typing.tab.tabId, preset: "reset" });
+    const userWindowAfter = await outerSize();
+    report("window resize", { firstSize, secondSize, userWindowBefore, userWindowAfter });
+    if (firstSize.window?.width !== 900 || secondSize.window?.width !== 1100 || userWindowBefore !== userWindowAfter ||
+        firstSize.emulated || secondSize.width <= firstSize.width || firstSize.width > 900 ||
+        !sharedWindowTab.emulated) {
+      throw new Error("The owned tab's window did not resize as requested.");
+    }
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     await context?.close().catch(() => undefined);

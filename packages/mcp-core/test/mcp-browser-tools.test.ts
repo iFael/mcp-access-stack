@@ -80,6 +80,9 @@ describe("browser viewport contracts", () => {
     expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "desktop", deviceScaleFactor: 6 }).success).toBe(false);
     expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", userAgent: "My browser 1.0" }).success).toBe(true);
     expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "reset", userAgent: "bad" }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900, height: 700 }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900, height: 700, touch: true }).success).toBe(false);
   });
 });
 

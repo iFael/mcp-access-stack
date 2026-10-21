@@ -873,7 +873,7 @@ export const browserScreenshotTransportResultSchema = browserScreenshotResultSch
 
 export const browserViewportInputSchema = z.object({
   tabId: tabIdSchema,
-  preset: z.enum(["desktop", "tablet", "mobile", "custom", "reset"]),
+  preset: z.enum(["desktop", "tablet", "mobile", "custom", "window", "reset"]),
   width: z.number().int().min(240).max(3840).optional(),
   height: z.number().int().min(240).max(2160).optional(),
   deviceScaleFactor: z.number().min(0.5).max(4).optional(),
@@ -881,14 +881,15 @@ export const browserViewportInputSchema = z.object({
   touch: z.boolean().optional(),
   userAgent: z.string().min(1).max(512).regex(/^[\x20-\x7e]+$/u).optional(),
 }).strict().superRefine((input, ctx) => {
-  if (input.preset === "custom" && (input.width === undefined || input.height === undefined)) {
-    ctx.addIssue({ code: "custom", message: "Custom viewport requires width and height." });
+  const sized = input.preset === "custom" || input.preset === "window";
+  if (sized && (input.width === undefined || input.height === undefined)) {
+    ctx.addIssue({ code: "custom", message: "Custom viewport and window resize require width and height." });
   }
-  if (input.preset !== "custom" && (input.width !== undefined || input.height !== undefined)) {
-    ctx.addIssue({ code: "custom", message: "Dimensions are only valid with custom viewport." });
+  if (!sized && (input.width !== undefined || input.height !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Dimensions are only valid with custom viewport or window resize." });
   }
-  if (input.preset === "reset" && (input.deviceScaleFactor !== undefined || input.colorScheme !== undefined || input.touch !== undefined || input.userAgent !== undefined)) {
-    ctx.addIssue({ code: "custom", message: "Reset does not allow emulation overrides." });
+  if ((input.preset === "reset" || input.preset === "window") && (input.deviceScaleFactor !== undefined || input.colorScheme !== undefined || input.touch !== undefined || input.userAgent !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Reset and window resize do not allow emulation overrides." });
   }
 });
 export type BrowserViewportInput = z.infer<typeof browserViewportInputSchema>;
@@ -902,6 +903,10 @@ export const browserViewportResultSchema = z.object({
   colorScheme: z.enum(["light", "dark", "no-preference"]),
   emulated: z.boolean(),
   userAgent: z.string().max(512),
+  window: z.object({
+    width: z.number().int().min(1),
+    height: z.number().int().min(1),
+  }).strict().optional(),
 }).strict();
 export type BrowserViewportResult = z.infer<typeof browserViewportResultSchema>;
 

@@ -610,6 +610,9 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         deviceScaleFactor: original.deviceScaleFactor, userAgent: original.userAgent,
         mobile: false, touch: false, colorScheme: original.colorScheme, emulated: false };
     }
+    if (input.preset === "window") {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Real window resize is available in personal Chrome mode.");
+    }
     const presets = {
       desktop: { width: 1366, height: 768, dpr: 1, mobile: false, touch: false },
       tablet: { width: 768, height: 1024, dpr: 2, mobile: true, touch: true },
