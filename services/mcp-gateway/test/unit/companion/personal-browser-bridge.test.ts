@@ -617,6 +617,58 @@ describe("PersonalBrowserBridge", () => {
     await expect(readFile(staged[1]!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("uploads only screenshots this session captured, by path", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const delivered: string[] = [];
+    const reply = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request" || !request.id) return;
+      if (request.operation === "screenshot") {
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId, path: "personal://screenshot/x.jpg", sizeBytes: 3, mimeType: "image/jpeg", contentBase64: "YWJj" } }));
+      } else if (request.operation === "upload") {
+        const info = request.input as { files: Array<{ name: string; path: string }>; totalBytes: number };
+        delivered.push(info.files[0]!.name);
+        void readFile(info.files[0]!.path).then((bytes) => extension.send(JSON.stringify({
+          type: "response", id: request.id, ok: true,
+          result: { tabId, completed: true, fileCount: 1, totalBytes: bytes.length },
+        })));
+      }
+    };
+    try {
+      await primeReference(bridge, extension, tabId, "zone");
+      extension.on("message", reply);
+      const shot = await bridge.screenshot({ tabId });
+      const upload = async (files: Array<Record<string, string>>) => {
+        const input = { tabId, dropRef: "zone", files } as never;
+        try {
+          return await bridge.upload(input);
+        } catch (error) {
+          const typed = error as { code: string; message: string };
+          if (typed.code !== "ACTION_REQUIRES_CONFIRMATION") throw error;
+          const confirmationId = JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId as string;
+          return bridge.upload({ ...(input as object), confirmationId } as never);
+        }
+      };
+      await expect(upload([{ name: "tela.jpg", screenshotPath: shot.path }]))
+        .resolves.toMatchObject({ completed: true, totalBytes: 3 });
+      expect(delivered).toEqual(["tela.jpg"]);
+      await expect(upload([{ name: "tela.png", screenshotPath: shot.path }]))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      const outsider = path.join(path.dirname(shot.path), "planted.jpg");
+      await writeFile(outsider, "abc");
+      await expect(upload([{ name: "planted.jpg", screenshotPath: outsider }]))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(upload([{ name: "hosts.jpg", screenshotPath: "/etc/hosts" }]))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      expect(delivered).toEqual(["tela.jpg"]);
+    } finally {
+      extension.off("message", reply);
+      await close();
+    }
+  });
+
   it("sweeps staged uploads past retention left by an earlier companion", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);

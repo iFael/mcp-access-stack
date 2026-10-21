@@ -1003,10 +1003,15 @@ export type BrowserDownloadResult = z.infer<typeof browserDownloadResultSchema>;
 export const browserUploadFileSchema = z
   .object({
     name: z.string().trim().min(1).max(255).regex(/^[^/\\\x00]+$/u),
-    contentBase64: z.string().max(8 * 1024 * 1024),
+    contentBase64: z.string().max(8 * 1024 * 1024).optional(),
+    // A browser_screenshot result path; only the session that captured it can read it.
+    screenshotPath: z.string().min(1).max(4_096).optional(),
     mimeType: z.string().trim().min(1).max(255).optional(),
   })
-  .strict();
+  .strict()
+  .refine((file) => (file.contentBase64 === undefined) !== (file.screenshotPath === undefined), {
+    message: "Provide exactly one of contentBase64 or screenshotPath.",
+  });
 export type BrowserUploadFile = z.infer<typeof browserUploadFileSchema>;
 
 export const browserUploadInputSchema = z

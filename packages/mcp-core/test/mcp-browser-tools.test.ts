@@ -333,7 +333,7 @@ function mockExecutor(): BrowserExecutor {
       completed: true as const,
       fileCount: files.length,
       totalBytes: files.reduce(
-        (total, file) => total + Buffer.from(file.contentBase64, "base64").byteLength,
+        (total, file) => total + Buffer.from(file.contentBase64 ?? "", "base64").byteLength,
         0,
       ),
     })),
@@ -767,6 +767,30 @@ describe("registerBrowserTools", () => {
         mimeType: "text/markdown",
       }],
     }));
+  });
+
+  it("routes earlier screenshots to browser_upload by path without a workspace", async () => {
+    const executor = mockExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerBrowserTools(server, executor, {});
+    const screenshotPath = "C:\\state\\browser\\personal-artifacts\\screenshots\\0f1e.jpg";
+    await expect(callTool(server, "browser_upload", {
+      tabId: "personal:1",
+      screenshotPaths: [screenshotPath],
+      dropRef: "p-9",
+    })).resolves.toMatchObject({ structuredContent: { completed: true, fileCount: 1 } });
+    expect(executor.upload).toHaveBeenCalledWith(expect.objectContaining({
+      tabId: "personal:1",
+      dropRef: "p-9",
+      files: [{ name: "0f1e.jpg", screenshotPath }],
+    }));
+    await expect(callTool(server, "browser_upload", { tabId: "personal:1", workspaceId: "workspace" }))
+      .resolves.toMatchObject({ isError: true });
+    expect(browserUploadFileSchema.safeParse({ name: "a.jpg", contentBase64: "aGVsbG8=", screenshotPath }).success).toBe(false);
+    expect(browserUploadFileSchema.safeParse({ name: "a.jpg" }).success).toBe(false);
   });
 
   it("rejects fields that do not belong to the selected advanced action", async () => {

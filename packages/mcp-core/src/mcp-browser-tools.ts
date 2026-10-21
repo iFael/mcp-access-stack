@@ -66,15 +66,27 @@ type Register = (
 const browserUploadToolInputSchema = z
   .object({
     tabId: c.browserUploadInputSchema.shape.tabId,
-    workspaceId: z.string().trim().min(1).max(128),
-    paths: z.array(z.string().min(1).max(4_096)).min(1).max(10),
+    workspaceId: z.string().trim().min(1).max(128).optional(),
+    paths: z.array(z.string().min(1).max(4_096)).min(1).max(10).optional(),
+    screenshotPaths: z.array(z.string().min(1).max(4_096)).min(1).max(10).optional(),
     triggerRef: c.browserUploadInputSchema.shape.triggerRef,
     inputRef: c.browserUploadInputSchema.shape.inputRef,
     selector: c.browserUploadInputSchema.shape.selector,
     dropRef: c.browserUploadInputSchema.shape.dropRef,
     confirmationId: c.browserUploadInputSchema.shape.confirmationId,
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if ((input.workspaceId === undefined) !== (input.paths === undefined)) {
+      context.addIssue({ code: "custom", path: ["paths"], message: "Workspace uploads require workspaceId and paths together." });
+    }
+    if (input.paths === undefined && input.screenshotPaths === undefined) {
+      context.addIssue({ code: "custom", path: ["paths"], message: "Provide workspace paths, screenshotPaths, or both." });
+    }
+    if ((input.paths?.length ?? 0) + (input.screenshotPaths?.length ?? 0) > 10) {
+      context.addIssue({ code: "custom", path: ["screenshotPaths"], message: "Upload at most 10 files." });
+    }
+  });
 const browserNetworkToolInputSchema = z
   .object({
     action: z.enum(["list", "inspect"]),
@@ -519,7 +531,7 @@ function definitions(
       () => e.download(assumeParsed(v)),
       (activeContext) => e.download(assumeParsed(v), activeContext),
     )),
-    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
+    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode. In personal mode, screenshotPaths uploads earlier browser_screenshot results (their path) from this session without resending the image.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
     d("browser_console", "Reads or clears sanitized console messages with regex pattern, errors-only, and result limit from an MCP-owned tab. Basic sanitized console reads are available in interactive mode; trace/video and detailed network inspection remain diagnostic-only.", c.browserConsoleInputSchema, c.browserConsoleResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.console(assumeParsed(v)),
@@ -547,29 +559,39 @@ async function runUploadTool(
   input: z.infer<typeof browserUploadToolInputSchema>,
   context?: OperationContext,
 ): Promise<c.BrowserUploadResult> {
-  if (!workspace) {
+  const workspaceId = input.workspaceId;
+  const paths = input.paths ?? [];
+  if (paths.length > 0 && (!workspace || workspaceId === undefined)) {
     throw new AppError(
       "BROWSER_CAPABILITY_UNSUPPORTED",
       "Workspace-backed browser uploads are not configured on this MCP server.",
     );
   }
   const loaded = await Promise.all(
-    input.paths.map((filePath) =>
+    paths.map((filePath) =>
       callWithOptionalContext(
         context,
-        () => workspace.readBinaryFile({ workspaceId: input.workspaceId, path: filePath }),
-        (activeContext) => workspace.readBinaryFile(
-          { workspaceId: input.workspaceId, path: filePath },
+        () => workspace!.readBinaryFile({ workspaceId: workspaceId!, path: filePath }),
+        (activeContext) => workspace!.readBinaryFile(
+          { workspaceId: workspaceId!, path: filePath },
           activeContext,
         ),
       ),
     ),
   );
-  const files = loaded.map((file) => ({
-    name: browserUploadFileName(file.path),
-    contentBase64: file.contentBase64,
-    mimeType: inferMimeType(file.path),
-  }));
+  // Screenshot bytes never pass through the model: the browser executor reads
+  // only screenshots its own session captured.
+  const files = [
+    ...loaded.map((file) => ({
+      name: browserUploadFileName(file.path),
+      contentBase64: file.contentBase64,
+      mimeType: inferMimeType(file.path),
+    })),
+    ...(input.screenshotPaths ?? []).map((screenshotPath) => ({
+      name: screenshotUploadName(screenshotPath),
+      screenshotPath,
+    })),
+  ];
   const uploadInput = c.browserUploadInputSchema.parse({
     tabId: input.tabId,
     files,
@@ -584,6 +606,12 @@ async function runUploadTool(
     () => browser.upload(uploadInput),
     (activeContext) => browser.upload(uploadInput, activeContext),
   );
+}
+
+function screenshotUploadName(screenshotPath: string): string {
+  const name = screenshotPath.split(/[\\/]+/u).at(-1)?.trim();
+  if (!name) throw new AppError("INVALID_ARGUMENT", "Screenshot path has no file name.");
+  return name;
 }
 
 function browserUploadFileName(filePath: string): string {

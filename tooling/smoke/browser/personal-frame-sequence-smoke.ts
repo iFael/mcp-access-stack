@@ -60,13 +60,14 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <div id="zone" role="button" aria-label="Soltar arquivos" style="width:320px;height:120px;border:2px dashed">Arraste aqui</div>
     <label>Arquivo <input type="file" id="arquivo"></label>
     <button id="reler">Reler arquivos</button>
-    <p id="out">vazio</p><p id="again">nada</p>
+    <p id="out">vazio</p><p id="again">nada</p><p id="kind">-</p>
     <script>
       const zone = document.getElementById("zone");
       zone.addEventListener("dragover", (event) => event.preventDefault());
       zone.addEventListener("drop", async (event) => {
         event.preventDefault();
         globalThis.dropped = event.dataTransfer.files[0];
+        document.getElementById("kind").textContent = "tipo=" + dropped.type + " bytes=" + dropped.size;
         document.getElementById("out").textContent = "drop:" + dropped.name + ":" + await dropped.text();
       });
       document.getElementById("reler").addEventListener("click", async () => {
@@ -348,6 +349,20 @@ async function main(): Promise<void> {
     const zoomedSize = jpegSize(await readFile(zoomed.path));
     report("zoomed region", zoomedSize);
     if (zoomedSize.width !== 400 || zoomedSize.height !== 160) throw new Error("Zoomed region has the wrong resolution.");
+
+    // An earlier screenshot is dropped by path; its bytes never pass through the caller.
+    const zoneAgain = (await bridge.snapshot({ tabId: uploadTab })).refs.find((item) => item.name === "Soltar arquivos")?.ref;
+    const shotUpload = { tabId: uploadTab, dropRef: zoneAgain!, files: [{ name: "quadro.jpg", screenshotPath: zoomed.path }] };
+    try {
+      await bridge.upload(shotUpload);
+    } catch (error) {
+      await bridge.upload({ ...shotUpload, confirmationId: confirmationIdOf(error) });
+    }
+    const shotKind = await bridge.extract({ tabId: uploadTab, selector: "#kind" });
+    report("screenshot upload", shotKind.value);
+    if (shotKind.value !== `tipo=image/jpeg bytes=${zoomed.sizeBytes}`) {
+      throw new Error("The earlier screenshot did not reach the drop zone intact.");
+    }
 
     // Slow typing sends accented and non-Latin characters as real keystrokes and
     // commits CJK runs through an IME composition.

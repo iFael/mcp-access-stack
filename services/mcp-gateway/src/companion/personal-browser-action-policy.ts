@@ -101,7 +101,9 @@ export class PersonalBrowserActionPolicy {
         input.inputRef, input.triggerRef, input.selector, input.dropRef,
         input.files.map((file) => [
           file.name, file.mimeType,
-          createHash("sha256").update(file.contentBase64).digest("hex"),
+          file.contentBase64 === undefined
+            ? "screenshot:" + file.screenshotPath
+            : createHash("sha256").update(file.contentBase64).digest("hex"),
         ]),
       ]))
       .digest("hex");

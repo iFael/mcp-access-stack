@@ -40,6 +40,7 @@ import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const STAGED_UPLOAD_RETENTION_MS = 30 * 60 * 1_000;
+const MAX_UPLOADABLE_SCREENSHOTS = 200;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 // A 12 MiB PDF needs up to 16 MiB of base64 transport. Other results retain their schemas.
 const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
@@ -80,6 +81,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   // Chrome reads uploaded files lazily (drop handlers, later form submits), so
   // staged copies outlive the call until their tab closes or retention ends.
   private readonly stagedUploads = new Map<string, { tabId: string; timer: NodeJS.Timeout }>();
+  // Only screenshots this bridge captured may be uploaded by path.
+  private readonly uploadableScreenshots = new Set<string>();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -547,6 +550,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     await mkdir(directory, { recursive: true });
     const absolutePath = path.join(directory, `${randomUUID()}.${extension}`);
     await writeFile(absolutePath, bytes, { mode: 0o600 });
+    this.uploadableScreenshots.add(absolutePath);
+    if (this.uploadableScreenshots.size > MAX_UPLOADABLE_SCREENSHOTS) {
+      this.uploadableScreenshots.delete(this.uploadableScreenshots.values().next().value!);
+    }
     // A screenshot is a prerequisite for pixel-only actions, never a grant.
     // The separate one-use confirmation is still required for every click.
     try {
@@ -683,11 +690,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
             /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:[.]|$)/iu.test(file.name)) {
           throw new AppError("INVALID_ARGUMENT", "Invalid personal Chrome upload filename.");
         }
-        if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(file.contentBase64)) {
-          throw new AppError("INVALID_ARGUMENT", "Upload payload is not canonical base64.");
-        }
-        const bytes = Buffer.from(file.contentBase64, "base64");
-        if (bytes.toString("base64") !== file.contentBase64 || bytes.length > 6 * 1024 * 1024) {
+        const bytes = file.screenshotPath !== undefined
+          ? await this.readUploadableScreenshot(file.name, file.screenshotPath)
+          : decodeUploadPayload(file.contentBase64 ?? "");
+        if (bytes.length > 6 * 1024 * 1024) {
           throw new AppError("LIMIT_EXCEEDED", "An individual upload exceeds its permitted size.");
         }
         totalBytes += bytes.length;
@@ -713,6 +719,25 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       return result;
     } finally {
       if (!delivered) await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  private async readUploadableScreenshot(name: string, screenshotPath: string): Promise<Buffer> {
+    const source = path.resolve(screenshotPath);
+    if (!this.uploadableScreenshots.has(source)) {
+      throw new AppError("INVALID_ARGUMENT",
+        "screenshotPath must be a browser_screenshot path captured in this personal Chrome session.");
+    }
+    const kind = path.extname(source).toLowerCase();
+    const named = path.extname(name).toLowerCase();
+    if (named !== kind && !(kind === ".jpg" && named === ".jpeg")) {
+      throw new AppError("INVALID_ARGUMENT", `A screenshot upload name must keep its ${kind} extension.`);
+    }
+    try {
+      return await readFile(source);
+    } catch {
+      this.uploadableScreenshots.delete(source);
+      throw new AppError("INVALID_ARGUMENT", "The screenshot file no longer exists; capture it again.");
     }
   }
 
@@ -1223,6 +1248,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       pending.reject(error);
     }
   }
+}
+
+function decodeUploadPayload(contentBase64: string): Buffer {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(contentBase64)) {
+    throw new AppError("INVALID_ARGUMENT", "Upload payload is not canonical base64.");
+  }
+  const bytes = Buffer.from(contentBase64, "base64");
+  if (bytes.toString("base64") !== contentBase64) {
+    throw new AppError("LIMIT_EXCEEDED", "An individual upload exceeds its permitted size.");
+  }
+  return bytes;
 }
 
 function parsePersonalBrowserHello(raw: string): PersonalBrowserConnectionInfo | undefined {

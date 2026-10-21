@@ -24155,7 +24155,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode.",
+    "description": "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode. In personal mode, screenshotPaths uploads earlier browser_screenshot results (their path) from this session without resending the image.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -24196,6 +24196,16 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
+        "screenshotPaths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
+        },
         "selector": {
           "maxLength": 2000,
           "minLength": 1,
@@ -24218,9 +24228,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       },
       "required": [
-        "tabId",
-        "workspaceId",
-        "paths"
+        "tabId"
       ],
       "type": "object"
     },
@@ -24972,13 +24980,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1d24a515a620be784d81528f9644cc64a526fb4f393e4b0a645583c7c0b691df",
-  "serverVersion": "0.4.0-catalog.c1d24a515a620.saca8cfec86ad",
+  "contractRevision": "cc0b5f1537878ca56299cba4168f59ba52b1be990e24d1197317295f9d7c712f",
+  "serverVersion": "0.4.0-catalog.ccc0b5f153787.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1d24a515a620.saca8cfec86ad"
+  "version": "0.4.0-catalog.ccc0b5f153787.saca8cfec86ad"
 } as const;
