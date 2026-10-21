@@ -140,6 +140,12 @@ function classifyPath(repositoryPath, impact) {
     impact.operationsTooling = true;
     return;
   }
+  // The personal Chrome smoke drives the gateway's companion bridge and extension.
+  if (projectPath.startsWith("tooling/smoke/browser/personal-")) {
+    impact.mcpGateway = true;
+    impact.operationsTooling = true;
+    return;
+  }
   if (
     projectPath.startsWith("deploy/") ||
     projectPath.startsWith("operations/") ||
