@@ -451,7 +451,7 @@ function definitions(
       () => e.press(assumeParsed(v)),
       (activeContext) => e.press(assumeParsed(v), activeContext),
     )),
-    d("browser_wait", "Waits for time, text, or an element ref and returns the resulting semantic state. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait.", c.browserWaitInputSchema, c.browserActionResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_wait", "Waits for time, text, or an element ref and returns the resulting semantic state. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait. In personal Chrome, forUser hands the tab to the user for a login, CAPTCHA or a step only they should do: Chrome notifies them with that reason, MCP neither reads nor acts in the tab meanwhile, and the call completes when they click 'Pronto, pode continuar'. On STATE_NOT_REACHED they are still busy; call again with forUser to keep waiting, then take a fresh snapshot.", c.browserWaitInputSchema, c.browserActionResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.wait(assumeParsed(v)),
       (activeContext) => e.wait(assumeParsed(v), activeContext),

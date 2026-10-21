@@ -1192,6 +1192,9 @@ export class BrowserRuntime implements BrowserExecutor {
     context: OperationContext = {},
   ): Promise<BrowserActionResult> {
     const tab = this.tabsRegistry.assertMcpOwned(input.tabId);
+    if (input.forUser !== undefined) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Handing a tab to the user is available in personal Chrome mode.");
+    }
     await this.selectBrowserTab(tab);
     const actionStarted = performance.now();
     await this.waitSelected(tab.tabId, input);

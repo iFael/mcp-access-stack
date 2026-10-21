@@ -18527,7 +18527,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Waits for time, text, or an element ref and returns the resulting semantic state. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait.",
+    "description": "Waits for time, text, or an element ref and returns the resulting semantic state. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait. In personal Chrome, forUser hands the tab to the user for a login, CAPTCHA or a step only they should do: Chrome notifies them with that reason, MCP neither reads nor acts in the tab meanwhile, and the call completes when they click 'Pronto, pode continuar'. On STATE_NOT_REACHED they are still busy; call again with forUser to keep waiting, then take a fresh snapshot.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -18537,6 +18537,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "properties": {
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "forUser": {
+          "maxLength": 200,
+          "minLength": 1,
           "type": "string"
         },
         "knownRevision": {
@@ -25006,13 +25011,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "70aacc8a7620c0f2229e57e398dd9ce5f9fb3b0585df4ed61b03bae2e8c6adfc",
-  "serverVersion": "0.4.0-catalog.c70aacc8a7620.saca8cfec86ad",
+  "contractRevision": "787c8f3664f9ce969bbbd2de891fe1a1a0eea5359d3559459fc1e01a1422173f",
+  "serverVersion": "0.4.0-catalog.c787c8f3664f9.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c70aacc8a7620.saca8cfec86ad"
+  "version": "0.4.0-catalog.c787c8f3664f9.saca8cfec86ad"
 } as const;

@@ -89,7 +89,7 @@ export function buildPersonalBrowserExtensionAssets(
     version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
-    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation"],
+    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation", "notifications"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
@@ -277,6 +277,7 @@ async function runRequest(operation, input, signal, timing) {
     if (timing && queueKey) timing.queueMs = performance.now() - queuedAt;
     const started = performance.now();
     const previousSnapshot = timing?.snapshotMs ?? 0;
+    await refuseDuringPersonalHandoff(operation, input);
     try { return await perform(operation, input, signal, timing); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
   };
@@ -401,9 +402,13 @@ async function personalTabContextEnabled() {
 // tab stays the user's: MCP never closes it, and finishing tasks or "Parar de
 // compartilhar" only releases it.
 async function personalTabSharingDispatch(message) {
-  if (message.type === "mcp-tab-context") {
+  if (message.type === "mcp-tab-context" || message.type === "mcp-tab-notify") {
     if (typeof message.enabled !== "boolean") throw Error("invalid");
-    await chrome.storage.session.set({ [PERSONAL_TAB_CONTEXT_KEY]: message.enabled });
+    if (message.type === "mcp-tab-context") {
+      await chrome.storage.session.set({ [PERSONAL_TAB_CONTEXT_KEY]: message.enabled });
+    } else {
+      await chrome.storage.local.set({ [PERSONAL_NOTIFY_ON_FINISH_KEY]: message.enabled });
+    }
   }
   if (!Number.isSafeInteger(message.tabId)) throw Error("no-tab");
   const tab = await chrome.tabs.get(message.tabId);
@@ -426,7 +431,9 @@ async function personalTabSharingDispatch(message) {
     const owned = await readOwnedTabs();
     if (owned[String(tab.id)]?.ownership !== "user") throw Error("not-shared");
     await releasePersonalSharedTab(tab.id);
-  } else if (message.type !== "mcp-tab-status" && message.type !== "mcp-tab-context") {
+  } else if (message.type === "mcp-tab-resume") {
+    if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
+  } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify"].includes(message.type)) {
     throw Error("unsupported");
   }
   const owned = await readOwnedTabs();
@@ -438,20 +445,127 @@ async function personalTabSharingDispatch(message) {
   } catch {
     shareable = false;
   }
+  const handoff = metadata ? await readPersonalHandoff(tab.id) : undefined;
+  const waiting = handoff && !handoff.done ? handoff.reason : undefined;
+  const notify = (await chrome.storage.local.get(PERSONAL_NOTIFY_ON_FINISH_KEY).catch(() => ({})))?.[PERSONAL_NOTIFY_ON_FINISH_KEY] === true;
   return { ok: true, shared: metadata?.ownership === "user", mcp: metadata?.ownership === "mcp",
-    shareable, context: await personalTabContextEnabled() };
+    shareable, context: await personalTabContextEnabled(), notify,
+    ...(waiting ? { waiting } : {}) };
 }
 
 async function releasePersonalSharedTab(chromeTabId) {
   await finalizePersonalDialog(chromeTabId, true);
   await resetPersonalViewport(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
+  await clearPersonalHandoff(chromeTabId);
   await setPersonalSharedBadge(chromeTabId, false);
 }
 
 async function setPersonalSharedBadge(chromeTabId, shared) {
+  await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#2563eb" }))
+    .catch(() => undefined);
   await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: shared ? "MCP" : "" }))
     .catch(() => undefined);
+}
+
+const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:";
+const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish";
+const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAl0lEQVR42u3ayw2AMAwE0ZxomVqpBipACeRj72YscZ93A5tSGKO5zuNueSSj02F6w8Mgo8OXQmbHT0OsCp8CiYofgoiO70ZIA7LE/0Jki/+MkAZkjW9GSAOyx1cRACIBKvGvCAAAAAAAAEAawLsQgE2+Cfw/KdlKsBsy3M7tu9yVX69bHDgsTkw2Rz6LM6vNodvmVwOmcx4kG+wc6mPGcQAAAABJRU5ErkJggg==";
+
+async function readPersonalHandoff(chromeTabId) {
+  const key = PERSONAL_HANDOFF_PREFIX + chromeTabId;
+  const value = await chrome.storage.session.get(key).catch(() => ({}));
+  const handoff = value?.[key];
+  return handoff && typeof handoff.reason === "string" ? handoff : undefined;
+}
+
+// While the user has the turn in a tab, MCP neither reads nor acts in it. Once
+// they hand it back, the next MCP call consumes that answer.
+async function refuseDuringPersonalHandoff(operation, input) {
+  if (typeof input?.tabId !== "string" || (operation === "wait" && typeof input.forUser === "string")) return;
+  let chromeTabId;
+  try {
+    chromeTabId = chromeTabIdFrom(input.tabId);
+  } catch {
+    return;
+  }
+  const handoff = await readPersonalHandoff(chromeTabId);
+  if (handoff?.done) await clearPersonalHandoff(chromeTabId);
+  else if (handoff) {
+    throw coded("EXECUTION_STATE_INVALID", "The user has the turn in this tab (" + handoff.reason +
+      "). Call browser_wait with forUser to wait until they hand it back.");
+  }
+}
+
+// Hands an owned or shared tab to the user for a login, a CAPTCHA or a choice
+// only they should make, and waits until they click "Pronto, pode continuar" in
+// the popup or the notification. The turn is not handed back on a timeout.
+async function waitForUser(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId, true);
+  let handoff = await readPersonalHandoff(chromeTabId);
+  if (handoff?.done) {
+    // Handed back after an earlier call timed out.
+    await clearPersonalHandoff(chromeTabId);
+    return { tabId: input.tabId, completed: true };
+  }
+  if (!handoff) {
+    handoff = { reason: String(input.forUser).slice(0, 200), startedAt: Date.now() };
+    await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: handoff });
+    await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#d97706" }))
+      .catch(() => undefined);
+    await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: "VOCÊ" })).catch(() => undefined);
+    await Promise.resolve(chrome.notifications?.create?.("mcp-handoff:" + chromeTabId, {
+      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP precisa de você",
+      message: handoff.reason, buttons: [{ title: "Pronto, pode continuar" }], requireInteraction: true, priority: 2,
+    })).catch(() => undefined);
+  }
+  const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 50000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await delay(Math.min(250, Math.max(1, deadline - Date.now())), signal);
+    const current = await readPersonalHandoff(chromeTabId);
+    if (!current || current.done) {
+      // Without a record the user stopped sharing or the task ended meanwhile.
+      if (!current) await requireOwnedMetadata(chromeTabId, true);
+      await clearPersonalHandoff(chromeTabId);
+      return { tabId: input.tabId, completed: true };
+    }
+  }
+  throw coded("STATE_NOT_REACHED", "The user has not handed the tab back yet (" + handoff.reason +
+    "). Call browser_wait with forUser again to keep waiting.");
+}
+
+// The user hands the tab back; the answer waits for MCP's next call.
+async function resumePersonalHandoff(chromeTabId) {
+  const handoff = await readPersonalHandoff(chromeTabId);
+  if (!handoff || handoff.done) return false;
+  await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: { ...handoff, done: true } });
+  await settlePersonalHandoffSignals(chromeTabId);
+  return true;
+}
+
+async function clearPersonalHandoff(chromeTabId) {
+  const existed = Boolean(await readPersonalHandoff(chromeTabId));
+  await chrome.storage.session.remove(PERSONAL_HANDOFF_PREFIX + chromeTabId).catch(() => undefined);
+  if (existed) await settlePersonalHandoffSignals(chromeTabId);
+}
+
+async function settlePersonalHandoffSignals(chromeTabId) {
+  await Promise.resolve(chrome.notifications?.clear?.("mcp-handoff:" + chromeTabId)).catch(() => undefined);
+  const owned = await readOwnedTabs().catch(() => ({}));
+  await setPersonalSharedBadge(chromeTabId, owned[String(chromeTabId)]?.ownership === "user");
+}
+
+async function notifyPersonalTaskFinished(taskId, closed, released) {
+  const value = await chrome.storage.local.get(PERSONAL_NOTIFY_ON_FINISH_KEY).catch(() => ({}));
+  if (value?.[PERSONAL_NOTIFY_ON_FINISH_KEY] !== true || closed + released === 0) return;
+  await Promise.resolve(chrome.notifications?.create?.("mcp-finished:" + Date.now(), {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP terminou uma tarefa",
+    message: (taskId ? "Tarefa " + String(taskId).slice(0, 80) + ": " : "") + closed + " aba(s) fechada(s), " +
+      released + " devolvida(s) a você.",
+    priority: 0,
+  })).catch(() => undefined);
 }
 
 async function finalizePersonalDialog(chromeTabId, dismiss) {
@@ -1699,6 +1813,7 @@ async function press(input, signal) {
 }
 
 async function wait(input, signal) {
+  if (typeof input.forUser === "string") return waitForUser(input, signal);
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 30000;
@@ -4355,6 +4470,7 @@ async function finishTask(input) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
     await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
+    if (!target.shared) await clearPersonalHandoff(target.chromeTabId);
   }
   if (input.keepOpen === true) {
     const groupedTabIds = [];
@@ -4365,7 +4481,9 @@ async function finishTask(input) {
       }
     }
     if (groupedTabIds.length > 0) await chrome.tabs.ungroup(groupedTabIds);
+    for (const target of targets) await clearPersonalHandoff(target.chromeTabId);
     for (const target of targets) if (target.shared) await setPersonalSharedBadge(target.chromeTabId, false);
+    await notifyPersonalTaskFinished(input.taskId, 0, targets.length);
     await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const target of targets) delete owned[String(target.chromeTabId)];
@@ -4396,6 +4514,7 @@ async function finishTask(input) {
     await writeOwnedTabs(owned);
   });
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+  await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
   return {
     completed: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -4973,6 +5092,20 @@ if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.run
 chrome.tabs.onRemoved.addListener((tabId) => {
   personalViewportSessions.delete(String(tabId));
   void removeOwnedTab(tabId);
+  void chrome.storage.session.remove(PERSONAL_HANDOFF_PREFIX + tabId).catch(() => undefined);
+  void Promise.resolve(chrome.notifications?.clear?.("mcp-handoff:" + tabId)).catch(() => undefined);
+});
+// A notification button is Chrome UI: only the user can press it.
+chrome.notifications?.onButtonClicked?.addListener((id) => {
+  const match = /^mcp-handoff:(\\d+)$/u.exec(id);
+  if (match) void resumePersonalHandoff(Number(match[1]));
+});
+chrome.notifications?.onClicked?.addListener((id) => {
+  const match = /^mcp-handoff:(\\d+)$/u.exec(id);
+  if (!match) return;
+  void chrome.tabs.update(Number(match[1]), { active: true })
+    .then((tab) => chrome.windows.update(tab.windowId, { focused: true }))
+    .catch(() => undefined);
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);

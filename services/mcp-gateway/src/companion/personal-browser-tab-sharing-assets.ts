@@ -1,7 +1,8 @@
 /**
- * Popup controls for sharing the user's own tabs with MCP V3. Only the user,
- * clicking in the extension popup, can share a tab or the list of open tabs;
- * neither the bridge nor a page can reach these messages.
+ * Popup controls for sharing the user's own tabs with MCP V3, handing a tab
+ * back after a login or CAPTCHA, and task notifications. Only the user,
+ * clicking in the extension popup, can do any of this; neither the bridge nor
+ * a page can reach these messages.
  */
 export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
 (() => {
@@ -9,7 +10,9 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const share = document.getElementById("tab-share");
   const unshare = document.getElementById("tab-unshare");
   const context = document.getElementById("tab-context");
-  const controls = [share, unshare, context];
+  const resume = document.getElementById("tab-resume");
+  const notify = document.getElementById("tab-notify");
+  const controls = [share, unshare, context, resume, notify];
   let tabId;
   async function call(type, extra) {
     const response = await chrome.runtime.sendMessage({ type, tabId, ...extra });
@@ -18,15 +21,20 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   }
   function render(state) {
     context.checked = state.context === true;
+    notify.checked = state.notify === true;
     share.hidden = !(state.shareable && !state.shared);
     unshare.hidden = !state.shared;
-    status.textContent = state.shared
-      ? "Esta aba está compartilhada com o MCP. O MCP pode ler e agir nela, mas nunca a fecha."
-      : state.mcp
-        ? "Esta aba foi aberta pelo MCP."
-        : state.shareable
-          ? "Esta aba é só sua. Compartilhe para o MCP trabalhar nela."
-          : "Esta aba não pode ser compartilhada: endereço privado, local ou página interna do Chrome.";
+    resume.hidden = typeof state.waiting !== "string";
+    status.textContent = typeof state.waiting === "string"
+      ? "O MCP está esperando você nesta aba: " + state.waiting.replace(/[.!?]?$/u, ".") +
+        " Quando terminar, clique em Pronto."
+      : state.shared
+        ? "Esta aba está compartilhada com o MCP. O MCP pode ler e agir nela, mas nunca a fecha."
+        : state.mcp
+          ? "Esta aba foi aberta pelo MCP."
+          : state.shareable
+            ? "Esta aba é só sua. Compartilhe para o MCP trabalhar nela."
+            : "Esta aba não pode ser compartilhada: endereço privado, local ou página interna do Chrome.";
   }
   async function refresh() {
     try {
@@ -51,5 +59,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   share.addEventListener("click", () => void act("mcp-tab-share"));
   unshare.addEventListener("click", () => void act("mcp-tab-unshare"));
   context.addEventListener("change", () => void act("mcp-tab-context", { enabled: context.checked }));
+  notify.addEventListener("change", () => void act("mcp-tab-notify", { enabled: notify.checked }));
+  resume.addEventListener("click", () => void act("mcp-tab-resume"));
   void refresh();
 })();`;

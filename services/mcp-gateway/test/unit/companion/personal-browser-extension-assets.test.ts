@@ -1032,7 +1032,8 @@ describe("personal browser extension assets", () => {
     const context = vm.createContext({ URL, AbortController, TextEncoder, performance: { now: () => clock },
       setTimeout, clearTimeout, setInterval: () => 0,
       WebSocket: class { static OPEN = 1; static CONNECTING = 0; readyState = 1; send(raw: string) { sent.push(JSON.parse(raw) as Record<string, unknown>); } },
-      chrome: { tabs: { onRemoved: { addListener() {} } }, runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } } },
+      chrome: { tabs: { onRemoved: { addListener() {} } }, runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } },
+        storage: { session: { get: async () => ({}) } } },
       collect: (m: Record<string, unknown>) => sent.push(m), tick: () => { clock += 10; } });
     vm.runInContext(serviceWorker, context);
     vm.runInContext('perform = async (operation, input) => { tick(); await Promise.resolve(); return { tabId: input.tabId, completed: true, content: "secret-page" }; };', context);
@@ -2735,15 +2736,20 @@ describe("personal browser extension assets", () => {
           set: async (entries: Record<string, unknown>) => {
             for (const [key, value] of Object.entries(entries)) session.set(key, value);
           },
-        } },
+          remove: async (key: string) => { session.delete(key); },
+        }, local: { get: async () => ({}) } },
         action: { setBadgeText: async ({ tabId, text }: { tabId: number; text: string }) => { badges.push([tabId, text]); } },
       },
     });
     vm.runInContext('const BLOCKED_PRIVATE_ORIGINS = new Set(); const PERSONAL_PREFIX = "personal:"; ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
+    vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
       "personalTabContextEnabled", "listPersonalOpenTabs", "personalTabSharingDispatch",
-      "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask"]) {
+      "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask",
+      "readPersonalHandoff", "resumePersonalHandoff", "clearPersonalHandoff", "settlePersonalHandoffSignals",
+      "notifyPersonalTaskFinished"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
     }
     const dispatch = vm.runInContext("personalTabSharingDispatch", context) as
@@ -2754,7 +2760,7 @@ describe("personal browser extension assets", () => {
       (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
-      ok: true, shared: false, mcp: false, shareable: true, context: false,
+      ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false,
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
@@ -2789,6 +2795,149 @@ describe("personal browser extension assets", () => {
     await expect(dispatch({ type: "mcp-tab-unshare", tabId: 9 })).rejects.toThrow("not-shared");
     await expect(dispatch({ type: "mcp-tab-unshare", tabId: 5 })).resolves.toMatchObject({ shared: false, shareable: true });
     expect(owned).toEqual({});
+  });
+
+  it("hands a tab to the user, refuses MCP work there until they hand it back, and notifies them", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>();
+    const badges: string[] = [];
+    const notifications: Array<[string, string, Record<string, unknown>?]> = [];
+    const owned: Record<string, Record<string, unknown>> = { "7": { tabId: "personal:7", ownership: "mcp" } };
+    let onTick: (() => Promise<void>) | undefined;
+    const storageArea = (map: Map<string, unknown>) => ({
+      get: async (key: string) => ({ [key]: map.get(key) }),
+      set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
+      remove: async (key: string) => { map.delete(key); },
+    });
+    const context = vm.createContext({
+      Date, Number, String, Math, Promise, Array, Object,
+      chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
+      requireOwnedMetadata: async (id: number) => {
+        if (!owned[String(id)]) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_OWNED" });
+        return owned[String(id)];
+      },
+      readOwnedTabs: async () => owned,
+      delay: async () => { await onTick?.(); },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async (id: number) => ({ id, url: "https://login.example/" }) },
+        storage: { session: storageArea(session), local: storageArea(local) },
+        action: {
+          setBadgeText: async ({ text }: { text: string }) => { badges.push(text); },
+          setBadgeBackgroundColor: async () => undefined,
+        },
+        notifications: {
+          create: async (id: string, options: Record<string, unknown>) => { notifications.push(["create", id, options]); },
+          clear: async (id: string) => { notifications.push(["clear", id]); },
+        },
+      },
+    });
+    vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,AA=="; ' +
+      'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const BLOCKED_PRIVATE_ORIGINS = new Set();', context);
+    for (const fn of ["readPersonalHandoff", "refuseDuringPersonalHandoff", "waitForUser", "resumePersonalHandoff",
+      "clearPersonalHandoff", "settlePersonalHandoffSignals", "setPersonalSharedBadge", "notifyPersonalTaskFinished", "personalTabContextEnabled", "personalTabSharingDispatch",
+      "isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const waitForUser = vm.runInContext("waitForUser", context) as (input: Record<string, unknown>) => Promise<unknown>;
+    const refuse = vm.runInContext("refuseDuringPersonalHandoff", context) as
+      (operation: string, input: Record<string, unknown>) => Promise<void>;
+    const dispatch = vm.runInContext("personalTabSharingDispatch", context) as
+      (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    const notifyFinished = vm.runInContext("notifyPersonalTaskFinished", context) as
+      (taskId: string | undefined, closed: number, released: number) => Promise<void>;
+
+    // Nobody answers: the call times out, the turn stays with the user and MCP is refused there.
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login no banco", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(notifications).toEqual([["create", "mcp-handoff:7", expect.objectContaining({
+      title: "O MCP precisa de você", message: "Faça login no banco", requireInteraction: true,
+      buttons: [{ title: "Pronto, pode continuar" }],
+    })]]);
+    expect(badges).toEqual(["VOCÊ"]);
+    await expect(refuse("snapshot", { tabId: "personal:7" })).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+    await expect(refuse("click", { tabId: "personal:8" })).resolves.toBeUndefined();
+    await expect(refuse("wait", { tabId: "personal:7", forUser: "again" })).resolves.toBeUndefined();
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
+      mcp: true, waiting: "Faça login no banco", notify: false,
+    });
+
+    // Waiting again neither re-notifies nor changes the reason; the user's click completes it.
+    let ticks = 0;
+    onTick = async () => {
+      ticks += 1;
+      if (ticks === 2) await dispatch({ type: "mcp-tab-resume", tabId: 7 });
+    };
+    await expect(waitForUser({ tabId: "personal:7", forUser: "outro motivo", timeoutMs: 60_000 }))
+      .resolves.toEqual({ tabId: "personal:7", completed: true });
+    expect(notifications.filter(([kind]) => kind === "create")).toHaveLength(1);
+    expect(notifications.at(-1)).toEqual(["clear", "mcp-handoff:7"]);
+    expect(badges.at(-1)).toBe("");
+    await expect(refuse("snapshot", { tabId: "personal:7" })).resolves.toBeUndefined();
+    await expect(dispatch({ type: "mcp-tab-resume", tabId: 7 })).rejects.toThrow("not-waiting");
+
+    // Handed back between two calls: the next call completes at once, and nothing lingers.
+    onTick = undefined;
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Aprove no celular", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(dispatch({ type: "mcp-tab-resume", tabId: 7 })).resolves.not.toHaveProperty("waiting");
+    await expect(refuse("snapshot", { tabId: "personal:7" })).resolves.toBeUndefined();
+    expect(session.size).toBe(0);
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Aprove no celular", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await dispatch({ type: "mcp-tab-resume", tabId: 7 });
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Aprove no celular", timeoutMs: 1 }))
+      .resolves.toEqual({ tabId: "personal:7", completed: true });
+    expect(session.size).toBe(0);
+
+    // If the user stops sharing instead of handing the tab back, the wait reports it.
+    onTick = async () => { delete owned["7"]; session.clear(); };
+    owned["7"] = { tabId: "personal:7", ownership: "mcp" };
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Resolva o CAPTCHA", timeoutMs: 60_000 }))
+      .rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
+
+    // Finished-task notifications are opt-in from the popup.
+    owned["7"] = { tabId: "personal:7", ownership: "mcp" };
+    notifications.length = 0;
+    await notifyFinished("t1", 2, 1);
+    expect(notifications).toEqual([]);
+    await dispatch({ type: "mcp-tab-notify", tabId: 7, enabled: true });
+    await notifyFinished("t1", 2, 1);
+    await notifyFinished("t2", 0, 0);
+    expect(notifications).toEqual([["create", expect.stringMatching(/^mcp-finished:/u), expect.objectContaining({
+      title: "O MCP terminou uma tarefa", message: "Tarefa t1: 2 aba(s) fechada(s), 1 devolvida(s) a você.",
+    })]]);
+  });
+
+  it("hands the turn back only from the handoff notification's button and focuses the tab on a body click", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const start = serviceWorker.indexOf("chrome.notifications?.onButtonClicked");
+    const end = serviceWorker.indexOf("\n});\n", serviceWorker.indexOf("chrome.notifications?.onClicked")) + 4;
+    let onButton: ((id: string) => void) | undefined;
+    let onBody: ((id: string) => void) | undefined;
+    const resumed: number[] = [];
+    const focused: unknown[] = [];
+    const context = vm.createContext({
+      Number,
+      resumePersonalHandoff: async (id: number) => { resumed.push(id); },
+      chrome: {
+        notifications: {
+          onButtonClicked: { addListener: (fn: typeof onButton) => { onButton = fn; } },
+          onClicked: { addListener: (fn: typeof onBody) => { onBody = fn; } },
+        },
+        tabs: { update: async (id: number) => { focused.push(["tab", id]); return { windowId: 4 }; } },
+        windows: { update: async (id: number, options: unknown) => { focused.push(["window", id, options]); } },
+      },
+    });
+    vm.runInContext(serviceWorker.slice(start, end), context);
+    onButton!("mcp-finished:1");
+    onButton!("mcp-handoff:7");
+    onBody!("mcp-handoff:9");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(resumed).toEqual([7]);
+    expect(focused).toEqual([["tab", 9], ["window", 4, { focused: true }]]);
   });
 
   it("answers tab sharing messages only from the extension popup", async () => {

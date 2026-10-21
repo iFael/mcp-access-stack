@@ -22,9 +22,11 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <body>
 <h1>MCP V3 · Esta aba</h1>
 <p id="tab-status" role="status" aria-live="polite">Carregando…</p>
+<button id="tab-resume" type="button" hidden>Pronto, pode continuar</button>
 <button id="tab-share" type="button" hidden>Compartilhar esta aba com o MCP</button>
 <button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
 <label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
+<label><input id="tab-notify" type="checkbox"> Avisar quando o MCP terminar uma tarefa</label>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>

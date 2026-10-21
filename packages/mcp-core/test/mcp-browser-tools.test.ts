@@ -9,6 +9,7 @@ import {
   browserTabActionInputSchema,
   browserDialogInputSchema,
   browserViewportInputSchema,
+  browserWaitInputSchema,
   browserSequenceInputSchema,
   browserSequenceResultSchema,
   browserHoverInputSchema,
@@ -255,6 +256,14 @@ describe("browser upload file contract", () => {
     expect(browserUploadFileSchema.safeParse({ ...file, name: "folder\\secret" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "secret\0.txt" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "playbook.md" }).success).toBe(true);
+  });
+
+  it("accepts a user handoff wait only on its own", () => {
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login" }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", timeoutMs: 50_000 }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", text: "Bem-vindo" }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: " " }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "x".repeat(201) }).success).toBe(false);
   });
 
   it("accepts screenshot zoom only for a clipped region", () => {

@@ -406,8 +406,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("press", { ...args[0], guard }, args[1]);
   }
 
-  wait(...args: Parameters<BrowserExecutor["wait"]>): ReturnType<BrowserExecutor["wait"]> {
-    return this.call("wait", args[0], args[1]);
+  async wait(...args: Parameters<BrowserExecutor["wait"]>): ReturnType<BrowserExecutor["wait"]> {
+    const result = await this.call("wait", args[0], args[1]);
+    if (args[0].forUser !== undefined) {
+      // The user may have navigated or changed the page while they had the turn.
+      const tabId = args[0].tabId;
+      this.actions.discard([tabId]);
+      this.snapshots.discard(tabId);
+      this.coordinateClicks.delete(tabId);
+      this.pixelEvidence.delete(tabId);
+      this.coordinateDrags.delete(tabId);
+    }
+    return result;
   }
 
   extract(...args: Parameters<BrowserExecutor["extract"]>): ReturnType<BrowserExecutor["extract"]> {

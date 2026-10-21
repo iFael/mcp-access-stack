@@ -447,6 +447,26 @@ async function main(): Promise<void> {
       throw new Error("Stopping the share did not release the tab cleanly.");
     }
 
+    // Handing a tab to the user: MCP is refused there until the user hands it back
+    // from the popup, and a timed-out wait does not take the turn back.
+    const handTab = plain.tab.tabId;
+    const handChromeId = Number(handTab.slice("personal:".length));
+    const popupFor = (type: string) => popup.evaluate(
+      `chrome.runtime.sendMessage({ type: ${JSON.stringify(type)}, tabId: ${handChromeId} })`) as Promise<Record<string, unknown>>;
+    const pending = await bridge.wait({ tabId: handTab, forUser: "Faça login no site de teste", timeoutMs: 300 })
+      .then(() => "completed", (error: { code?: string }) => error.code);
+    const pausedRead = await bridge.snapshot({ tabId: handTab }).then(() => "allowed", (error: { code?: string }) => error.code);
+    const waitingState = await popupFor("mcp-tab-status");
+    const resumed = await popupFor("mcp-tab-resume");
+    const handedBack = await bridge.wait({ tabId: handTab, forUser: "Faça login no site de teste", timeoutMs: 300 });
+    const afterHandoff = await bridge.snapshot({ tabId: handTab });
+    report("user handoff", { pending, pausedRead, waitingState, resumed, handedBack });
+    if (pending !== "STATE_NOT_REACHED" || pausedRead !== "EXECUTION_STATE_INVALID" ||
+        waitingState.waiting !== "Faça login no site de teste" || resumed.ok !== true || resumed.waiting ||
+        !handedBack.completed || afterHandoff.refs.length === 0) {
+      throw new Error("The user handoff did not pause and resume MCP as expected.");
+    }
+
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     await context?.close().catch(() => undefined);
