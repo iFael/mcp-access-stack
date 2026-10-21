@@ -40,6 +40,10 @@ import {
   type PersonalSiteApprovals,
   type PersonalSiteGrant,
 } from "./personal-browser-action-policy.js";
+import {
+  PersonalBrowserRecorder,
+  personalRecordingTransportSchema,
+} from "./personal-browser-recording.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 
 const DEFAULT_PORT = 3361;
@@ -76,6 +80,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly pending = new Map<string, PendingCall>();
   private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
+  private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
   private readonly coordinateDrags = new Map<string, {
@@ -104,6 +109,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       path.resolve(options.stateRoot),
       "browser",
       "personal-extension",
+    );
+    this.recorder = new PersonalBrowserRecorder(
+      path.join(path.resolve(options.stateRoot), "browser", "personal-artifacts"),
+      {
+        start: (input, context) => this.call("videoStart", input, context),
+        stop: (input, context) => this.call("videoStop", input, context),
+      },
     );
   }
 
@@ -149,6 +161,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.pixelEvidence.clear();
     this.coordinateDrags.clear();
     await this.releaseStagedUploads();
+    await this.recorder.close();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -795,28 +808,30 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("networkInspect", args[0], args[1]);
   }
 
+  // A personal trace is the timeline of what reached Chrome for the tab, with
+  // the tab's recording as a WebM aligned to it; a video is that recording.
   traceStart(
-    ..._args: Parameters<BrowserExecutor["traceStart"]>
+    ...args: Parameters<BrowserExecutor["traceStart"]>
   ): ReturnType<BrowserExecutor["traceStart"]> {
-    throw unsupported("browser_trace");
+    return this.recorder.traceStart(...args);
   }
 
   traceStop(
-    ..._args: Parameters<BrowserExecutor["traceStop"]>
+    ...args: Parameters<BrowserExecutor["traceStop"]>
   ): ReturnType<BrowserExecutor["traceStop"]> {
-    throw unsupported("browser_trace");
+    return this.recorder.traceStop(...args);
   }
 
   videoStart(
-    ..._args: Parameters<BrowserExecutor["videoStart"]>
+    ...args: Parameters<BrowserExecutor["videoStart"]>
   ): ReturnType<BrowserExecutor["videoStart"]> {
-    throw unsupported("browser_video");
+    return this.recorder.videoStart(...args);
   }
 
   videoStop(
-    ..._args: Parameters<BrowserExecutor["videoStop"]>
+    ...args: Parameters<BrowserExecutor["videoStop"]>
   ): ReturnType<BrowserExecutor["videoStop"]> {
-    throw unsupported("browser_video");
+    return this.recorder.videoStop(...args);
   }
 
   async pdf(...args: Parameters<BrowserExecutor["pdf"]>): ReturnType<BrowserExecutor["pdf"]> {
@@ -877,7 +892,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         text: networkResult.text, truncated: networkResult.truncated,
         collectedAt: networkResult.collectedAt,
       },
-      traceActive: false, videoActive: false,
+      traceActive: this.recorder.isActive(input.tabId, "trace"),
+      videoActive: this.recorder.isActive(input.tabId, "video"),
       collectedAt: new Date().toISOString(),
     };
   }
@@ -887,6 +903,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const tokenPath = path.join(personalRoot, "bridge-token.txt");
     await mkdir(this.extensionDirectory, { recursive: true });
     await sweepStaleStagedUploads(this.uploadsRoot());
+    await this.recorder.sweep();
     this.token = await readOrCreateToken(tokenPath);
     const blockedPrivateOrigins = await readPrivateSiteOrigins(this.options.stateRoot);
     const assets = buildPersonalBrowserExtensionAssets(
@@ -976,6 +993,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.coordinateClicks.clear();
           this.coordinateDrags.clear();
           if (previous && previous !== socket) {
+            this.recorder.disconnect();
             this.rejectPendingForGeneration(
               previousGeneration,
               new AppError(
@@ -1017,6 +1035,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.snapshots.clear();
           this.coordinateClicks.clear();
           this.coordinateDrags.clear();
+          this.recorder.disconnect();
           this.rejectPendingForGeneration(
             generation,
             new AppError(
@@ -1103,6 +1122,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       if (approvals) this.actions.setSiteApprovals(approvals);
       return;
     }
+    if (message.type === "recording-frame") {
+      // A recording nobody here wants any more (its stop timed out, say) ends in Chrome too.
+      if (!this.recorder.acceptFrame(message) && typeof message.recordingId === "string" &&
+          /^[0-9a-f-]{36}$/u.test(message.recordingId) && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "recording-cancel", recordingId: message.recordingId }));
+      }
+      return;
+    }
+    if (message.type === "recording-ended") {
+      this.recorder.ended(message);
+      return;
+    }
     if (message.type !== "response" || typeof message.id !== "string") return;
     const pending = this.pending.get(message.id);
     if (!pending || pending.generation !== generation) return;
@@ -1153,10 +1184,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const metrics: Record<string, unknown> = {};
     const gatewayStartedAt = context?.latency?.gatewayStartedAt;
     if (typeof gatewayStartedAt === "number" && Number.isFinite(gatewayStartedAt) && gatewayStartedAt <= started) metrics.gatewayBeforeBridgeMs = started - gatewayStartedAt;
+    const startedAt = Date.now();
+    const traced = operation !== "videoStart" && operation !== "videoStop";
     const fail = (error: Error, outcome: "error" | "cancelled" | "timeout" = "error") => {
       const code = error instanceof AppError && ERROR_CODES.has(error.code) ? error.code : "INTERNAL_ERROR";
       latency.finish(outcome, { ...metrics, responseBytes: pendingMetrics?.responseBytes,
         ...extensionLatencyMetrics(pendingMetrics?.timing), errorCode: code });
+      if (traced) this.recorder.traceAction(operation, input, startedAt, outcome, code);
       return error;
     };
     const socket = this.socket;
@@ -1232,8 +1266,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           try {
             const parsed = operation === "pdf"
               ? browserPdfTransportResultSchema.parse(value)
-              : browserOperationResultSchemas[operation].parse(value);
+              : operation === "videoStart" || operation === "videoStop"
+                ? personalRecordingTransportSchema.parse(value)
+                : browserOperationResultSchemas[operation].parse(value);
             latency.finish("success", { ...metrics, responseBytes: pending.responseBytes, ...extensionLatencyMetrics(pending.timing) });
+            if (traced) this.recorder.traceAction(operation, input, startedAt, "success");
             resolve(parsed as never);
           } catch {
             rejectWithTiming(

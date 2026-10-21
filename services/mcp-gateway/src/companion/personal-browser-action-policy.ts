@@ -71,7 +71,7 @@ export interface PersonalLegacyFrameTarget {
 export class PersonalBrowserActionPolicy {
   private readonly confirmations = new BrowserConfirmationRegistry();
   private readonly interactions = new BrowserInteractionContextService();
-  private readonly pages = new Map<string, { url: string; refs: Set<string>; taskId?: string }>();
+  private readonly pages = new Map<string, { url: string; title?: string; refs: Set<string>; taskId?: string }>();
   private siteApprovals: PersonalSiteApprovals | undefined;
 
   constructor(private readonly requestSiteApproval?: (request: PersonalSiteApprovalRequest) => void) {}
@@ -80,12 +80,14 @@ export class PersonalBrowserActionPolicy {
     this.siteApprovals = approvals;
   }
 
-  observeTab(tab: Pick<BrowserTab, "tabId" | "url" | "taskId">): void {
+  observeTab(tab: Pick<BrowserTab, "tabId" | "url" | "taskId" | "title">): void {
     if (!tab.url) return;
     const prior = this.pages.get(tab.tabId);
     if (prior?.url !== tab.url) this.interactions.discardReferences(tab.tabId);
+    const title = tab.title ?? (prior?.url === tab.url ? prior.title : undefined);
     this.pages.set(tab.tabId, {
       url: tab.url,
+      ...(title ? { title } : {}),
       refs: prior?.url === tab.url ? prior.refs : new Set(),
       ...((tab.taskId ?? prior?.taskId) ? { taskId: (tab.taskId ?? prior?.taskId)! } : {}),
     });
@@ -97,6 +99,7 @@ export class PersonalBrowserActionPolicy {
     this.interactions.captureStructuredReferences(result.tabId, result.refs);
     this.pages.set(result.tabId, {
       url: result.url,
+      ...(result.title ? { title: result.title } : {}),
       refs: new Set(result.refs.map((ref) => ref.ref)),
       ...(prior?.taskId ? { taskId: prior.taskId } : {}),
     });
@@ -172,7 +175,7 @@ export class PersonalBrowserActionPolicy {
     if (!input.ref) throw new AppError("INVALID_ARGUMENT", "Click requires a resolved snapshot ref.");
     const reference = this.requireRef(input.tabId, input.ref, page);
     const authorization = this.interactions.prepareDangerousAction(
-      { tabId: input.tabId, url: page.url },
+      this.pageTab(input.tabId, page),
       reference,
       clickAuthorizationAction(input),
     );
@@ -263,9 +266,9 @@ export class PersonalBrowserActionPolicy {
     const source = this.requireRef(input.tabId, input.from.ref, page);
     const target = this.requireRef(input.tabId, input.to.ref, page);
     const category = this.interactions.prepareDangerousAction(
-      { tabId: input.tabId, url: page.url }, source, "drag",
+      this.pageTab(input.tabId, page), source, "drag",
     )?.category ?? this.interactions.prepareDangerousAction(
-      { tabId: input.tabId, url: page.url }, target, "drag",
+      this.pageTab(input.tabId, page), target, "drag",
     )?.category;
     if (category) {
       const label = `${source.role}:${source.name}=>${target.role}:${target.name}|${JSON.stringify([input.from, input.to])}`;
@@ -283,7 +286,7 @@ export class PersonalBrowserActionPolicy {
     const page = this.requirePage(input.tabId);
     const reference = this.requireRef(input.tabId, input.ref, page);
     const binding = this.interactions.prepareDangerousAction(
-      { tabId: input.tabId, url: page.url }, reference, "form-input",
+      this.pageTab(input.tabId, page), reference, "form-input",
     );
     if (binding) this.authorize(input.confirmationId, binding);
     return { url: page.url, ref: reference.ref, role: reference.role, name: reference.name };
@@ -296,7 +299,8 @@ export class PersonalBrowserActionPolicy {
         input.confirmationId,
         this.interactions.prepareConfirmation(
           { tabId: input.tabId, url: page.url },
-          "submit-form", "type", "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex"),
+          this.interactions.pageRiskCategory(page) ?? "submit-form", "type",
+          "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex"),
         ),
       );
     }
@@ -311,7 +315,7 @@ export class PersonalBrowserActionPolicy {
         input.confirmationId,
         this.interactions.prepareConfirmation(
           { tabId: input.tabId, url: page.url },
-          "submit-form", "press", "keyboard:Enter",
+          this.interactions.pageRiskCategory(page) ?? "submit-form", "press", "keyboard:Enter",
         ),
       );
     }
@@ -361,7 +365,7 @@ export class PersonalBrowserActionPolicy {
     targets: readonly PersonalLegacyFrameTarget[],
   ): void {
     const page = this.requirePage(input.tabId);
-    const tab = { tabId: input.tabId, url: page.url };
+    const tab = this.pageTab(input.tabId, page);
     const required: Array<{
       confirmationId: string | undefined;
       binding: Parameters<BrowserConfirmationRegistry["create"]>[0];
@@ -375,7 +379,7 @@ export class PersonalBrowserActionPolicy {
       const action = `legacy-${step.action}`;
       const scope = `${(step.framePath ?? []).join("/")}|${target.role}:${target.label}`;
       const category = this.interactions.prepareDangerousTarget(tab, target.label, action, target.role)?.category ??
-        (target.submitLike || step.action === "press" ? "submit-form" : undefined);
+        (target.submitLike || step.action === "press" ? this.interactions.pageRiskCategory(tab) ?? "submit-form" : undefined);
       if (!category) continue;
       required.push({
         confirmationId: step.confirmationId,
@@ -395,7 +399,7 @@ export class PersonalBrowserActionPolicy {
    */
   guardNavigatePath(input: BrowserNavigatePathInput): boolean {
     const page = this.requirePage(input.tabId);
-    const tab = { tabId: input.tabId, url: page.url };
+    const tab = this.pageTab(input.tabId, page);
     const category = input.path
       .map((label) => this.interactions.prepareDangerousTarget(
         tab, label, "legacy-navigate-path", "legacy-menu-path")?.category)
@@ -430,7 +434,11 @@ export class PersonalBrowserActionPolicy {
     this.siteApprovals = undefined;
   }
 
-  private requirePage(tabId: string): { url: string; refs: Set<string> } {
+  private pageTab(tabId: string, page: { url: string; title?: string }): Pick<BrowserTab, "tabId" | "url" | "title"> {
+    return { tabId, url: page.url, ...(page.title ? { title: page.title } : {}) };
+  }
+
+  private requirePage(tabId: string): { url: string; title?: string; refs: Set<string> } {
     const page = this.pages.get(tabId);
     if (!page || !/^https?:\/\//u.test(page.url)) {
       throw new AppError("INVALID_ARGUMENT", "Capture a fresh browser_snapshot for this personal Chrome tab before interacting.");
