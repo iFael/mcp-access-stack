@@ -1486,17 +1486,27 @@ async function extract(input, signal) {
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "extract", false);
   if (input.completion === "document-and-safe-pagination") {
-    throw coded("BROWSER_CAPABILITY_UNSUPPORTED",
-      "Safe pagination across pages is not implemented in personal Chrome; no links were followed.");
+    return extractWithSafePagination(input, chromeTabId, signal);
   }
   const tab = await chrome.tabs.get(chromeTabId);
   assertPersonalNavigationTarget(tab.url);
+  const result = await readPersonalExtraction(chromeTabId, input, tab.url, input.completion === "document");
+  throwIfAborted(signal, "extract", false);
+  return {
+    tabId: input.tabId,
+    format: input.format ?? "text",
+    value: result.value,
+    ...(result.completeness ? { completeness: result.completeness } : {}),
+  };
+}
+
+async function readPersonalExtraction(chromeTabId, input, expectedUrl, complete) {
   let result;
   try {
     [result] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
-      func: input.completion === "document" ? extractCompletePersonalFrame : extractPage,
-      args: [input.ref ?? null, input.selector ?? null, input.format ?? "text", tab.url],
+      func: complete ? extractCompletePersonalFrame : extractPage,
+      args: [input.ref ?? null, input.selector ?? null, input.format ?? "text", expectedUrl],
     });
   } catch {
     throw coded("FRAME_NOT_READY", "Owned Chrome document is unavailable for extraction.");
@@ -1507,13 +1517,164 @@ async function extract(input, signal) {
   if (!result.result?.found) {
     throw coded("LOCATOR_NOT_FOUND", "The requested personal browser extraction target was not found.");
   }
-  throwIfAborted(signal, "extract", false);
-  return {
-    tabId: input.tabId,
-    format: input.format ?? "text",
-    value: result.result.value,
-    ...(result.result.completeness ? { completeness: result.result.completeness } : {}),
+  return result.result;
+}
+
+const PERSONAL_PAGINATION_MAX_PAGES = 5;
+const PERSONAL_PAGINATION_MAX_BYTES = 480000;
+const PERSONAL_PAGINATION_BUDGET_MS = 50000;
+
+// Follows only semantic rel=next links inside this owned tab, never arbitrary
+// "Next" controls: same origin, public http(s), bounded pages, bytes and time,
+// and it stops on cycles, redirects away from the origin or missing targets.
+async function extractWithSafePagination(input, chromeTabId, signal) {
+  const format = input.format ?? "text";
+  const deadline = Date.now() + PERSONAL_PAGINATION_BUDGET_MS;
+  const values = [];
+  const visited = new Set();
+  const signatures = new Set();
+  let origin;
+  let scrolls = 0;
+  const finish = (status, reason, paginationAvailable) => {
+    const combined = values.length > 1 ? values.join(String.fromCharCode(10, 10)) : values[0] ?? "";
+    const value = typeof combined === "string"
+      ? boundPersonalText(combined, PERSONAL_PAGINATION_MAX_BYTES) : combined;
+    const truncated = value !== combined;
+    const bytes = new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)).byteLength;
+    return {
+      tabId: input.tabId, format, value,
+      completeness: {
+        status: truncated ? "partial" : status, reason: truncated ? "byte-limit" : reason,
+        mode: "document-and-safe-pagination", pages: Math.max(1, values.length), scrolls, bytes,
+        ...(paginationAvailable ? { paginationAvailable: true } : {}),
+      },
+    };
   };
+  while (true) {
+    throwIfAborted(signal, "extract", false);
+    const metadata = await requireOwnedMetadata(chromeTabId);
+    const tab = await chrome.tabs.get(chromeTabId);
+    let pageUrl;
+    try {
+      pageUrl = new URL(assertPersonalNavigationTarget(tab.url));
+    } catch (error) {
+      if (values.length === 0) throw error;
+      return finish("partial", "unsafe-pagination", false);
+    }
+    // A redirect away from the first page's origin ends pagination unread.
+    origin ??= pageUrl.origin;
+    if (pageUrl.origin !== origin) return finish("partial", "unsafe-pagination", false);
+    let page;
+    try {
+      page = await readPersonalExtraction(chromeTabId, input, tab.url, true);
+    } catch (error) {
+      if (values.length === 0 || !error?.code) throw error;
+      return finish("partial", "no-progress", false);
+    }
+    const text = typeof page.value === "string" ? page.value : JSON.stringify(page.value);
+    const signature = personalTextSignature(text);
+    if (signatures.has(signature)) return finish("partial", "cycle", true);
+    signatures.add(signature);
+    visited.add(withoutPersonalHash(pageUrl));
+    values.push(page.value);
+    scrolls += Number.isInteger(page.completeness?.scrolls) ? page.completeness.scrolls : 0;
+    const nextUrl = await probePersonalNextPage(chromeTabId, tab.url);
+    if (page.completeness?.status !== "complete") {
+      return finish("partial", page.completeness?.reason ?? "no-progress", Boolean(nextUrl));
+    }
+    if (!nextUrl) return finish("complete", "pagination-end", false);
+    if (format !== "text" || typeof input.ref === "string" || metadata.sticky) {
+      return finish("partial", "unsafe-pagination", true);
+    }
+    if (values.length >= PERSONAL_PAGINATION_MAX_PAGES) return finish("partial", "page-limit", true);
+    let target;
+    try {
+      target = new URL(assertPersonalNavigationTarget(nextUrl));
+    } catch {
+      return finish("partial", "unsafe-pagination", true);
+    }
+    if (target.origin !== pageUrl.origin) return finish("partial", "unsafe-pagination", true);
+    if (visited.has(withoutPersonalHash(target))) return finish("partial", "cycle", true);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return finish("partial", "time-limit", true);
+    axTargetsByTab.delete(chromeTabId);
+    const loaded = await loadPersonalTabUrl(chromeTabId, target.href, Math.min(30000, remaining), signal);
+    metadata.lastUsedAt = new Date().toISOString();
+    metadata.requestedUrl = target.href;
+    await updateMetadata(chromeTabId, metadata);
+    if (!loaded) return finish("partial", "time-limit", true);
+  }
+}
+
+function withoutPersonalHash(url) {
+  const copy = new URL(url.href);
+  copy.hash = "";
+  return copy.href;
+}
+
+function personalTextSignature(text) {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16) + ":" + text.length;
+}
+
+function boundPersonalText(value, maxBytes) {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).byteLength <= maxBytes) return value;
+  let end = Math.min(value.length, maxBytes);
+  while (end > 0 && encoder.encode(value.slice(0, end)).byteLength > maxBytes) end = Math.floor(end * 0.9);
+  return value.slice(0, end);
+}
+
+async function probePersonalNextPage(chromeTabId, expectedUrl) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: chromeTabId },
+    func: readPersonalNextPageLink,
+    args: [expectedUrl],
+  }).catch(() => []);
+  return typeof result?.result === "string" ? result.result : null;
+}
+
+// Runs in the page: only a semantic rel=next link or anchor counts as pagination.
+function readPersonalNextPageLink(expectedUrl) {
+  if (location.href !== expectedUrl) return null;
+  const link = document.querySelector('link[rel~="next"][href],a[rel~="next"][href]');
+  const href = link?.getAttribute("href");
+  if (!href) return null;
+  try { return new URL(href, location.href).href; } catch { return null; }
+}
+
+// Waits for the owned tab to start and finish loading the requested URL; a
+// timeout resolves false so already collected pages are still returned.
+async function loadPersonalTabUrl(chromeTabId, url, timeoutMs, signal) {
+  let cleanup = () => undefined;
+  const loaded = new Promise((resolve, reject) => {
+    let loading = false;
+    const timer = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
+    const onAbort = () => { cleanup(); reject(cancellationError("extract", signal, false)); };
+    const onUpdated = (tabId, change) => {
+      if (tabId !== chromeTabId) return;
+      if (change.status === "loading") loading = true;
+      else if (change.status === "complete" && loading) { cleanup(); resolve(true); }
+    };
+    cleanup = () => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+  try {
+    await chrome.tabs.update(chromeTabId, { url });
+  } catch {
+    cleanup();
+    throw coded("FRAME_NOT_READY", "Chrome refused to load the next page in the owned tab.");
+  }
+  return loaded;
 }
 
 // Discover only scriptable child frames of this explicitly MCP-owned Chrome tab.
@@ -4354,6 +4515,9 @@ function coded(code, message) {
 }
 
 function mutationQueueKey(operation, input) {
+  // Safe pagination navigates the owned tab, so it waits behind its mutations.
+  if (operation === "extract" && input?.completion === "document-and-safe-pagination" &&
+      typeof input?.tabId === "string") return "tab:" + input.tabId;
   if (!MUTATING_OPERATIONS.has(operation)) return null;
   if (typeof input?.tabId === "string") return "tab:" + input.tabId;
   if (operation === "open" && typeof input?.taskId === "string") return "task:" + input.taskId;

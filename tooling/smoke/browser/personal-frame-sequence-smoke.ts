@@ -12,6 +12,7 @@ import { chromium, type BrowserContext } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
 const submissions: string[] = [];
+const listHits: string[] = [];
 const pages: Record<string, (url: URL, port: number) => string> = {
   "parent-site.test/": (_url, port) => `<!doctype html><title>Parent</title>
     <body style="margin:0"><div style="height:900px">Top content</div>
@@ -44,6 +45,15 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <p id="log">intacto</p>`,
   "content-site.test/home": () => `<!doctype html><title>Home</title><h1 id="title">Início</h1>`,
   "content-site.test/clientes": () => `<!doctype html><title>Clientes</title><h1 id="title">Clientes</h1>`,
+  "list-site.test/list": (url) => {
+    const page = Number(url.searchParams.get("page") ?? "1");
+    listHits.push(url.search);
+    return `<!doctype html><title>Lista ${page}</title>
+      ${page < 3 ? `<link rel="next" href="/list?page=${page + 1}">` : ""}
+      <body><p>Item ${page}</p><a href="/list?page=99">Próxima</a>`;
+  },
+  "list-site.test/cross": (_url, port) => `<!doctype html><title>Cross</title><body>
+    <p>Cruzado</p><a rel="next" href="http://other-site.test:${port}/list?page=1">Seguinte</a>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -164,6 +174,19 @@ async function main(): Promise<void> {
     const deleted = await bridge.navigatePath!({ ...danger, confirmationId: pathConfirmation });
     report("confirmed dangerous menu path", deleted.checkpoint);
     if (deleted.checkpoint?.step.value !== "apagado") throw new Error("Confirmed menu path did not run.");
+
+    // Safe pagination follows only same-origin rel=next, never a bare "Próxima".
+    const list = await bridge.open({ url: `http://list-site.test:${sitePort}/list?page=1`, taskId: "personal-frame-smoke" });
+    const paged = await bridge.extract({ tabId: list.tab.tabId, completion: "document-and-safe-pagination" });
+    report("safe pagination", { value: paged.value, completeness: paged.completeness });
+    if (paged.completeness?.status !== "complete" || paged.completeness.pages !== 3 ||
+        !String(paged.value).includes("Item 3") || listHits.some((hit) => hit.includes("99"))) {
+      throw new Error("Safe pagination did not stop at the last rel=next page.");
+    }
+    const cross = await bridge.open({ url: `http://list-site.test:${sitePort}/cross`, taskId: "personal-frame-smoke" });
+    const refused = await bridge.extract({ tabId: cross.tab.tabId, completion: "document-and-safe-pagination" });
+    report("cross-origin pagination", refused.completeness);
+    if (refused.completeness?.reason !== "unsafe-pagination") throw new Error("Cross-origin rel=next was followed.");
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });

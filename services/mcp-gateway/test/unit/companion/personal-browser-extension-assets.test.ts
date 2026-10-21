@@ -32,7 +32,7 @@ describe("personal browser extension assets", () => {
         } },
       },
     });
-    for (const name of ["extractPage", "extractCompletePersonalFrame", "extract"]) {
+    for (const name of ["extractPage", "extractCompletePersonalFrame", "readPersonalExtraction", "extract"]) {
       vm.runInContext(extractFunction(serviceWorker, name), context);
     }
     const extract = vm.runInContext("extract", context) as (input: unknown) => Promise<unknown>;
@@ -44,14 +44,135 @@ describe("personal browser extension assets", () => {
     await expect(extract({ tabId: "personal:7", completion: "visible" }))
       .resolves.toMatchObject({ value: "Entire document" });
     expect(invoked).toEqual(["extractCompletePersonalFrame", "extractPage"]);
-    await expect(extract({ tabId: "personal:7",
-      completion: "document-and-safe-pagination" })).rejects.toMatchObject({
-      code: "BROWSER_CAPABILITY_UNSUPPORTED",
-    });
-    expect(invoked).toHaveLength(2);
     stale = true;
     await expect(extract({ tabId: "personal:7", completion: "document" }))
       .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+  });
+
+  it("follows only same-origin public rel=next pages within bounds and stops on cycles", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const site = (path: string) => `https://shop.example/${path}`;
+    let pages: Record<string, { text: string; next?: string }> = {};
+    let current = "";
+    const updates: string[] = [];
+    const listeners = new Set<(tabId: number, change: { status?: string }) => void>();
+    const metadata: Record<string, unknown> = {};
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => metadata,
+      updateMetadata: async () => undefined, throwIfAborted: () => undefined,
+      axTargetsByTab: new Map(), cancellationError: () => new Error("cancelled"),
+      assertPersonalNavigationTarget: (url: string) => {
+        if (new URL(url).hostname.endsWith(".internal")) {
+          throw Object.assign(new Error("private"), { code: "NAVIGATION_BLOCKED" });
+        }
+        return url;
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      URL, TextEncoder, Date, Math, Number, JSON, String, Promise, Set, setTimeout, clearTimeout,
+      chrome: {
+        tabs: {
+          get: async () => ({ url: current }),
+          update: async (_tabId: number, { url }: { url: string }) => {
+            updates.push(url);
+            setTimeout(() => {
+              current = url;
+              for (const listener of [...listeners]) listener(7, { status: "loading" });
+              for (const listener of [...listeners]) listener(7, { status: "complete" });
+            }, 0);
+          },
+          onUpdated: {
+            addListener: (listener: (tabId: number, change: { status?: string }) => void) => listeners.add(listener),
+            removeListener: (listener: (tabId: number, change: { status?: string }) => void) => listeners.delete(listener),
+          },
+        },
+        scripting: { executeScript: async ({ func, args }: { func: { name: string }; args: unknown[] }) => {
+          const page = pages[current];
+          if (func.name === "readPersonalNextPageLink") {
+            expect(args[0]).toBe(current);
+            return [{ result: page?.next ?? null }];
+          }
+          return [{ result: { found: true, value: page!.text, completeness: {
+            status: "complete", reason: "end-of-document", mode: "document", pages: 1, scrolls: 1, bytes: 1,
+          } } }];
+        } },
+      },
+    });
+    for (const name of ["extractPage", "extractCompletePersonalFrame", "readPersonalExtraction",
+      "extractWithSafePagination", "withoutPersonalHash", "personalTextSignature", "boundPersonalText",
+      "probePersonalNextPage", "readPersonalNextPageLink", "loadPersonalTabUrl", "extract"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    vm.runInContext("const PERSONAL_PAGINATION_MAX_PAGES = 5; const PERSONAL_PAGINATION_MAX_BYTES = 480000;" +
+      " const PERSONAL_PAGINATION_BUDGET_MS = 50000;", context);
+    const extract = vm.runInContext("extract", context) as (input: unknown) => Promise<{
+      value: unknown; completeness: Record<string, unknown>;
+    }>;
+    const run = async (start: string, input: Record<string, unknown> = {}) => {
+      current = start;
+      updates.length = 0;
+      return extract({ tabId: "personal:7", completion: "document-and-safe-pagination", ...input });
+    };
+
+    pages = {
+      [site("list?page=1")]: { text: "Pedido 1", next: "list?page=2" },
+      [site("list?page=2")]: { text: "Pedido 2", next: site("list?page=3#topo") },
+      [site("list?page=3#topo")]: { text: "Pedido 3" },
+    };
+    for (const [url, page] of Object.entries(pages)) {
+      if (page.next && !page.next.startsWith("https:")) page.next = new URL(page.next, url).href;
+    }
+    await expect(run(site("list?page=1"))).resolves.toMatchObject({
+      value: "Pedido 1\n\nPedido 2\n\nPedido 3",
+      completeness: { status: "complete", reason: "pagination-end", mode: "document-and-safe-pagination",
+        pages: 3, scrolls: 3 },
+    });
+    expect(updates).toEqual([site("list?page=2"), site("list?page=3#topo")]);
+    expect(metadata.requestedUrl).toBe(site("list?page=3#topo"));
+
+    pages = {
+      [site("a")]: { text: "A", next: "https://other.example/b" },
+    };
+    await expect(run(site("a"))).resolves.toMatchObject({ value: "A",
+      completeness: { status: "partial", reason: "unsafe-pagination", pages: 1, paginationAvailable: true } });
+    pages = { [site("a")]: { text: "A", next: "https://shop.internal/b" } };
+    await expect(run(site("a"))).resolves.toMatchObject({
+      completeness: { reason: "unsafe-pagination", paginationAvailable: true } });
+    expect(updates).toEqual([]);
+
+    pages = {
+      [site("a")]: { text: "A", next: site("b") },
+      [site("b")]: { text: "B", next: site("a#again") },
+    };
+    await expect(run(site("a"))).resolves.toMatchObject({ value: "A\n\nB",
+      completeness: { status: "partial", reason: "cycle", pages: 2 } });
+    pages = {
+      [site("a")]: { text: "Same", next: site("b") },
+      [site("b")]: { text: "Same", next: site("c") },
+    };
+    await expect(run(site("a"))).resolves.toMatchObject({ value: "Same",
+      completeness: { reason: "cycle", pages: 1 } });
+
+    pages = Object.fromEntries(Array.from({ length: 7 }, (_, index) =>
+      [site(`p${index}`), { text: `P${index}`, next: site(`p${index + 1}`) }]));
+    await expect(run(site("p0"))).resolves.toMatchObject({
+      completeness: { status: "partial", reason: "page-limit", pages: 5, paginationAvailable: true } });
+    expect(updates).toHaveLength(4);
+
+    pages = { [site("a")]: { text: "A", next: site("b") } };
+    await expect(run(site("a"), { format: "html" })).resolves.toMatchObject({
+      completeness: { reason: "unsafe-pagination", paginationAvailable: true } });
+    await expect(run(site("a"), { ref: "p-1" })).resolves.toMatchObject({
+      completeness: { reason: "unsafe-pagination" } });
+    metadata.sticky = true;
+    await expect(run(site("a"))).resolves.toMatchObject({ completeness: { reason: "unsafe-pagination" } });
+    expect(updates).toEqual([]);
+
+    const queue = vm.createContext({ MUTATING_OPERATIONS: new Set(PERSONAL_BROWSER_MUTATING_OPERATIONS) });
+    vm.runInContext(extractFunction(serviceWorker, "mutationQueueKey"), queue);
+    const queueKey = vm.runInContext("mutationQueueKey", queue) as (operation: string, input: unknown) => unknown;
+    expect(queueKey("extract", { tabId: "personal:7", completion: "document-and-safe-pagination" }))
+      .toBe("tab:personal:7");
+    expect(queueKey("extract", { tabId: "personal:7", completion: "document" })).toBeNull();
   });
 
   it("collects a previously observed element ref in document mode without leaking unrelated DOM", async () => {
