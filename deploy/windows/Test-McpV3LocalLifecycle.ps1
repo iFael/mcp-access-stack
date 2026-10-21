@@ -272,7 +272,7 @@ Assert-ContainsNone -Label 'MCP V3 Windows elevation broker' -Source $elevationB
 
 $companion = Read-ProjectFile 'services\mcp-gateway\src\companion-cli.ts'
 Assert-ContainsAll -Label 'MCP V3 companion runtime' -Source $companion -Tokens @(
-    'LocalBrowserWorker',
+    'PersonalBrowserBridge',
     'WindowsElevationBroker',
     'resolveCanonicalStackRoot',
     'VS_CODE_GPT_STACK_ROOT',
@@ -280,6 +280,11 @@ Assert-ContainsAll -Label 'MCP V3 companion runtime' -Source $companion -Tokens 
     '"browser"',
     '"elevation"',
     'Repositórios'
+)
+# The companion drives only the user's own Chrome; it never starts a managed profile.
+Assert-ContainsNone -Label 'MCP V3 companion runtime' -Source $companion -Tokens @(
+    'LocalBrowserWorker',
+    'local-browser-worker'
 )
 
 Write-Output 'MCP V3 local lifecycle contracts passed.'

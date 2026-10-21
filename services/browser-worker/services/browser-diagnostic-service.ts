@@ -35,6 +35,9 @@ export class BrowserDiagnosticService {
   async console(input: BrowserConsoleInput): Promise<ConsoleResult> {
     const result = await this.advancedDriver().readConsole({
       ...(input.level === undefined ? {} : { level: input.level }),
+      ...(input.pattern === undefined ? {} : { pattern: input.pattern }),
+      ...(input.onlyErrors === undefined ? {} : { onlyErrors: input.onlyErrors }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.clear === undefined ? {} : { clear: input.clear }),
     });
     return sanitizeBrowserDiagnosticResult(result);

@@ -1,6 +1,9 @@
 import type {
   BrowserActionResult,
   BrowserClickInput,
+  BrowserHoverInput,
+  BrowserDragInput,
+  BrowserScrollInput,
   BrowserCloseTabInput,
   BrowserConnectInput,
   BrowserConnectResult,
@@ -15,8 +18,16 @@ import type {
   BrowserExtractInput,
   BrowserExtractResult,
   BrowserFillInput,
+  BrowserFormInputInput,
+  BrowserTypeInput,
+  BrowserFindInput,
+  BrowserFindResult,
+  BrowserEvaluateInput,
+  BrowserEvaluateResult,
   BrowserFinishTaskInput,
   BrowserFinishTaskResult,
+  BrowserPlanInput,
+  BrowserPlanResult,
   BrowserFrameClickInput,
   BrowserFrameExtractInput,
   BrowserFrameExtractResult,
@@ -40,6 +51,10 @@ import type {
   BrowserStatusInput,
   BrowserStatusResult,
   BrowserTabActionInput,
+  BrowserDialogInput,
+  BrowserDialogResult,
+  BrowserViewportInput,
+  BrowserViewportResult,
   BrowserTraceInput,
   BrowserTraceStartResult,
   BrowserTraceStopResult,
@@ -69,6 +84,9 @@ export interface BrowserExecutor {
   status(input: BrowserStatusInput, context?: OperationContext): Promise<BrowserStatusResult>;
   connect(input: BrowserConnectInput, context?: OperationContext): Promise<BrowserConnectResult>;
   tabs(input: BrowserTabsInput, context?: OperationContext): Promise<BrowserTabsResult>;
+  selectTab(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
+  dialog(input: BrowserDialogInput, context?: OperationContext): Promise<BrowserDialogResult>;
+  viewport(input: BrowserViewportInput, context?: OperationContext): Promise<BrowserViewportResult>;
   open(input: BrowserOpenInput, context?: OperationContext): Promise<BrowserTabResult>;
   openAuthorizedSite(
     input: BrowserOpenAuthorizedSiteInput,
@@ -76,8 +94,15 @@ export interface BrowserExecutor {
   ): Promise<BrowserOpenAuthorizedSiteResult>;
   navigate(input: BrowserNavigateInput, context?: OperationContext): Promise<BrowserTabResult>;
   snapshot(input: BrowserSnapshotInput, context?: OperationContext): Promise<BrowserSnapshotResult>;
+  find(input: BrowserFindInput, context?: OperationContext): Promise<BrowserFindResult>;
+  evaluate(input: BrowserEvaluateInput, context?: OperationContext): Promise<BrowserEvaluateResult>;
   click(input: BrowserClickInput, context?: OperationContext): Promise<BrowserActionResult>;
+  hover(input: BrowserHoverInput, context?: OperationContext): Promise<BrowserActionResult>;
+  drag(input: BrowserDragInput, context?: OperationContext): Promise<BrowserActionResult>;
+  scroll(input: BrowserScrollInput, context?: OperationContext): Promise<BrowserActionResult>;
   fill(input: BrowserFillInput, context?: OperationContext): Promise<BrowserActionResult>;
+  formInput(input: BrowserFormInputInput, context?: OperationContext): Promise<BrowserActionResult>;
+  type(input: BrowserTypeInput, context?: OperationContext): Promise<BrowserActionResult>;
   press(input: BrowserPressInput, context?: OperationContext): Promise<BrowserActionResult>;
   wait(input: BrowserWaitInput, context?: OperationContext): Promise<BrowserActionResult>;
   extract(input: BrowserExtractInput, context?: OperationContext): Promise<BrowserExtractResult>;
@@ -94,6 +119,7 @@ export interface BrowserExecutor {
   goForward(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
   closeTab(input: BrowserCloseTabInput, context?: OperationContext): Promise<BrowserActionResult>;
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext): Promise<BrowserFinishTaskResult>;
+  plan(input: BrowserPlanInput, context?: OperationContext): Promise<BrowserPlanResult>;
   download(input: BrowserDownloadInput, context?: OperationContext): Promise<BrowserDownloadResult>;
   upload(input: BrowserUploadInput, context?: OperationContext): Promise<BrowserUploadResult>;
   console(input: BrowserConsoleInput, context?: OperationContext): Promise<BrowserConsoleResult>;

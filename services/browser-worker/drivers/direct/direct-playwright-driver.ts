@@ -8,6 +8,7 @@ import {
   type BrowserContext,
   type CDPSession,
   type ConsoleMessage,
+  type Dialog,
   type FileChooser,
   type Frame,
   type Locator,
@@ -20,6 +21,8 @@ import {
 import {
   abortSignalError,
   AppError,
+  type BrowserDialogInput,
+  type BrowserDialogResult,
 } from "@vs-code-gpt/shared";
 import {
   normalizeBrowserDiagnosticPayload,
@@ -49,6 +52,9 @@ import {
   type BrowserDriverTab,
   type BrowserEvaluateRequest,
   type BrowserFillRequest,
+  type BrowserHoverRequest,
+  type BrowserDragRequest,
+  type BrowserScrollRequest,
   type BrowserNavigateRequest,
   type BrowserPressRequest,
   type BrowserScreenshotRequest,
@@ -75,6 +81,7 @@ import {
   jpegFrameDimensions,
   type BrowserLiveFrame,
 } from "../../services/browser-live-frame-mailbox.js";
+import { hasBrowserCaptchaChallenge } from "../../services/browser-captcha-detector.js";
 import {
   BrowserPageStabilizationService,
   type BrowserDocumentReadyState,
@@ -113,6 +120,14 @@ export async function showActionPointer(target: Locator): Promise<void> {
 const DEFAULT_PAGE_STABILIZATION_TIMEOUT_MS = 2_000;
 const MAX_STABILIZATION_FRAME_PROBES = 32;
 const STABILIZATION_RESOURCE_TYPES = new Set(["document", "script", "xhr", "fetch"]);
+
+interface ObservedJsDialog {
+  expiresAt: string;
+  dialog?: Dialog;
+  onDialog: (value: Dialog) => void;
+  timer: ReturnType<typeof setTimeout>;
+  cleanup: () => void;
+}
 
 interface NetworkEntry {
   request: Request;
@@ -160,6 +175,48 @@ export interface DirectPlaywrightEngineStatus {
   incrementalSnapshots: boolean;
 }
 
+async function inspectSemanticPoint(page: Page, x: number, y: number): Promise<{ role: string; name: string } | null> {
+  return page.evaluate(({ x, y }) => {
+    type HitElement = {
+      tagName: string;
+      textContent: string | null;
+      parentElement?: HitElement | null;
+      shadowRoot?: { elementFromPoint(px: number, py: number): HitElement | null } | null;
+      closest(selector: string): HitElement | null;
+      getAttribute(name: string): string | null;
+      labels?: ArrayLike<{ textContent: string | null }> | null;
+    };
+    const browser = globalThis as unknown as {
+      innerWidth: number;
+      innerHeight: number;
+      document: { elementFromPoint(px: number, py: number): HitElement | null };
+    };
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 ||
+      x >= browser.innerWidth || y >= browser.innerHeight) return null;
+    let top = browser.document.elementFromPoint(x, y);
+    for (let depth = 0; depth < 6; depth += 1) {
+      const inner = top?.shadowRoot?.elementFromPoint(x, y);
+      if (!inner || inner === top) break;
+      top = inner;
+    }
+    if (!top) return null;
+    const interactive = "button,input,textarea,select,a[href],summary,canvas,svg,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='switch'],[role='combobox'],[contenteditable='true']";
+    const element = top.closest(interactive);
+    if (!element) return null;
+    const tag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") ?? "text").toLowerCase();
+    const role = element.getAttribute("role") ??
+      (tag === "canvas" || tag === "svg" ? "canvas" : tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
+      tag === "textarea" ? "textbox" : tag === "select" ? "combobox" :
+      tag === "input" ? type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
+      type === "button" || type === "submit" ? "button" : "textbox" : "generic");
+    const label = element.getAttribute("aria-label") ||
+      Array.from(element.labels ?? []).map((item) => item.textContent ?? "").join(" ") ||
+      element.getAttribute("placeholder") || element.getAttribute("title") || element.textContent || "";
+    return { role: role.slice(0, 100), name: label.replace(/\s+/gu, " ").trim().slice(0, 500) };
+  }, { x, y });
+}
+
 export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   readonly kind = "direct" as const;
   private readonly pageIds = new WeakMap<Page, string>();
@@ -172,6 +229,8 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   private readonly relevantRequests = new WeakMap<Page, Set<Request>>();
   private readonly frameNavigationEpochs = new WeakMap<Frame, number>();
   private readonly pendingFileChoosers = new WeakMap<Page, FileChooser>();
+  private readonly observedDialogs = new WeakMap<Page, ObservedJsDialog>();
+  private readonly viewportSessions = new WeakMap<Page, { session: CDPSession; original: { userAgent: string; platform: string; colorScheme: "light" | "dark" } }>();
   private readonly suppressedDiagnosticPages = new WeakSet<Page>();
   private readonly pageAllowedOrigins = new WeakMap<Page, Map<string, number>>();
   private readonly pageRequestPolicies = new WeakMap<Page, AuthorizedSitePolicy>();
@@ -456,16 +515,292 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     });
   }
 
+  async inspectPoint(
+    input: { x: number; y: number },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("inspectPoint", options, async (page) => {
+      const point = await inspectSemanticPoint(page, input.x, input.y);
+      if (!point) throw new AppError("LOCATOR_NOT_FOUND", "No actionable element at the provided CSS coordinates.");
+      return this.pageResponse(page, undefined, point);
+    });
+  }
+
   async click(
     input: BrowserClickRequest,
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("click", options, async (page) => {
-      const target = this.refLocator(page, input.target);
-      await showActionPointer(target);
-      await target.click({
-        timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await showActionPointer(target);
+        await target.click({
+          timeout: options.timeoutMs ?? this.config.actionTimeoutMs,
+          ...(input.button ? { button: input.button } : {}),
+          ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+          ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+        });
+      } else {
+        if (input.x === undefined || input.y === undefined || !input.role || !input.element) {
+          throw new AppError("INVALID_ARGUMENT", "Coordinate click requires a classified target.");
+        }
+        const current = await inspectSemanticPoint(page, input.x, input.y);
+        if (!current || current.role !== input.role || current.name !== input.element) {
+          throw new AppError("BROWSER_CONFIRMATION_INVALID", "Coordinate target changed before action.");
+        }
+        await page.mouse.click(input.x, input.y, {
+          ...(input.button ? { button: input.button } : {}),
+          ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+          ...(input.modifiers ? { modifiers: input.modifiers } : {}),
+        });
+      }
+      return this.pageResponse(page);
+    });
+  }
+
+  async hover(
+    input: BrowserHoverRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("hover", options, async (page) => {
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await target.hover({ timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (input.x !== undefined && input.y !== undefined) {
+        if (!await inspectSemanticPoint(page, input.x, input.y)) {
+          throw new AppError("LOCATOR_NOT_FOUND", "Coordinate hover requires a visible actionable element.");
+        }
+        await page.mouse.move(input.x, input.y);
+      } else {
+        throw new AppError("INVALID_ARGUMENT", "Hover requires a ref or coordinates.");
+      }
+      return this.pageResponse(page);
+    });
+  }
+
+  async viewport(input: import("@vs-code-gpt/shared").BrowserViewportInput): Promise<import("@vs-code-gpt/shared").BrowserViewportResult> {
+    const page = this.requireCurrentPage();
+    const current = this.viewportSessions.get(page);
+    const dimensions = async () => page.evaluate(() => {
+      const browser = globalThis as unknown as {
+        innerWidth: number; innerHeight: number; devicePixelRatio: number;
+        navigator: { userAgent: string; platform: string };
+        matchMedia: (query: string) => { matches: boolean };
+      };
+      return {
+        width: Math.max(1, browser.innerWidth),
+        height: Math.max(1, browser.innerHeight),
+        deviceScaleFactor: browser.devicePixelRatio || 1,
+        userAgent: browser.navigator.userAgent,
+        platform: browser.navigator.platform,
+        colorScheme: browser.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" as const : "light" as const,
+      };
+    });
+    if (input.preset === "reset") {
+      if (current) {
+        await current.session.send("Emulation.clearDeviceMetricsOverride");
+        await current.session.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+        await current.session.send("Emulation.setEmulatedMedia", { media: "", features: [] });
+        await current.session.send("Emulation.setUserAgentOverride", { userAgent: current.original.userAgent, platform: current.original.platform });
+        await current.session.detach();
+        this.viewportSessions.delete(page);
+      }
+      const original = await dimensions();
+      return { tabId: input.tabId, width: original.width, height: original.height,
+        deviceScaleFactor: original.deviceScaleFactor, userAgent: original.userAgent,
+        mobile: false, touch: false, colorScheme: original.colorScheme, emulated: false };
+    }
+    if (input.preset === "window") {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Real window resize is available in personal Chrome mode.");
+    }
+    const presets = {
+      desktop: { width: 1366, height: 768, dpr: 1, mobile: false, touch: false },
+      tablet: { width: 768, height: 1024, dpr: 2, mobile: true, touch: true },
+      mobile: { width: 375, height: 812, dpr: 3, mobile: true, touch: true },
+      custom: { width: input.width ?? 1280, height: input.height ?? 720, dpr: 1, mobile: false, touch: false },
+    } as const;
+    const profile = presets[input.preset];
+    const width = profile.width;
+    const height = profile.height;
+    const deviceScaleFactor = input.deviceScaleFactor ?? profile.dpr;
+    const touch = input.touch ?? profile.touch;
+    const colorScheme = input.colorScheme ?? "no-preference";
+    let session = current?.session;
+    const created = !session;
+    const original = current?.original ?? await dimensions();
+    const chromeVersion = /Chrome\/([\d.]+)/u.exec(original.userAgent)?.[1];
+    const mobileUA = chromeVersion && (input.preset === "mobile" || input.preset === "tablet")
+      ? `Mozilla/5.0 (Linux; Android 14; ${input.preset === "mobile" ? "Pixel 7" : "Pixel Tablet"}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} ${input.preset === "mobile" ? "Mobile " : ""}Safari/537.36`
+      : original.userAgent;
+    const userAgent = input.userAgent ?? mobileUA;
+    if (!session) {
+      session = await page.context().newCDPSession(page);
+      this.viewportSessions.set(page, { session, original: { userAgent: original.userAgent, platform: original.platform, colorScheme: original.colorScheme } });
+      page.once("close", () => {
+        void session?.detach().catch(() => undefined);
+        this.viewportSessions.delete(page);
       });
+    }
+    try {
+      await session.send("Emulation.setDeviceMetricsOverride", {
+        width, height, deviceScaleFactor, mobile: profile.mobile,
+        screenWidth: width, screenHeight: height,
+      });
+      await session.send("Emulation.setTouchEmulationEnabled", {
+        enabled: touch, maxTouchPoints: touch ? 5 : 1,
+      });
+      await session.send("Emulation.setEmulatedMedia", {
+        media: "screen", features: [{ name: "prefers-color-scheme", value: colorScheme }],
+      });
+      await session.send("Emulation.setUserAgentOverride", {
+        userAgent, platform: profile.mobile ? "Android" : original.platform,
+      });
+    } catch (error) {
+      if (created) {
+        await session.detach().catch(() => undefined);
+        this.viewportSessions.delete(page);
+      }
+      throw error;
+    }
+    return { tabId: input.tabId, width, height, deviceScaleFactor,
+      mobile: profile.mobile, touch, colorScheme, userAgent, emulated: true };
+  }
+
+  async dialog(input: BrowserDialogInput): Promise<BrowserDialogResult> {
+    const page = this.requireCurrentPage();
+    const current = this.observedDialogs.get(page);
+    const describe = (entry: ObservedJsDialog | undefined): BrowserDialogResult => ({
+      tabId: input.tabId,
+      state: !entry ? "idle" : entry.dialog ? "open" : "armed",
+      ...(entry?.dialog ? {
+        dialogType: entry.dialog.type() as NonNullable<BrowserDialogResult["dialogType"]>,
+        message: entry.dialog.message(),
+      } : {}),
+      ...(entry ? { expiresAt: entry.expiresAt } : {}),
+    });
+    if (input.action === "inspect") return describe(current);
+    if (input.action === "cancel") {
+      if (current?.dialog) await current.dialog.dismiss().catch(() => undefined);
+      current?.cleanup();
+      return describe(undefined);
+    }
+    if (input.action === "arm") {
+      if (current) throw new AppError("EXECUTION_STATE_INVALID", "An observer is already armed for this tab.");
+      const expiresAt = new Date(Date.now() + 30_000).toISOString();
+      let state!: ObservedJsDialog;
+      const cleanup = () => {
+        clearTimeout(state.timer);
+        page.off("dialog", state.onDialog);
+        this.observedDialogs.delete(page);
+      };
+      const onDialog = (dialog: Dialog) => {
+        if (dialog.message().length > 2_000) {
+          void dialog.dismiss().catch(() => undefined).finally(cleanup);
+          return;
+        }
+        state.dialog = dialog;
+      };
+      state = {
+        expiresAt,
+        cleanup,
+        onDialog,
+        timer: setTimeout(() => {
+          if (state.dialog) void state.dialog.dismiss().catch(() => undefined).finally(cleanup);
+          else cleanup();
+        }, 30_000),
+      };
+      page.on("dialog", onDialog);
+      this.observedDialogs.set(page, state);
+      return describe(state);
+    }
+    if (!current?.dialog || input.expectedMessage === undefined ||
+        input.expectedMessage !== current.dialog.message()) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "Dialog is absent or its message changed.");
+    }
+    const dialog = current.dialog;
+    if (input.promptText !== undefined && dialog.type() !== "prompt") {
+      throw new AppError("INVALID_ARGUMENT", "Prompt text requires a prompt dialog.");
+    }
+    try {
+      if (input.response === "accept") await dialog.accept(input.promptText);
+      else await dialog.dismiss();
+    } finally {
+      current.cleanup();
+    }
+    return describe(undefined);
+  }
+
+  async drag(
+    input: BrowserDragRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("drag", options, async (page) => {
+      const locate = async (endpoint: BrowserDragRequest["from"]): Promise<{ x: number; y: number }> => {
+        if (endpoint.target) {
+          const rect = await this.refLocator(page, endpoint.target).boundingBox();
+          if (!rect || rect.width <= 0 || rect.height <= 0) {
+            throw new AppError("LOCATOR_NOT_FOUND", "Drag endpoint is not visible.");
+          }
+          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        }
+        if (endpoint.x === undefined || endpoint.y === undefined || !endpoint.role || endpoint.name === undefined) {
+          throw new AppError("INVALID_ARGUMENT", "Coordinate drag endpoint must be classified.");
+        }
+        const found = await inspectSemanticPoint(page, endpoint.x, endpoint.y);
+        if (!found || found.role !== endpoint.role || found.name !== endpoint.name) {
+          throw new AppError("BROWSER_CONFIRMATION_INVALID", "Coordinate drag endpoint changed before action.");
+        }
+        return { x: endpoint.x, y: endpoint.y };
+      };
+      const source = await locate(input.from);
+      const destination = await locate(input.to);
+      const steps = input.steps ?? 10;
+      await page.mouse.move(source.x, source.y);
+      await page.mouse.down();
+      try {
+        for (let i = 1; i <= steps; i += 1) {
+          this.assertNotAborted(options.signal);
+          const factor = i / steps;
+          await page.mouse.move(
+            source.x + (destination.x - source.x) * factor,
+            source.y + (destination.y - source.y) * factor,
+            { steps: 1 },
+          );
+        }
+      } finally {
+        await page.mouse.up();
+      }
+      return this.pageResponse(page);
+    });
+  }
+
+  async scroll(
+    input: BrowserScrollRequest,
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("scroll", options, async (page) => {
+      if (input.target) {
+        const target = this.refLocator(page, input.target);
+        await target.scrollIntoViewIfNeeded();
+        const bounds = await target.boundingBox();
+        if (!bounds) throw new AppError("LOCATOR_NOT_FOUND", "Scroll target is not visible.");
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      } else {
+        const viewport = await page.evaluate(() => {
+          const global = globalThis as unknown as { innerWidth: number; innerHeight: number };
+          return { width: global.innerWidth, height: global.innerHeight };
+        });
+        const px = input.x ?? Math.floor(viewport.width / 2);
+        const py = input.y ?? Math.floor(viewport.height / 2);
+        if (!Number.isInteger(px) || !Number.isInteger(py) ||
+            px < 0 || py < 0 || px >= viewport.width || py >= viewport.height) {
+          throw new AppError("INVALID_ARGUMENT", "Scroll coordinates are outside the CSS viewport.");
+        }
+        await page.mouse.move(px, py);
+      }
+      const x = input.direction === "left" ? -input.amount : input.direction === "right" ? input.amount : 0;
+      const y = input.direction === "up" ? -input.amount : input.direction === "down" ? input.amount : 0;
+      await page.mouse.wheel(x, y);
       return this.pageResponse(page);
     });
   }
@@ -485,12 +820,57 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     });
   }
 
+  async formInput(
+    input: { target: string; value: string | number | boolean | string[] },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("formInput", options, async (page) => {
+      const target = this.refLocator(page, input.target);
+      if (typeof input.value === "boolean") {
+        await target.setChecked(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (Array.isArray(input.value)) {
+        await target.selectOption(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else if (typeof input.value === "number") {
+        await target.fill(String(input.value), { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+      } else {
+        const tag = await target.evaluate((element) => element.tagName.toLowerCase());
+        if (tag === "select") {
+          await target.selectOption(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+        } else {
+          await target.fill(input.value, { timeout: options.timeoutMs ?? this.config.actionTimeoutMs });
+        }
+      }
+      return this.pageResponse(page);
+    });
+  }
+
+  async type(
+    input: { text: string; slowly?: boolean; submit?: boolean },
+    options: BrowserDriverCallOptions = {},
+  ): Promise<BrowserDriverResponse> {
+    return this.runOperation("type", options, async (page) => {
+      if (input.slowly) {
+        if (Array.from(input.text).length > 2_000) {
+          throw new AppError("LIMIT_EXCEEDED", "Slow typing is limited to 2,000 characters.");
+        }
+        await page.keyboard.type(input.text, { delay: 15 });
+      } else {
+        await page.keyboard.insertText(input.text);
+      }
+      if (input.submit) await page.keyboard.press("Enter");
+      return this.pageResponse(page);
+    });
+  }
+
   async press(
     input: BrowserPressRequest,
     options: BrowserDriverCallOptions = {},
   ): Promise<BrowserDriverResponse> {
     return this.runOperation("press", options, async (page) => {
-      await page.keyboard.press(input.key);
+      const chords = input.key.trim().split(/\s+/u);
+      for (let i = 0; i < (input.repeat ?? 1); i += 1) {
+        for (const chord of chords) await page.keyboard.press(chord);
+      }
       return this.pageResponse(page);
     });
   }
@@ -535,6 +915,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         type: input.type ?? "png",
         fullPage: input.fullPage ?? false,
         scale: input.scale ?? "css",
+        ...(input.region ? { clip: input.region } : {}),
       });
       return this.pageResponse(page);
     });
@@ -807,7 +1188,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
           const legacy = await captureLegacySummary(page);
           if (legacy) content = `${content}\n\n### Legacy DOM summary\n${legacy}`.trim();
         }
-        if (/\b(?:captcha|recaptcha|hcaptcha)\b/i.test(content)) {
+        if (hasBrowserCaptchaChallenge(content, page.frames().map((frame) => frame.url()))) {
           throw new AppError(
             "CAPTCHA_DETECTED",
             "A CAPTCHA requires manual completion in Chromium.",
@@ -827,16 +1208,20 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
               }
               catch {
                 this.incrementalSnapshots = false;
-                return {
-                  content: await page.ariaSnapshot({ mode: "ai" }),
-                  kind: "full" as const,
-                };
+                const fallbackContent = await page.ariaSnapshot({ mode: "ai" });
+                if (hasBrowserCaptchaChallenge(fallbackContent, page.frames().map((frame) => frame.url()))) {
+                  throw new AppError("CAPTCHA_DETECTED", "A CAPTCHA requires manual completion in Chromium.");
+                }
+                return { content: fallbackContent, kind: "full" as const };
               }
               if (this.legacySnapshotPages.has(page)) {
                 const legacy = await captureLegacySummary(page);
                 if (legacy) {
                   content = `${content}\n\n### Legacy DOM summary\n${legacy}`.trim();
                 }
+              }
+              if (hasBrowserCaptchaChallenge(content, page.frames().map((frame) => frame.url()))) {
+                throw new AppError("CAPTCHA_DETECTED", "A CAPTCHA requires manual completion in Chromium.");
               }
               return { content, kind: "delta" as const };
             },
@@ -864,11 +1249,14 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   ): Promise<BrowserDiagnosticTextResult> {
     const page = this.requireCurrentPage();
     const entries = this.consoleEntries.get(page) ?? [];
-    const level = options.level;
-    const filtered = level
-      ? entries.filter((entry) => consoleEntryMeetsThreshold(entry, level))
-      : entries;
-    const result = this.normalizeDiagnostic(filtered.join("\n"));
+    const level = options.onlyErrors ? "error" : options.level;
+    const expression = options.pattern ? new RegExp(validateBrowserNetworkFilter(options.pattern)) : undefined;
+    const filtered = entries.filter((entry) =>
+      (!level || consoleEntryMeetsThreshold(entry, level)) &&
+      (!expression || expression.test(entry)),
+    );
+    const limit = options.limit ?? this.config.diagnosticMaxEntries;
+    const result = this.normalizeDiagnostic(filtered.slice(0, limit).join("\n"));
     if (options.clear) entries.splice(0);
     return result;
   }
@@ -922,7 +1310,21 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         value = response ? await response.allHeaders() : {};
         break;
       case "response-body":
-        value = "Response bodies are not retained by the direct engine.";
+        if (!response) {
+          value = "[no response]";
+          break;
+        }
+        {
+          const mime = (response.headers()["content-type"] ?? "").toLowerCase();
+          if (!/^(?:application\/(?:json|(?:[\w.-]+\+)?json|xml|(?:[\w.-]+\+)?xml|javascript|x-www-form-urlencoded)|text\/)/u.test(mime)) {
+            value = "[binary response not available as text]";
+            break;
+          }
+          const body = await response.body();
+          value = body.byteLength > 256 * 1024
+            ? body.subarray(0, 256 * 1024).toString("utf8") + "\n[truncated]"
+            : body.toString("utf8");
+        }
         break;
     }
     return this.normalizeDiagnostic(value);

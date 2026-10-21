@@ -8,7 +8,6 @@ import { WindowsElevationBroker } from "@vs-code-gpt/local-agent";
 import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
-import { LocalBrowserWorker } from "./companion/local-browser-worker.js";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
@@ -99,28 +98,6 @@ async function main(): Promise<void> {
   }
   await reloadable.reload(await repositories.buildPolicy());
 
-  let browserWorker: LocalBrowserWorker | undefined;
-  if (process.platform === "win32") {
-    try {
-      browserWorker = await LocalBrowserWorker.start({
-        releaseRoot: runtime.releaseRoot,
-        stateRoot: runtime.stateRoot,
-        credentialBrokerPath: runtime.credentialBrokerPath,
-        headless: true,
-        log: writeLog,
-      });
-    } catch (error) {
-      const browserError = asAppError(error);
-      writeLog({
-        event: "mcp_v3_local_browser_unavailable",
-        error: browserError.toJSON(),
-      });
-    }
-  }
-  const browserLiveViewReady = browserWorker
-    ? await browserWorker.supportsLiveView()
-    : false;
-
   let personalBrowser: PersonalBrowserBridge | undefined;
   if (process.platform === "win32") {
     try {
@@ -137,8 +114,10 @@ async function main(): Promise<void> {
     }
   }
 
-  const browser = browserWorker
-    ? new BrowserModeRouter(browserWorker.client, personalBrowser)
+  // The companion automates the user's existing Chrome profile exclusively.
+  // Never start a separate persistent Chromium profile as a fallback.
+  const browser = personalBrowser
+    ? new BrowserModeRouter(undefined, personalBrowser)
     : undefined;
 
   const gatewayConfig = loadGatewayConfig({
@@ -159,17 +138,6 @@ async function main(): Promise<void> {
       ? {}
       : {
           browser,
-          ...(browserLiveViewReady
-            ? {
-                browserLiveFrame: (
-                  input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
-                  context: { ownerScope: string },
-                ) => browserWorker!.readLiveFrame({
-                  ...input,
-                  ownerScope: context.ownerScope,
-                }),
-              }
-            : {}),
         }),
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
@@ -187,8 +155,7 @@ async function main(): Promise<void> {
     credentialStore,
   });
   const capabilities: string[] = [...DEFAULT_COMPANION_CAPABILITIES];
-  if (browserWorker) capabilities.push("browser");
-  if (browserLiveViewReady) capabilities.push("browser-live-view-v1");
+  if (personalBrowser) capabilities.push("browser");
   if (elevationBroker) capabilities.push("elevation");
 
   connector = new CompanionConnector({
@@ -233,7 +200,6 @@ async function main(): Promise<void> {
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
     await personalBrowser?.close();
-    await browserWorker?.close();
     await instanceLock.release();
     writeLog({ event: "mcp_v3_local_stopped" });
   }

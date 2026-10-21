@@ -37,8 +37,41 @@ export interface BrowserNavigateRequest {
 }
 
 export interface BrowserClickRequest {
-  target: string;
+  target?: string;
+  x?: number;
+  y?: number;
+  role?: string;
   element?: string;
+  button?: "left" | "right" | "middle";
+  clickCount?: number;
+  modifiers?: Array<"Alt" | "Control" | "Meta" | "Shift">;
+}
+
+export interface BrowserHoverRequest {
+  target?: string;
+  x?: number;
+  y?: number;
+}
+
+export interface BrowserDragEndpointRequest {
+  target?: string;
+  x?: number;
+  y?: number;
+  role?: string;
+  name?: string;
+}
+export interface BrowserDragRequest {
+  from: BrowserDragEndpointRequest;
+  to: BrowserDragEndpointRequest;
+  steps?: number;
+}
+
+export interface BrowserScrollRequest {
+  direction: "up" | "down" | "left" | "right";
+  amount: number;
+  target?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface BrowserFillRequest {
@@ -49,8 +82,20 @@ export interface BrowserFillRequest {
   submit?: boolean;
 }
 
+export interface BrowserFormInputRequest {
+  target: string;
+  value: string | number | boolean | string[];
+}
+
+export interface BrowserTypeRequest {
+  text: string;
+  slowly?: boolean;
+  submit?: boolean;
+}
+
 export interface BrowserPressRequest {
   key: string;
+  repeat?: number;
 }
 
 export interface BrowserWaitRequest {
@@ -69,6 +114,7 @@ export interface BrowserScreenshotRequest {
   type?: "png" | "jpeg";
   scale?: "css" | "device";
   fullPage?: boolean;
+  region?: { x: number; y: number; width: number; height: number };
 }
 
 export type BrowserAuthenticationInspection =
@@ -135,10 +181,18 @@ export interface BrowserDriver {
     input: BrowserClickRequest,
     options?: BrowserDriverCallOptions,
   ): Promise<BrowserDriverResponse>;
+  hover?(input: BrowserHoverRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  scroll?(input: BrowserScrollRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   fill(
     input: BrowserFillRequest,
     options?: BrowserDriverCallOptions,
   ): Promise<BrowserDriverResponse>;
+  formInput?(input: BrowserFormInputRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  drag?(input: BrowserDragRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  dialog?(input: import("@vs-code-gpt/shared").BrowserDialogInput): Promise<import("@vs-code-gpt/shared").BrowserDialogResult>;
+  viewport?(input: import("@vs-code-gpt/shared").BrowserViewportInput): Promise<import("@vs-code-gpt/shared").BrowserViewportResult>;
+  inspectPoint?(input: { x: number; y: number }, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
+  type?(input: BrowserTypeRequest, options?: BrowserDriverCallOptions): Promise<BrowserDriverResponse>;
   press(
     input: BrowserPressRequest,
     options?: BrowserDriverCallOptions,

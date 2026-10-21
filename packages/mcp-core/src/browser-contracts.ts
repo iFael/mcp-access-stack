@@ -147,8 +147,8 @@ export const browserStatusResultSchema = z
     state: browserConnectionStateSchema,
     ready: z.boolean(),
     browser: z.literal("chrome"),
-    profile: z.enum(["default", "dedicated-persistent"]),
-    autoLaunch: z.literal(true),
+    profile: z.enum(["default", "dedicated-persistent", "personal"]),
+    autoLaunch: z.boolean(),
     tabGroup: z.literal("MCP"),
     edgeFallback: z.literal("technical-necessity-only"),
     tabCount: z.number().int().nonnegative(),
@@ -179,6 +179,7 @@ export const browserStatusResultSchema = z
         profile: z.literal("personal"),
         protocolVersion: z.number().int().positive(),
         extensionVersion: z.string().min(1).max(100).optional(),
+        expectedExtensionVersion: z.string().min(1).max(100).optional(),
         capabilities: z.array(z.string().min(1).max(64)).max(64),
       })
       .strict()
@@ -196,8 +197,19 @@ export const browserTabsInputSchema = z
   .object({ taskId: taskIdSchema.optional() })
   .strict();
 export type BrowserTabsInput = z.infer<typeof browserTabsInputSchema>;
+export const browserOpenTabContextSchema = z
+  .object({
+    url: z.string().min(1).max(500),
+    title: z.string().max(200).optional(),
+    active: z.boolean(),
+  })
+  .strict();
 export const browserTabsResultSchema = z
-  .object({ tabs: z.array(browserTabSchema).max(100) })
+  .object({
+    tabs: z.array(browserTabSchema).max(100),
+    // The user's other tabs, read-only, present only while the user allows it.
+    openTabs: z.array(browserOpenTabContextSchema).max(100).optional(),
+  })
   .strict();
 export type BrowserTabsResult = z.infer<typeof browserTabsResultSchema>;
 
@@ -360,11 +372,36 @@ export const browserNavigateInputSchema = z
   .strict();
 export type BrowserNavigateInput = z.infer<typeof browserNavigateInputSchema>;
 
+export const browserAccessibilitySummarySchema = z.object({
+  source: z.literal("cdp"),
+  coverage: z.literal("main-frame-only"),
+  frameCount: z.number().int().min(0).max(200),
+  nodes: z.array(z.object({
+    role: z.string().max(100),
+    name: z.string().max(500),
+    depth: z.number().int().min(0).max(40),
+  }).strict()).max(1000),
+  truncated: z.boolean(),
+}).strict();
+export type BrowserAccessibilitySummary = z.infer<typeof browserAccessibilitySummarySchema>;
+
+export const browserPointSchema = z.object({
+  x: z.number().int().min(0).max(20_000),
+  y: z.number().int().min(0).max(20_000),
+}).strict();
+export type BrowserPoint = z.infer<typeof browserPointSchema>;
+
 export const browserSnapshotInputSchema = z
   .object({
     tabId: tabIdSchema,
     knownRevision: knownRevisionSchema,
     forceFull: z.boolean().optional(),
+    filter: z.enum(["interactive", "all"]).optional(),
+    depth: z.number().int().min(1).max(40).optional(),
+    refId: z.string().min(1).max(128).optional(),
+    maxChars: z.number().int().min(50).max(200_000).optional(),
+    includeAccessibility: z.boolean().optional(),
+    point: browserPointSchema.optional(),
   })
   .strict();
 export type BrowserSnapshotInput = z.infer<typeof browserSnapshotInputSchema>;
@@ -373,7 +410,11 @@ export const browserSnapshotResultSchema = z
     tabId: tabIdSchema,
     url: z.url(),
     title: z.string().max(500).optional(),
+    pageInstanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u).optional(),
+    accessibility: browserAccessibilitySummarySchema.optional(),
+    pointTarget: z.object({ ref: z.string().min(1).max(128), role: z.string().max(100), name: z.string().max(500) }).strict().optional(),
     content: z.string().max(2_000_000),
+    truncated: z.boolean().optional(),
     refs: z
       .array(
         z
@@ -391,15 +432,62 @@ export const browserSnapshotResultSchema = z
   .strict();
 export type BrowserSnapshotResult = z.infer<typeof browserSnapshotResultSchema>;
 
+export const browserFindInputSchema = z.object({
+  tabId: tabIdSchema,
+  query: z.string().trim().min(1).max(200),
+  role: z.string().min(1).max(100).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+export type BrowserFindInput = z.infer<typeof browserFindInputSchema>;
+
+export const browserFindResultSchema = z.object({
+  tabId: tabIdSchema,
+  url: z.url(),
+  matches: z.array(z.object({
+    ref: z.string().min(1).max(128),
+    role: z.string().min(1).max(100),
+    name: z.string().max(500),
+    score: z.number().int().min(0).max(100),
+  }).strict()).max(20),
+}).strict();
+export type BrowserFindResult = z.infer<typeof browserFindResultSchema>;
+
 export const browserClickInputSchema = z
   .object({
     tabId: tabIdSchema,
-    ref: z.string().min(1).max(128),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
+    button: z.enum(["left", "right", "middle"]).optional(),
+    clickCount: z.number().int().min(1).max(3).optional(),
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
   })
-  .strict();
+  .strict()
+  .refine((input) => Boolean(input.ref) !== (input.x !== undefined && input.y !== undefined) && ((input.x === undefined) === (input.y === undefined)), { message: "Specify either ref or both x and y." });
 export type BrowserClickInput = z.infer<typeof browserClickInputSchema>;
+
+export const browserHoverInputSchema = z.object({
+  tabId: tabIdSchema,
+  ref: z.string().min(1).max(128).optional(),
+  x: browserPointSchema.shape.x.optional(),
+  y: browserPointSchema.shape.y.optional(),
+  knownRevision: knownRevisionSchema,
+}).strict().refine((input) => Boolean(input.ref) !== (input.x !== undefined && input.y !== undefined) && ((input.x === undefined) === (input.y === undefined)), { message: "Specify either ref or both x and y." });
+export type BrowserHoverInput = z.infer<typeof browserHoverInputSchema>;
+
+export const browserScrollInputSchema = z.object({
+  tabId: tabIdSchema,
+  direction: z.enum(["up", "down", "left", "right"]),
+  amount: z.number().int().min(1).max(10000),
+  ref: z.string().min(1).max(128).optional(),
+  x: browserPointSchema.shape.x.optional(),
+  y: browserPointSchema.shape.y.optional(),
+  knownRevision: knownRevisionSchema,
+}).strict().refine((v) => (v.x === undefined) === (v.y === undefined) &&
+  !(v.ref && v.x !== undefined), { message: "Provide a ref, CSS x/y, or neither." });
+export type BrowserScrollInput = z.infer<typeof browserScrollInputSchema>;
 
 export const browserFillInputSchema = z
   .object({
@@ -412,10 +500,64 @@ export const browserFillInputSchema = z
   .strict();
 export type BrowserFillInput = z.infer<typeof browserFillInputSchema>;
 
+export const browserDragEndpointSchema = z.union([
+  z.object({ ref: z.string().min(1).max(128) }).strict(),
+  browserPointSchema,
+]);
+export type BrowserDragEndpoint = z.infer<typeof browserDragEndpointSchema>;
+export const browserDragInputSchema = z.object({
+  tabId: tabIdSchema,
+  from: browserDragEndpointSchema,
+  to: browserDragEndpointSchema,
+  steps: z.number().int().min(2).max(40).optional(),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserDragInput = z.infer<typeof browserDragInputSchema>;
+
+export const browserFormInputInputSchema = z.object({
+  tabId: tabIdSchema,
+  ref: z.string().min(1).max(128),
+  value: z.union([
+    z.string().max(200_000),
+    z.number().finite(),
+    z.boolean(),
+    z.array(z.string().max(500)).min(1).max(100),
+  ]),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserFormInputInput = z.infer<typeof browserFormInputInputSchema>;
+
+export const browserEvaluateInputSchema = z.object({
+  tabId: tabIdSchema,
+  function: z.string().trim().min(5).max(8192),
+  ref: z.string().min(1).max(128).optional(),
+  confirmationId: confirmationIdSchema,
+}).strict();
+export type BrowserEvaluateInput = z.infer<typeof browserEvaluateInputSchema>;
+
+export const browserEvaluateResultSchema = z.object({
+  tabId: tabIdSchema,
+  value: z.unknown(),
+}).strict();
+export type BrowserEvaluateResult = z.infer<typeof browserEvaluateResultSchema>;
+
+export const browserTypeInputSchema = z.object({
+  tabId: tabIdSchema,
+  text: z.string().max(100_000),
+  slowly: z.boolean().optional(),
+  submit: z.boolean().optional(),
+  confirmationId: confirmationIdSchema,
+  knownRevision: knownRevisionSchema,
+}).strict();
+export type BrowserTypeInput = z.infer<typeof browserTypeInputSchema>;
+
 export const browserPressInputSchema = z
   .object({
     tabId: tabIdSchema,
     key: z.string().min(1).max(100),
+    repeat: z.number().int().min(1).max(100).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
   })
@@ -428,11 +570,17 @@ export const browserWaitInputSchema = z
     timeoutMs: z.number().int().positive().max(120_000).optional(),
     text: z.string().min(1).max(10_000).optional(),
     ref: z.string().min(1).max(128).optional(),
+    // Hands the tab to the user with this reason until they hand it back.
+    forUser: z.string().trim().min(1).max(200).optional(),
     knownRevision: knownRevisionSchema,
   })
   .strict()
-  .refine((input) => input.text !== undefined || input.ref !== undefined || input.timeoutMs !== undefined, {
-    message: "Provide timeoutMs, text, or ref.",
+  .refine((input) => input.text !== undefined || input.ref !== undefined || input.timeoutMs !== undefined ||
+    input.forUser !== undefined, {
+    message: "Provide timeoutMs, text, ref, or forUser.",
+  })
+  .refine((input) => input.forUser === undefined || (input.text === undefined && input.ref === undefined), {
+    message: "forUser waits for the user and cannot be combined with text or ref.",
   });
 export type BrowserWaitInput = z.infer<typeof browserWaitInputSchema>;
 
@@ -503,6 +651,9 @@ const browserSequenceStepSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("click"),
     ref: z.string().min(1).max(128),
+    button: z.enum(["left", "right", "middle"]).optional(),
+    clickCount: z.number().int().min(1).max(3).optional(),
+    modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
   }).strict(),
   z.object({
@@ -513,6 +664,41 @@ const browserSequenceStepSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("press"),
     key: z.string().min(1).max(100),
+    repeat: z.number().int().min(1).max(100).optional(),
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
+    action: z.literal("hover"),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("scroll"),
+    direction: z.enum(["up", "down", "left", "right"]),
+    amount: z.number().int().min(1).max(10000),
+    ref: z.string().min(1).max(128).optional(),
+    x: browserPointSchema.shape.x.optional(),
+    y: browserPointSchema.shape.y.optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("drag"),
+    from: browserDragEndpointSchema,
+    to: browserDragEndpointSchema,
+    steps: z.number().int().min(2).max(40).optional(),
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
+    action: z.literal("formInput"),
+    ref: z.string().min(1).max(128),
+    value: browserFormInputInputSchema.shape.value,
+    confirmationId: confirmationIdSchema,
+  }).strict(),
+  z.object({
+    action: z.literal("type"),
+    text: z.string().max(100_000),
+    slowly: z.boolean().optional(),
+    submit: z.boolean().optional(),
     confirmationId: confirmationIdSchema,
   }).strict(),
   z.object({
@@ -534,11 +720,24 @@ export const browserSequenceInputSchema = z
     tabId: tabIdSchema,
     steps: z.array(browserSequenceStepSchema).min(1).max(20),
     finalSnapshot: z.boolean().optional(),
+    finalScreenshot: z.boolean().optional(),
     knownRevision: knownRevisionSchema,
   })
   .strict()
   .superRefine((input, context) => {
     input.steps.forEach((step, index) => {
+      if (step.action === "hover" &&
+          (Boolean(step.ref) === (step.x !== undefined && step.y !== undefined) ||
+            (step.x === undefined) !== (step.y === undefined))) {
+        context.addIssue({ code: "custom", path: ["steps", index],
+          message: "Hover requires a ref or a viewport CSS x/y point." });
+      }
+      if (step.action === "scroll" &&
+          ((step.x === undefined) !== (step.y === undefined) ||
+            (step.ref !== undefined && step.x !== undefined))) {
+        context.addIssue({ code: "custom", path: ["steps", index],
+          message: "Scroll requires either a ref, coordinates, or the page." });
+      }
       if (
         step.action === "wait" &&
         step.timeoutMs === undefined &&
@@ -558,10 +757,11 @@ export type BrowserSequenceStep = BrowserSequenceInput["steps"][number];
 export const browserSequenceStepResultSchema = z
   .object({
     index: z.number().int().nonnegative(),
-    action: z.enum(["navigate", "click", "fill", "press", "wait", "extract"]),
+    action: z.enum(["navigate", "click", "fill", "hover", "scroll", "drag", "formInput", "type", "press", "wait", "extract"]),
     completed: z.literal(true),
     value: z.unknown().optional(),
     completeness: browserExtractionCompletenessSchema.optional(),
+    durationMs: z.number().nonnegative().optional(),
   })
   .strict();
 export const browserSequenceResultSchema = z
@@ -570,6 +770,8 @@ export const browserSequenceResultSchema = z
     completed: z.literal(true),
     steps: z.array(browserSequenceStepResultSchema).max(20),
     snapshot: browserSnapshotResultSchema.optional(),
+    screenshot: z.lazy(() => browserScreenshotResultSchema).optional(),
+    actionSummary: z.array(z.object({ index: z.number().int().nonnegative(), action: z.string().max(64), durationMs: z.number().nonnegative() }).strict()).max(200).optional(),
     state: browserStateUpdateSchema.optional(),
     timing: browserOperationTimingSchema.optional(),
   })
@@ -630,12 +832,30 @@ export const browserFrameFillInputSchema = z
   .strict();
 export type BrowserFrameFillInput = z.infer<typeof browserFrameFillInputSchema>;
 
+export const browserScreenshotRegionSchema = z.object({
+  x: z.number().int().min(0).max(20_000),
+  y: z.number().int().min(0).max(20_000),
+  width: z.number().int().min(1).max(10_000),
+  height: z.number().int().min(1).max(10_000),
+}).strict().refine((value) => value.width * value.height <= 12_000_000, {
+  message: "Screenshot region exceeds the 12 megapixel cap.",
+});
+export type BrowserScreenshotRegion = z.infer<typeof browserScreenshotRegionSchema>;
 export const browserScreenshotInputSchema = z
   .object({
     tabId: tabIdSchema,
     fullPage: z.boolean().optional(),
+    region: browserScreenshotRegionSchema.optional(),
+    scale: z.enum(["css", "device"]).optional(),
+    zoom: z.number().min(1).max(8).optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.fullPage && value.region), {
+    message: "A screenshot cannot be both full-page and clipped.",
+  })
+  .refine((value) => value.zoom === undefined || value.region !== undefined, {
+    message: "Zoom magnifies a clipped region; provide region.",
+  });
 export type BrowserScreenshotInput = z.infer<typeof browserScreenshotInputSchema>;
 export const browserScreenshotImageContentSchema = z
   .object({
@@ -667,6 +887,73 @@ export const browserScreenshotTransportResultSchema = browserScreenshotResultSch
       });
     }
   });
+
+export const browserViewportInputSchema = z.object({
+  tabId: tabIdSchema,
+  preset: z.enum(["desktop", "tablet", "mobile", "custom", "window", "reset"]),
+  width: z.number().int().min(240).max(3840).optional(),
+  height: z.number().int().min(240).max(2160).optional(),
+  deviceScaleFactor: z.number().min(0.5).max(4).optional(),
+  colorScheme: z.enum(["light", "dark", "no-preference"]).optional(),
+  touch: z.boolean().optional(),
+  userAgent: z.string().min(1).max(512).regex(/^[\x20-\x7e]+$/u).optional(),
+}).strict().superRefine((input, ctx) => {
+  const sized = input.preset === "custom" || input.preset === "window";
+  if (sized && (input.width === undefined || input.height === undefined)) {
+    ctx.addIssue({ code: "custom", message: "Custom viewport and window resize require width and height." });
+  }
+  if (!sized && (input.width !== undefined || input.height !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Dimensions are only valid with custom viewport or window resize." });
+  }
+  if ((input.preset === "reset" || input.preset === "window") && (input.deviceScaleFactor !== undefined || input.colorScheme !== undefined || input.touch !== undefined || input.userAgent !== undefined)) {
+    ctx.addIssue({ code: "custom", message: "Reset and window resize do not allow emulation overrides." });
+  }
+});
+export type BrowserViewportInput = z.infer<typeof browserViewportInputSchema>;
+export const browserViewportResultSchema = z.object({
+  tabId: tabIdSchema,
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+  deviceScaleFactor: z.number().positive(),
+  mobile: z.boolean(),
+  touch: z.boolean(),
+  colorScheme: z.enum(["light", "dark", "no-preference"]),
+  emulated: z.boolean(),
+  userAgent: z.string().max(512),
+  window: z.object({
+    width: z.number().int().min(1),
+    height: z.number().int().min(1),
+  }).strict().optional(),
+}).strict();
+export type BrowserViewportResult = z.infer<typeof browserViewportResultSchema>;
+
+export const browserDialogInputSchema = z.object({
+  tabId: tabIdSchema,
+  action: z.enum(["arm", "inspect", "respond", "cancel"]),
+  response: z.enum(["accept", "dismiss"]).optional(),
+  expectedMessage: z.string().max(2000).optional(),
+  promptText: z.string().max(2000).optional(),
+  confirmationId: confirmationIdSchema,
+}).strict().superRefine((input, ctx) => {
+  if (input.action === "respond" && (!input.response || input.expectedMessage === undefined)) {
+    ctx.addIssue({ code: "custom", message: "Respond requires the inspected exact message and a response." });
+  }
+  if (input.action !== "respond" && (input.response || input.expectedMessage !== undefined || input.promptText || input.confirmationId)) {
+    ctx.addIssue({ code: "custom", message: "Only response actions accept message, response and confirmation." });
+  }
+  if (input.promptText !== undefined && (input.action !== "respond" || input.response !== "accept")) {
+    ctx.addIssue({ code: "custom", message: "Prompt text is only allowed for accepting a prompt." });
+  }
+});
+export type BrowserDialogInput = z.infer<typeof browserDialogInputSchema>;
+export const browserDialogResultSchema = z.object({
+  tabId: tabIdSchema,
+  state: z.enum(["idle", "armed", "open"]),
+  dialogType: z.enum(["alert", "confirm", "prompt", "beforeunload"]).optional(),
+  message: z.string().max(2000).optional(),
+  expiresAt: z.string().datetime().optional(),
+}).strict();
+export type BrowserDialogResult = z.infer<typeof browserDialogResultSchema>;
 
 export const browserTabActionInputSchema = z.object({ tabId: tabIdSchema }).strict();
 export type BrowserTabActionInput = z.infer<typeof browserTabActionInputSchema>;
@@ -708,6 +995,75 @@ export const browserFinishTaskResultSchema = z
   .strict();
 export type BrowserFinishTaskResult = z.infer<typeof browserFinishTaskResultSchema>;
 
+// A plan the user approves in personal Chrome before MCP acts for a task.
+// Reading pages on the approved sites is always included; every other kind of
+// action is granted on its own, and the user may approve a subset.
+export const browserPlanActionSchema = z.enum(["navigate", "interact", "fill", "upload", "download", "evaluate"]);
+export type BrowserPlanAction = z.infer<typeof browserPlanActionSchema>;
+const browserPlanDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .regex(
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+    "Use a bare public hostname such as example.com, without scheme, port or path; it also covers its subdomains.",
+  );
+const browserPlanIdSchema = z.string().regex(/^plan_[a-z0-9-]{8,64}$/);
+export const browserPlanInputSchema = z
+  .object({
+    planId: browserPlanIdSchema.optional(),
+    taskId: taskIdSchema.optional(),
+    summary: z.string().trim().min(1).max(500).optional(),
+    steps: z.array(z.string().trim().min(1).max(200)).min(1).max(20).optional(),
+    domains: z.array(browserPlanDomainSchema).min(1).max(20).optional(),
+    actions: z.array(browserPlanActionSchema).max(6).optional(),
+    tabIds: z.array(tabIdSchema).min(1).max(10).optional(),
+    timeoutMs: z.number().int().positive().max(120_000).optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const proposal = ["taskId", "summary", "steps", "domains", "actions", "tabIds"] as const;
+    if (input.planId !== undefined) {
+      if (proposal.some((key) => input[key] !== undefined)) {
+        context.addIssue({
+          code: "custom",
+          path: ["planId"],
+          message: "planId only keeps waiting for an earlier plan; pass it alone, optionally with timeoutMs.",
+        });
+      }
+      return;
+    }
+    for (const key of ["taskId", "summary", "steps", "domains", "actions"] as const) {
+      if (input[key] === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "A new plan requires taskId, summary, steps, domains and actions.",
+        });
+      }
+    }
+    for (const key of ["domains", "actions", "tabIds"] as const) {
+      const values = input[key];
+      if (values && new Set(values).size !== values.length) {
+        context.addIssue({ code: "custom", path: [key], message: `Repeated ${key} are not allowed.` });
+      }
+    }
+  });
+export type BrowserPlanInput = z.infer<typeof browserPlanInputSchema>;
+export const browserPlanResultSchema = z
+  .object({
+    planId: browserPlanIdSchema,
+    taskId: taskIdSchema,
+    status: z.enum(["pending", "approved", "rejected", "superseded"]),
+    domains: z.array(browserPlanDomainSchema).max(20),
+    actions: z.array(browserPlanActionSchema).max(6),
+    tabIds: z.array(tabIdSchema).max(10).optional(),
+    feedback: z.string().max(500).optional(),
+  })
+  .strict();
+export type BrowserPlanResult = z.infer<typeof browserPlanResultSchema>;
+
 export const browserDownloadInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -733,10 +1089,15 @@ export type BrowserDownloadResult = z.infer<typeof browserDownloadResultSchema>;
 export const browserUploadFileSchema = z
   .object({
     name: z.string().trim().min(1).max(255).regex(/^[^/\\\x00]+$/u),
-    contentBase64: z.string().max(8 * 1024 * 1024),
+    contentBase64: z.string().max(8 * 1024 * 1024).optional(),
+    // A browser_screenshot result path; only the session that captured it can read it.
+    screenshotPath: z.string().min(1).max(4_096).optional(),
     mimeType: z.string().trim().min(1).max(255).optional(),
   })
-  .strict();
+  .strict()
+  .refine((file) => (file.contentBase64 === undefined) !== (file.screenshotPath === undefined), {
+    message: "Provide exactly one of contentBase64 or screenshotPath.",
+  });
 export type BrowserUploadFile = z.infer<typeof browserUploadFileSchema>;
 
 export const browserUploadInputSchema = z
@@ -746,10 +1107,19 @@ export const browserUploadInputSchema = z
     triggerRef: z.string().min(1).max(128).optional(),
     inputRef: z.string().min(1).max(128).optional(),
     selector: z.string().min(1).max(2_000).optional(),
+    dropRef: z.string().min(1).max(128).optional(),
     confirmationId: confirmationIdSchema,
   })
   .strict()
   .superRefine((input, context) => {
+    if (input.dropRef !== undefined &&
+        (input.triggerRef !== undefined || input.inputRef !== undefined || input.selector !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dropRef"],
+        message: "dropRef targets a drop zone and cannot be combined with a file input target.",
+      });
+    }
     const names = new Set<string>();
     for (const [index, file] of input.files.entries()) {
       const normalized = file.name.toLocaleLowerCase("en-US");
@@ -869,6 +1239,9 @@ export const browserConsoleInputSchema = z
   .object({
     tabId: tabIdSchema,
     level: browserConsoleLevelSchema.optional(),
+    pattern: browserNetworkFilterSchema.optional(),
+    onlyErrors: z.boolean().optional(),
+    limit: z.number().int().min(1).max(1_000).optional(),
     clear: z.boolean().optional(),
   })
   .strict();
@@ -884,6 +1257,9 @@ export const browserNetworkListInputSchema = z
     tabId: tabIdSchema,
     includeStatic: z.boolean().optional(),
     filter: browserNetworkFilterSchema.optional(),
+    capture: z.enum(["start", "read", "stop"]).optional(),
+    captureHeaders: z.boolean().optional(),
+    captureBodies: z.boolean().optional(),
     clear: z.boolean().optional(),
   })
   .strict();
@@ -987,6 +1363,13 @@ export const browserPdfResultSchema = browserArtifactSchema
   })
   .strict();
 export type BrowserPdfResult = z.infer<typeof browserPdfResultSchema>;
+export const browserPdfTransportResultSchema = z.object({
+  tabId: tabIdSchema,
+  kind: z.literal("pdf"),
+  contentBase64: z.string().min(12).max(17 * 1024 * 1024),
+  sizeBytes: z.number().int().min(8).max(12 * 1024 * 1024),
+  createdAt: z.string().datetime(),
+}).strict();
 
 export const browserDiagnosticsInputSchema = z
   .object({
@@ -1019,12 +1402,22 @@ export const browserOperationSchema = z.enum([
   "status",
   "connect",
   "tabs",
+  "selectTab",
+  "dialog",
+  "viewport",
   "open",
   "openAuthorizedSite",
   "navigate",
   "snapshot",
+  "find",
+  "evaluate",
   "click",
+  "hover",
+  "drag",
+  "scroll",
   "fill",
+  "formInput",
+  "type",
   "press",
   "wait",
   "extract",
@@ -1041,6 +1434,7 @@ export const browserOperationSchema = z.enum([
   "goForward",
   "closeTab",
   "finishTask",
+  "plan",
   "download",
   "upload",
   "console",
@@ -1089,12 +1483,22 @@ export const browserOperationInputSchemas = {
   status: browserStatusInputSchema,
   connect: browserConnectInputSchema,
   tabs: browserTabsInputSchema,
+  selectTab: browserTabActionInputSchema,
+  dialog: browserDialogInputSchema,
+  viewport: browserViewportInputSchema,
   open: browserOpenInputSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteInputSchema,
   navigate: browserNavigateInputSchema,
   snapshot: browserSnapshotInputSchema,
+  find: browserFindInputSchema,
+  evaluate: browserEvaluateInputSchema,
   click: browserClickInputSchema,
+  hover: browserHoverInputSchema,
+  drag: browserDragInputSchema,
+  scroll: browserScrollInputSchema,
   fill: browserFillInputSchema,
+  formInput: browserFormInputInputSchema,
+  type: browserTypeInputSchema,
   press: browserPressInputSchema,
   wait: browserWaitInputSchema,
   extract: browserExtractInputSchema,
@@ -1111,6 +1515,7 @@ export const browserOperationInputSchemas = {
   goForward: browserTabActionInputSchema,
   closeTab: browserCloseTabInputSchema,
   finishTask: browserFinishTaskInputSchema,
+  plan: browserPlanInputSchema,
   download: browserDownloadInputSchema,
   upload: browserUploadInputSchema,
   console: browserConsoleInputSchema,
@@ -1128,12 +1533,22 @@ export const browserOperationResultSchemas = {
   status: browserStatusResultSchema,
   connect: browserConnectResultSchema,
   tabs: browserTabsResultSchema,
+  selectTab: browserTabResultSchema,
+  dialog: browserDialogResultSchema,
+  viewport: browserViewportResultSchema,
   open: browserTabResultSchema,
   openAuthorizedSite: browserOpenAuthorizedSiteResultSchema,
   navigate: browserTabResultSchema,
   snapshot: browserSnapshotResultSchema,
+  find: browserFindResultSchema,
+  evaluate: browserEvaluateResultSchema,
   click: browserActionResultSchema,
+  hover: browserActionResultSchema,
+  drag: browserActionResultSchema,
+  scroll: browserActionResultSchema,
   fill: browserActionResultSchema,
+  formInput: browserActionResultSchema,
+  type: browserActionResultSchema,
   press: browserActionResultSchema,
   wait: browserActionResultSchema,
   extract: browserExtractResultSchema,
@@ -1150,6 +1565,7 @@ export const browserOperationResultSchemas = {
   goForward: browserTabResultSchema,
   closeTab: browserActionResultSchema,
   finishTask: browserFinishTaskResultSchema,
+  plan: browserPlanResultSchema,
   download: browserDownloadResultSchema,
   upload: browserUploadResultSchema,
   console: browserConsoleResultSchema,

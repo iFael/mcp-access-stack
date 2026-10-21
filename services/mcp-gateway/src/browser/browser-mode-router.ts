@@ -6,6 +6,7 @@ export interface PersonalBrowserConnectionInfo {
   profile: "personal";
   protocolVersion: number;
   extensionVersion?: string;
+  expectedExtensionVersion?: string;
   capabilities: string[];
 }
 
@@ -21,13 +22,31 @@ export class BrowserModeRouter implements BrowserExecutor {
   private readonly taskModes = new Map<string, "managed" | "personal">();
 
   constructor(
-    private readonly managed: BrowserExecutor,
+    private readonly managed: BrowserExecutor | undefined,
     private readonly personal?: PersonalBrowserExecutor,
   ) {}
 
   async status(
     ...args: Parameters<BrowserExecutor["status"]>
   ): ReturnType<BrowserExecutor["status"]> {
+    if (!this.managed) {
+      const personal = this.personal?.connectionInfo();
+      if (!personal) throw unsupported("browser_status");
+      const tabs = personal.connected
+        ? await this.requirePersonal().tabs({}, args[1])
+        : { tabs: [] };
+      return {
+        state: personal.connected ? "connected" : "disconnected",
+        ready: personal.connected,
+        browser: "chrome",
+        profile: "personal",
+        autoLaunch: false,
+        tabGroup: "MCP",
+        edgeFallback: "technical-necessity-only",
+        tabCount: tabs.tabs.length,
+        personal,
+      };
+    }
     const managed = await this.managed.status(...args);
     return {
       ...managed,
@@ -40,6 +59,7 @@ export class BrowserModeRouter implements BrowserExecutor {
   async connect(
     ...args: Parameters<BrowserExecutor["connect"]>
   ): ReturnType<BrowserExecutor["connect"]> {
+    if (!this.managed) return this.status(...args);
     const managed = await this.managed.connect(...args);
     return {
       ...managed,
@@ -53,6 +73,7 @@ export class BrowserModeRouter implements BrowserExecutor {
     ...args: Parameters<BrowserExecutor["tabs"]>
   ): ReturnType<BrowserExecutor["tabs"]> {
     const [input, context] = args;
+    if (!this.managed) return this.requirePersonal().tabs(input, context);
     if (input.taskId) {
       const knownMode = this.taskModes.get(input.taskId);
       if (knownMode === "personal") return this.requirePersonal().tabs(input, context);
@@ -84,11 +105,23 @@ export class BrowserModeRouter implements BrowserExecutor {
     return { tabs: [...managed.tabs, ...personal.tabs] };
   }
 
+  selectTab(...args: Parameters<BrowserExecutor["selectTab"]>): ReturnType<BrowserExecutor["selectTab"]> {
+    return this.forTab(args[0].tabId).selectTab(...args);
+  }
+
+  dialog(...args: Parameters<BrowserExecutor["dialog"]>): ReturnType<BrowserExecutor["dialog"]> {
+    return this.forTab(args[0].tabId).dialog(...args);
+  }
+
+  viewport(...args: Parameters<BrowserExecutor["viewport"]>): ReturnType<BrowserExecutor["viewport"]> {
+    return this.forTab(args[0].tabId).viewport(...args);
+  }
+
   async open(
     ...args: Parameters<BrowserExecutor["open"]>
   ): ReturnType<BrowserExecutor["open"]> {
     const [input, context] = args;
-    const { browserMode = "managed", ...browserInput } = input;
+    const { browserMode = this.managed ? "managed" : "personal", ...browserInput } = input;
     if (input.taskId) {
       const existingMode = this.taskModes.get(input.taskId);
       if (existingMode && existingMode !== browserMode) {
@@ -106,7 +139,7 @@ export class BrowserModeRouter implements BrowserExecutor {
       else if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "personal");
       return result;
     }
-    const result = await this.managed.open(browserInput, context);
+    const result = await this.requireManaged().open(browserInput, context);
     if (input.taskId) this.taskModes.set(input.taskId, "managed");
     else if (result.tab.taskId) this.taskModes.set(result.tab.taskId, "managed");
     return result;
@@ -115,7 +148,7 @@ export class BrowserModeRouter implements BrowserExecutor {
   openAuthorizedSite(
     ...args: Parameters<BrowserExecutor["openAuthorizedSite"]>
   ): ReturnType<BrowserExecutor["openAuthorizedSite"]> {
-    return this.managed.openAuthorizedSite(...args);
+    return this.requireManaged().openAuthorizedSite(...args);
   }
 
   navigate(...args: Parameters<BrowserExecutor["navigate"]>): ReturnType<BrowserExecutor["navigate"]> {
@@ -126,12 +159,40 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.forTab(args[0].tabId).snapshot(...args);
   }
 
+  find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
+    return this.forTab(args[0].tabId).find(...args);
+  }
+
+  evaluate(...args: Parameters<BrowserExecutor["evaluate"]>): ReturnType<BrowserExecutor["evaluate"]> {
+    return this.forTab(args[0].tabId).evaluate(...args);
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.forTab(args[0].tabId).click(...args);
   }
 
+  hover(...args: Parameters<BrowserExecutor["hover"]>): ReturnType<BrowserExecutor["hover"]> {
+    return this.forTab(args[0].tabId).hover(...args);
+  }
+
+  drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
+    return this.forTab(args[0].tabId).drag(...args);
+  }
+
+  scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
+    return this.forTab(args[0].tabId).scroll(...args);
+  }
+
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.forTab(args[0].tabId).fill(...args);
+  }
+
+  formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
+    return this.forTab(args[0].tabId).formInput(...args);
+  }
+
+  type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
+    return this.forTab(args[0].tabId).type(...args);
   }
 
   press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {
@@ -231,6 +292,17 @@ export class BrowserModeRouter implements BrowserExecutor {
     return result;
   }
 
+  async plan(...args: Parameters<BrowserExecutor["plan"]>): ReturnType<BrowserExecutor["plan"]> {
+    const [input] = args;
+    if (input.taskId && this.taskModes.get(input.taskId) === "managed") {
+      throw new AppError(
+        "BROWSER_OPERATION_MODE_UNSUPPORTED",
+        `Browser task ${input.taskId} runs in managed mode; plans are approved only in personal Chrome.`,
+      );
+    }
+    return this.requirePersonal().plan(...args);
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
@@ -240,6 +312,16 @@ export class BrowserModeRouter implements BrowserExecutor {
         "INVALID_ARGUMENT",
         "browser_finish_task keepOpen requires an explicit taskId.",
       );
+    }
+    if (!this.managed) {
+      const result = await this.requirePersonal().finishTask(...args);
+      for (const tabId of [
+        ...(result.closedTabIds ?? []),
+        ...(result.releasedTabIds ?? []),
+      ]) this.personalTabIds.delete(tabId);
+      if (input.taskId) this.taskModes.delete(input.taskId);
+      else this.taskModes.clear();
+      return result;
     }
     if (input.taskId) {
       let mode = this.taskModes.get(input.taskId);
@@ -343,6 +425,16 @@ export class BrowserModeRouter implements BrowserExecutor {
 
   private forTab(tabId: string): BrowserExecutor {
     if (isPersonalTabId(tabId)) return this.requirePersonal();
+    return this.requireManaged();
+  }
+
+  private requireManaged(): BrowserExecutor {
+    if (!this.managed) {
+      throw new AppError(
+        "BROWSER_CAPABILITY_UNSUPPORTED",
+        "Managed browser mode is disabled: use the existing authenticated Chrome profile through the MCP V3 extension.",
+      );
+    }
     return this.managed;
   }
 

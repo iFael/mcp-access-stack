@@ -320,12 +320,22 @@ async function execute(
     case "status": return runtime.status(input as never);
     case "connect": return runtime.connect(input as never, context);
     case "tabs": return runtime.tabs(input as never, context);
+    case "selectTab": return runtime.selectTab(input as never, context);
+    case "dialog": return runtime.dialog(input as never, context);
+    case "viewport": return runtime.viewport(input as never, context);
     case "open": return runtime.open(input as never, context);
     case "openAuthorizedSite": return runtime.openAuthorizedSite(input as never, context);
     case "navigate": return runtime.navigate(input as never, context);
     case "snapshot": return runtime.snapshot(input as never, context);
+    case "find": return runtime.find(input as never, context);
+    case "evaluate": return runtime.evaluate(input as never, context);
     case "click": return runtime.click(input as never, context);
+    case "hover": return runtime.hover(input as never, context);
+    case "drag": return runtime.drag(input as never, context);
+    case "scroll": return runtime.scroll(input as never, context);
     case "fill": return runtime.fill(input as never, context);
+    case "formInput": return runtime.formInput(input as never, context);
+    case "type": return runtime.type(input as never, context);
     case "press": return runtime.press(input as never, context);
     case "wait": return runtime.wait(input as never, context);
     case "extract": return runtime.extract(input as never, context);
@@ -342,6 +352,7 @@ async function execute(
     case "goForward": return runtime.goForward(input as never);
     case "closeTab": return runtime.closeTab(input as never);
     case "finishTask": return runtime.finishTask(input as never, context);
+    case "plan": return runtime.plan(input as never);
     case "download": return runtime.download(input as never);
     case "upload": return runtime.upload(input as never);
     case "console": return runtime.console(input as never);
@@ -495,6 +506,7 @@ function isMutatingOperation(operation: BrowserOperation): boolean {
     "status",
     "tabs",
     "snapshot",
+    "find",
     "wait",
     "extract",
     "frameExtract",

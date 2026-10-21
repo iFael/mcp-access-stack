@@ -6,9 +6,32 @@ import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
+  browserPlanInputSchema,
+  browserTabActionInputSchema,
+  browserDialogInputSchema,
+  browserViewportInputSchema,
+  browserWaitInputSchema,
+  browserSequenceInputSchema,
+  browserSequenceResultSchema,
+  browserHoverInputSchema,
+  browserFindInputSchema,
+  browserFindResultSchema,
+  browserScrollInputSchema,
+  browserClickInputSchema,
+  browserPressInputSchema,
+  browserTypeInputSchema,
+  browserFormInputInputSchema,
+  browserDragInputSchema,
+  browserEvaluateInputSchema,
+  browserSnapshotInputSchema,
+  browserScreenshotInputSchema,
+  browserConsoleInputSchema,
+  browserNetworkListInputSchema,
+  browserSnapshotResultSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserUploadFileSchema,
+  browserUploadInputSchema,
 } from "../src/browser-contracts.js";
 import {
   BROWSER_TOOL_NAMES,
@@ -18,7 +41,75 @@ import {
 
 const collectedAt = "2026-07-02T00:00:00.000Z";
 
+describe("advanced browser sequence parity", () => {
+  it("accepts all trusted advanced steps and optional final screenshot", () => {
+    const input = {
+      tabId: "personal:7",
+      steps: [
+        { action: "hover", x: 150, y: 220 },
+        { action: "scroll", direction: "down", amount: 300, x: 150, y: 220 },
+        { action: "drag", from: { ref: "p-1" }, to: { ref: "p-2" }, steps: 10 },
+        { action: "formInput", ref: "p-3", value: true },
+        { action: "type", text: "Hello", slowly: true },
+      ],
+      finalScreenshot: true,
+      finalSnapshot: true,
+    };
+    expect(browserSequenceInputSchema.safeParse(input).success).toBe(true);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "hover" }] }).success).toBe(false);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "scroll", direction: "down", amount: 100, x: 10 }] }).success).toBe(false);
+    expect(browserSequenceInputSchema.safeParse({ tabId: "personal:7",
+      steps: [{ action: "type", text: "a".repeat(100_001) }] }).success).toBe(false);
+    expect(browserSequenceResultSchema.safeParse({
+      tabId: "personal:7", completed: true,
+      steps: [{ index: 0, action: "hover", completed: true, durationMs: 5 }],
+      actionSummary: [{ index: 0, action: "hover", durationMs: 5 }],
+      screenshot: { tabId: "personal:7", path: "/private/frame.png", sizeBytes: 22 },
+    }).success).toBe(true);
+  });
+});
+
+describe("browser viewport contracts", () => {
+  it("requires owned tab and coherent emulation settings", () => {
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", colorScheme: "dark" }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "tablet", touch: false }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "custom", width: 900, height: 700, deviceScaleFactor: 2 }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "custom", width: 900 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "reset", width: 600, height: 800 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", colorScheme: "wrong" }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "desktop", deviceScaleFactor: 6 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "mobile", userAgent: "My browser 1.0" }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "reset", userAgent: "bad" }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900, height: 700 }).success).toBe(true);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900 }).success).toBe(false);
+    expect(browserViewportInputSchema.safeParse({ tabId: "personal:7", preset: "window", width: 900, height: 700, touch: true }).success).toBe(false);
+  });
+});
+
+describe("browser dialogue lifecycle contracts", () => {
+  it("requires exact messages for responses and bounds prompt input", () => {
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "arm" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "inspect" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "cancel" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "dismiss", expectedMessage: "Are you sure?" }).success).toBe(true);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "accept" }).success).toBe(false);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "arm",
+      response: "accept" }).success).toBe(false);
+    expect(browserDialogInputSchema.safeParse({ tabId: "personal:7", action: "respond",
+      response: "accept", expectedMessage: "Name?", promptText: "a".repeat(2001) }).success).toBe(false);
+  });
+});
+
 describe("browser mode contract", () => {
+  it("accepts only an explicit owned tab reference for tab selection", () => {
+    expect(browserTabActionInputSchema.safeParse({ tabId: "personal:7" }).success).toBe(true);
+    expect(browserTabActionInputSchema.safeParse({ tabId: "personal:7", openNewTab: true }).success).toBe(false);
+    expect(browserTabActionInputSchema.safeParse({}).success).toBe(false);
+  });
   it("exposes browserMode only on browser_open", () => {
     expect(browserOpenInputSchema.safeParse({
       url: "https://chatgpt.com/",
@@ -43,6 +134,122 @@ describe("browser mode contract", () => {
   });
 });
 
+describe("browser snapshot filter contract", () => {
+  it("bounds filter depth, maxChars and reference selectors", () => {
+    expect(browserSnapshotInputSchema.safeParse({
+      tabId: "personal:7", filter: "interactive", depth: 4, refId: "p-1", maxChars: 300,
+    }).success).toBe(true);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", filter: "unknown" }).success).toBe(false);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", depth: 41 }).success).toBe(false);
+    expect(browserSnapshotInputSchema.safeParse({ tabId: "personal:7", maxChars: 2_000_000 }).success).toBe(false);
+    expect(browserSnapshotResultSchema.safeParse({
+      tabId: "personal:7", url: "https://example.com/", content: "",
+      pageInstanceId: "private-page-id", truncated: true, refs: [],
+    }).success).toBe(true);
+  });
+});
+
+describe("browser targeted screenshot and console contracts", () => {
+  it("bounds viewport crops, scale and excludes fullPage with region", () => {
+    const region = { x: 120, y: 90, width: 360, height: 200 };
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region, scale: "device" }).success).toBe(true);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region, fullPage: true }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region: { ...region, width: 0 } }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", region: { ...region, height: 10_000, width: 10_000 } }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "personal:7", scale: "3x" }).success).toBe(false);
+  });
+
+  it("validates console regex, errors-only and bounded result limit", () => {
+    expect(browserConsoleInputSchema.safeParse({
+      tabId: "personal:7", pattern: "TypeError|warning", onlyErrors: true, limit: 50,
+    }).success).toBe(true);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "(" }).success).toBe(false);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", pattern: "x".repeat(501) }).success).toBe(false);
+    expect(browserConsoleInputSchema.safeParse({ tabId: "personal:7", limit: 1001 }).success).toBe(false);
+  });
+});
+
+describe("browser network capture contract", () => {
+  it("supports explicit continuous capture with bounded detail permissions", () => {
+    expect(browserNetworkListInputSchema.safeParse({
+      tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({
+      tabId: "personal:7", capture: "read", filter: "api[.]example",
+    }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", capture: "stop" }).success).toBe(true);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", capture: "forever" }).success).toBe(false);
+    expect(browserNetworkListInputSchema.safeParse({ tabId: "personal:7", captureBodies: "yes" }).success).toBe(false);
+  });
+});
+
+describe("browser interaction parity contracts", () => {
+  it("accepts bounded fresh-reference search and rejects unbounded inputs", () => {
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: "Enviar", role: "button", limit: 5 }).success).toBe(true);
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: " " }).success).toBe(false);
+    expect(browserFindInputSchema.safeParse({ tabId: "personal:7", query: "Enviar", limit: 21 }).success).toBe(false);
+    expect(browserFindResultSchema.safeParse({ tabId: "personal:7", url: "https://example.com", matches: [
+      { ref: "fresh-1", role: "button", name: "Enviar", score: 100 },
+    ] }).success).toBe(true);
+  });
+
+  it("bounds JavaScript evaluation and forbids unknown arguments", () => {
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: "() => document.title" }).success).toBe(true);
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: " " }).success).toBe(false);
+    expect(browserEvaluateInputSchema.safeParse({ tabId: "personal:7", function: "() => 1", unsafe: true }).success).toBe(false);
+  });
+
+  it("validates drag references and viewport coordinates with bounded movement", () => {
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { ref: "a" }, to: { x: 30, y: 40 }, steps: 12,
+    }).success).toBe(true);
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { x: 20, y: 30 }, to: { x: 60, y: 70 }, steps: 41,
+    }).success).toBe(false);
+    expect(browserDragInputSchema.safeParse({
+      tabId: "personal:7", from: { ref: "a", x: 30, y: 40 }, to: { ref: "b" },
+    }).success).toBe(false);
+  });
+
+  it("validates native form controls with bounded options and no unknown input", () => {
+    for (const value of ["Brazil", 42, true, false, ["A", "B"]]) {
+      expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value }).success).toBe(true);
+    }
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: [] }).success).toBe(false);
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: ["x".repeat(501)] }).success).toBe(false);
+    expect(browserFormInputInputSchema.safeParse({ tabId: "personal:7", ref: "p-2", value: true, custom: "bad" }).success).toBe(false);
+  });
+
+  it("bounds autonomous typing and submission", () => {
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "hello", slowly: true, submit: true }).success).toBe(true);
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "x".repeat(100001) }).success).toBe(false);
+    expect(browserTypeInputSchema.safeParse({ tabId: "personal:7", text: "a", unknown: true }).success).toBe(false);
+  });
+
+  it("validates bounded hover, scroll, click and repeat keyboard arguments", () => {
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1" }).success).toBe(true);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", x: 120, y: 30 }).success).toBe(true);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", x: 120, y: 30 }).success).toBe(false);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1", x: 120 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", x: 20, y: 40 }).success).toBe(true);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", x: 20, y: 40 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", y: 20 }).success).toBe(false);
+    expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450 }).success).toBe(true);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, x: 50, y: 90 }).success).toBe(true);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, x: 50 }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, ref: "p-1", x: 50, y: 90 }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: -1 }).success).toBe(false);
+    expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "diagonal", amount: 5 }).success).toBe(false);
+    expect(browserClickInputSchema.safeParse({
+      tabId: "personal:1", ref: "p-1", button: "right", clickCount: 3, modifiers: ["Control"],
+    }).success).toBe(true);
+    expect(browserClickInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", clickCount: 4 }).success).toBe(false);
+    expect(browserPressInputSchema.safeParse({ tabId: "personal:1", key: "Ctrl+A", repeat: 100 }).success).toBe(true);
+    expect(browserPressInputSchema.safeParse({ tabId: "personal:1", key: "Tab", repeat: 101 }).success).toBe(false);
+  });
+});
+
 describe("browser upload file contract", () => {
   it("rejects path separators and NUL in client-provided filenames", () => {
     const file = { contentBase64: "aGVsbG8=" };
@@ -50,6 +257,49 @@ describe("browser upload file contract", () => {
     expect(browserUploadFileSchema.safeParse({ ...file, name: "folder\\secret" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "secret\0.txt" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "playbook.md" }).success).toBe(true);
+  });
+
+  it("accepts a user handoff wait only on its own", () => {
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login" }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", timeoutMs: 50_000 }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", text: "Bem-vindo" }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: " " }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "x".repeat(201) }).success).toBe(false);
+  });
+
+  it("accepts a whole plan proposal or a bare planId to keep waiting", () => {
+    const proposal = {
+      taskId: "t1", summary: "Comprar o livro", steps: ["Abrir a loja"],
+      domains: ["Shop.Example ", "pay.example"], actions: ["navigate", "fill"],
+    };
+    expect(browserPlanInputSchema.parse(proposal).domains).toEqual(["shop.example", "pay.example"]);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: [], tabIds: ["personal:3"] }).success).toBe(true);
+    expect(browserPlanInputSchema.safeParse({ planId: "plan_00000001-aaaa", timeoutMs: 1_000 }).success).toBe(true);
+    expect(browserPlanInputSchema.safeParse({ planId: "plan_00000001-aaaa", taskId: "t1" }).success).toBe(false);
+    const { steps: _steps, ...withoutSteps } = proposal;
+    expect(browserPlanInputSchema.safeParse(withoutSteps).success).toBe(false);
+    for (const domain of ["https://shop.example", "shop.example/path", "shop.example:443", "localhost", "10.0.0.1", "*.shop.example"]) {
+      expect(browserPlanInputSchema.safeParse({ ...proposal, domains: [domain] }).success).toBe(false);
+    }
+    expect(browserPlanInputSchema.safeParse({ ...proposal, domains: ["shop.example", "SHOP.example"] }).success).toBe(false);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: ["navigate", "navigate"] }).success).toBe(false);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: ["read"] }).success).toBe(false);
+  });
+
+  it("accepts screenshot zoom only for a clipped region", () => {
+    const region = { x: 0, y: 0, width: 100, height: 40 };
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", region, zoom: 4 }).success).toBe(true);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", zoom: 2 }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", region, zoom: 9 }).success).toBe(false);
+  });
+
+  it("accepts a drop zone ref only as the sole upload target", () => {
+    const files = [{ name: "nota.txt", contentBase64: "aGVsbG8=" }];
+    expect(browserUploadInputSchema.safeParse({ tabId: "tab-1", files, dropRef: "p-3" }).success).toBe(true);
+    for (const target of [{ inputRef: "p-1" }, { triggerRef: "p-2" }, { selector: "input[type=file]" }]) {
+      expect(browserUploadInputSchema.safeParse({ tabId: "tab-1", files, dropRef: "p-3", ...target }).success)
+        .toBe(false);
+    }
   });
 });
 
@@ -112,7 +362,7 @@ function mockExecutor(): BrowserExecutor {
       completed: true as const,
       fileCount: files.length,
       totalBytes: files.reduce(
-        (total, file) => total + Buffer.from(file.contentBase64, "base64").byteLength,
+        (total, file) => total + Buffer.from(file.contentBase64 ?? "", "base64").byteLength,
         0,
       ),
     })),
@@ -202,6 +452,29 @@ async function callTool(
 }
 
 describe("registerBrowserTools", () => {
+  it("forwards the network start/read/stop and detail options through the public browser_network tool", async () => {
+    const executor = mockExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    await callTool(server, "browser_network", {
+      action: "list", tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    });
+    expect(executor.networkList).toHaveBeenCalledWith({
+      tabId: "personal:7", capture: "start", captureHeaders: true, captureBodies: true,
+    });
+    await callTool(server, "browser_network", {
+      action: "inspect", tabId: "personal:7", index: 1, detail: "response-body",
+    });
+    expect(executor.networkInspect).toHaveBeenCalledWith({
+      tabId: "personal:7", index: 1, detail: "response-body",
+    });
+    const countBefore = (executor.networkInspect as jest.Mock).mock.calls.length;
+    await callTool(server, "browser_network", {
+      action: "inspect", tabId: "personal:7", index: 1, captureBodies: true,
+    });
+    expect((executor.networkInspect as jest.Mock).mock.calls).toHaveLength(countBefore);
+  });
+
   it("registers the complete explicit browser tool surface", () => {
     const server = new McpServer(
       { name: "test", version: "0.0.0" },
@@ -523,6 +796,30 @@ describe("registerBrowserTools", () => {
         mimeType: "text/markdown",
       }],
     }));
+  });
+
+  it("routes earlier screenshots to browser_upload by path without a workspace", async () => {
+    const executor = mockExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerBrowserTools(server, executor, {});
+    const screenshotPath = "C:\\state\\browser\\personal-artifacts\\screenshots\\0f1e.jpg";
+    await expect(callTool(server, "browser_upload", {
+      tabId: "personal:1",
+      screenshotPaths: [screenshotPath],
+      dropRef: "p-9",
+    })).resolves.toMatchObject({ structuredContent: { completed: true, fileCount: 1 } });
+    expect(executor.upload).toHaveBeenCalledWith(expect.objectContaining({
+      tabId: "personal:1",
+      dropRef: "p-9",
+      files: [{ name: "0f1e.jpg", screenshotPath }],
+    }));
+    await expect(callTool(server, "browser_upload", { tabId: "personal:1", workspaceId: "workspace" }))
+      .resolves.toMatchObject({ isError: true });
+    expect(browserUploadFileSchema.safeParse({ name: "a.jpg", contentBase64: "aGVsbG8=", screenshotPath }).success).toBe(false);
+    expect(browserUploadFileSchema.safeParse({ name: "a.jpg" }).success).toBe(false);
   });
 
   it("rejects fields that do not belong to the selected advanced action", async () => {

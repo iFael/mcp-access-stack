@@ -13,6 +13,9 @@ import {
   browserOperationResponseSchema,
   browserOperationResultSchemas,
   type BrowserClickInput,
+  type BrowserHoverInput,
+  type BrowserDragInput,
+  type BrowserScrollInput,
   type BrowserCloseTabInput,
   type BrowserConnectInput,
   type BrowserConsoleInput,
@@ -22,7 +25,12 @@ import {
   type BrowserExecutor,
   type BrowserExtractInput,
   type BrowserFillInput,
+  type BrowserFormInputInput,
+  type BrowserTypeInput,
+  type BrowserFindInput,
+  type BrowserEvaluateInput,
   type BrowserFinishTaskInput,
+  type BrowserPlanInput,
   type BrowserFrameClickInput,
   type BrowserFrameExtractInput,
   type BrowserFrameFillInput,
@@ -43,6 +51,8 @@ import {
   type BrowserSnapshotInput,
   type BrowserStatusInput,
   type BrowserTabActionInput,
+  type BrowserDialogInput,
+  type BrowserViewportInput,
   type BrowserTraceInput,
   type BrowserTabsInput,
   type BrowserVideoStartInput,
@@ -106,6 +116,18 @@ export class BrowserWorkerClient implements BrowserExecutor {
     return this.call("tabs", input, context);
   }
 
+  selectTab(input: BrowserTabActionInput, context?: OperationContext) {
+    return this.call("selectTab", input, context);
+  }
+
+  dialog(input: BrowserDialogInput, context?: OperationContext) {
+    return this.call("dialog", input, context);
+  }
+
+  viewport(input: BrowserViewportInput, context?: OperationContext) {
+    return this.call("viewport", input, context);
+  }
+
   open(input: BrowserOpenInput, context?: OperationContext) {
     return this.call("open", input, context);
   }
@@ -125,12 +147,40 @@ export class BrowserWorkerClient implements BrowserExecutor {
     return this.call("snapshot", input, context);
   }
 
+  find(input: BrowserFindInput, context?: OperationContext) {
+    return this.call("find", input, context);
+  }
+
+  evaluate(input: BrowserEvaluateInput, context?: OperationContext) {
+    return this.call("evaluate", input, context);
+  }
+
   click(input: BrowserClickInput, context?: OperationContext) {
     return this.call("click", input, context);
   }
 
+  hover(input: BrowserHoverInput, context?: OperationContext) {
+    return this.call("hover", input, context);
+  }
+
+  drag(input: BrowserDragInput, context?: OperationContext) {
+    return this.call("drag", input, context);
+  }
+
+  scroll(input: BrowserScrollInput, context?: OperationContext) {
+    return this.call("scroll", input, context);
+  }
+
   fill(input: BrowserFillInput, context?: OperationContext) {
     return this.call("fill", input, context);
+  }
+
+  formInput(input: BrowserFormInputInput, context?: OperationContext) {
+    return this.call("formInput", input, context);
+  }
+
+  type(input: BrowserTypeInput, context?: OperationContext) {
+    return this.call("type", input, context);
   }
 
   press(input: BrowserPressInput, context?: OperationContext) {
@@ -195,6 +245,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext) {
     return this.call("finishTask", input, context);
+  }
+
+  plan(input: BrowserPlanInput, context?: OperationContext) {
+    return this.call("plan", input, context);
   }
 
   download(input: BrowserDownloadInput, context?: OperationContext) {
@@ -461,7 +515,14 @@ const BROWSER_EFFECTFUL_OPERATIONS = new Set<BrowserOperation>([
   "open",
   "openAuthorizedSite",
   "navigate",
+  "selectTab",
+  "evaluate",
   "click",
+  "hover",
+  "drag",
+  "scroll",
+  "formInput",
+  "type",
   "fill",
   "press",
   "sequence",

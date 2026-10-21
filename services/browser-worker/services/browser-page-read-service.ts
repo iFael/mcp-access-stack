@@ -8,6 +8,7 @@ import type {
   BrowserDriver,
   BrowserDriverResponse,
 } from "../drivers/browser-driver.js";
+import { hasBrowserCaptchaChallenge } from "./browser-captcha-detector.js";
 import type {
   BrowserElementReference,
   BrowserInteractionContextService,
@@ -51,7 +52,7 @@ export class BrowserPageReadService {
     const response = await this.options.driver.snapshot();
     const tab = this.options.updateSelectedTab(tabId, response);
     const content = response.snapshot ?? "";
-    if (/\b(?:captcha|recaptcha|hcaptcha)\b/i.test(content)) {
+    if (hasBrowserCaptchaChallenge(content)) {
       throw new AppError(
         "CAPTCHA_DETECTED",
         "A CAPTCHA requires manual completion in Chrome.",

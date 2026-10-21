@@ -58,7 +58,7 @@ describe("BrowserPageReadService", () => {
     const captureReferences = jest.fn(() => []);
     const service = makeService({
       driver: new FakePageDriver([
-        response({ snapshot: "Complete the reCAPTCHA challenge" }),
+        response({ snapshot: '- iframe "reCAPTCHA" [ref=captcha-frame]' }),
       ]),
       captureReferences,
     });
@@ -67,6 +67,17 @@ describe("BrowserPageReadService", () => {
       code: "CAPTCHA_DETECTED",
     });
     expect(captureReferences).not.toHaveBeenCalled();
+  });
+
+  it("does not block an ordinary article mentioning CAPTCHA", async () => {
+    const service = makeService({
+      driver: new FakePageDriver([
+        response({ snapshot: '- heading "What is reCAPTCHA?"\n- paragraph: "How to solve a CAPTCHA challenge"\n- button "Continue" [ref=continue]' }),
+      ]),
+    });
+    await expect(service.captureSnapshot(baseTab.tabId)).resolves.toMatchObject({
+      content: expect.stringContaining("reCAPTCHA"),
+    });
   });
 
   it("polls snapshots until the requested reference appears", async () => {

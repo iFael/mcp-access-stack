@@ -65,6 +65,14 @@ test("mcp-gateway changes include the Edge parity consumer", () => {
   assert.equal(result.linuxRuntime, true);
 });
 
+test("personal Chrome smoke changes run the gateway lanes that execute it", () => {
+  const result = classifyChangedPaths(["tooling/smoke/browser/personal-frame-sequence-smoke.ts"]);
+  assert.equal(result.mcpGateway, true);
+  assert.equal(result.operationsTooling, true);
+  assert.equal(result.browserWorker, false);
+  assert.equal(result.rootBroad, false);
+});
+
 test("edge protocol changes fan out to both gateway consumers", () => {
   const result = classifyChangedPaths(["packages/edge-protocol/src/index.ts"]);
   assert.equal(result.edgeProtocol, true);

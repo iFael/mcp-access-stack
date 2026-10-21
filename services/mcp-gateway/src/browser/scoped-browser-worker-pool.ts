@@ -138,6 +138,18 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.tabs(...args));
   }
 
+  selectTab(...args: Parameters<BrowserExecutor["selectTab"]>): ReturnType<BrowserExecutor["selectTab"]> {
+    return this.invoke(args[1], (client) => client.selectTab(...args));
+  }
+
+  dialog(...args: Parameters<BrowserExecutor["dialog"]>): ReturnType<BrowserExecutor["dialog"]> {
+    return this.invoke(args[1], (client) => client.dialog(...args));
+  }
+
+  viewport(...args: Parameters<BrowserExecutor["viewport"]>): ReturnType<BrowserExecutor["viewport"]> {
+    return this.invoke(args[1], (client) => client.viewport(...args));
+  }
+
   open(...args: Parameters<BrowserExecutor["open"]>): ReturnType<BrowserExecutor["open"]> {
     const [input, context] = args;
     if (input.browserMode === "personal") {
@@ -164,12 +176,40 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.snapshot(...args));
   }
 
+  find(...args: Parameters<BrowserExecutor["find"]>): ReturnType<BrowserExecutor["find"]> {
+    return this.invoke(args[1], (client) => client.find(...args));
+  }
+
+  evaluate(...args: Parameters<BrowserExecutor["evaluate"]>): ReturnType<BrowserExecutor["evaluate"]> {
+    return this.invoke(args[1], (client) => client.evaluate(...args));
+  }
+
   click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     return this.invoke(args[1], (client) => client.click(...args));
   }
 
+  hover(...args: Parameters<BrowserExecutor["hover"]>): ReturnType<BrowserExecutor["hover"]> {
+    return this.invoke(args[1], (client) => client.hover(...args));
+  }
+
+  drag(...args: Parameters<BrowserExecutor["drag"]>): ReturnType<BrowserExecutor["drag"]> {
+    return this.invoke(args[1], (client) => client.drag(...args));
+  }
+
+  scroll(...args: Parameters<BrowserExecutor["scroll"]>): ReturnType<BrowserExecutor["scroll"]> {
+    return this.invoke(args[1], (client) => client.scroll(...args));
+  }
+
   fill(...args: Parameters<BrowserExecutor["fill"]>): ReturnType<BrowserExecutor["fill"]> {
     return this.invoke(args[1], (client) => client.fill(...args));
+  }
+
+  formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
+    return this.invoke(args[1], (client) => client.formInput(...args));
+  }
+
+  type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
+    return this.invoke(args[1], (client) => client.type(...args));
   }
 
   press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {
@@ -252,6 +292,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     const result = await this.invoke(args[1], (client) => client.closeTab(...args));
     this.forgetTab(args[0].tabId);
     return result;
+  }
+
+  plan(...args: Parameters<BrowserExecutor["plan"]>): ReturnType<BrowserExecutor["plan"]> {
+    return this.invoke(args[1], (client) => client.plan(...args));
   }
 
   async finishTask(

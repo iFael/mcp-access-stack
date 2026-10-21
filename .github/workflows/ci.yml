@@ -337,6 +337,48 @@ jobs:
 
       - name: Build Browser Worker
         run: npm run build --workspace @vs-code-gpt/browser-worker
+
+  pr-personal-chrome-smoke:
+    needs: impact
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.impact.result == 'success' &&
+      needs.impact.outputs.mcpGateway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build smoke dependencies
+        run: npm run build --workspace @vs-code-gpt/shared && npm run build --workspace @mcp-access-stack/edge-protocol
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      # The generated extension runs in a throwaway Chromium profile on loopback
+      # *.test hosts, never in a personal profile.
+      - name: Run personal Chrome extension smoke
+        run: npm run smoke:browser:personal-frames
+
+      - name: Run personal Chrome extension smoke in a real window
+        env:
+          PERSONAL_SMOKE_HEADFUL: "1"
+        run: xvfb-run -a npm run smoke:browser:personal-frames
   pr-workspace-agent-unit:
     needs: impact
     if: >-
@@ -593,6 +635,7 @@ jobs:
       - pr-edge-beta84-bridge-dry-run
       - pr-validation
       - pr-browser-worker
+      - pr-personal-chrome-smoke
       - pr-workspace-agent
       - pr-runtime-assurance
       - pr-linux-runtime
@@ -607,6 +650,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           IMPACT_RESULT: ${{ needs.impact.result }}
           BROWSER_WORKER_IMPACT: ${{ needs.impact.outputs.browserWorker }}
+          MCP_GATEWAY_IMPACT: ${{ needs.impact.outputs.mcpGateway }}
           WORKSPACE_AGENT_IMPACT: ${{ needs.impact.outputs.workspaceAgent }}
           WINDOWS_RUNTIME_IMPACT: ${{ needs.impact.outputs.windowsRuntime }}
           LINUX_RUNTIME_IMPACT: ${{ needs.impact.outputs.linuxRuntime }}
@@ -615,6 +659,7 @@ jobs:
           VALIDATION_RESULT: ${{ needs.pr-validation.result }}
           EDGE_BRIDGE_LINUX_RESULT: ${{ needs.pr-edge-beta84-bridge-dry-run.result }}
           BROWSER_WORKER_RESULT: ${{ needs.pr-browser-worker.result }}
+          PERSONAL_CHROME_SMOKE_RESULT: ${{ needs.pr-personal-chrome-smoke.result }}
           WORKSPACE_AGENT_RESULT: ${{ needs.pr-workspace-agent.result }}
           RUNTIME_ASSURANCE_RESULT: ${{ needs.pr-runtime-assurance.result }}
           LINUX_RUNTIME_RESULT: ${{ needs.pr-linux-runtime.result }}
@@ -636,6 +681,11 @@ jobs:
               test "$BROWSER_WORKER_RESULT" = "success"
             else
               test "$BROWSER_WORKER_RESULT" = "skipped"
+            fi
+            if [[ "$MCP_GATEWAY_IMPACT" == "true" ]]; then
+              test "$PERSONAL_CHROME_SMOKE_RESULT" = "success"
+            else
+              test "$PERSONAL_CHROME_SMOKE_RESULT" = "skipped"
             fi
             if [[ "$WORKSPACE_AGENT_IMPACT" == "true" ]]; then
               test "$WORKSPACE_AGENT_RESULT" = "success"

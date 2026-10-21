@@ -84,6 +84,7 @@ function personalExecutor(connected = true): PersonalBrowserExecutor {
       content: "personal",
       refs: [],
     })),
+    find: jest.fn(async ({ tabId }) => ({ tabId, url: "https://chatgpt.com/", matches: [] })),
     tabs: jest.fn(async () => ({ tabs: [] })),
     finishTask: jest.fn(async ({ taskId }) => ({
       completed: true as const,
@@ -96,6 +97,64 @@ function personalExecutor(connected = true): PersonalBrowserExecutor {
 }
 
 describe("BrowserModeRouter", () => {
+  it("runs personal-only without launching or falling back to a second Chrome profile", async () => {
+    const personal = personalExecutor();
+    const router = new BrowserModeRouter(undefined, personal);
+    const status = await router.status({});
+    expect(status).toMatchObject({
+      browser: "chrome",
+      profile: "personal",
+      autoLaunch: false,
+      ready: true,
+      tabCount: 0,
+    });
+    expect(await router.connect({})).toMatchObject({ profile: "personal", autoLaunch: false });
+
+    const opened = await router.open({
+      taskId: "single-profile-task",
+      url: "https://chatgpt.com/",
+    });
+    expect(opened.tab.tabId).toBe("personal:42");
+    expect(personal.open).toHaveBeenCalledWith({
+      taskId: "single-profile-task",
+      url: "https://chatgpt.com/",
+    }, undefined);
+
+    await expect(router.tabs({ taskId: "single-profile-task" })).resolves.toEqual({ tabs: [] });
+    await expect(router.snapshot({ tabId: "personal:42" })).resolves.toMatchObject({
+      content: "personal",
+    });
+    const personalFound = await router.find({ tabId: "personal:42", query: "Enviar" });
+    expect(personalFound.tabId).toBe("personal:42");
+    expect(personal.find).toHaveBeenCalledWith({ tabId: "personal:42", query: "Enviar" });
+    await expect(router.finishTask({ taskId: "single-profile-task", keepOpen: true })).resolves.toMatchObject({
+      browserClosed: false,
+    });
+    await expect(router.open({
+      url: "https://example.test/",
+      browserMode: "managed",
+    })).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    expect(() => router.snapshot({ tabId: "managed:1" })).toThrow(
+      "Managed browser mode is disabled",
+    );
+    expect(() => router.openAuthorizedSite({ siteId: "unknown" } as never)).toThrow(
+      "Managed browser mode is disabled",
+    );
+  });
+
+  it("reports the personal extension disconnected without starting a managed browser", async () => {
+    const router = new BrowserModeRouter(undefined, personalExecutor(false));
+    await expect(router.status({})).resolves.toMatchObject({
+      state: "disconnected",
+      ready: false,
+      profile: "personal",
+      autoLaunch: false,
+    });
+    await expect(router.open({ url: "https://example.test/" })).rejects.toMatchObject({
+      code: "BROWSER_CAPABILITY_UNSUPPORTED",
+    });
+  });
+
   it("adds personal provider state to managed browser status", async () => {
     const managed = managedExecutor();
     const personal = personalExecutor();
@@ -259,6 +318,23 @@ describe("BrowserModeRouter", () => {
       code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
     });
     expect(managed.finishTask).not.toHaveBeenCalled();
+  });
+
+  it("sends plans to personal Chrome and refuses them for managed tasks", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    const result = { planId: "plan_00000001", taskId: "task-plan", status: "pending" as const,
+      domains: ["shop.example"], actions: [] };
+    personal.plan = jest.fn(async () => result);
+    const router = new BrowserModeRouter(managed, personal);
+    const proposal = { taskId: "task-plan", summary: "Ler", steps: ["Ler a página"], domains: ["shop.example"], actions: [] };
+
+    await expect(router.plan(proposal)).resolves.toEqual(result);
+    await router.open({ taskId: "task-managed", url: "https://example.test/" });
+    await expect(router.plan({ ...proposal, taskId: "task-managed" })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    expect(personal.plan).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when personal mode is requested without a connected extension", async () => {

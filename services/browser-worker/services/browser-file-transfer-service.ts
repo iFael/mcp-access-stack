@@ -80,12 +80,27 @@ export class BrowserFileTransferService {
     input: BrowserUploadInput,
     context: BrowserUploadContext,
   ): Promise<BrowserUploadResult> {
+    if (input.dropRef !== undefined) {
+      throw new AppError(
+        "BROWSER_CAPABILITY_UNSUPPORTED",
+        "Drop zone uploads are only available through native Chrome input in personal mode.",
+      );
+    }
+    const files = input.files.map((file) => {
+      if (file.contentBase64 === undefined) {
+        throw new AppError(
+          "BROWSER_CAPABILITY_UNSUPPORTED",
+          "Screenshot uploads are only available in personal Chrome mode.",
+        );
+      }
+      return { ...file, contentBase64: file.contentBase64 };
+    });
     const target =
       input.inputRef ?? input.selector ?? input.triggerRef ?? "input[type=file]";
-    const names = input.files.map((file) => file.name).join(",");
+    const names = files.map((file) => file.name).join(",");
     context.authorizeUpload((target + ":" + names).slice(0, 1_000));
 
-    const decoded = input.files.map((file) => ({
+    const decoded = files.map((file) => ({
       ...file,
       contents: decodeUploadFile(file.contentBase64),
     }));

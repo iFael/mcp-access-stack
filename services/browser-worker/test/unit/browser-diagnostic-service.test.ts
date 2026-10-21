@@ -24,13 +24,13 @@ describe("BrowserDiagnosticService", () => {
     const service = new BrowserDiagnosticService(driver);
 
     await expect(
-      service.console({ tabId: "tab-1", level: "error", clear: true }),
+      service.console({ tabId: "tab-1", level: "error", pattern: "error|warn", onlyErrors: true, limit: 25, clear: true }),
     ).resolves.toEqual({
       text: "Authorization: [redacted]",
       truncated: false,
       collectedAt,
     });
-    expect(driver.consoleOptions).toEqual({ level: "error", clear: true });
+    expect(driver.consoleOptions).toEqual({ level: "error", pattern: "error|warn", onlyErrors: true, limit: 25, clear: true });
   });
 
   it("forwards network options and request inspection", async () => {

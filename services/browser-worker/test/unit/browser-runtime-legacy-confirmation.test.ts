@@ -56,7 +56,7 @@ describe("BrowserRuntime legacy confirmation flow", () => {
           };
         },
       },
-      selectTab: async () => undefined,
+      selectBrowserTab: async () => undefined,
       beginNavigation: async () => undefined,
       updateSelectedTab: () => tab,
       checkpoint: async () => undefined,
