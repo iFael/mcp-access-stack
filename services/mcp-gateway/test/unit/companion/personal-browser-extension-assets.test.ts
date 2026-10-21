@@ -1196,7 +1196,8 @@ describe("personal browser extension assets", () => {
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     const ctx = vm.createContext({
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
-      throwIfAborted: () => undefined,
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      settlePersonalViewport: async () => false,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
@@ -1237,6 +1238,8 @@ describe("personal browser extension assets", () => {
       requireOwnedMetadata: async () => ({}),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       probeGuardedElement: () => undefined,
+      delay: async () => undefined,
+      settlePersonalViewport: async () => false,
       throwIfAborted: () => { if (aborted) throw Object.assign(new Error("abort"), { code: "OPERATION_CANCELLED" }); },
       chrome: {
         scripting: { executeScript: async (request: { args: unknown[] }) => [{
@@ -1266,6 +1269,66 @@ describe("personal browser extension assets", () => {
     commands.length = 0;
     await expect(drag({ ...input, fromGuard: undefined })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
     expect(commands).toHaveLength(0);
+  });
+
+  it("intercepts native HTML5 drags and re-resolves endpoints after the debugging infobar resizes the page", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const listeners = new Set<(source: { tabId: number }, method: string, params: unknown) => void>();
+    let shift = 0;
+    let metricsReads = 0;
+    const data = { items: [{ mimeType: "text/plain", data: "card" }], dragOperationsMask: -1 };
+    const ctx = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined,
+      delay: async () => undefined,
+      chrome: {
+        scripting: { executeScript: async (request: { args: unknown[] }) => [{
+          result: { x: request.args[0] === "card" ? 60 : 120, y: (request.args[0] === "card" ? 30 : 230) - shift },
+        }] },
+        debugger: {
+          attach: async () => undefined,
+          detach: async () => undefined,
+          onEvent: {
+            addListener: (fn: (source: { tabId: number }, method: string, params: unknown) => void) => { listeners.add(fn); },
+            removeListener: (fn: (source: { tabId: number }, method: string, params: unknown) => void) => { listeners.delete(fn); },
+          },
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            if (method === "Page.getLayoutMetrics") {
+              // The infobar appears just after attach and shifts the layout.
+              metricsReads += 1;
+              if (metricsReads > 1) shift = 20;
+              return { cssLayoutViewport: { clientWidth: 1000, clientHeight: metricsReads > 1 ? 660 : 700 } };
+            }
+            commands.push({ method, ...(params ? { params } : {}) });
+            if (method === "Input.dispatchMouseEvent" && params?.type === "mouseMoved" && params.buttons === 1) {
+              for (const listener of listeners) listener({ tabId: 7 }, "Input.dragIntercepted", { data });
+            }
+            return {};
+          },
+        },
+      },
+    });
+    for (const fn of ["settlePersonalViewport", "drag"]) vm.runInContext(extractFunction(serviceWorker, fn), ctx);
+    const drag = vm.runInContext("drag", ctx) as (input: unknown) => Promise<unknown>;
+    await expect(drag({
+      tabId: "personal:7", from: { ref: "card" }, to: { ref: "column" }, steps: 5,
+      fromGuard: { ref: "card", url: "https://example.com/", role: "button", name: "Card" },
+      toGuard: { ref: "column", url: "https://example.com/", role: "button", name: "Column" },
+    })).resolves.toMatchObject({ completed: true });
+    expect(commands.find((command) => command.params?.type === "mousePressed")?.params).toMatchObject({ x: 60, y: 10 });
+    const drags = commands.filter((command) => command.method === "Input.dispatchDragEvent");
+    expect(drags.map((command) => command.params?.type)).toEqual(["dragEnter", "dragOver", "drop"]);
+    expect(drags[2]?.params).toMatchObject({ x: 120, y: 210, data });
+    expect(commands.filter((command) => command.params?.type === "mouseMoved" && command.params.buttons === 1)).toHaveLength(1);
+    expect(commands.filter((command) => command.method === "Input.setInterceptDrags").map((command) => command.params?.enabled))
+      .toEqual([true, false]);
+    expect(commands.at(-1)).toMatchObject({ method: "Input.setInterceptDrags", params: { enabled: false } });
+    expect(listeners.size).toBe(0);
+    expect(metricsReads).toBeGreaterThanOrEqual(4);
   });
 
   it("operates native form controls with trusted CDP and rejects mismatched values", async () => {

@@ -1027,6 +1027,13 @@ async function drag(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   let pressed = false;
+  let intercepting = false;
+  let dragData;
+  // A native HTML5 drag would enter the OS drag loop, which ignores further
+  // CDP mouse input in a real window; intercept it and deliver drag events.
+  const onDragIntercepted = (source, method, params) => {
+    if (source?.tabId === chromeTabId && method === "Input.dragIntercepted") dragData = params?.data;
+  };
   try {
     attached = await attachGuardedDebugger(target);
     if (input.from.ref?.startsWith("ax-")) from = await resolveGuardedAxPoint(
@@ -1035,6 +1042,17 @@ async function drag(input, signal) {
     if (input.to.ref?.startsWith("ax-")) to = await resolveGuardedAxPoint(
       chromeTabId, input.to.ref, input.toGuard, target, false,
     );
+    // A fresh attach shows Chrome's debugging infobar, which resizes the page
+    // and cancels a press already in progress; start once the viewport settles
+    // and measure the endpoints again in case the layout moved.
+    if (attached) {
+      await settlePersonalViewport(target, signal);
+      if (!input.from.ref?.startsWith("ax-")) from = await resolve(input.from, input.fromGuard);
+      if (!input.to.ref?.startsWith("ax-")) to = await resolve(input.to, input.toGuard);
+    }
+    chrome.debugger.onEvent?.addListener?.(onDragIntercepted);
+    await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: true });
+    intercepting = true;
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: from.x, y: from.y, button: "none",
     });
@@ -1051,6 +1069,15 @@ async function drag(input, signal) {
         y: from.y + (to.y - from.y) * progress,
         buttons: 1, button: "left",
       });
+      if (dragData) break;
+    }
+    for (let wait = 0; !dragData && wait < 6; wait += 1) await delay(50, signal);
+    if (dragData) {
+      for (const type of ["dragEnter", "dragOver", "drop"]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchDragEvent", {
+          type, x: to.x, y: to.y, data: dragData,
+        });
+      }
     }
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1,
@@ -1062,6 +1089,10 @@ async function drag(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for drag-and-drop.");
   } finally {
+    chrome.debugger.onEvent?.removeListener?.(onDragIntercepted);
+    if (intercepting) {
+      await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined);
+    }
     if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId))) {
       if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
@@ -1069,6 +1100,24 @@ async function drag(input, signal) {
       }).catch(() => undefined);
       await detachGuardedDebugger(target, attached).catch(() => undefined);
     }
+  }
+}
+
+// Waits (at most 800 ms) until the layout viewport keeps one size for three
+// consecutive reads 50 ms apart.
+async function settlePersonalViewport(target, signal) {
+  const read = async () => {
+    const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics").catch(() => undefined);
+    const viewport = metrics?.cssLayoutViewport;
+    return viewport ? viewport.clientWidth + "x" + viewport.clientHeight : "";
+  };
+  let previous = await read();
+  let stable = 0;
+  for (let attempt = 0; attempt < 16 && stable < 3; attempt += 1) {
+    await delay(50, signal);
+    const current = await read();
+    stable = current === previous ? stable + 1 : 0;
+    previous = current;
   }
 }
 

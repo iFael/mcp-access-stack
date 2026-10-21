@@ -4,6 +4,8 @@
 // and drives legacy frame mutations plus plain ref actions through the bridge.
 // Run: npm run smoke:browser:personal-frames
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
+// PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
+// shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +79,30 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <script>console.error("falha na primeira página"); console.log("primeira pronta");</script>`,
   "log-site.test/two": () => `<!doctype html><title>Dois</title><body>Dois
     <script>console.warn("aviso na segunda página");</script>`,
+  "dnd-site.test/": () => `<!doctype html><title>Quadro</title><body>
+    <div draggable="true" id="card" role="button" aria-label="Cartão A" style="width:120px;height:40px;background:#ddd">Cartão A</div>
+    <div id="done" role="button" aria-label="Coluna Concluído" style="margin-top:120px;width:240px;height:120px;border:1px solid">Concluído</div>
+    <p id="status">pendente</p>
+    <div id="knob" role="slider" aria-label="Alça" aria-valuenow="0" style="position:absolute;left:300px;top:20px;width:30px;height:30px;background:#88f"></div>
+    <p id="pointer">parado</p>
+    <script>
+      let dragging = false;
+      document.getElementById("knob").addEventListener("mousedown", () => { dragging = true; });
+      document.addEventListener("mouseup", (event) => {
+        if (!dragging) return;
+        dragging = false;
+        const zone = document.getElementById("done").getBoundingClientRect();
+        const inside = event.clientX >= zone.left && event.clientX <= zone.right && event.clientY >= zone.top && event.clientY <= zone.bottom;
+        document.getElementById("pointer").textContent = inside ? "solto na coluna" : "fora";
+      });
+      document.getElementById("card").addEventListener("dragstart", (event) => event.dataTransfer.setData("text/plain", "card"));
+      const done = document.getElementById("done");
+      done.addEventListener("dragover", (event) => event.preventDefault());
+      done.addEventListener("drop", (event) => {
+        event.preventDefault();
+        document.getElementById("status").textContent = "movido:" + event.dataTransfer.getData("text/plain");
+      });
+    </script>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -112,7 +138,7 @@ async function main(): Promise<void> {
   try {
     context = await chromium.launchPersistentContext(path.join(root, "profile"), {
       channel: "chromium",
-      headless: true,
+      headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
       ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
       args: [
         `--disable-extensions-except=${bridge.extensionDirectory}`,
@@ -263,6 +289,32 @@ async function main(): Promise<void> {
         history.text.indexOf("primeira pronta") > history.text.indexOf("aviso na segunda")) {
       throw new Error("Console history was duplicated or lost across navigation.");
     }
+
+    // Native HTML5 drag and drop between refs (draggable source, drop handler target).
+    const board = await bridge.open({ url: `http://dnd-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
+    const boardRefs = (await bridge.snapshot({ tabId: board.tab.tabId })).refs;
+    const card = boardRefs.find((item) => item.name === "Cartão A")?.ref;
+    const column = boardRefs.find((item) => item.name === "Coluna Concluído")?.ref;
+    if (!card || !column) throw new Error(`Board refs missing: ${JSON.stringify(boardRefs)}`);
+    const dragInput = { tabId: board.tab.tabId, from: { ref: card }, to: { ref: column } };
+    try {
+      await bridge.drag(dragInput);
+    } catch (error) {
+      await bridge.drag({ ...dragInput, confirmationId: confirmationIdOf(error) });
+    }
+    const moved = await bridge.extract({ tabId: board.tab.tabId, selector: "#status" });
+    report("html5 drag and drop", moved.value);
+    if (moved.value !== "movido:card") throw new Error("Native HTML5 drop did not reach the target.");
+    const knob = boardRefs.find((item) => item.name === "Alça")?.ref;
+    const pointerInput = { tabId: board.tab.tabId, from: { ref: knob! }, to: { ref: column } };
+    try {
+      await bridge.drag(pointerInput);
+    } catch (error) {
+      await bridge.drag({ ...pointerInput, confirmationId: confirmationIdOf(error) });
+    }
+    const pointer = await bridge.extract({ tabId: board.tab.tabId, selector: "#pointer" });
+    report("pointer drag", pointer.value);
+    if (pointer.value !== "solto na coluna") throw new Error("Pointer-based drag did not end on the target.");
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
