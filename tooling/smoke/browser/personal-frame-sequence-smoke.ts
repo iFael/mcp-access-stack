@@ -103,6 +103,19 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("status").textContent = "movido:" + event.dataTransfer.getData("text/plain");
       });
     </script>`,
+  "type-site.test/": () => `<!doctype html><title>Digitação</title><body>
+    <input id="campo" aria-label="Campo internacional">
+    <p id="teclas"></p><p id="ime"></p><p id="valor"></p>
+    <script>
+      const field = document.getElementById("campo");
+      field.addEventListener("input", () => { document.getElementById("valor").textContent = "valor=" + field.value; });
+      field.addEventListener("keydown", (event) => {
+        if (event.key !== "Process") document.getElementById("teclas").textContent += event.key + "·";
+      });
+      field.addEventListener("compositionend", (event) => {
+        document.getElementById("ime").textContent += "[" + event.data + "]";
+      });
+    </script>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -332,6 +345,20 @@ async function main(): Promise<void> {
     const zoomedSize = jpegSize(await readFile(zoomed.path));
     report("zoomed region", zoomedSize);
     if (zoomedSize.width !== 400 || zoomedSize.height !== 160) throw new Error("Zoomed region has the wrong resolution.");
+
+    // Slow typing sends accented and non-Latin characters as real keystrokes and
+    // commits CJK runs through an IME composition.
+    const typing = await bridge.open({ url: `http://type-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
+    const fieldRef = (await bridge.snapshot({ tabId: typing.tab.tabId })).refs
+      .find((item) => item.name === "Campo internacional")?.ref;
+    if (!fieldRef) throw new Error("The typing field has no ref.");
+    await bridge.click({ tabId: typing.tab.tabId, ref: fieldRef });
+    await bridge.type({ tabId: typing.tab.tabId, text: "Ação ß 東京 🙂", slowly: true });
+    const typed = JSON.stringify((await bridge.extract({ tabId: typing.tab.tabId, selector: "body" })).value);
+    report("international typing", typed);
+    if (!typed.includes("A·ç·ã·o· ·ß· · ·🙂·") || !typed.includes("[東京]") || !typed.includes("valor=Ação ß 東京 🙂")) {
+      throw new Error("International slow typing lost keystrokes or the IME commit.");
+    }
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });

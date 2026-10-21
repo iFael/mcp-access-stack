@@ -18062,7 +18062,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Types into the focused element using trusted input, optionally slowly and with a confirmed Enter submit. Text is never logged. If submit=true, a bound confirmation may be required.",
+    "description": "Types into the focused element using trusted input, optionally slowly and with a confirmed Enter submit. In personal Chrome, slowly sends one keystroke per character, accented and non-Latin text included, and commits Chinese, Japanese and Korean runs through an IME composition. Text is never logged. If submit=true, a bound confirmation may be required.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -24951,13 +24951,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "f6362ac833e7a7b03c3967aecc89b4aff484c171c5774fd2206caa98aaee6223",
-  "serverVersion": "0.4.0-catalog.cf6362ac833e7.saca8cfec86ad",
+  "contractRevision": "59eddbca71bb0ed84fb5db73d6336ff8afc3e21a0925baf52e7046dc9eedc071",
+  "serverVersion": "0.4.0-catalog.c59eddbca71bb.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cf6362ac833e7.saca8cfec86ad"
+  "version": "0.4.0-catalog.c59eddbca71bb.saca8cfec86ad"
 } as const;

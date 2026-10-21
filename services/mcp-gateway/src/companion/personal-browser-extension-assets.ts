@@ -1379,8 +1379,10 @@ async function formInput(input, signal) {
 }
 
 // CDP physical keyboard events are needed by autocomplete, masks and rich editors.
-// Unknown layouts / IME characters use insertText rather than pretending that a
-// physical key was pressed. This routine only handles single US-ASCII key strokes.
+// US-ASCII characters map to their US key. Other characters still arrive as one
+// trusted keystroke carrying their own key value, as on a native layout: accented
+// Latin letters keep their base letter's physical code, other scripts report no
+// physical key. Control characters other than newline have no keystroke.
 function physicalTypingKey(character) {
   const codePoint = character.codePointAt(0);
   if (codePoint >= 65 && codePoint <= 90) return {
@@ -1412,7 +1414,18 @@ function physicalTypingKey(character) {
     "(": ["Digit9", 57, 8], ")": ["Digit0", 48, 8],
   };
   const mapping = symbols[character];
-  return mapping ? { key: character, code: mapping[0], keyCode: mapping[1], modifiers: mapping[2] } : null;
+  if (mapping) return { key: character, code: mapping[0], keyCode: mapping[1], modifiers: mapping[2] };
+  if (codePoint < 32 || (codePoint >= 127 && codePoint < 160)) return null;
+  const base = character.normalize("NFD").charAt(0);
+  const latin = base !== character && /^[A-Za-z]$/u.test(base) ? physicalTypingKey(base) : null;
+  return latin ? { key: character, code: latin.code, keyCode: latin.keyCode, modifiers: latin.modifiers } :
+    { key: character, code: "", keyCode: 0, modifiers: 0 };
+}
+
+// Han, kana and Hangul are typed through an input method on every desktop OS, so
+// slow typing commits them as one IME composition per run, as editors expect.
+function imeComposedCharacter(character) {
+  return /[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Bopomofo}]/u.test(character);
 }
 
 async function typeText(input, signal) {
@@ -1428,11 +1441,34 @@ async function typeText(input, signal) {
   throwIfAborted(signal, "type", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let composing;
   try {
     attached = await attachGuardedDebugger(target);
     if (input.slowly) {
-      for (const char of input.text) {
+      const processKey = { key: "Process", code: "", windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 };
+      const chars = Array.from(input.text);
+      for (let index = 0; index < chars.length; index += 1) {
         throwIfAborted(signal, "type", true);
+        const char = chars[index];
+        if (imeComposedCharacter(char)) {
+          composing = "";
+          while (index < chars.length && imeComposedCharacter(chars[index])) {
+            throwIfAborted(signal, "type", true);
+            composing += chars[index];
+            await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...processKey, type: "rawKeyDown" });
+            await chrome.debugger.sendCommand(target, "Input.imeSetComposition", {
+              text: composing, selectionStart: composing.length, selectionEnd: composing.length,
+            });
+            await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...processKey, type: "keyUp" });
+            await new Promise((resolve) => setTimeout(resolve, 15));
+            index += 1;
+          }
+          index -= 1;
+          const committed = composing;
+          composing = undefined;
+          await chrome.debugger.sendCommand(target, "Input.insertText", { text: committed });
+          continue;
+        }
         const physical = physicalTypingKey(char);
         if (physical) {
           const args = { key: physical.key, code: physical.code,
@@ -1461,6 +1497,12 @@ async function typeText(input, signal) {
     }
     return { tabId: input.tabId, completed: true };
   } catch (error) {
+    if (composing !== undefined) {
+      // Never leave a half-typed composition behind in the user's page.
+      await chrome.debugger.sendCommand(target, "Input.imeSetComposition", {
+        text: "", selectionStart: 0, selectionEnd: 0,
+      }).catch(() => undefined);
+    }
     if (signal?.aborted) throw cancellationError("type", signal, true);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
@@ -4568,6 +4610,7 @@ function parseChromeKey(input) {
     Escape: ["Escape", 27], Backspace: ["Backspace", 8], Delete: ["Delete", 46],
     ArrowUp: ["ArrowUp", 38], ArrowDown: ["ArrowDown", 40],
     ArrowLeft: ["ArrowLeft", 37], ArrowRight: ["ArrowRight", 39],
+    Home: ["Home", 36], End: ["End", 35], PageUp: ["PageUp", 33], PageDown: ["PageDown", 34],
     Space: ["Space", 32],
   };
   const knownName = Object.keys(lookup).find((value) => value.toLowerCase() === name.toLowerCase());

@@ -1152,6 +1152,9 @@ describe("personal browser extension assets", () => {
       code: "BROWSER_CONFIRMATION_INVALID",
     });
     expect(attachCount).toBe(3);
+    const parseChromeKey = vm.runInContext("parseChromeKey", context) as (key: string) => unknown;
+    expect(parseChromeKey("Shift+End")).toEqual({ key: "End", code: "End", keyCode: 35, modifiers: 8 });
+    expect(parseChromeKey("pagedown")).toMatchObject({ key: "PageDown", keyCode: 34 });
   });
 
   it("hit-tests viewport coordinates against authoritative isolated-world refs", () => {
@@ -1432,8 +1435,9 @@ describe("personal browser extension assets", () => {
       },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
     });
-    vm.runInContext(extractFunction(serviceWorker, "physicalTypingKey"), context);
-    vm.runInContext(extractFunction(serviceWorker, "typeText"), context);
+    for (const name of ["physicalTypingKey", "imeComposedCharacter", "typeText"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
     const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
     await expect(typeText({ tabId: "personal:7", text: "hello" }))
       .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
@@ -1444,7 +1448,7 @@ describe("personal browser extension assets", () => {
     expect(events[0]?.params).toEqual({ text: "hello" });
     expect(events[1]?.params).toMatchObject({ key: "Enter", type: "keyDown" });
     events.length = 0;
-    await typeText({ tabId: "personal:7", text: "Ab7!é", slowly: true,
+    await typeText({ tabId: "personal:7", text: "Ab7!\t", slowly: true,
       guard: { url: "https://example.com/" } });
     expect(events.map(event => event.method)).toEqual([
       "Input.dispatchKeyEvent", "Input.dispatchKeyEvent",
@@ -1456,7 +1460,70 @@ describe("personal browser extension assets", () => {
     expect(events[1]?.params).toMatchObject({ type: "keyUp", key: "A" });
     expect(events[2]?.params).toMatchObject({ type: "keyDown", key: "b", code: "KeyB", modifiers: 0, text: "b" });
     expect(events[6]?.params).toMatchObject({ type: "keyDown", key: "!", code: "Digit1", modifiers: 8, text: "!" });
-    expect(events[8]?.params).toEqual({ text: "é" });
+    expect(events[8]?.params).toEqual({ text: "\t" });
+  });
+
+  it("types international text as native keystrokes and composes CJK runs through an IME", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let checks = 0;
+    let abortAfter = Number.POSITIVE_INFINITY;
+    const context = vm.createContext({
+      setTimeout: (callback: () => void) => { callback(); return 0; },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => {
+        checks += 1;
+        if (checks > abortAfter) throw Object.assign(new Error("cancelled"), { code: "CANCELLED" });
+      },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+            events.push({ method, params });
+          },
+        },
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+    });
+    for (const name of ["physicalTypingKey", "imeComposedCharacter", "typeText"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
+    const guard = { url: "https://example.com/" };
+    await typeText({ tabId: "personal:7", text: "çÃß🙂", slowly: true, guard });
+    const keyDowns = events.filter((event) => event.params.type === "keyDown").map((event) => event.params);
+    expect(events.every((event) => event.method === "Input.dispatchKeyEvent")).toBe(true);
+    expect(keyDowns).toEqual([
+      expect.objectContaining({ key: "ç", code: "KeyC", windowsVirtualKeyCode: 67, modifiers: 0, text: "ç" }),
+      expect.objectContaining({ key: "Ã", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 8, text: "Ã" }),
+      expect.objectContaining({ key: "ß", code: "", windowsVirtualKeyCode: 0, modifiers: 0, text: "ß" }),
+      expect.objectContaining({ key: "🙂", code: "", windowsVirtualKeyCode: 0, text: "🙂" }),
+    ]);
+
+    events.length = 0;
+    await typeText({ tabId: "personal:7", text: "a東京b", slowly: true, guard });
+    expect(events.map((event) => event.method === "Input.dispatchKeyEvent"
+      ? event.method + ":" + String(event.params.type) + ":" + String(event.params.key)
+      : event.method + ":" + String(event.params.text))).toEqual([
+      "Input.dispatchKeyEvent:keyDown:a", "Input.dispatchKeyEvent:keyUp:a",
+      "Input.dispatchKeyEvent:rawKeyDown:Process", "Input.imeSetComposition:東", "Input.dispatchKeyEvent:keyUp:Process",
+      "Input.dispatchKeyEvent:rawKeyDown:Process", "Input.imeSetComposition:東京", "Input.dispatchKeyEvent:keyUp:Process",
+      "Input.insertText:東京",
+      "Input.dispatchKeyEvent:keyDown:b", "Input.dispatchKeyEvent:keyUp:b",
+    ]);
+    expect(events[3]?.params).toEqual({ text: "東", selectionStart: 1, selectionEnd: 1 });
+
+    events.length = 0;
+    checks = 0;
+    abortAfter = 3;
+    await expect(typeText({ tabId: "personal:7", text: "東京都", slowly: true, guard }))
+      .rejects.toMatchObject({ code: "CANCELLED" });
+    expect(events.map((event) => event.method)).not.toContain("Input.insertText");
+    expect(events.at(-1)).toEqual({
+      method: "Input.imeSetComposition", params: { text: "", selectionStart: 0, selectionEnd: 0 },
+    });
   });
 
   it("routes scroll through explicit CSS viewport coordinates with bounded Chrome wheel origin", async () => {

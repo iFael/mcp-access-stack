@@ -429,7 +429,7 @@ function definitions(
       () => e.formInput(assumeParsed(v)),
       (activeContext) => e.formInput(assumeParsed(v), activeContext),
     )),
-    d("browser_type", "Types into the focused element using trusted input, optionally slowly and with a confirmed Enter submit. Text is never logged. If submit=true, a bound confirmation may be required.", c.browserTypeInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_type", "Types into the focused element using trusted input, optionally slowly and with a confirmed Enter submit. In personal Chrome, slowly sends one keystroke per character, accented and non-Latin text included, and commits Chinese, Japanese and Korean runs through an IME composition. Text is never logged. If submit=true, a bound confirmation may be required.", c.browserTypeInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.type(assumeParsed(v)),
       (activeContext) => e.type(assumeParsed(v), activeContext),
