@@ -14532,7 +14532,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.",
+    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work. In personal Chrome, tabs the user shared from the extension popup appear with ownership=user (MCP never closes them), and openTabs lists the titles and addresses of the user's other tabs only while the user allows it there; ask the user to share a tab before working in it.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -14561,6 +14561,32 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "openTabs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "title": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "url": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "active"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
         "tabs": {
           "items": {
             "additionalProperties": false,
@@ -24980,13 +25006,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "cc0b5f1537878ca56299cba4168f59ba52b1be990e24d1197317295f9d7c712f",
-  "serverVersion": "0.4.0-catalog.ccc0b5f153787.saca8cfec86ad",
+  "contractRevision": "70aacc8a7620c0f2229e57e398dd9ce5f9fb3b0585df4ed61b03bae2e8c6adfc",
+  "serverVersion": "0.4.0-catalog.c70aacc8a7620.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ccc0b5f153787.saca8cfec86ad"
+  "version": "0.4.0-catalog.c70aacc8a7620.saca8cfec86ad"
 } as const;

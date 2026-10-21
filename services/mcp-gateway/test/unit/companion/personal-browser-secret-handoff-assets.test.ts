@@ -142,6 +142,13 @@ describe("native MCP V3 browser secret handoff", () => {
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.local.set");
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.sync.set");
     expect(assets.popupHtml).toContain("Salvar no Cloudflare realiza um deploy");
+    expect(assets.popupHtml).toContain('<script src="tab-sharing.js"></script>');
+    expect(assets.tabSharingScript).not.toContain("BRIDGE_TOKEN");
+  });
+
+  it("leaves tab sharing messages to their own popup channel", async () => {
+    const h = harness();
+    await expect(h.send("mcp-tab-status")).resolves.toEqual({ allowed: false });
   });
 
   it("generates 48 random bytes in Chrome and never returns secret through popup messages", async () => {

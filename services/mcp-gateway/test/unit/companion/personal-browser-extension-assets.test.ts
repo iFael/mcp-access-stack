@@ -2694,6 +2694,132 @@ describe("personal browser extension assets", () => {
     await expect(requireOwnedMetadata(7, true)).resolves.toMatchObject({ tabId: "personal:7" });
   });
 
+  it("shares only tabs the user picks in the popup, lists other tabs only on opt-in and never closes shared tabs", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const owned: Record<string, Record<string, unknown>> = {
+      "3": { tabId: "personal:3", ownership: "mcp", taskId: "t1", purpose: "x" },
+    };
+    const session = new Map<string, unknown>();
+    const badges: Array<[number, string]> = [];
+    const removed: number[] = [];
+    const openTabs = new Map<number, Record<string, unknown>>([
+      [3, { id: 3, url: "https://mcp.example/", title: "MCP", active: false }],
+      [5, { id: 5, url: "https://mail.example/inbox?token=abc#msg", title: "Inbox (3)", active: true }],
+      [6, { id: 6, url: "http://intranet.local/", title: "Intranet", active: false }],
+      [8, { id: 8, url: "chrome://settings/", title: "Settings", active: false }],
+    ]);
+    const context = vm.createContext({
+      URL, String, Number, Object, Array, Set, Date, Promise,
+      withOwnershipLock: async (fn: () => Promise<unknown>) => fn(),
+      readOwnedTabs: async () => owned,
+      writeOwnedTabs: async () => undefined,
+      removeOwnedTab: async (id: number) => { delete owned[String(id)]; },
+      finalizePersonalDialog: async () => undefined,
+      resetPersonalViewport: async () => undefined,
+      axTargetsByTab: new Map(),
+      taskGroups: new Map(),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: {
+          get: async (id: number) => {
+            const tab = openTabs.get(id);
+            if (!tab) throw new Error("No tab");
+            return tab;
+          },
+          query: async () => [...openTabs.values()],
+          remove: async (id: number) => { removed.push(id); openTabs.delete(id); },
+          ungroup: async () => undefined,
+        },
+        storage: { session: {
+          get: async (key: string) => ({ [key]: session.get(key) }),
+          set: async (entries: Record<string, unknown>) => {
+            for (const [key, value] of Object.entries(entries)) session.set(key, value);
+          },
+        } },
+        action: { setBadgeText: async ({ tabId, text }: { tabId: number; text: string }) => { badges.push([tabId, text]); } },
+      },
+    });
+    vm.runInContext('const BLOCKED_PRIVATE_ORIGINS = new Set(); const PERSONAL_PREFIX = "personal:"; ' +
+      'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
+    for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
+      "personalTabContextEnabled", "listPersonalOpenTabs", "personalTabSharingDispatch",
+      "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const dispatch = vm.runInContext("personalTabSharingDispatch", context) as
+      (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    const listTabs = vm.runInContext("tabs", context) as
+      (input: Record<string, unknown>) => Promise<{ tabs: Array<Record<string, unknown>>; openTabs?: unknown[] }>;
+    const finish = vm.runInContext("finishTask", context) as
+      (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
+      ok: true, shared: false, mcp: false, shareable: true, context: false,
+    });
+    expect((await listTabs({})).openTabs).toBeUndefined();
+    await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
+    await expect(dispatch({ type: "mcp-tab-share", tabId: 3 })).rejects.toThrow("already-owned");
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 3 })).resolves.toMatchObject({ mcp: true, shareable: false });
+    await expect(dispatch({ type: "mcp-tab-share", tabId: 5 })).resolves.toMatchObject({ shared: true, shareable: false });
+    expect(owned["5"]).toMatchObject({ tabId: "personal:5", ownership: "user", lifecycle: "external",
+      protected: true, requestedUrl: "https://mail.example/inbox?token=abc#msg" });
+    expect(badges).toEqual([[5, "MCP"]]);
+
+    await dispatch({ type: "mcp-tab-context", tabId: 5, enabled: true });
+    const listed = await listTabs({});
+    expect(listed.tabs.map((tab) => [tab.tabId, tab.ownership])).toEqual([["personal:3", "mcp"], ["personal:5", "user"]]);
+    // Owned tabs, private hosts and Chrome pages stay out; query and fragment are dropped.
+    expect(listed.openTabs).toEqual([]);
+    openTabs.set(9, { id: 9, url: "https://docs.example/d/1/edit?usp=sharing", title: "Plano", active: false });
+    expect((await listTabs({})).openTabs).toEqual([{ url: "https://docs.example/d/1/edit", active: false, title: "Plano" }]);
+    await dispatch({ type: "mcp-tab-context", tabId: 5, enabled: false });
+    expect((await listTabs({})).openTabs).toBeUndefined();
+
+    // Finishing every task closes MCP tabs but only releases the shared one.
+    await expect(finish({})).resolves.toEqual({
+      completed: true, closedTabs: 1, closedTabIds: ["personal:3"],
+      releasedTabs: 1, releasedTabIds: ["personal:5"], browserClosed: false,
+    });
+    expect(removed).toEqual([3]);
+    expect(openTabs.has(5)).toBe(true);
+    expect(owned).toEqual({});
+    expect(badges.at(-1)).toEqual([5, ""]);
+
+    await dispatch({ type: "mcp-tab-share", tabId: 5 });
+    await expect(dispatch({ type: "mcp-tab-unshare", tabId: 9 })).rejects.toThrow("not-shared");
+    await expect(dispatch({ type: "mcp-tab-unshare", tabId: 5 })).resolves.toMatchObject({ shared: false, shareable: true });
+    expect(owned).toEqual({});
+  });
+
+  it("answers tab sharing messages only from the extension popup", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const marker = 'message.type.startsWith("mcp-tab-")';
+    const start = serviceWorker.lastIndexOf("if (chrome.runtime.onMessage", serviceWorker.indexOf(marker));
+    const listenerSource = serviceWorker.slice(start, serviceWorker.indexOf("\n});\n", start) + 4);
+    let handler: ((message: unknown, sender: Record<string, unknown>, reply: (value: unknown) => void) => boolean) | undefined;
+    const dispatched: unknown[] = [];
+    const context = vm.createContext({
+      personalTabSharingDispatch: async (message: unknown) => { dispatched.push(message); return { ok: true }; },
+      chrome: {
+        runtime: {
+          id: "ext", getURL: (file: string) => "chrome-extension://ext/" + file,
+          onMessage: { addListener: (fn: typeof handler) => { handler = fn; } },
+        },
+        storage: { session: {} },
+      },
+    });
+    vm.runInContext(listenerSource, context);
+    const popup = { id: "ext", url: "chrome-extension://ext/secret-provision.html" };
+    const replies: unknown[] = [];
+    expect(handler!({ type: "mcp-secret-status" }, popup, (value) => replies.push(value))).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...popup, url: "https://evil.example/" }, () => undefined)).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...popup, id: "other" }, () => undefined)).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, popup, (value) => replies.push(value))).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(dispatched).toEqual([{ type: "mcp-tab-share", tabId: 5 }]);
+    expect(replies).toEqual([{ ok: true }]);
+  });
+
   it("keeps private ownership metadata out of public tab responses", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const context = vm.createContext({ String });

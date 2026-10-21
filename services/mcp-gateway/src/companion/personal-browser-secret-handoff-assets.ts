@@ -8,7 +8,7 @@ export const HANDOFF_EXTENSION_VERSION = "1.9.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MCP V3 — Credencial segura</title>
+<title>MCP V3</title>
 <style>
 :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101114; color: #f5f5f5; }
 body { width: 330px; margin: 0; padding: 16px; font-size: 13px; line-height: 1.5; }
@@ -16,8 +16,16 @@ h1 { font-size: 16px; margin: 0 0 8px; } p { color: #bdbdbd; }
 button { width: 100%; padding: 10px 12px; margin: 5px 0; border: 1px solid #555; border-radius: 8px; background: #27282d; color: white; cursor: pointer; }
 button:disabled { opacity: .55; } #status { min-height: 24px; padding-top: 8px; }
 .warning { color: #f2ce81; } code { user-select: all; }
+label { display: flex; gap: 8px; align-items: flex-start; color: #bdbdbd; margin: 6px 0; }
+hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 </style></head>
 <body>
+<h1>MCP V3 · Esta aba</h1>
+<p id="tab-status" role="status" aria-live="polite">Carregando…</p>
+<button id="tab-share" type="button" hidden>Compartilhar esta aba com o MCP</button>
+<button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
+<label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
+<hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>
 <button id="generate" type="button">Gerar novo segredo temporário</button>
@@ -25,6 +33,7 @@ button:disabled { opacity: .55; } #status { min-height: 24px; padding-top: 8px; 
 <button id="clear" type="button">Descartar segredo</button>
 <p class="warning">O valor nunca será exibido ou copiado. Prepare o formulário, insira o nome exato e selecione o campo Valor. Preencha com este botão ou com Ctrl+Shift+8 (atalho da extensão). Para trocar o valor, descarte-o antes. Salvar no Cloudflare realiza um deploy: precisa de autorização separada.</p>
 <div id="status" role="status" aria-live="polite">Carregando…</div>
+<script src="tab-sharing.js"></script>
 <script src="secret-provision.js"></script>
 </body></html>`;
 
@@ -205,6 +214,8 @@ async function mcpSecretDispatch(message) {
 }
 
 if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  // Other popup channels (tab sharing) answer their own messages.
+  if (typeof message?.type === "string" && !message.type.startsWith("mcp-secret-")) return false;
   // Never accept these operations through webpage/bridge or external extension messages.
   if (sender.id !== chrome.runtime.id ||
       sender.url !== chrome.runtime.getURL("secret-provision.html")) return false;

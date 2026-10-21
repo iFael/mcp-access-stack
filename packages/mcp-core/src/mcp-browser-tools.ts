@@ -361,7 +361,7 @@ function definitions(
       () => e.connect(assumeParsed(v)),
       (activeContext) => e.connect(assumeParsed(v), activeContext),
     )),
-    d("browser_tabs", "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_tabs", "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work. In personal Chrome, tabs the user shared from the extension popup appear with ownership=user (MCP never closes them), and openTabs lists the titles and addresses of the user's other tabs only while the user allows it there; ask the user to share a tab before working in it.", c.browserTabsInputSchema, c.browserTabsResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.tabs(assumeParsed(v)),
       (activeContext) => e.tabs(assumeParsed(v), activeContext),

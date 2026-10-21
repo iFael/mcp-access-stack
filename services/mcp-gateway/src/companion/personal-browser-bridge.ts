@@ -896,6 +896,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         assets.popupScript,
         { encoding: "utf8", mode: 0o600 },
       ),
+      writeFile(
+        path.join(this.extensionDirectory, "tab-sharing.js"),
+        assets.tabSharingScript,
+        { encoding: "utf8", mode: 0o600 },
+      ),
     ]);
 
     const server = new WebSocketServer({

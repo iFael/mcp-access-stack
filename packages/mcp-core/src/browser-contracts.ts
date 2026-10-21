@@ -197,8 +197,19 @@ export const browserTabsInputSchema = z
   .object({ taskId: taskIdSchema.optional() })
   .strict();
 export type BrowserTabsInput = z.infer<typeof browserTabsInputSchema>;
+export const browserOpenTabContextSchema = z
+  .object({
+    url: z.string().min(1).max(500),
+    title: z.string().max(200).optional(),
+    active: z.boolean(),
+  })
+  .strict();
 export const browserTabsResultSchema = z
-  .object({ tabs: z.array(browserTabSchema).max(100) })
+  .object({
+    tabs: z.array(browserTabSchema).max(100),
+    // The user's other tabs, read-only, present only while the user allows it.
+    openTabs: z.array(browserOpenTabContextSchema).max(100).optional(),
+  })
   .strict();
 export type BrowserTabsResult = z.infer<typeof browserTabsResultSchema>;
 

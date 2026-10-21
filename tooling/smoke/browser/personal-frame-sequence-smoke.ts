@@ -117,6 +117,9 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("ime").textContent += "[" + event.data + "]";
       });
     </script>`,
+  "share-site.test/": () => `<!doctype html><title>Minha aba</title><body>
+    <button onclick="document.getElementById('estado').textContent='clicado pelo MCP'">Marcar</button>
+    <p id="estado">intocado</p>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -405,6 +408,45 @@ async function main(): Promise<void> {
         !sharedWindowTab.emulated) {
       throw new Error("The owned tab's window did not resize as requested.");
     }
+    // The user shares an already open tab from the extension popup; MCP can work in
+    // it and list other tabs only on opt-in, but never close it.
+    const userTab = await context.newPage();
+    await userTab.goto(`http://share-site.test:${sitePort}/`);
+    const otherTab = await context.newPage();
+    await otherTab.goto(`http://plain-site.test:${sitePort}/?segredo=1#x`);
+    const worker = context.serviceWorkers().find((candidate) => candidate.url().startsWith("chrome-extension://"))!;
+    const popup = await context.newPage();
+    await popup.goto(new URL("secret-provision.html", worker.url()).href);
+    const popupCall = (type: string, extra: Record<string, unknown> = {}) => popup.evaluate(`(async () => {
+      const [tab] = await chrome.tabs.query({ url: "http://share-site.test/*" });
+      return chrome.runtime.sendMessage({ type: ${JSON.stringify(type)}, tabId: tab.id, ...${JSON.stringify(extra)} });
+    })()`) as Promise<Record<string, unknown>>;
+    const before = (await bridge.tabs({})).tabs.length;
+    const sharedState = await popupCall("mcp-tab-share");
+    await popupCall("mcp-tab-context", { enabled: true });
+    const listing = await bridge.tabs({});
+    const shared = listing.tabs.find((tab) => tab.ownership === "user");
+    report("shared tab", { sharedState, shared, openTabs: listing.openTabs });
+    if (!shared || listing.tabs.length !== before + 1 ||
+        !listing.openTabs?.some((tab) => tab.url === `http://plain-site.test:${sitePort}/`) ||
+        JSON.stringify(listing.openTabs).includes("segredo")) {
+      throw new Error("The shared tab or the opt-in tab list is wrong.");
+    }
+    const markRef = (await bridge.snapshot({ tabId: shared.tabId })).refs.find((item) => item.name === "Marcar")?.ref;
+    await bridge.click({ tabId: shared.tabId, ref: markRef! });
+    const marked = await bridge.extract({ tabId: shared.tabId, selector: "#estado" });
+    if (marked.value !== "clicado pelo MCP") throw new Error("MCP could not act in the shared tab.");
+    await bridge.closeTab({ tabId: shared.tabId }).then(
+      () => { throw new Error("MCP closed a tab the user shared."); },
+      (error: { code?: string }) => { if (error.code !== "TAB_PROTECTED") throw error; },
+    );
+    await popupCall("mcp-tab-unshare");
+    await popupCall("mcp-tab-context", { enabled: false });
+    const afterUnshare = await bridge.tabs({});
+    if (afterUnshare.tabs.some((tab) => tab.tabId === shared.tabId) || afterUnshare.openTabs || userTab.isClosed()) {
+      throw new Error("Stopping the share did not release the tab cleanly.");
+    }
+
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     await context?.close().catch(() => undefined);

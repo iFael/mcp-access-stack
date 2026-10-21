@@ -1,4 +1,5 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
+import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
 import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 
 export interface PersonalBrowserExtensionAssets {
@@ -6,6 +7,7 @@ export interface PersonalBrowserExtensionAssets {
   serviceWorker: string;
   popupHtml: string;
   popupScript: string;
+  tabSharingScript: string;
 }
 
 export function sanitizePersonalDiagnosticText(value: string, maxChars = 8_000): string {
@@ -361,8 +363,95 @@ async function tabs(input) {
       result.push(toBrowserTab(metadata, tab));
     }
     if (changed) await writeOwnedTabs(owned);
-    return { tabs: result };
+    const openTabs = await listPersonalOpenTabs(owned);
+    return { tabs: result, ...(openTabs ? { openTabs } : {}) };
   });
+}
+
+// Titles and addresses of the user's other tabs, only while the user allows it
+// from the popup. Query strings and fragments are dropped, private hosts are
+// skipped, and none of these tabs can be controlled until the user shares it.
+async function listPersonalOpenTabs(owned) {
+  if (!(await personalTabContextEnabled())) return undefined;
+  const all = await chrome.tabs.query({}).catch(() => []);
+  const openTabs = [];
+  for (const tab of all) {
+    if (openTabs.length >= 100) break;
+    if (!Number.isSafeInteger(tab.id) || owned[String(tab.id)]) continue;
+    let url;
+    try {
+      url = new URL(assertPersonalNavigationTarget(tab.url));
+    } catch {
+      continue;
+    }
+    openTabs.push({ url: (url.origin + url.pathname).slice(0, 500), active: tab.active === true,
+      ...(typeof tab.title === "string" && tab.title ? { title: tab.title.slice(0, 200) } : {}) });
+  }
+  return openTabs;
+}
+
+const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";
+
+async function personalTabContextEnabled() {
+  const value = await chrome.storage.session.get(PERSONAL_TAB_CONTEXT_KEY).catch(() => ({}));
+  return value?.[PERSONAL_TAB_CONTEXT_KEY] === true;
+}
+
+// Only the user shares an already open tab, from the extension popup. A shared
+// tab stays the user's: MCP never closes it, and finishing tasks or "Parar de
+// compartilhar" only releases it.
+async function personalTabSharingDispatch(message) {
+  if (message.type === "mcp-tab-context") {
+    if (typeof message.enabled !== "boolean") throw Error("invalid");
+    await chrome.storage.session.set({ [PERSONAL_TAB_CONTEXT_KEY]: message.enabled });
+  }
+  if (!Number.isSafeInteger(message.tabId)) throw Error("no-tab");
+  const tab = await chrome.tabs.get(message.tabId);
+  if (message.type === "mcp-tab-share") {
+    await withOwnershipLock(async () => {
+      const owned = await readOwnedTabs();
+      if (owned[String(tab.id)]) throw Error("already-owned");
+      const current = await chrome.tabs.get(tab.id);
+      const url = assertPersonalNavigationTarget(current.url);
+      const now = new Date().toISOString();
+      owned[String(tab.id)] = {
+        tabId: PERSONAL_PREFIX + tab.id, lifecycle: "external", ownership: "user",
+        purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
+        createdAt: now, lastUsedAt: now, requestedUrl: url,
+      };
+      await writeOwnedTabs(owned);
+    });
+    await setPersonalSharedBadge(tab.id, true);
+  } else if (message.type === "mcp-tab-unshare") {
+    const owned = await readOwnedTabs();
+    if (owned[String(tab.id)]?.ownership !== "user") throw Error("not-shared");
+    await releasePersonalSharedTab(tab.id);
+  } else if (message.type !== "mcp-tab-status" && message.type !== "mcp-tab-context") {
+    throw Error("unsupported");
+  }
+  const owned = await readOwnedTabs();
+  const metadata = owned[String(tab.id)];
+  let shareable = false;
+  try {
+    assertPersonalNavigationTarget(tab.url);
+    shareable = !metadata;
+  } catch {
+    shareable = false;
+  }
+  return { ok: true, shared: metadata?.ownership === "user", mcp: metadata?.ownership === "mcp",
+    shareable, context: await personalTabContextEnabled() };
+}
+
+async function releasePersonalSharedTab(chromeTabId) {
+  await finalizePersonalDialog(chromeTabId, true);
+  await resetPersonalViewport(chromeTabId).catch(() => undefined);
+  await removeOwnedTab(chromeTabId);
+  await setPersonalSharedBadge(chromeTabId, false);
+}
+
+async function setPersonalSharedBadge(chromeTabId, shared) {
+  await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: shared ? "MCP" : "" }))
+    .catch(() => undefined);
 }
 
 async function finalizePersonalDialog(chromeTabId, dismiss) {
@@ -4258,6 +4347,7 @@ async function finishTask(input) {
         chromeTabId: Number(key),
         tabId: metadata.tabId,
         mcpGroupId: metadata.mcpGroupId,
+        shared: metadata.ownership === "user",
       }));
   });
 
@@ -4275,6 +4365,7 @@ async function finishTask(input) {
       }
     }
     if (groupedTabIds.length > 0) await chrome.tabs.ungroup(groupedTabIds);
+    for (const target of targets) if (target.shared) await setPersonalSharedBadge(target.chromeTabId, false);
     await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const target of targets) delete owned[String(target.chromeTabId)];
@@ -4292,9 +4383,13 @@ async function finishTask(input) {
     };
   }
 
-  for (const target of targets) {
+  // Tabs the user shared are released, never closed.
+  const closing = targets.filter((target) => !target.shared);
+  const released = targets.filter((target) => target.shared);
+  for (const target of closing) {
     await chrome.tabs.remove(target.chromeTabId).catch(() => undefined);
   }
+  for (const target of released) await releasePersonalSharedTab(target.chromeTabId);
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     for (const target of targets) delete owned[String(target.chromeTabId)];
@@ -4304,8 +4399,10 @@ async function finishTask(input) {
   return {
     completed: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
-    closedTabs: targets.length,
-    closedTabIds: targets.map((target) => target.tabId),
+    closedTabs: closing.length,
+    closedTabIds: closing.map((target) => target.tabId),
+    ...(released.length > 0 ? { releasedTabs: released.length,
+      releasedTabIds: released.map((target) => target.tabId) } : {}),
     browserClosed: false,
   };
 }
@@ -4861,6 +4958,18 @@ function delay(ms, signal) {
 
 ${HANDOFF_WORKER_SOURCE}
 
+if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (typeof message?.type !== "string" || !message.type.startsWith("mcp-tab-")) return false;
+  // Only the extension's own popup, never a page, the bridge or another extension.
+  if (sender.id !== chrome.runtime.id ||
+      sender.url !== chrome.runtime.getURL("secret-provision.html")) return false;
+  void personalTabSharingDispatch(message).then(
+    (result) => reply(result),
+    () => reply({ ok: false, code: "refused" }),
+  );
+  return true;
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   personalViewportSessions.delete(String(tabId));
   void removeOwnedTab(tabId);
@@ -4891,5 +5000,6 @@ chrome.runtime.onInstalled.addListener(connect);
 connect();
 `;
 
-  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT };
+  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
+    tabSharingScript: TAB_SHARING_POPUP_SCRIPT };
 }
