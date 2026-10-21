@@ -447,6 +447,7 @@ describe("BackgroundTaskManager", () => {
     const manager = new BackgroundTaskManager({
       stateDirectory,
       runner: new ControlledRunner(),
+      now: () => new Date("2026-09-18T00:00:00.000Z"),
     });
     expect(await manager.get_background_task(id)).toMatchObject({
       id,

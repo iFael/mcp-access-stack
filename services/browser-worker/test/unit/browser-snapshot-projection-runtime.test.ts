@@ -22,7 +22,7 @@ describe("browser snapshot projection runtime", () => {
     const capture = jest.fn(async (_tabId: string) => all);
     const runtime = Object.assign(Object.create(BrowserRuntime.prototype), {
       tabsRegistry: { assertMcpOwned },
-      selectTab: jest.fn(async () => undefined),
+      selectBrowserTab: jest.fn(async () => undefined),
       captureSnapshotSelected: capture,
       driver: {},
     }) as BrowserRuntime;
@@ -37,7 +37,7 @@ describe("browser snapshot projection runtime", () => {
   it("fails closed for unsupported native AX, rather than showing a pretend full tree", async () => {
     const runtime = Object.assign(Object.create(BrowserRuntime.prototype), {
       tabsRegistry: { assertMcpOwned: () => ({ tabId: "tab-7" }) },
-      selectTab: jest.fn(async () => undefined),
+      selectBrowserTab: jest.fn(async () => undefined),
       driver: {},
     }) as BrowserRuntime;
     await expect(runtime.snapshot({ tabId: "tab-7", includeAccessibility: true }))
@@ -47,7 +47,7 @@ describe("browser snapshot projection runtime", () => {
   it("rejects unauthorized tabs before projection", async () => {
     const runtime = Object.assign(Object.create(BrowserRuntime.prototype), {
       tabsRegistry: { assertMcpOwned: () => { throw new AppError("TAB_NOT_OWNED", "not owned"); } },
-      selectTab: jest.fn(async () => undefined),
+      selectBrowserTab: jest.fn(async () => undefined),
       driver: {},
     }) as BrowserRuntime;
     await expect(runtime.snapshot({ tabId: "tab-x", filter: "interactive" }))

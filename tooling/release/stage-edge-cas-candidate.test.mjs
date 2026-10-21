@@ -19,10 +19,18 @@ const config = JSON.parse(await readFile(path.join(base, "services/mcp-edge-gate
 const manifest = await readFile(path.join(base, "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts"), "utf8");
 
 test("Edge staging accepts only the pinned 99-tool manifest and rejects legacy 97", () => {
-  assert.equal(verifyLocalCandidate(config, manifest, revision), revision);
-  assert.throws(() => verifyLocalCandidate(config, manifest, previousRevision),
+  const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": 99\n}`;
+  assert.equal(verifyLocalCandidate(config, pinned, revision), revision);
+  assert.throws(() => verifyLocalCandidate(config, pinned, previousRevision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
-  assert.throws(() => verifyLocalCandidate(config, manifest.replace('"toolCount": 99', '"toolCount": 97'), revision),
+  assert.throws(() => verifyLocalCandidate(config, pinned.replace('"toolCount": 99', '"toolCount": 97'), revision),
+    /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
+});
+test("frozen Edge staging rejects the newer MCP catalog instead of changing its pinned CAS", () => {
+  // This staging gate stays pinned to the published 99-tool revision. The
+  // current catalog is larger and must not be staged as that candidate.
+  assert.doesNotMatch(manifest, /"toolCount":\s*99\b/u);
+  assert.throws(() => verifyLocalCandidate(config, manifest, revision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
 test("cannot stage a mismatched revision, fake manifest, missing secret, DO or migration drift", () => {
