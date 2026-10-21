@@ -3328,6 +3328,10 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
 // fail closed instead of producing a misdirected native click.
 function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScroll) {
   if (location.href !== expectedUrl) return { stale: true };
+  // Chrome sizes an out-of-process frame a moment after creating it. Until then
+  // its viewport is empty: nothing in it can be measured, and scrolling it would
+  // only move the page to a meaningless offset.
+  if (!(innerWidth > 0 && innerHeight > 0)) return { unsized: true };
   const hosts = Array.from(document.querySelectorAll("iframe,frame")).slice(0, 200);
   let candidates = child.name ? hosts.filter((node) => node.getAttribute("name") === child.name) : [];
   if (candidates.length === 0) candidates = hosts.filter((node) => node.src === child.url);
@@ -3373,18 +3377,21 @@ function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScrol
 }
 
 // Scrolls requested by a frame propagate to out-of-process ancestors
-// asynchronously, so the chain is re-measured until two passes agree. An
-// out-of-process frame that Chrome has not sized yet (offscreen, or still
-// resizing) reports an empty viewport, so nothing in it can be scrolled into
-// view: its ancestors are then scrolled to it from the top, and the mapping is
+// asynchronously, so the chain is re-measured until two passes agree. Chrome
+// gives a new out-of-process frame its size a moment after creating it, and on
+// a busy machine that can take seconds: until then the frame reports an empty
+// viewport and the mapping waits for it. A host still outside a sized frame's
+// viewport has its ancestors scrolled to it from the top, and the mapping is
 // retried for a moment before refusing.
 async function resolvePersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, signal) {
   let previous;
-  for (let attempt = 0; !previous; attempt += 1) {
+  for (let outside = 0, unsized = 0; !previous;) {
     try {
       previous = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, true);
     } catch (error) {
-      if (!error?.outsideViewport || attempt >= 10) throw error;
+      if (error?.unsized && unsized < 100) unsized += 1;
+      else if (error?.outsideViewport && outside < 10) outside += 1;
+      else throw error;
       await revealPersonalFrameChain(chromeTabId, graph, frame);
       await delay(100, signal);
     }
@@ -3417,7 +3424,7 @@ async function revealPersonalFrameChain(chromeTabId, graph, frame) {
 
 // Only scrolls; the click point is still measured and verified afterwards.
 function revealPersonalChildFrame(expectedUrl, child) {
-  if (location.href !== expectedUrl) return false;
+  if (location.href !== expectedUrl || !(innerWidth > 0 && innerHeight > 0)) return false;
   const hosts = Array.from(document.querySelectorAll("iframe,frame")).slice(0, 200);
   let candidates = child.name ? hosts.filter((node) => node.getAttribute("name") === child.name) : [];
   if (candidates.length === 0) candidates = hosts.filter((node) => node.src === child.url);
@@ -3452,6 +3459,12 @@ async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, view
       throw coded("FRAME_NOT_READY", "A parent frame navigated while mapping the action point.");
     }
     const result = mapped.result;
+    if (result?.unsized) {
+      const error = coded("FRAME_NOT_READY", "Chrome has not given a frame on the way to the target a size yet " +
+        "(its viewport is 0x0), so the action point cannot be verified.");
+      error.unsized = true;
+      throw error;
+    }
     if (!Number.isFinite(result?.x) || !Number.isFinite(result?.y)) {
       // Say which check failed, so a refusal in the user's Chrome can be diagnosed.
       const error = coded(result?.ambiguous ? "LOCATOR_AMBIGUOUS" : "BROWSER_CAPABILITY_UNSUPPORTED",

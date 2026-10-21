@@ -394,9 +394,21 @@ describe("personal browser extension assets", () => {
     expect(scrolled).toBe(1);
     (ctx as unknown as { document: { elementFromPoint: () => unknown } }).document.elementFromPoint = () => ({ tagName: "DIV" });
     expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ obscured: true, by: "div" });
+    // A frame Chrome has not sized yet is neither measured nor scrolled.
+    vm.runInContext(extractFunction(serviceWorker, "revealPersonalChildFrame"), ctx);
+    const reveal = vm.runInContext("revealPersonalChildFrame", ctx) as (...args: unknown[]) => boolean;
+    top = 900;
+    scrolled = 0;
+    (ctx as unknown as { innerWidth: number }).innerWidth = 0;
+    expect(map("https://parent.example/", child, { x: 20, y: 30 }, true)).toEqual({ unsized: true });
+    expect(reveal("https://parent.example/", { name: "inner", url: child.url })).toBe(false);
+    expect(scrolled).toBe(0);
+    (ctx as unknown as { innerWidth: number }).innerWidth = 800;
+    expect(reveal("https://parent.example/", { name: "inner", url: child.url })).toBe(true);
+    expect(scrolled).toBe(1);
   });
 
-  it("scrolls ancestors to an unsized nested frame from the top and retries before refusing", async () => {
+  it("waits for Chrome to size a nested frame and scrolls ancestors to an outside host before refusing", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const top = { frameId: 0, parentFrameId: -1, url: "https://parent.example/", status: "ready", documentId: "d0", data: {} };
     const mid = { frameId: 4, parentFrameId: 0, url: "https://mid.example/", status: "ready", documentId: "d4", data: { name: "a" } };
@@ -404,6 +416,7 @@ describe("personal browser extension assets", () => {
     const graph = { byId: new Map([[0, top], [4, mid], [9, leaf]]) };
     const calls: string[] = [];
     let unsized = 2;
+    let outside = 0;
     const context = vm.createContext({
       Math, delay: async () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -414,14 +427,19 @@ describe("personal browser extension assets", () => {
         const child = args[1] as { name: string };
         if (func.name === "revealPersonalChildFrame") {
           calls.push("reveal " + frameId + ">" + child.name);
-          if (frameId === 4) unsized -= 1;
           return [{ frameId, result: true }];
         }
         calls.push("map " + frameId);
-        // The mid frame has no size until the top page scrolls it into view.
-        const result = frameId === 4 && unsized > 0
-          ? { outside: true, at: "74,-38", size: "0x0" }
-          : { x: frameId === 0 ? 300 : 110, y: frameId === 0 ? 200 : 50, viewport: { width: 800, height: 600 } };
+        // Chrome gives the mid frame its size only after a few polls.
+        let result: Record<string, unknown> = { x: frameId === 0 ? 300 : 110, y: frameId === 0 ? 200 : 50,
+          viewport: { width: 800, height: 600 } };
+        if (frameId === 4 && unsized > 0) {
+          unsized -= 1;
+          result = { unsized: true };
+        } else if (frameId === 4 && outside > 0) {
+          outside -= 1;
+          result = { outside: true, at: "110,650", size: "800x600" };
+        }
         return [{ frameId, documentId: frameId === 0 ? "d0" : "d4", result }];
       } } },
     });
@@ -434,12 +452,21 @@ describe("personal browser extension assets", () => {
     await expect(resolve(7, graph, leaf, { x: 5, y: 6 }, { width: 400, height: 300 })).resolves.toEqual({ x: 300, y: 200 });
     expect(calls.slice(0, 7)).toEqual(["map 4", "reveal 0>a", "reveal 4>b", "map 4", "reveal 0>a", "reveal 4>b", "map 4"]);
 
-    // A frame that never gets a size is refused with what was measured.
+    // A frame that stays unsized is waited for much longer than a host that stays outside.
     unsized = 1000;
     calls.length = 0;
     await expect(resolve(7, graph, leaf, { x: 5, y: 6 }, { width: 400, height: 300 })).rejects.toMatchObject({
+      code: "FRAME_NOT_READY",
+      message: "Chrome has not given a frame on the way to the target a size yet (its viewport is 0x0), " +
+        "so the action point cannot be verified.",
+    });
+    expect(calls.filter((call) => call === "map 4")).toHaveLength(101);
+    unsized = 0;
+    outside = 1000;
+    calls.length = 0;
+    await expect(resolve(7, graph, leaf, { x: 5, y: 6 }, { width: 400, height: 300 })).rejects.toMatchObject({
       code: "BROWSER_CAPABILITY_UNSUPPORTED",
-      message: "The frame host is outside the viewport even after scrolling (point 74,-38, viewport 0x0).",
+      message: "The frame host is outside the viewport even after scrolling (point 110,650, viewport 800x600).",
     });
     expect(calls.filter((call) => call === "map 4")).toHaveLength(11);
   });
