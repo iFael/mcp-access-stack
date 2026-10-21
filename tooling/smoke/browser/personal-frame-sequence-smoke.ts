@@ -54,6 +54,25 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   },
   "list-site.test/cross": (_url, port) => `<!doctype html><title>Cross</title><body>
     <p>Cruzado</p><a rel="next" href="http://other-site.test:${port}/list?page=1">Seguinte</a>`,
+  "upload-site.test/": () => `<!doctype html><title>Upload</title><body>
+    <div id="zone" role="button" aria-label="Soltar arquivos" style="width:320px;height:120px;border:2px dashed">Arraste aqui</div>
+    <label>Arquivo <input type="file" id="arquivo"></label>
+    <button id="reler">Reler arquivos</button>
+    <p id="out">vazio</p><p id="again">nada</p>
+    <script>
+      const zone = document.getElementById("zone");
+      zone.addEventListener("dragover", (event) => event.preventDefault());
+      zone.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        globalThis.dropped = event.dataTransfer.files[0];
+        document.getElementById("out").textContent = "drop:" + dropped.name + ":" + await dropped.text();
+      });
+      document.getElementById("reler").addEventListener("click", async () => {
+        const read = async (file) => file ? await file.text().catch((error) => "falhou-" + error.name) : "sem-arquivo";
+        document.getElementById("again").textContent =
+          "drop=" + await read(globalThis.dropped) + " input=" + await read(document.getElementById("arquivo").files[0]);
+      });
+    </script>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -187,6 +206,45 @@ async function main(): Promise<void> {
     const refused = await bridge.extract({ tabId: cross.tab.tabId, completion: "document-and-safe-pagination" });
     report("cross-origin pagination", refused.completeness);
     if (refused.completeness?.reason !== "unsafe-pagination") throw new Error("Cross-origin rel=next was followed.");
+
+    // Drop zone upload: trusted CDP drag events deliver the staged file once confirmed.
+    const upload = await bridge.open({ url: `http://upload-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
+    const uploadTab = upload.tab.tabId;
+    const uploadRefs = (await bridge.snapshot({ tabId: uploadTab })).refs;
+    const zoneRef = uploadRefs.find((item) => item.name === "Soltar arquivos")?.ref;
+    const inputRef = uploadRefs.find((item) => item.name.startsWith("Arquivo"))?.ref;
+    if (!zoneRef || !inputRef) throw new Error(`Upload page refs missing: ${JSON.stringify(uploadRefs)}`);
+    const file = { name: "nota.txt", mimeType: "text/plain", contentBase64: Buffer.from("conteudo do drop").toString("base64") };
+    let dropId = "";
+    try {
+      await bridge.upload({ tabId: uploadTab, files: [file], dropRef: zoneRef });
+      throw new Error("A drop zone upload ran without confirmation.");
+    } catch (error) {
+      dropId = confirmationIdOf(error);
+    }
+    const dropped = await bridge.upload({ tabId: uploadTab, files: [file], dropRef: zoneRef, confirmationId: dropId });
+    const dropText = await bridge.extract({ tabId: uploadTab, selector: "#out" });
+    report("drop zone upload", { dropped, dropText: dropText.value });
+    if (!String(dropText.value).includes("drop:nota.txt:conteudo do drop")) throw new Error("The drop zone did not receive the file.");
+    await bridge.snapshot({ tabId: uploadTab });
+    let inputId = "";
+    const inputFile = { ...file, name: "campo.txt", contentBase64: Buffer.from("conteudo do campo").toString("base64") };
+    try {
+      await bridge.upload({ tabId: uploadTab, files: [inputFile], inputRef });
+    } catch (error) {
+      inputId = confirmationIdOf(error);
+    }
+    await bridge.upload({ tabId: uploadTab, files: [inputFile], inputRef, confirmationId: inputId });
+    // Pages often read selected or dropped files later, e.g. when a form submits.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const rereadRef = (await bridge.snapshot({ tabId: uploadTab })).refs.find((item) => item.name === "Reler arquivos")?.ref;
+    await bridge.click({ tabId: uploadTab, ref: rereadRef! });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const reread = await bridge.extract({ tabId: uploadTab, selector: "#again" });
+    report("files read after the upload call returned", reread.value);
+    if (reread.value !== "drop=conteudo do drop input=conteudo do campo") {
+      throw new Error("Staged upload files did not outlive the upload call.");
+    }
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });

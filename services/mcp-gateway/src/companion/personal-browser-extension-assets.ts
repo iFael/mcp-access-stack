@@ -3655,9 +3655,13 @@ async function uploadPersonalFiles(input, signal) {
   if (!Number.isSafeInteger(totalBytes) || totalBytes < 0 || totalBytes > 60 * 1024 * 1024) {
     throw coded("LIMIT_EXCEEDED", "Upload exceeds the aggregate file size budget.");
   }
+  if (input.dropRef && (input.inputRef || input.triggerRef || input.selector)) {
+    throw coded("INVALID_ARGUMENT", "A drop zone upload cannot also target a file input.");
+  }
   if (input.inputRef && input.guard.ref !== input.inputRef ||
       input.triggerRef && input.guard.ref !== input.triggerRef ||
-      !input.inputRef && !input.triggerRef && !input.selector) {
+      input.dropRef && input.guard.ref !== input.dropRef ||
+      !input.inputRef && !input.triggerRef && !input.selector && !input.dropRef) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Upload target guard does not match the authorized element.");
   }
   const target = { tabId: chromeTabId };
@@ -3680,6 +3684,32 @@ async function uploadPersonalFiles(input, signal) {
       }
       return options;
     };
+    if (input.dropRef) {
+      // Trusted CDP drag events carry the staged files onto the confirmed drop
+      // zone; the page never receives a synthetic DataTransfer.
+      let point;
+      if (input.dropRef.startsWith("ax-")) {
+        point = await resolveGuardedAxPoint(chromeTabId, input.dropRef, input.guard, target, false);
+      } else {
+        const [hit] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId }, func: probeGuardedElement,
+          args: [input.dropRef, input.guard, false, null, null],
+        });
+        point = hit?.result;
+        if (!point || point.error) {
+          throw coded("BROWSER_CONFIRMATION_INVALID", "Drop zone is stale or obscured.");
+        }
+      }
+      const data = { items: [], files: input.files.map((item) => item.path), dragOperationsMask: 19 };
+      for (const type of ["dragEnter", "dragOver", "drop"]) {
+        throwIfAborted(signal, "upload", type === "drop");
+        await chrome.debugger.sendCommand(target, "Input.dispatchDragEvent", {
+          type, x: point.x, y: point.y, data,
+        });
+      }
+      throwIfAborted(signal, "upload", true);
+      return { tabId: input.tabId, completed: true, fileCount: input.files.length, totalBytes };
+    }
     let node;
     if (input.triggerRef) {
       // CDP intercepts the page's real file chooser; no synthetic file input events.

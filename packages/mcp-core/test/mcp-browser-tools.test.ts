@@ -29,6 +29,7 @@ import {
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserUploadFileSchema,
+  browserUploadInputSchema,
 } from "../src/browser-contracts.js";
 import {
   BROWSER_TOOL_NAMES,
@@ -251,6 +252,15 @@ describe("browser upload file contract", () => {
     expect(browserUploadFileSchema.safeParse({ ...file, name: "folder\\secret" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "secret\0.txt" }).success).toBe(false);
     expect(browserUploadFileSchema.safeParse({ ...file, name: "playbook.md" }).success).toBe(true);
+  });
+
+  it("accepts a drop zone ref only as the sole upload target", () => {
+    const files = [{ name: "nota.txt", contentBase64: "aGVsbG8=" }];
+    expect(browserUploadInputSchema.safeParse({ tabId: "tab-1", files, dropRef: "p-3" }).success).toBe(true);
+    for (const target of [{ inputRef: "p-1" }, { triggerRef: "p-2" }, { selector: "input[type=file]" }]) {
+      expect(browserUploadInputSchema.safeParse({ tabId: "tab-1", files, dropRef: "p-3", ...target }).success)
+        .toBe(false);
+    }
   });
 });
 

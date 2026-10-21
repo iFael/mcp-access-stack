@@ -1007,10 +1007,19 @@ export const browserUploadInputSchema = z
     triggerRef: z.string().min(1).max(128).optional(),
     inputRef: z.string().min(1).max(128).optional(),
     selector: z.string().min(1).max(2_000).optional(),
+    dropRef: z.string().min(1).max(128).optional(),
     confirmationId: confirmationIdSchema,
   })
   .strict()
   .superRefine((input, context) => {
+    if (input.dropRef !== undefined &&
+        (input.triggerRef !== undefined || input.inputRef !== undefined || input.selector !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dropRef"],
+        message: "dropRef targets a drop zone and cannot be combined with a file input target.",
+      });
+    }
     const names = new Set<string>();
     for (const [index, file] of input.files.entries()) {
       const normalized = file.name.toLocaleLowerCase("en-US");

@@ -24129,7 +24129,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Uploads authorized workspace files into a file input in an MCP-owned tab.",
+    "description": "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -24144,6 +24144,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "dropRef": {
+          "maxLength": 128,
+          "minLength": 1,
           "type": "string"
         },
         "inputRef": {
@@ -24941,13 +24946,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1bbc95294a13c866853ce0b0bbe66ebbbaeb7045e008cef409feec6a709efb75",
-  "serverVersion": "0.4.0-catalog.c1bbc95294a13.saca8cfec86ad",
+  "contractRevision": "31a2b9d74536f0c43e5fac8bbac986ce94471c72fb5cb46a1ccfaa62545f3852",
+  "serverVersion": "0.4.0-catalog.c31a2b9d74536.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1bbc95294a13.saca8cfec86ad"
+  "version": "0.4.0-catalog.c31a2b9d74536.saca8cfec86ad"
 } as const;

@@ -80,6 +80,12 @@ export class BrowserFileTransferService {
     input: BrowserUploadInput,
     context: BrowserUploadContext,
   ): Promise<BrowserUploadResult> {
+    if (input.dropRef !== undefined) {
+      throw new AppError(
+        "BROWSER_CAPABILITY_UNSUPPORTED",
+        "Drop zone uploads are only available through native Chrome input in personal mode.",
+      );
+    }
     const target =
       input.inputRef ?? input.selector ?? input.triggerRef ?? "input[type=file]";
     const names = input.files.map((file) => file.name).join(",");

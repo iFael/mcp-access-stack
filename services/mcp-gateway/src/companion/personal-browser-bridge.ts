@@ -1,6 +1,6 @@
 import { createBrowserLatencyRecorder, extensionLatencyMetrics } from "@mcp-access-stack/edge-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import {
@@ -39,6 +39,7 @@ import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.
 
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
+const STAGED_UPLOAD_RETENTION_MS = 30 * 60 * 1_000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 // A 12 MiB PDF needs up to 16 MiB of base64 transport. Other results retain their schemas.
 const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
@@ -76,6 +77,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     from: { ref: string; x?: number; y?: number } | { x: number; y: number };
     to: { ref: string; x?: number; y?: number } | { x: number; y: number };
   }>();
+  // Chrome reads uploaded files lazily (drop handlers, later form submits), so
+  // staged copies outlive the call until their tab closes or retention ends.
+  private readonly stagedUploads = new Map<string, { tabId: string; timer: NodeJS.Timeout }>();
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -136,6 +140,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.coordinateClicks.clear();
     this.pixelEvidence.clear();
     this.coordinateDrags.clear();
+    await this.releaseStagedUploads();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
     }
@@ -583,6 +588,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async closeTab(...args: Parameters<BrowserExecutor["closeTab"]>): ReturnType<BrowserExecutor["closeTab"]> {
     const result = await this.call("closeTab", args[0], args[1]);
+    await this.releaseStagedUploads([args[0].tabId]);
     this.actions.discard([args[0].tabId]);
     this.snapshots.discard(args[0].tabId);
     this.pixelEvidence.delete(args[0].tabId);
@@ -594,6 +600,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
     const result = await this.call("finishTask", args[0], args[1]);
+    await this.releaseStagedUploads(result.closedTabIds ?? []);
     this.actions.finish(args[0].taskId);
     for (const tabId of [...(result.closedTabIds ?? []), ...(result.releasedTabIds ?? [])]) {
       this.snapshots.discard(tabId);
@@ -660,11 +667,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.requireGuardedActions();
     const [input, context] = args;
     const guard = this.actions.guardUpload(input);
-    const root = path.join(path.resolve(this.options.stateRoot), "browser", "personal-artifacts", "uploads");
+    const root = this.uploadsRoot();
     await mkdir(root, { recursive: true, mode: 0o700 });
     const staged = await mkdtemp(path.join(root, "staged-"));
     let totalBytes = 0;
     const stagedFiles: Array<{ name: string; path: string }> = [];
+    let delivered = false;
     try {
       if (input.files.length < 1 || input.files.length > 10) {
         throw new AppError("INVALID_ARGUMENT", "Upload requires 1-10 authorized files.");
@@ -690,18 +698,45 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         await writeFile(absolutePath, bytes, { flag: "wx", mode: 0o600 });
         stagedFiles.push({ name: file.name, path: absolutePath });
       }
-      return await this.call("upload", {
+      const result = await this.call("upload", {
         tabId: input.tabId,
         files: stagedFiles,
         totalBytes,
         ...(input.inputRef ? { inputRef: input.inputRef } : {}),
         ...(input.triggerRef ? { triggerRef: input.triggerRef } : {}),
         ...(input.selector ? { selector: input.selector } : {}),
+        ...(input.dropRef ? { dropRef: input.dropRef } : {}),
         guard,
       }, context);
+      delivered = true;
+      this.retainStagedUpload(input.tabId, staged);
+      return result;
     } finally {
-      await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+      if (!delivered) await rm(staged, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  private uploadsRoot(): string {
+    return path.join(path.resolve(this.options.stateRoot), "browser", "personal-artifacts", "uploads");
+  }
+
+  private retainStagedUpload(tabId: string, directory: string): void {
+    const timer = setTimeout(() => {
+      this.stagedUploads.delete(directory);
+      void rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }, STAGED_UPLOAD_RETENTION_MS);
+    timer.unref();
+    this.stagedUploads.set(directory, { tabId, timer });
+  }
+
+  private async releaseStagedUploads(tabIds?: readonly string[]): Promise<void> {
+    const released = [...this.stagedUploads].filter(([, entry]) => !tabIds || tabIds.includes(entry.tabId));
+    for (const [directory, entry] of released) {
+      clearTimeout(entry.timer);
+      this.stagedUploads.delete(directory);
+    }
+    await Promise.all(released.map(([directory]) =>
+      rm(directory, { recursive: true, force: true }).catch(() => undefined)));
   }
 
   async console(...args: Parameters<BrowserExecutor["console"]>): ReturnType<BrowserExecutor["console"]> {
@@ -807,6 +842,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const personalRoot = path.dirname(this.extensionDirectory);
     const tokenPath = path.join(personalRoot, "bridge-token.txt");
     await mkdir(this.extensionDirectory, { recursive: true });
+    await sweepStaleStagedUploads(this.uploadsRoot());
     this.token = await readOrCreateToken(tokenPath);
     const blockedPrivateOrigins = await readPrivateSiteOrigins(this.options.stateRoot);
     const assets = buildPersonalBrowserExtensionAssets(
@@ -1336,6 +1372,20 @@ function resolveCallTimeoutMs(
     if (Number.isFinite(remainingMs)) timeoutMs = Math.min(timeoutMs, remainingMs);
   }
   return Math.max(0, Math.floor(timeoutMs));
+}
+
+// Removes staged uploads left by an earlier companion process once they are
+// past retention; younger ones may still back files in an open tab.
+async function sweepStaleStagedUploads(root: string): Promise<void> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const cutoff = Date.now() - STAGED_UPLOAD_RETENTION_MS;
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("staged-"))
+    .map(async (entry) => {
+      const directory = path.join(root, entry.name);
+      const info = await stat(directory).catch(() => undefined);
+      if (info && info.mtimeMs < cutoff) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }));
 }
 
 function sendCancel(socket: WebSocket, id: string): void {

@@ -71,6 +71,7 @@ const browserUploadToolInputSchema = z
     triggerRef: c.browserUploadInputSchema.shape.triggerRef,
     inputRef: c.browserUploadInputSchema.shape.inputRef,
     selector: c.browserUploadInputSchema.shape.selector,
+    dropRef: c.browserUploadInputSchema.shape.dropRef,
     confirmationId: c.browserUploadInputSchema.shape.confirmationId,
   })
   .strict();
@@ -518,7 +519,7 @@ function definitions(
       () => e.download(assumeParsed(v)),
       (activeContext) => e.download(assumeParsed(v), activeContext),
     )),
-    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
+    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
     d("browser_console", "Reads or clears sanitized console messages with regex pattern, errors-only, and result limit from an MCP-owned tab. Basic sanitized console reads are available in interactive mode; trace/video and detailed network inspection remain diagnostic-only.", c.browserConsoleInputSchema, c.browserConsoleResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.console(assumeParsed(v)),
@@ -575,6 +576,7 @@ async function runUploadTool(
     ...(input.triggerRef === undefined ? {} : { triggerRef: input.triggerRef }),
     ...(input.inputRef === undefined ? {} : { inputRef: input.inputRef }),
     ...(input.selector === undefined ? {} : { selector: input.selector }),
+    ...(input.dropRef === undefined ? {} : { dropRef: input.dropRef }),
     ...(input.confirmationId === undefined ? {} : { confirmationId: input.confirmationId }),
   });
   return callWithOptionalContext(

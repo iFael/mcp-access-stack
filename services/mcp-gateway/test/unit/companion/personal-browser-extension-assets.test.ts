@@ -1962,6 +1962,61 @@ describe("personal browser extension assets", () => {
     expect(commands.filter((c) => c.method === "DOM.setFileInputFiles")).toHaveLength(1);
   });
 
+  it("drops staged files on a confirmed drop zone with trusted CDP drag events", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    let probe: Record<string, unknown> = { x: 40, y: 60 };
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      probeGuardedElement: () => undefined,
+      chrome: {
+        tabs: { get: async () => ({ url: "https://upload.example/" }) },
+        scripting: { executeScript: async ({ args }: { args: unknown[] }) => {
+          expect(args).toEqual(["p-9", expect.objectContaining({ ref: "p-9" }), false, null, null]);
+          return [{ result: probe }];
+        } },
+        debugger: {
+          attach: async () => undefined,
+          detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            commands.push({ method, ...(params ? { params } : {}) });
+            return {};
+          },
+        },
+      },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "uploadPersonalFiles"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const upload = vm.runInContext("uploadPersonalFiles", context) as
+      (input: unknown) => Promise<Record<string, unknown>>;
+    const input = {
+      tabId: "personal:7", dropRef: "p-9",
+      guard: { url: "https://upload.example/", ref: "p-9", role: "button", name: "Soltar arquivos" },
+      files: [{ name: "a.txt", path: "/private/staged-1/a.txt" }, { name: "b.txt", path: "/private/staged-1/b.txt" }],
+      totalBytes: 10,
+    };
+    await expect(upload(input)).resolves.toEqual({ tabId: "personal:7", completed: true, fileCount: 2, totalBytes: 10 });
+    const drags = commands.filter((command) => command.method === "Input.dispatchDragEvent");
+    expect(drags.map((command) => command.params?.type)).toEqual(["dragEnter", "dragOver", "drop"]);
+    expect(drags[2]?.params).toMatchObject({ x: 40, y: 60,
+      data: { items: [], files: ["/private/staged-1/a.txt", "/private/staged-1/b.txt"] } });
+    expect(commands.some((command) => command.method === "DOM.setFileInputFiles")).toBe(false);
+
+    commands.length = 0;
+    probe = { error: "obscured" };
+    await expect(upload(input)).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    await expect(upload({ ...input, guard: { ...input.guard, ref: "p-1" } }))
+      .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    await expect(upload({ ...input, selector: "input[type=file]" }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(commands.filter((command) => command.method === "Input.dispatchDragEvent")).toHaveLength(0);
+  });
+
   it("prints the single MCP-owned Chrome tab to a bounded CDP PDF", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];

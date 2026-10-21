@@ -159,6 +159,30 @@ describe("BrowserFileTransferService", () => {
 
     expect(fake.locator).not.toHaveBeenCalled();
   });
+
+  it("refuses drop zone uploads instead of selecting some file input", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = fakePage(directory);
+    const service = new BrowserFileTransferService(directory, {
+      currentPage: () => fake.page,
+    });
+    const authorizeUpload = jest.fn();
+    const context = makeContext({ authorizeUpload });
+
+    await expect(
+      service.upload(
+        {
+          tabId: tab.tabId,
+          dropRef: "e7",
+          files: [{ name: "nota.txt", contentBase64: "aGVsbG8=" }],
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+
+    expect(fake.locator).not.toHaveBeenCalled();
+    expect(authorizeUpload).not.toHaveBeenCalled();
+  });
 });
 
 function fakePage(directory: string) {

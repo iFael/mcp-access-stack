@@ -1,5 +1,5 @@
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Script } from "node:vm";
@@ -513,7 +513,7 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
-  it("stages authorized Chrome uploads privately and removes temporary bytes after native selection", async () => {
+  it("stages authorized Chrome uploads privately and keeps the bytes until the tab closes", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
     let stagePath = "";
@@ -533,6 +533,11 @@ describe("PersonalBrowserBridge", () => {
       expect(confirmationId).toBeTruthy();
       const reply = async (data: WebSocket.RawData) => {
         const request = JSON.parse(data.toString()) as WireMessage;
+        if (request.type === "request" && request.operation === "closeTab") {
+          extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+            result: { tabId, completed: true } }));
+          return;
+        }
         if (request.type !== "request" || request.operation !== "upload") return;
         const info = request.input as { files: Array<{ name: string; path: string }>;
           guard: { url: string }; totalBytes: number };
@@ -551,12 +556,83 @@ describe("PersonalBrowserBridge", () => {
         await expect(bridge.upload({ ...input, confirmationId })).resolves.toEqual({
           tabId, completed: true, fileCount: 1, totalBytes: 5,
         });
+        // The page may read the selected or dropped file later, e.g. on submit.
+        expect((await readFile(stagePath)).toString()).toBe("hello");
+        await bridge.closeTab({ tabId });
         await expect(readFile(stagePath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         extension.off("message", reply);
       }
     } finally {
       await close();
+    }
+  });
+
+  it("binds drop zone uploads to their ref and drops staged bytes on failure or shutdown", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const staged: string[] = [];
+    let fail = true;
+    const reply = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request" || request.operation !== "upload") return;
+      const info = request.input as { files: Array<{ path: string }>; dropRef?: string; guard: { ref?: string } };
+      expect(info.dropRef).toBe("zone");
+      expect(info.guard.ref).toBe("zone");
+      staged.push(info.files[0]!.path);
+      extension.send(JSON.stringify(fail
+        ? { type: "response", id: request.id, ok: false,
+            error: { code: "BROWSER_CONFIRMATION_INVALID", message: "Drop zone is stale or obscured." } }
+        : { type: "response", id: request.id, ok: true,
+            result: { tabId, completed: true, fileCount: 1, totalBytes: 5 } }));
+    };
+    try {
+      await primeReference(bridge, extension, tabId, "zone");
+      const input = { tabId, dropRef: "zone", files: [{ name: "nota.txt", contentBase64: "aGVsbG8=" }] };
+      const confirm = async () => {
+        try {
+          await bridge.upload(input);
+        } catch (error) {
+          const typed = error as { code: string; message: string };
+          expect(typed.code).toBe("ACTION_REQUIRES_CONFIRMATION");
+          return JSON.parse(typed.message.slice(typed.message.indexOf("{"))).confirmationId as string;
+        }
+        throw new Error("Drop zone upload ran without confirmation.");
+      };
+      const forInput = await confirm();
+      await expect(bridge.upload({ ...input, dropRef: undefined, selector: "input[type=file]",
+        confirmationId: forInput } as never)).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      extension.on("message", reply);
+      await expect(bridge.upload({ ...input, confirmationId: await confirm() }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      await expect(readFile(staged[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+      fail = false;
+      await expect(bridge.upload({ ...input, confirmationId: await confirm() }))
+        .resolves.toMatchObject({ completed: true });
+      expect((await readFile(staged[1]!)).toString()).toBe("hello");
+    } finally {
+      extension.off("message", reply);
+      await close();
+    }
+    await expect(readFile(staged[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sweeps staged uploads past retention left by an earlier companion", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const uploads = path.join(root, "browser", "personal-artifacts", "uploads");
+    const stale = path.join(uploads, "staged-old");
+    const fresh = path.join(uploads, "staged-new");
+    await mkdir(stale, { recursive: true });
+    await mkdir(fresh, { recursive: true });
+    const old = new Date(Date.now() - 31 * 60 * 1_000);
+    await utimes(stale, old, old);
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port: await reservePort() });
+    try {
+      await expect(stat(stale)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(stat(fresh)).resolves.toBeTruthy();
+    } finally {
+      await bridge.close();
     }
   });
 

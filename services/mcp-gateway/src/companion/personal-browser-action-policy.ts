@@ -94,11 +94,11 @@ export class PersonalBrowserActionPolicy {
 
   guardUpload(input: import("@vs-code-gpt/shared").BrowserUploadInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
-    const ref = input.inputRef ?? input.triggerRef;
+    const ref = input.inputRef ?? input.triggerRef ?? input.dropRef;
     const reference = ref ? this.requireRef(input.tabId, ref, page) : undefined;
     const digest = createHash("sha256")
       .update(JSON.stringify([
-        input.inputRef, input.triggerRef, input.selector,
+        input.inputRef, input.triggerRef, input.selector, input.dropRef,
         input.files.map((file) => [
           file.name, file.mimeType,
           createHash("sha256").update(file.contentBase64).digest("hex"),
