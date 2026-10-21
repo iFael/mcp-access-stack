@@ -2426,6 +2426,18 @@ describe("personal browser extension assets", () => {
       region: { x: 780, y: 30, width: 50, height: 100 },
     })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(commands.some((c) => c.name === "Page.captureScreenshot")).toBe(false);
+
+    // Zoom re-renders the clip at a higher resolution, bounded by the pixel budget.
+    await screenshot({ tabId: "personal:7", region: { x: 10, y: 20, width: 200, height: 100 }, scale: "device", zoom: 3 });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 6 },
+    });
+    commands.length = 0;
+    await expect(screenshot({ tabId: "personal:7", region: { x: 0, y: 0, width: 800, height: 600 },
+      scale: "device", zoom: 8 }))
+      .rejects.toMatchObject({ code: "LIMIT_EXCEEDED" });
+    await expect(screenshot({ tabId: "personal:7", zoom: 2 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(commands.some((c) => c.name === "Page.captureScreenshot")).toBe(false);
   });
 
   it("activates only a verified MCP-owned tab and does not adopt another user's tab", async () => {

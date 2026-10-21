@@ -830,10 +830,14 @@ export const browserScreenshotInputSchema = z
     fullPage: z.boolean().optional(),
     region: browserScreenshotRegionSchema.optional(),
     scale: z.enum(["css", "device"]).optional(),
+    zoom: z.number().min(1).max(8).optional(),
   })
   .strict()
   .refine((value) => !(value.fullPage && value.region), {
     message: "A screenshot cannot be both full-page and clipped.",
+  })
+  .refine((value) => value.zoom === undefined || value.region !== undefined, {
+    message: "Zoom magnifies a clipped region; provide region.",
   });
 export type BrowserScreenshotInput = z.infer<typeof browserScreenshotInputSchema>;
 export const browserScreenshotImageContentSchema = z

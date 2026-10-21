@@ -489,7 +489,7 @@ function definitions(
       () => e.navigatePath!(assumeParsed(v)),
       (activeContext) => e.navigatePath!(assumeParsed(v), activeContext),
     )),
-    d("browser_screenshot", "Captures an MCP-owned tab, optionally cropping a CSS viewport region and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_screenshot", "Captures an MCP-owned tab, optionally cropping a CSS viewport region, magnifying it with zoom (1-8, personal Chrome) to read small text, and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.screenshot(assumeParsed(v)),
       (activeContext) => e.screenshot(assumeParsed(v), activeContext),

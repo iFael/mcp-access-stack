@@ -23063,7 +23063,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Captures an MCP-owned tab, optionally cropping a CSS viewport region and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.",
+    "description": "Captures an MCP-owned tab, optionally cropping a CSS viewport region, magnifying it with zoom (1-8, personal Chrome) to read small text, and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -23125,6 +23125,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
+        },
+        "zoom": {
+          "maximum": 8,
+          "minimum": 1,
+          "type": "number"
         }
       },
       "required": [
@@ -24946,13 +24951,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "31a2b9d74536f0c43e5fac8bbac986ce94471c72fb5cb46a1ccfaa62545f3852",
-  "serverVersion": "0.4.0-catalog.c31a2b9d74536.saca8cfec86ad",
+  "contractRevision": "f6362ac833e7a7b03c3967aecc89b4aff484c171c5774fd2206caa98aaee6223",
+  "serverVersion": "0.4.0-catalog.cf6362ac833e7.saca8cfec86ad",
   "toolCount": 109,
   "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c31a2b9d74536.saca8cfec86ad"
+  "version": "0.4.0-catalog.cf6362ac833e7.saca8cfec86ad"
 } as const;

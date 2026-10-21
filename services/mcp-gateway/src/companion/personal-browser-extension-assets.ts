@@ -3987,6 +3987,9 @@ async function screenshot(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
+    if (input.zoom !== undefined && !input.region) {
+      throw coded("INVALID_ARGUMENT", "Zoom magnifies a clipped region; provide region.");
+    }
     attached = await attachGuardedDebugger(target);
     await chrome.debugger.sendCommand(target, "Page.enable");
     let clip;
@@ -4004,6 +4007,10 @@ async function screenshot(input, signal) {
           x + width > view.clientWidth || y + height > view.clientHeight) {
         throw coded("INVALID_ARGUMENT", "Screenshot region must fit the current CSS viewport and pixel budget.");
       }
+      const zoom = input.zoom ?? 1;
+      if (!Number.isFinite(zoom) || zoom < 1 || zoom > 8) {
+        throw coded("INVALID_ARGUMENT", "Screenshot zoom must be between 1 and 8.");
+      }
       let scale = 1;
       if (input.scale === "device") {
         const dpr = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
@@ -4014,6 +4021,8 @@ async function screenshot(input, signal) {
           throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome returned an invalid device scale.");
         }
       }
+      // Zoom renders the clip at a higher resolution, not an upscaled bitmap.
+      scale *= zoom;
       if (width * height * scale * scale > MAX_FULL_PAGE_PIXELS) {
         throw coded("LIMIT_EXCEEDED", "Screenshot scaling exceeds the image pixel budget.");
       }

@@ -1633,6 +1633,9 @@ export class BrowserRuntime implements BrowserExecutor {
     if (input.region && !isDirectPlaywrightDriver(this.driver)) {
       throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Region screenshots require the direct browser driver.");
     }
+    if (input.zoom !== undefined && input.zoom !== 1) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Zoomed region screenshots are available in personal Chrome mode.");
+    }
     const relativePath = isDirectPlaywrightDriver(this.driver)
       ? path.join(
           "direct",

@@ -254,6 +254,13 @@ describe("browser upload file contract", () => {
     expect(browserUploadFileSchema.safeParse({ ...file, name: "playbook.md" }).success).toBe(true);
   });
 
+  it("accepts screenshot zoom only for a clipped region", () => {
+    const region = { x: 0, y: 0, width: 100, height: 40 };
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", region, zoom: 4 }).success).toBe(true);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", zoom: 2 }).success).toBe(false);
+    expect(browserScreenshotInputSchema.safeParse({ tabId: "tab-1", region, zoom: 9 }).success).toBe(false);
+  });
+
   it("accepts a drop zone ref only as the sole upload target", () => {
     const files = [{ name: "nota.txt", contentBase64: "aGVsbG8=" }];
     expect(browserUploadInputSchema.safeParse({ tabId: "tab-1", files, dropRef: "p-3" }).success).toBe(true);

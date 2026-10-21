@@ -9,7 +9,7 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { chromium, type BrowserContext } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
@@ -110,6 +110,17 @@ const pages: Record<string, (url: URL, port: number) => string> = {
 
 function report(label: string, value: unknown): void {
   console.log(`\n== ${label}\n${JSON.stringify(value, null, 1).slice(0, 2500)}`);
+}
+
+function jpegSize(bytes: Buffer): { width: number; height: number } {
+  for (let offset = 2; offset + 9 < bytes.length;) {
+    const marker = bytes[offset + 1]!;
+    if (marker >= 0xc0 && marker <= 0xc2) {
+      return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + bytes.readUInt16BE(offset + 2);
+  }
+  throw new Error("Screenshot is not a baseline or progressive JPEG.");
 }
 
 function confirmationIdOf(error: unknown): string {
@@ -315,6 +326,12 @@ async function main(): Promise<void> {
     const pointer = await bridge.extract({ tabId: board.tab.tabId, selector: "#pointer" });
     report("pointer drag", pointer.value);
     if (pointer.value !== "solto na coluna") throw new Error("Pointer-based drag did not end on the target.");
+
+    // Zoom re-renders a clipped region at a higher resolution to read small text.
+    const zoomed = await bridge.screenshot({ tabId: board.tab.tabId, region: { x: 0, y: 0, width: 100, height: 40 }, zoom: 4 });
+    const zoomedSize = jpegSize(await readFile(zoomed.path));
+    report("zoomed region", zoomedSize);
+    if (zoomedSize.width !== 400 || zoomedSize.height !== 160) throw new Error("Zoomed region has the wrong resolution.");
 
     // Plain ref hover/click without coordinates must still serialize cleanly.
     const plain = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
