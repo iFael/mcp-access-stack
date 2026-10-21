@@ -73,6 +73,10 @@ const pages: Record<string, (url: URL, port: number) => string> = {
           "drop=" + await read(globalThis.dropped) + " input=" + await read(document.getElementById("arquivo").files[0]);
       });
     </script>`,
+  "log-site.test/one": () => `<!doctype html><title>Um</title><body>Um
+    <script>console.error("falha na primeira página"); console.log("primeira pronta");</script>`,
+  "log-site.test/two": () => `<!doctype html><title>Dois</title><body>Dois
+    <script>console.warn("aviso na segunda página");</script>`,
   "plain-site.test/": () => `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
     <p id="out">Oculto</p>`,
@@ -244,6 +248,20 @@ async function main(): Promise<void> {
     report("files read after the upload call returned", reread.value);
     if (reread.value !== "drop=conteudo do drop input=conteudo do campo") {
       throw new Error("Staged upload files did not outlive the upload call.");
+    }
+
+    // Console history survives repeated reads and MCP navigations without duplicates.
+    const logs = await bridge.open({ url: `http://log-site.test:${sitePort}/one`, taskId: "personal-frame-smoke" });
+    await bridge.console({ tabId: logs.tab.tabId });
+    const repeated = await bridge.console({ tabId: logs.tab.tabId });
+    await bridge.navigate({ tabId: logs.tab.tabId, url: `http://log-site.test:${sitePort}/two` });
+    const history = await bridge.console({ tabId: logs.tab.tabId });
+    report("console history", history.text);
+    const once = (text: string, line: string) => text.split(line).length === 2;
+    if (!once(repeated.text, "[error] falha na primeira página") || !once(history.text, "[info] primeira pronta") ||
+        !once(history.text, "[warning] aviso na segunda página") ||
+        history.text.indexOf("primeira pronta") > history.text.indexOf("aviso na segunda")) {
+      throw new Error("Console history was duplicated or lost across navigation.");
     }
 
     // Plain ref hover/click without coordinates must still serialize cleanly.

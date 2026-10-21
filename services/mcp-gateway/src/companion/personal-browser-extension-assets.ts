@@ -681,6 +681,7 @@ async function navigate(input, signal) {
     throw coded("NAVIGATION_BLOCKED", "The sticky personal browser tab cannot navigate away from its locked URL.");
   }
   throwIfAborted(signal, "navigate", false);
+  await preservePersonalConsole(chromeTabId, signal);
   await chrome.tabs.update(chromeTabId, { url: targetUrl, active: true });
   try {
     await waitForTabComplete(chromeTabId, 30000, signal);
@@ -1598,6 +1599,7 @@ async function extractWithSafePagination(input, chromeTabId, signal) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return finish("partial", "time-limit", true);
     axTargetsByTab.delete(chromeTabId);
+    await preservePersonalConsole(chromeTabId, signal);
     const loaded = await loadPersonalTabUrl(chromeTabId, target.href, Math.min(30000, remaining), signal);
     metadata.lastUsedAt = new Date().toISOString();
     metadata.requestedUrl = target.href;
@@ -3086,13 +3088,93 @@ async function readPersonalConsole(input, signal) {
     throw coded("INVALID_ARGUMENT", "Console message limit must be between 1 and 1000.");
   }
   const tabKey = String(chromeTabId);
-  const recorded = personalConsoleEntries.get(tabKey) ?? [];
+  const history = await loadPersonalConsoleHistory(tabKey);
+  try {
+    await collectPersonalConsole(chromeTabId, history, signal);
+  } catch (error) {
+    if (signal?.aborted) throw cancellationError("console", signal, false);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger console capture is unavailable or occupied.");
+  }
+  const threshold = input.onlyErrors ? "error" : input.level;
+  const severities = { error: 0, warning: 1, info: 2, debug: 3 };
+  const output = history.entries.map((entry) => entry.line).filter((line) => {
+    const level = line.slice(1, line.indexOf("]"));
+    return (!threshold || (severities[level] ?? 3) <= severities[threshold]) &&
+      (!filter || filter.test(line));
+  });
+  const text = output.slice(0, limit).join("\\n").slice(0, 120000);
+  const result = {
+    tabId: input.tabId, text,
+    truncated: history.truncated || output.length > limit || output.join("\\n").length > 120000,
+    collectedAt: new Date().toISOString(),
+  };
+  if (input.clear === true) await clearPersonalConsoleHistory(tabKey);
+  else await savePersonalConsoleHistory(tabKey, history);
+  return result;
+}
+
+const PERSONAL_CONSOLE_STORAGE_PREFIX = "mcpV3PersonalConsole:";
+const PERSONAL_CONSOLE_MAX_ENTRIES = 500;
+
+// Console history outlives service worker restarts (session storage, never
+// disk) and navigations collected before MCP navigates the owned tab.
+async function loadPersonalConsoleHistory(tabKey) {
+  const cached = personalConsoleEntries.get(tabKey);
+  if (cached) return cached;
+  const storageKey = PERSONAL_CONSOLE_STORAGE_PREFIX + tabKey;
+  const stored = await chrome.storage?.session?.get(storageKey).then((value) => value?.[storageKey], () => undefined);
+  const entries = Array.isArray(stored?.entries)
+    ? stored.entries.filter((entry) => typeof entry?.key === "string" && typeof entry?.line === "string")
+      .slice(-PERSONAL_CONSOLE_MAX_ENTRIES)
+    : [];
+  const history = { entries, truncated: stored?.truncated === true };
+  personalConsoleEntries.set(tabKey, history);
+  return history;
+}
+
+async function savePersonalConsoleHistory(tabKey, history) {
+  await chrome.storage?.session?.set({
+    [PERSONAL_CONSOLE_STORAGE_PREFIX + tabKey]: { entries: history.entries, truncated: history.truncated },
+  }).catch(() => undefined);
+}
+
+async function clearPersonalConsoleHistory(tabKey) {
+  personalConsoleEntries.delete(tabKey);
+  await chrome.storage?.session?.remove(PERSONAL_CONSOLE_STORAGE_PREFIX + tabKey).catch(() => undefined);
+}
+
+async function hasPersonalConsoleHistory(tabKey) {
+  if (personalConsoleEntries.has(tabKey)) return true;
+  const storageKey = PERSONAL_CONSOLE_STORAGE_PREFIX + tabKey;
+  const stored = await chrome.storage?.session?.get(storageKey).then((value) => value?.[storageKey], () => undefined);
+  return Boolean(stored);
+}
+
+// Collects the current document's console before MCP navigates a tab whose
+// console was read earlier; failures never block the navigation itself.
+async function preservePersonalConsole(chromeTabId, signal) {
+  const tabKey = String(chromeTabId);
+  if (!chrome.debugger?.onEvent?.addListener || !(await hasPersonalConsoleHistory(tabKey))) return;
+  try {
+    const history = await loadPersonalConsoleHistory(tabKey);
+    await collectPersonalConsole(chromeTabId, history, signal);
+    await savePersonalConsoleHistory(tabKey, history);
+  } catch {
+    // Best effort: an occupied debugger only loses the old document's lines.
+  }
+}
+
+// Chrome replays the current document's stored console on Runtime/Log.enable;
+// the original timestamps make repeated reads idempotent.
+async function collectPersonalConsole(chromeTabId, history, signal) {
+  const seen = new Set(history.entries.map((entry) => entry.key));
   let attached = false;
-  let truncated = false;
   const listener = (source, method, params) => {
     if (source?.tabId !== chromeTabId) return;
     let level;
     let message;
+    let timestamp;
     if (method === "Runtime.consoleAPICalled") {
       const type = params?.type;
       level = type === "error" || type === "assert" ? "error" :
@@ -3105,21 +3187,27 @@ async function readPersonalConsole(input, signal) {
         if (typeof entry?.value === "number" || typeof entry?.value === "boolean") return String(entry.value);
         return String(entry?.description ?? "[object]").slice(0, 1800);
       }).join(" ");
+      timestamp = params?.timestamp;
     } else if (method === "Runtime.exceptionThrown") {
       level = "error";
       message = String(params?.exceptionDetails?.text ?? "Script exception");
+      timestamp = params?.timestamp;
     } else if (method === "Log.entryAdded") {
       const entry = params?.entry;
       level = entry?.level === "error" ? "error" : entry?.level === "warning" ? "warning" :
         entry?.level === "verbose" ? "debug" : "info";
       message = String(entry?.text ?? "");
+      timestamp = entry?.timestamp;
     } else return;
     const line = "[" + level + "] " + sanitizePersonalDiagnosticText(message.slice(0, 3000));
-    if (recorded.length >= 500) {
-      recorded.shift();
-      truncated = true;
+    const key = method + "|" + (Number.isFinite(timestamp) ? timestamp : "") + "|" + line;
+    if (Number.isFinite(timestamp) && seen.has(key)) return;
+    seen.add(key);
+    if (history.entries.length >= PERSONAL_CONSOLE_MAX_ENTRIES) {
+      history.entries.shift();
+      history.truncated = true;
     }
-    recorded.push(line);
+    history.entries.push({ key, line });
   };
   try {
     chrome.debugger.onEvent.addListener(listener);
@@ -3129,26 +3217,7 @@ async function readPersonalConsole(input, signal) {
     await chrome.debugger.sendCommand(target, "Log.enable");
     await new Promise((resolve) => setTimeout(resolve, 120));
     throwIfAborted(signal, "console", false);
-    personalConsoleEntries.set(tabKey, recorded);
-    const threshold = input.onlyErrors ? "error" : input.level;
-    const severities = { error: 0, warning: 1, info: 2, debug: 3 };
-    const output = recorded.filter((line) => {
-      const level = line.slice(1, line.indexOf("]"));
-      return (!threshold || (severities[level] ?? 3) <= severities[threshold]) &&
-        (!filter || filter.test(line));
-    });
-    const text = output.slice(0, limit).join("\\n").slice(0, 120000);
-    const result = {
-      tabId: input.tabId, text,
-      truncated: truncated || output.length > limit || output.join("\\n").length > 120000,
-      collectedAt: new Date().toISOString(),
-    };
-    if (input.clear === true) personalConsoleEntries.delete(tabKey);
-    return result;
-  } catch (error) {
-    if (signal?.aborted) throw cancellationError("console", signal, false);
-    if (error?.code) throw error;
-    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger console capture is unavailable or occupied.");
+    personalConsoleEntries.set(String(chromeTabId), history);
   } finally {
     chrome.debugger.onEvent.removeListener(listener);
     await detachGuardedDebugger({ tabId: chromeTabId }, attached).catch(() => undefined);
@@ -3965,6 +4034,7 @@ async function goBack(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "goBack", false);
+  await preservePersonalConsole(chromeTabId, signal);
   await chrome.tabs.goBack(chromeTabId);
   try {
     await waitForTabComplete(chromeTabId, 10000, signal);
@@ -3979,6 +4049,7 @@ async function goForward(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   const metadata = await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "goForward", false);
+  await preservePersonalConsole(chromeTabId, signal);
   await chrome.tabs.goForward(chromeTabId);
   try {
     await waitForTabComplete(chromeTabId, 10000, signal);
@@ -4114,7 +4185,7 @@ async function updateMetadata(chromeTabId, metadata) {
 
 async function removeOwnedTab(chromeTabId) {
   axTargetsByTab.delete(chromeTabId);
-  personalConsoleEntries.delete(String(chromeTabId));
+  await clearPersonalConsoleHistory(String(chromeTabId));
   await stopPersonalNetworkCapture(chromeTabId);
   personalNetworkEntries.delete(String(chromeTabId));
   await withOwnershipLock(async () => {

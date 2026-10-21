@@ -61,6 +61,7 @@ describe("personal browser extension assets", () => {
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => metadata,
       updateMetadata: async () => undefined, throwIfAborted: () => undefined,
       axTargetsByTab: new Map(), cancellationError: () => new Error("cancelled"),
+      preservePersonalConsole: async () => undefined,
       assertPersonalNavigationTarget: (url: string) => {
         if (new URL(url).hostname.endsWith(".internal")) {
           throw Object.assign(new Error("private"), { code: "NAVIGATION_BLOCKED" });
@@ -2191,36 +2192,51 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const listeners = new Set<(source: { tabId: number }, name: string, args: unknown) => void>();
     const commands: string[] = [];
+    const session = new Map<string, unknown>();
     const context = vm.createContext({
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
+      cancellationError: () => new Error("cancelled"),
       setTimeout: (fn: () => void) => { fn(); return 1; },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       sanitizePersonalDiagnosticText,
-      chrome: { debugger: {
-        onEvent: {
-          addListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.add(fn); },
-          removeListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.delete(fn); },
-        },
-        attach: async () => { commands.push("attach"); },
-        detach: async () => { commands.push("detach"); },
-        sendCommand: async (_target: unknown, method: string) => {
-          commands.push(method);
-          if (method === "Runtime.enable") {
-            for (const listener of listeners) {
-              listener({ tabId: 999 }, "Runtime.consoleAPICalled", { type: "error", args: [{ value: "wrong tab" }] });
-              listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "log", args: [{ value: "ordinary event" }] });
-              listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "error", args: [{ value: "Authorization: Bearer hidden-key" }] });
-              listener({ tabId: 7 }, "Runtime.exceptionThrown", { exceptionDetails: { text: "TypeError: failed" } });
+      chrome: {
+        storage: { session: {
+          get: async (key: string) => (session.has(key) ? { [key]: session.get(key) } : {}),
+          set: async (value: Record<string, unknown>) => {
+            for (const [key, item] of Object.entries(value)) session.set(key, JSON.parse(JSON.stringify(item)));
+          },
+          remove: async (key: string) => { session.delete(key); },
+        } },
+        debugger: {
+          onEvent: {
+            addListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.add(fn); },
+            removeListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.delete(fn); },
+          },
+          attach: async () => { commands.push("attach"); },
+          detach: async () => { commands.push("detach"); },
+          sendCommand: async (_target: unknown, method: string) => {
+            commands.push(method);
+            if (method === "Runtime.enable") {
+              for (const listener of listeners) {
+                listener({ tabId: 999 }, "Runtime.consoleAPICalled", { type: "error", timestamp: 1, args: [{ value: "wrong tab" }] });
+                listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "log", timestamp: 2, args: [{ value: "ordinary event" }] });
+                listener({ tabId: 7 }, "Runtime.consoleAPICalled", { type: "error", timestamp: 3, args: [{ value: "Authorization: Bearer hidden-key" }] });
+                listener({ tabId: 7 }, "Runtime.exceptionThrown", { timestamp: 4, exceptionDetails: { text: "TypeError: failed" } });
+              }
             }
-          }
-          return {};
+            return {};
+          },
         },
-      } },
+      },
     });
-    vm.runInContext("const personalConsoleEntries = new Map();", context);
-    vm.runInContext(extractFunction(serviceWorker, "readPersonalConsole"), context);
+    vm.runInContext("const personalConsoleEntries = new Map();" +
+      " const PERSONAL_CONSOLE_STORAGE_PREFIX = 'mcpV3PersonalConsole:'; const PERSONAL_CONSOLE_MAX_ENTRIES = 500;", context);
+    for (const name of ["loadPersonalConsoleHistory", "savePersonalConsoleHistory", "clearPersonalConsoleHistory",
+      "collectPersonalConsole", "readPersonalConsole"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
     const consoleRead = vm.runInContext("readPersonalConsole", context) as (input: unknown) => Promise<Record<string, unknown>>;
     const result = await consoleRead({ tabId: "personal:7", onlyErrors: true, pattern: "Authorization|TypeError", limit: 1, clear: true });
     expect(result).toMatchObject({ tabId: "personal:7", truncated: true });
@@ -2230,8 +2246,80 @@ describe("personal browser extension assets", () => {
     expect(commands).toEqual(["attach", "Runtime.enable", "Log.enable", "detach"]);
     expect(listeners.size).toBe(0);
     expect(vm.runInContext("personalConsoleEntries.size", context)).toBe(0);
+    expect(session.size).toBe(0);
     await expect(consoleRead({ tabId: "personal:7", pattern: "[" }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+
+  it("keeps a deduplicated console history across reads, worker restarts and MCP navigations", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const listeners = new Set<(source: { tabId: number }, name: string, args: unknown) => void>();
+    const session = new Map<string, unknown>();
+    let documentMessages: Array<{ type: string; timestamp: number; text: string }> = [
+      { type: "error", timestamp: 10, text: "first page failed" },
+      { type: "log", timestamp: 11, text: "first page ready" },
+    ];
+    const chrome = {
+      storage: { session: {
+        get: async (key: string) => (session.has(key) ? { [key]: session.get(key) } : {}),
+        set: async (value: Record<string, unknown>) => {
+          for (const [key, item] of Object.entries(value)) session.set(key, JSON.parse(JSON.stringify(item)));
+        },
+        remove: async (key: string) => { session.delete(key); },
+      } },
+      debugger: {
+        onEvent: {
+          addListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.add(fn); },
+          removeListener(fn: (source: { tabId: number }, name: string, args: unknown) => void) { listeners.delete(fn); },
+        },
+        attach: async () => undefined,
+        detach: async () => undefined,
+        sendCommand: async (_target: unknown, method: string) => {
+          if (method === "Runtime.enable") {
+            for (const listener of listeners) {
+              for (const message of documentMessages) {
+                listener({ tabId: 7 }, "Runtime.consoleAPICalled",
+                  { type: message.type, timestamp: message.timestamp, args: [{ value: message.text }] });
+              }
+            }
+          }
+          return {};
+        },
+      },
+    };
+    const worker = () => {
+      const context = vm.createContext({
+        chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}), throwIfAborted: () => undefined,
+        cancellationError: () => new Error("cancelled"), setTimeout: (fn: () => void) => { fn(); return 1; },
+        coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+        sanitizePersonalDiagnosticText, chrome,
+      });
+      vm.runInContext("const personalConsoleEntries = new Map();" +
+        " const PERSONAL_CONSOLE_STORAGE_PREFIX = 'mcpV3PersonalConsole:'; const PERSONAL_CONSOLE_MAX_ENTRIES = 500;", context);
+      for (const name of ["loadPersonalConsoleHistory", "savePersonalConsoleHistory", "clearPersonalConsoleHistory",
+        "hasPersonalConsoleHistory", "collectPersonalConsole", "preservePersonalConsole", "readPersonalConsole"]) {
+        vm.runInContext(extractFunction(serviceWorker, name), context);
+      }
+      return {
+        read: vm.runInContext("readPersonalConsole", context) as (input: unknown) => Promise<{ text: string }>,
+        preserve: vm.runInContext("preservePersonalConsole", context) as (tabId: number) => Promise<void>,
+      };
+    };
+
+    const first = worker();
+    await first.preserve(7);
+    expect(session.size).toBe(0);
+    expect((await first.read({ tabId: "personal:7" })).text).toBe("[error] first page failed\n[info] first page ready");
+    expect((await first.read({ tabId: "personal:7" })).text).toBe("[error] first page failed\n[info] first page ready");
+    documentMessages.push({ type: "warning", timestamp: 12, text: "late warning" });
+    await first.preserve(7);
+    documentMessages = [{ type: "error", timestamp: 20, text: "second page failed" }];
+
+    const restarted = worker();
+    expect((await restarted.read({ tabId: "personal:7", level: "warning" })).text)
+      .toBe("[error] first page failed\n[warning] late warning\n[error] second page failed");
+    await restarted.read({ tabId: "personal:7", clear: true });
+    expect(session.size).toBe(0);
   });
 
   it("captures a bounded CSS viewport region using page scroll offsets and device scale", async () => {
