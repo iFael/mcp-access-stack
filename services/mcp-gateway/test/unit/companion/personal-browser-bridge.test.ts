@@ -854,6 +854,70 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("records a personal trace and video from the extension's screencast frames", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const seen: string[] = [];
+    const cancelled: unknown[] = [];
+    // A lossy WebP still: the RIFF header, then one VP8 key frame of 320x180.
+    const still = (fill: number) => {
+      const frame = Buffer.alloc(24, fill);
+      frame.set([0x10, 0, 0, 0x9d, 0x01, 0x2a], 0);
+      frame.writeUInt16LE(320, 6);
+      frame.writeUInt16LE(180, 8);
+      const head = Buffer.alloc(20);
+      head.write("RIFF", 0, "ascii");
+      head.writeUInt32LE(12 + frame.length, 4);
+      head.write("WEBPVP8 ", 8, "ascii");
+      head.writeUInt32LE(frame.length, 16);
+      return Buffer.concat([head, frame]).toString("base64");
+    };
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type === "recording-cancel") cancelled.push(request.recordingId);
+      if (request.type !== "request" || !request.operation) return;
+      seen.push(request.operation);
+      const input = request.input as { recordingId?: string };
+      if (request.operation === "videoStart" || request.operation === "videoStop") {
+        // Frames precede the reply on the same socket, as Chrome's first and last frames do.
+        extension.send(JSON.stringify({ type: "recording-frame", recordingId: input.recordingId, data: still(seen.length) }));
+        extension.send(JSON.stringify({ type: "recording-frame", recordingId: "00000000-0000-4000-8000-000000000000", data: still(9) }));
+        extension.send(JSON.stringify({
+          type: "response", id: request.id, ok: true,
+          result: { tabId: "personal:7", recordingId: input.recordingId, active: request.operation === "videoStart" },
+        }));
+        return;
+      }
+      extension.send(JSON.stringify({
+        type: "response", id: request.id, ok: true,
+        result: { tabId: "personal:7", text: "ok", truncated: false, collectedAt: "2026-10-21T11:00:00.000Z" },
+      }));
+    };
+    extension.on("message", respond);
+    try {
+      await expect(bridge.traceStart({ tabId: "personal:7" })).resolves.toEqual({ tabId: "personal:7", active: true });
+      const started = await bridge.videoStart({ tabId: "personal:7", filename: "demo.webm" });
+      expect(started.path).toMatch(/personal-artifacts[\\/]videos[\\/][0-9a-f-]{36}-demo\.webm$/u);
+      await expect(bridge.diagnostics({ tabId: "personal:7" }))
+        .resolves.toMatchObject({ traceActive: true, videoActive: true });
+      const video = await bridge.videoStop({ tabId: "personal:7" });
+      expect(video).toMatchObject({ tabId: "personal:7", kind: "video", path: started.path });
+      expect((await readFile(video.path)).subarray(0, 4).toString("hex")).toBe("1a45dfa3");
+      const trace = await bridge.traceStop({ tabId: "personal:7" });
+      expect(trace.files.map((file) => path.basename(file.path))).toEqual(["trace.json", "trace.webm"]);
+      const document = JSON.parse(await readFile(trace.files[0]!.path, "utf8")) as { actions: Array<{ operation: string }> };
+      expect(document.actions.map((action) => action.operation)).toEqual(["console", "networkList"]);
+      // One recording served both, and it stopped with the trace; Chrome is told
+      // to stop sending frames nobody here wants.
+      expect(seen).toEqual(["videoStart", "console", "networkList", "videoStop"]);
+      expect(cancelled[0]).toBe("00000000-0000-4000-8000-000000000000");
+      await expect(bridge.diagnostics({ tabId: "personal:7" }))
+        .resolves.toMatchObject({ traceActive: false, videoActive: false });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("routes network list and request inspection without exposing tab data through another tab", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input?: unknown }> = [];

@@ -2237,6 +2237,151 @@ describe("personal browser extension assets", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("records fresh captures as WebP stills, skips unchanged pages and the user's turn, and ends with the page as it is", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const methods: Array<[string, Record<string, unknown> | undefined]> = [];
+    const sent: Array<Record<string, unknown>> = [];
+    const decoded: string[] = [];
+    const draws: unknown[][] = [];
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    let attached = 0;
+    let detached = 0;
+    let handoff: unknown;
+    let active = true;
+    let page = "white";
+    class FakeCanvas {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() {
+        return { fillStyle: "", fillRect() {}, drawImage: (...args: unknown[]) => { draws.push(args.slice(1)); } };
+      }
+      async convertToBlob(options: { type: string }) {
+        return new Blob([`${options.type} ${this.width}x${this.height} ${decoded.at(-1)}`]);
+      }
+    }
+    const ctx = vm.createContext({
+      Map, Promise, Math, Number, String, Uint8Array, Blob, atob, btoa,
+      OffscreenCanvas: FakeCanvas,
+      createImageBitmap: async (blob: Blob) => {
+        decoded.push(await blob.text());
+        return { width: 801, height: 451, close() {} };
+      },
+      setTimeout: (callback: () => void) => {
+        nextTimer += 1;
+        timers.set(nextTimer, callback);
+        return nextTimer;
+      },
+      clearTimeout: (id: number) => { timers.delete(id); },
+      delay: () => new Promise(() => undefined),
+      chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
+      requireOwnedMetadata: async () => ({}),
+      readPersonalHandoff: async () => handoff,
+      throwIfAborted: () => undefined,
+      cancellationError: () => new Error("cancelled"),
+      send: (value: Record<string, unknown>) => { sent.push(value); },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ id: 7, active }) },
+        debugger: {
+          attach: async () => { attached += 1; },
+          detach: async () => { detached += 1; },
+          sendCommand: async (_target: unknown, method: string, params?: Record<string, unknown>) => {
+            methods.push([method, params]);
+            if (method === "Page.getLayoutMetrics") {
+              return { cssVisualViewport: { clientWidth: 1600, clientHeight: 900, pageX: 0, pageY: 40 } };
+            }
+            return method === "Page.captureScreenshot" ? { data: Buffer.from(page).toString("base64") } : {};
+          },
+        },
+      },
+    });
+    vm.runInContext("const personalViewportSessions = new Map(); globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions; " +
+      "const personalDialogArms = new Map(); globalThis.__mcpV3PersonalDialogArms = personalDialogArms; " +
+      "const personalNetworkCaptures = new Map(); globalThis.__mcpV3PersonalNetworkCaptures = personalNetworkCaptures; " +
+      "const PERSONAL_RECORDING_FRAME_MS = 200; const personalRecordings = new Map(); " +
+      "globalThis.__mcpV3PersonalRecordings = personalRecordings;", ctx);
+    for (const name of ["startPersonalRecording", "schedulePersonalRecordingFrame", "capturePersonalRecordingFrame",
+      "sendPersonalRecordingFrame", "stopPersonalRecording", "endPersonalRecording", "releasePersonalRecordingDebugger",
+      "endAllPersonalRecordings", "cancelPersonalRecording", "personalBase64Bytes", "personalBytesBase64"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const start = vm.runInContext("startPersonalRecording", ctx) as (input: unknown) => Promise<Record<string, unknown>>;
+    const stop = vm.runInContext("stopPersonalRecording", ctx) as (input: unknown) => Promise<Record<string, unknown>>;
+    const attachDebugger = vm.runInContext("attachGuardedDebugger", ctx) as (target: unknown) => Promise<boolean>;
+    const detachDebugger = vm.runInContext("detachGuardedDebugger", ctx) as (target: unknown, attached: boolean) => Promise<void>;
+    const tick = async () => {
+      for (const [id, callback] of [...timers]) {
+        timers.delete(id);
+        callback();
+      }
+      await vm.runInContext("personalRecordings.get('7')?.flight", ctx);
+    };
+    const frames = () => sent.filter((message) => message.type === "recording-frame")
+      .map((message) => Buffer.from(String(message.data), "base64").toString());
+    const recordingId = "3f1c2b9a-1111-4222-8333-444455556666";
+
+    await expect(start({ tabId: "personal:7", recordingId: "nope" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(start({ tabId: "personal:7", recordingId })).resolves.toEqual({ tabId: "personal:7", recordingId, active: true });
+    await expect(start({ tabId: "personal:7", recordingId })).resolves.toMatchObject({ active: true });
+    await expect(start({ tabId: "personal:7", recordingId: "3f1c2b9a-1111-4222-8333-000000000000" }))
+      .rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+    expect(attached).toBe(1);
+    // The visible page, scaled to fit 1280x720, opens the recording on an even canvas.
+    expect(methods.find(([method]) => method === "Page.captureScreenshot")?.[1]).toEqual({
+      format: "jpeg", quality: 80, optimizeForSpeed: true,
+      clip: { x: 0, y: 40, width: 1600, height: 900, scale: 0.8 },
+    });
+    expect(frames()).toEqual(["image/webp 802x452 white"]);
+    expect(sent[0]).toMatchObject({ type: "recording-frame", recordingId });
+    expect(draws[0]).toEqual([0, 0, 802, 452]);
+
+    // Unchanged pages, background tabs and the user's turn add nothing.
+    await tick();
+    active = false;
+    page = "hidden";
+    await tick();
+    active = true;
+    handoff = { reason: "login" };
+    page = "password";
+    await tick();
+    expect(frames()).toEqual(["image/webp 802x452 white"]);
+    handoff = undefined;
+    page = "green";
+    await tick();
+    expect(frames()).toEqual(["image/webp 802x452 white", "image/webp 802x452 green"]);
+
+    // A borrowed debugger keeps the recording until its borrower ends.
+    expect(await attachDebugger({ tabId: 7 })).toBe(false);
+    await expect(stop({ tabId: "personal:7", recordingId })).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+    await detachDebugger({ tabId: 7 }, false);
+    page = "final";
+    await expect(stop({ tabId: "personal:7", recordingId })).resolves.toEqual({ tabId: "personal:7", recordingId, active: false });
+    expect(frames().at(-1)).toBe("image/webp 802x452 final");
+    expect([attached, detached]).toEqual([1, 1]);
+    expect(timers.size).toBe(0);
+    await expect(stop({ tabId: "personal:7", recordingId })).resolves.toMatchObject({ active: false });
+
+    // Chrome ending the session tells the bridge; losing the bridge ends every recording.
+    await start({ tabId: "personal:7", recordingId, width: 640, height: 360 });
+    expect(methods.filter(([method]) => method === "Page.captureScreenshot").at(-1)?.[1])
+      .toMatchObject({ clip: { scale: 0.4 } });
+    vm.runInContext("endPersonalRecording(personalRecordings.get('7'), true)", ctx);
+    expect(sent.at(-1)).toEqual({ type: "recording-ended", recordingId });
+    await start({ tabId: "personal:7", recordingId });
+    vm.runInContext("endAllPersonalRecordings()", ctx);
+    await Promise.resolve();
+    expect(vm.runInContext("personalRecordings.size", ctx)).toBe(0);
+    expect(detached).toBe(2);
+    // The bridge cancels only the recording it no longer wants.
+    await start({ tabId: "personal:7", recordingId });
+    vm.runInContext("cancelPersonalRecording('3f1c2b9a-1111-4222-8333-000000000000')", ctx);
+    expect(vm.runInContext("personalRecordings.size", ctx)).toBe(1);
+    vm.runInContext(`cancelPersonalRecording("${recordingId}")`, ctx);
+    await Promise.resolve();
+    expect(vm.runInContext("personalRecordings.size", ctx)).toBe(0);
+    expect(detached).toBe(3);
+  });
+
   it("persists mobile viewport, shares network CDP, and resets only the owned tab", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: string[] = [];
@@ -2674,7 +2819,7 @@ describe("personal browser extension assets", () => {
       ["https://private.example.test"],
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.10.0");
+    expect(parsedManifest.version).toBe("1.11.0");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation",
       "declarativeNetRequest"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");

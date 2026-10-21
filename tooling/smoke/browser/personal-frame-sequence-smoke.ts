@@ -121,6 +121,10 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "share-site.test/": (_url, port) => `<!doctype html><title>Minha aba</title><body>
     <button onclick="document.getElementById('estado').textContent='clicado pelo MCP'">Marcar</button>
     <p id="estado">intocado</p><a href="http://plain-site.test:${port}/?via=plano">Sair do plano</a>`,
+  "rec-site.test/": () => `<!doctype html><title>Gravação</title>
+    <body style="margin:0;height:100vh;background:#ffffff">
+    <button onclick="document.body.style.background='#00c000'">Pintar</button>
+    <button onclick="document.body.style.background='#ffffff'">Limpar</button>`,
   "plain-site.test/": (url) => {
     if (url.searchParams.get("via") === "plano") planEscapes.push(url.search);
     return `<!doctype html><title>Plain</title><body>
@@ -395,6 +399,71 @@ async function main(): Promise<void> {
     const shown = await bridge.extract({ tabId: plain.tab.tabId, selector: "#out" });
     report("plain ref click", shown);
     if (!JSON.stringify(shown).includes("Mostrado")) throw new Error("Plain ref click did not run.");
+
+    // One recording feeds a trace and a video. Both come out as WebM files Chrome
+    // plays, each timed from its own start, and the trace lists the clicks.
+    const recTab = (await bridge.open({ url: `http://rec-site.test:${sitePort}/`, taskId: "personal-frame-smoke" })).tab.tabId;
+    const recRefs = (await bridge.snapshot({ tabId: recTab })).refs;
+    const paintRef = recRefs.find((item) => item.name === "Pintar")?.ref;
+    const clearRef = recRefs.find((item) => item.name === "Limpar")?.ref;
+    if (!paintRef || !clearRef) throw new Error(`Recording page refs missing: ${JSON.stringify(recRefs)}`);
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 800));
+    await bridge.traceStart({ tabId: recTab });
+    const videoStarted = await bridge.videoStart({ tabId: recTab, filename: "gravacao" });
+    await pause();
+    await bridge.click({ tabId: recTab, ref: paintRef });
+    await pause();
+    const video = await bridge.videoStop({ tabId: recTab });
+    const midway = await bridge.diagnostics({ tabId: recTab });
+    await bridge.click({ tabId: recTab, ref: clearRef });
+    await pause();
+    const trace = await bridge.traceStop({ tabId: recTab });
+    const traceJson = JSON.parse(await readFile(trace.files.find((file) => file.path.endsWith("trace.json"))!.path, "utf8")) as {
+      video: string | null; actions: Array<{ operation: string; outcome: string; atMs: number; durationMs: number; target?: { ref?: string } }>;
+    };
+    const clicks = traceJson.actions.filter((action) => action.operation === "click");
+    // Plays a recording in Chrome and reads the center pixel at each time; a
+    // negative time counts back from the end.
+    const play = async (file: string, times: number[]) => context!.pages()[0]!.evaluate(`(async () => {
+      const element = document.createElement("video");
+      element.muted = true;
+      element.src = "data:video/webm;base64," + ${JSON.stringify((await readFile(file)).toString("base64"))};
+      await new Promise((resolve, reject) => {
+        element.onloadedmetadata = resolve;
+        element.onerror = () => reject(new Error("video error " + element.error?.code));
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = element.videoWidth;
+      canvas.height = element.videoHeight;
+      const context2d = canvas.getContext("2d");
+      const pixels = [];
+      for (const time of ${JSON.stringify(times)}) {
+        element.currentTime = time < 0 ? element.duration + time : time;
+        await new Promise((resolve) => { element.onseeked = resolve; });
+        context2d.drawImage(element, 0, 0);
+        pixels.push([...context2d.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data].slice(0, 3));
+      }
+      return { duration: element.duration, width: element.videoWidth, height: element.videoHeight, pixels };
+    })()`) as Promise<{ duration: number; width: number; height: number; pixels: number[][] }>;
+    const green = (pixel: number[] | undefined) => !!pixel && pixel[1]! > 110 && pixel[0]! < 80 && pixel[2]! < 80;
+    const white = (pixel: number[] | undefined) => !!pixel && pixel.every((value) => value > 220);
+    // At the start, half a second after the paint click and at the end; the video
+    // started with the trace.
+    const paintClick = clicks.find((action) => action.target?.ref === paintRef);
+    const clearClick = clicks.find((action) => action.target?.ref === clearRef);
+    const painted = paintClick ? (paintClick.atMs + paintClick.durationMs + 500) / 1000 : 0;
+    const videoPlay = await play(video.path, [0, painted, -0.05]);
+    const tracePlay = await play(trace.files.find((file) => file.path.endsWith("trace.webm"))!.path, [0, painted, -0.05]);
+    report("recording", { videoStarted, video, midway: { traceActive: midway.traceActive, videoActive: midway.videoActive },
+      videoPlay, tracePlay, traceFiles: trace.files.map((file) => path.basename(file.path)), clicks });
+    if (!video.path.endsWith("gravacao.webm") || video.path !== videoStarted.path || video.sizeBytes <= 0 ||
+        !midway.traceActive || midway.videoActive || traceJson.video !== "trace.webm" || trace.files.length !== 2 ||
+        clicks.length !== 2 || clicks.some((action) => action.outcome !== "success") || !clearClick ||
+        videoPlay.duration < 1 || videoPlay.width < 64 || !white(videoPlay.pixels[0]) || !green(videoPlay.pixels[1]) || !green(videoPlay.pixels[2]) ||
+        tracePlay.duration < videoPlay.duration || !white(tracePlay.pixels[0]) || !green(tracePlay.pixels[1]) ||
+        !white(tracePlay.pixels[2])) {
+      throw new Error("The personal recording did not show the page as it changed.");
+    }
 
     // A real window resize moves the owned tab out of the shared window first,
     // so the window the user browses in keeps its size.

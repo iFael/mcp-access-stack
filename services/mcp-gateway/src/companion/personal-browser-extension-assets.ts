@@ -31,7 +31,7 @@ export const PERSONAL_BROWSER_REQUIRED_CAPABILITIES = [
 
 export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
   "open", "selectTab", "dialog", "viewport", "upload", "download", "navigate", "snapshot", "screenshot", "console", "networkList", "pdf",
-  "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill", "frameSequence", "navigatePath",
+  "videoStart", "videoStop", "evaluate", "click", "hover", "drag", "scroll", "fill", "formInput", "type", "press", "sequence", "frameClick", "frameFill", "frameSequence", "navigatePath",
   "goBack", "goForward", "closeTab", "finishTask",
 ] as const;
 
@@ -70,6 +70,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "networkList",
   "networkInspect",
   "pdf",
+  "videoStart",
+  "videoStop",
   "goBack",
   "goForward",
   "tabGroups",
@@ -149,9 +151,14 @@ function borrowPersonalDebugger(target) {
     return dialog;
   }
   const session = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
-  if (!session) return null;
-  session.borrowers = (session.borrowers ?? 0) + 1;
-  return session;
+  if (session) {
+    session.borrowers = (session.borrowers ?? 0) + 1;
+    return session;
+  }
+  const recording = globalThis.__mcpV3PersonalRecordings?.get(key);
+  if (!recording) return null;
+  recording.borrowers += 1;
+  return recording;
 }
 
 async function attachGuardedDebugger(target) {
@@ -185,7 +192,12 @@ async function detachGuardedDebugger(target, attached) {
     return;
   }
   const borrowed = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
-  if (borrowed) borrowed.borrowers = Math.max(0, (borrowed.borrowers ?? 0) - 1);
+  if (borrowed) {
+    borrowed.borrowers = Math.max(0, (borrowed.borrowers ?? 0) - 1);
+    return;
+  }
+  const recording = globalThis.__mcpV3PersonalRecordings?.get(key);
+  if (recording) recording.borrowers = Math.max(0, recording.borrowers - 1);
 }
 
 
@@ -210,6 +222,7 @@ function connect() {
   socket.onerror = () => undefined;
   socket.onclose = () => {
     socket = undefined;
+    endAllPersonalRecordings();
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 1000);
   };
@@ -245,6 +258,10 @@ async function handleMessage(raw) {
   }
   if (message?.type === "site-approval-request") {
     void recordPersonalApprovalRequest(message).catch(() => undefined);
+    return;
+  }
+  if (message?.type === "recording-cancel") {
+    cancelPersonalRecording(message.recordingId);
     return;
   }
   if (message?.type !== "request" || typeof message.id !== "string") return;
@@ -352,6 +369,8 @@ async function perform(operation, input, signal, timing) {
     case "networkList": return readPersonalNetwork(input, signal);
     case "networkInspect": return inspectPersonalNetwork(input, signal);
     case "pdf": return printPersonalPdf(input, signal);
+    case "videoStart": return startPersonalRecording(input, signal);
+    case "videoStop": return stopPersonalRecording(input, signal);
     case "goBack": return goBack(input, signal);
     case "goForward": return goForward(input, signal);
     case "closeTab": return closeTab(input, signal);
@@ -670,7 +689,9 @@ async function readPersonalHandoff(chromeTabId) {
 // While the user has the turn in a tab, MCP neither reads nor acts in it. Once
 // they hand it back, the next MCP call consumes that answer.
 async function refuseDuringPersonalHandoff(operation, input) {
-  if (typeof input?.tabId !== "string" || (operation === "wait" && typeof input.forUser === "string")) return;
+  // A recording can always stop; it records nothing during the user's turn.
+  if (typeof input?.tabId !== "string" || operation === "videoStop" ||
+      (operation === "wait" && typeof input.forUser === "string")) return;
   let chromeTabId;
   try {
     chromeTabId = chromeTabIdFrom(input.tabId);
@@ -762,7 +783,7 @@ const PERSONAL_PLAN_ACTIONS = ["navigate", "interact", "fill", "upload", "downlo
 const PERSONAL_PLAN_CATEGORIES = {
   open: "navigate", navigate: "navigate", goBack: "navigate", goForward: "navigate",
   snapshot: "read", find: "read", extract: "read", frameExtract: "read", profilePage: "read", domIndex: "read",
-  screenshot: "read", console: "read", networkList: "read", networkInspect: "read", pdf: "read",
+  screenshot: "read", console: "read", networkList: "read", networkInspect: "read", pdf: "read", videoStart: "read",
   click: "interact", hover: "interact", drag: "interact", scroll: "interact", press: "interact",
   frameClick: "interact", navigatePath: "interact",
   fill: "fill", formInput: "fill", type: "fill", frameFill: "fill",
@@ -4859,6 +4880,188 @@ async function printPersonalPdf(input, signal) {
   }
 }
 
+// A recording captures the tab about four times a second while it is in front
+// and streams each new picture to the bridge as a WebP still; the bridge
+// assembles the video. Chrome's screencast can deliver a frame painted before
+// the latest change, so every frame here is a fresh capture. A background tab
+// adds no frames, and nothing is recorded while the user has the turn in the tab.
+const PERSONAL_RECORDING_FRAME_MS = 200;
+const personalRecordings = new Map();
+globalThis.__mcpV3PersonalRecordings = personalRecordings;
+
+async function startPersonalRecording(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  await requireOwnedMetadata(chromeTabId);
+  throwIfAborted(signal, "videoStart", false);
+  if (typeof input.recordingId !== "string" || !/^[0-9a-f-]{36}$/u.test(input.recordingId)) {
+    throw coded("INVALID_ARGUMENT", "A recording needs the bridge's recording id.");
+  }
+  const key = String(chromeTabId);
+  const current = personalRecordings.get(key);
+  if (current) {
+    if (current.recordingId === input.recordingId) return { tabId: input.tabId, recordingId: input.recordingId, active: true };
+    throw coded("EXECUTION_STATE_INVALID", "This tab is already being recorded.");
+  }
+  const fixed = Number.isInteger(input.width) && Number.isInteger(input.height) &&
+    input.width >= 64 && input.width <= 3840 && input.height >= 64 && input.height <= 2160;
+  const state = {
+    recordingId: input.recordingId, chromeTabId, attached: false, borrowers: 0,
+    width: fixed ? input.width : 0, height: fixed ? input.height : 0, canvas: null,
+    timer: undefined, flight: Promise.resolve(), last: "",
+  };
+  const target = { tabId: chromeTabId };
+  try {
+    state.attached = await attachGuardedDebugger(target);
+    personalRecordings.set(key, state);
+    // The page as it is now opens the recording.
+    state.flight = capturePersonalRecordingFrame(state);
+    await state.flight;
+    throwIfAborted(signal, "videoStart", true);
+    schedulePersonalRecordingFrame(state);
+    return { tabId: input.tabId, recordingId: input.recordingId, active: true };
+  } catch (error) {
+    endPersonalRecording(state, false);
+    await detachGuardedDebugger(target, state.attached).catch(() => undefined);
+    if (signal?.aborted) throw cancellationError("videoStart", signal, true);
+    if (error?.code) throw error;
+    throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for recording this tab.");
+  }
+}
+
+function schedulePersonalRecordingFrame(state) {
+  if (state.stopping) return;
+  state.timer = setTimeout(() => {
+    state.timer = undefined;
+    if (state.stopping) return;
+    state.flight = state.flight.then(() => capturePersonalRecordingFrame(state)).catch(() => undefined)
+      .finally(() => schedulePersonalRecordingFrame(state));
+  }, PERSONAL_RECORDING_FRAME_MS);
+}
+
+async function capturePersonalRecordingFrame(state) {
+  if (personalRecordings.get(String(state.chromeTabId)) !== state) return;
+  const tab = await chrome.tabs.get(state.chromeTabId).catch(() => undefined);
+  if (!tab?.active) return;
+  const handoff = await readPersonalHandoff(state.chromeTabId);
+  if (handoff && !handoff.done) return;
+  const target = { tabId: state.chromeTabId };
+  const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+  const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+  const width = Number(view?.clientWidth);
+  const height = Number(view?.clientHeight);
+  if (!(width > 0) || !(height > 0)) return;
+  const scale = state.width
+    ? Math.min(2, state.width / width, state.height / height)
+    : Math.min(1, 1280 / width, 720 / height);
+  const shot = await Promise.race([
+    chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+      format: "jpeg", quality: 80, optimizeForSpeed: true,
+      clip: { x: Number(view.pageX) || 0, y: Number(view.pageY) || 0, width, height, scale },
+    }),
+    delay(3000).then(() => undefined),
+  ]);
+  // An unchanged page captures to the same bytes; the video holds its last frame.
+  if (typeof shot?.data !== "string" || shot.data === state.last) return;
+  state.last = shot.data;
+  await sendPersonalRecordingFrame(state, shot.data);
+}
+
+async function sendPersonalRecordingFrame(state, jpegBase64) {
+  const bitmap = await createImageBitmap(new Blob([personalBase64Bytes(jpegBase64)], { type: "image/jpeg" }));
+  try {
+    if (!state.canvas) {
+      // Every frame keeps the first frame's even size; later frames are letterboxed.
+      if (!state.width) {
+        state.width = Math.max(2, bitmap.width + (bitmap.width % 2));
+        state.height = Math.max(2, bitmap.height + (bitmap.height % 2));
+      }
+      state.canvas = new OffscreenCanvas(state.width, state.height);
+    }
+    const context = state.canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#000";
+    context.fillRect(0, 0, state.width, state.height);
+    const scale = Math.min(state.width / bitmap.width, state.height / bitmap.height);
+    const width = Math.round(bitmap.width * scale);
+    const height = Math.round(bitmap.height * scale);
+    context.drawImage(bitmap, Math.floor((state.width - width) / 2), Math.floor((state.height - height) / 2), width, height);
+  } finally {
+    bitmap.close();
+  }
+  const blob = await state.canvas.convertToBlob({ type: "image/webp", quality: 0.75 });
+  if (personalRecordings.get(String(state.chromeTabId)) !== state) return;
+  send({ type: "recording-frame", recordingId: state.recordingId,
+    data: personalBytesBase64(new Uint8Array(await blob.arrayBuffer())) });
+}
+
+async function stopPersonalRecording(input, signal) {
+  const chromeTabId = chromeTabIdFrom(input.tabId);
+  const key = String(chromeTabId);
+  const state = personalRecordings.get(key);
+  if (!state || state.recordingId !== input.recordingId) {
+    return { tabId: input.tabId, recordingId: String(input.recordingId), active: false };
+  }
+  if (state.borrowers > 0) {
+    throw coded("EXECUTION_STATE_INVALID",
+      "The recording shares Chrome's debugger with a viewport, dialog or network capture; end that first.");
+  }
+  throwIfAborted(signal, "videoStop", false);
+  state.stopping = true;
+  clearTimeout(state.timer);
+  state.timer = undefined;
+  await state.flight.catch(() => undefined);
+  // The page as it is now closes the recording.
+  await capturePersonalRecordingFrame(state).catch(() => undefined);
+  endPersonalRecording(state, false);
+  await releasePersonalRecordingDebugger(state);
+  return { tabId: input.tabId, recordingId: state.recordingId, active: false };
+}
+
+function endPersonalRecording(state, notify) {
+  const key = String(state.chromeTabId);
+  if (personalRecordings.get(key) !== state) return false;
+  personalRecordings.delete(key);
+  state.stopping = true;
+  clearTimeout(state.timer);
+  state.timer = undefined;
+  if (notify) send({ type: "recording-ended", recordingId: state.recordingId });
+  return true;
+}
+
+async function releasePersonalRecordingDebugger(state) {
+  // A session that borrowed this recording's debugger keeps it attached.
+  if (state.attached && state.borrowers > 0) return;
+  await detachGuardedDebugger({ tabId: state.chromeTabId }, state.attached).catch(() => undefined);
+}
+
+// The bridge no longer wants this recording's frames.
+function cancelPersonalRecording(recordingId) {
+  for (const state of [...personalRecordings.values()]) {
+    if (state.recordingId === recordingId && endPersonalRecording(state, false)) void releasePersonalRecordingDebugger(state);
+  }
+}
+
+// Without the bridge nobody would receive the frames.
+function endAllPersonalRecordings() {
+  for (const state of [...personalRecordings.values()]) {
+    if (endPersonalRecording(state, false)) void releasePersonalRecordingDebugger(state);
+  }
+}
+
+function personalBase64Bytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function personalBytesBase64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+  }
+  return btoa(binary);
+}
+
 async function screenshot(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -5665,6 +5868,8 @@ chrome.windows?.onRemoved?.addListener((windowId) => void rejectPersonalPlanWind
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   personalViewportSessions.delete(String(tabId));
+  const recording = personalRecordings.get(String(tabId));
+  if (recording) endPersonalRecording(recording, true);
   void removeOwnedTab(tabId);
   void chrome.storage.session.remove(PERSONAL_HANDOFF_PREFIX + tabId).catch(() => undefined);
   void Promise.resolve(chrome.notifications?.clear?.("mcp-handoff:" + tabId)).catch(() => undefined);
@@ -5694,6 +5899,8 @@ chrome.notifications?.onClicked?.addListener((id) => {
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
   personalViewportSessions.delete(key);
+  const recording = personalRecordings.get(key);
+  if (recording) endPersonalRecording(recording, true);
   const dialog = personalDialogArms.get(key);
   if (dialog) {
     clearTimeout(dialog.timer);
