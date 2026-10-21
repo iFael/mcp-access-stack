@@ -3352,9 +3352,22 @@ function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScrol
 }
 
 // Scrolls requested by a frame propagate to out-of-process ancestors
-// asynchronously, so the chain is re-measured until two passes agree.
+// asynchronously, so the chain is re-measured until two passes agree. An
+// out-of-process frame that Chrome has not sized yet (offscreen, or still
+// resizing) reports an empty viewport, so nothing in it can be scrolled into
+// view: its ancestors are then scrolled to it from the top, and the mapping is
+// retried for a moment before refusing.
 async function resolvePersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, signal) {
-  let previous = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, true);
+  let previous;
+  for (let attempt = 0; !previous; attempt += 1) {
+    try {
+      previous = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, true);
+    } catch (error) {
+      if (!error?.outsideViewport || attempt >= 10) throw error;
+      await revealPersonalFrameChain(chromeTabId, graph, frame);
+      await delay(100, signal);
+    }
+  }
   for (let attempt = 0; attempt < 8; attempt += 1) {
     await delay(50, signal);
     const point = await mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, false);
@@ -3362,6 +3375,34 @@ async function resolvePersonalFramePoint(chromeTabId, graph, frame, localPoint, 
     previous = point;
   }
   throw coded("STATE_NOT_REACHED", "Frame geometry did not settle; the page is still scrolling or animating.");
+}
+
+async function revealPersonalFrameChain(chromeTabId, graph, frame) {
+  const chain = [];
+  for (let current = frame; current.frameId !== 0 && chain.length < 16;) {
+    const parent = graph.byId.get(current.parentFrameId);
+    if (!parent) break;
+    chain.unshift({ parent, child: current });
+    current = parent;
+  }
+  for (const { parent, child } of chain) {
+    await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, frameIds: [parent.frameId] },
+      func: revealPersonalChildFrame,
+      args: [parent.url, { name: child.data?.name || "", url: child.url }],
+    }).catch(() => undefined);
+  }
+}
+
+// Only scrolls; the click point is still measured and verified afterwards.
+function revealPersonalChildFrame(expectedUrl, child) {
+  if (location.href !== expectedUrl) return false;
+  const hosts = Array.from(document.querySelectorAll("iframe,frame")).slice(0, 200);
+  let candidates = child.name ? hosts.filter((node) => node.getAttribute("name") === child.name) : [];
+  if (candidates.length === 0) candidates = hosts.filter((node) => node.src === child.url);
+  if (candidates.length !== 1) return false;
+  candidates[0].scrollIntoView({ block: "center", inline: "center" });
+  return true;
 }
 
 async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, viewport, allowScroll) {
@@ -3392,7 +3433,7 @@ async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, view
     const result = mapped.result;
     if (!Number.isFinite(result?.x) || !Number.isFinite(result?.y)) {
       // Say which check failed, so a refusal in the user's Chrome can be diagnosed.
-      throw coded(result?.ambiguous ? "LOCATOR_AMBIGUOUS" : "BROWSER_CAPABILITY_UNSUPPORTED",
+      const error = coded(result?.ambiguous ? "LOCATOR_AMBIGUOUS" : "BROWSER_CAPABILITY_UNSUPPORTED",
         result?.ambiguous ? "Several frame hosts match the frame's name or address and size." :
           result?.missing ? "No frame host matches the frame's name or address and its " + size.width + "x" +
             size.height + " size (found " + (result.sizes?.join(", ") || "none") + ")." :
@@ -3400,6 +3441,8 @@ async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, view
               ", viewport " + result.size + ")." :
               result?.obscured ? "Another element (" + result.by + ") covers the frame host at the action point." :
                 "The frame host is transformed or scaled, so a native click could miss it.");
+      error.outsideViewport = result?.outside === true;
+      throw error;
     }
     point = { x: result.x, y: result.y };
     size = result.viewport;

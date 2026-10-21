@@ -396,6 +396,54 @@ describe("personal browser extension assets", () => {
     expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ obscured: true, by: "div" });
   });
 
+  it("scrolls ancestors to an unsized nested frame from the top and retries before refusing", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const top = { frameId: 0, parentFrameId: -1, url: "https://parent.example/", status: "ready", documentId: "d0", data: {} };
+    const mid = { frameId: 4, parentFrameId: 0, url: "https://mid.example/", status: "ready", documentId: "d4", data: { name: "a" } };
+    const leaf = { frameId: 9, parentFrameId: 4, url: "https://leaf.example/", status: "ready", documentId: "d9", data: { name: "b" } };
+    const graph = { byId: new Map([[0, top], [4, mid], [9, leaf]]) };
+    const calls: string[] = [];
+    let unsized = 2;
+    const context = vm.createContext({
+      Math, delay: async () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async ({ target, func, args }: {
+        target: { frameIds: number[] }; func: { name: string }; args: unknown[];
+      }) => {
+        const [frameId] = target.frameIds;
+        const child = args[1] as { name: string };
+        if (func.name === "revealPersonalChildFrame") {
+          calls.push("reveal " + frameId + ">" + child.name);
+          if (frameId === 4) unsized -= 1;
+          return [{ frameId, result: true }];
+        }
+        calls.push("map " + frameId);
+        // The mid frame has no size until the top page scrolls it into view.
+        const result = frameId === 4 && unsized > 0
+          ? { outside: true, at: "74,-38", size: "0x0" }
+          : { x: frameId === 0 ? 300 : 110, y: frameId === 0 ? 200 : 50, viewport: { width: 800, height: 600 } };
+        return [{ frameId, documentId: frameId === 0 ? "d0" : "d4", result }];
+      } } },
+    });
+    for (const fn of ["resolvePersonalFramePoint", "revealPersonalFrameChain", "revealPersonalChildFrame",
+      "probePersonalChildFramePoint", "mapPersonalFramePoint"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const resolve = vm.runInContext("resolvePersonalFramePoint", context) as
+      (...args: unknown[]) => Promise<{ x: number; y: number }>;
+    await expect(resolve(7, graph, leaf, { x: 5, y: 6 }, { width: 400, height: 300 })).resolves.toEqual({ x: 300, y: 200 });
+    expect(calls.slice(0, 7)).toEqual(["map 4", "reveal 0>a", "reveal 4>b", "map 4", "reveal 0>a", "reveal 4>b", "map 4"]);
+
+    // A frame that never gets a size is refused with what was measured.
+    unsized = 1000;
+    calls.length = 0;
+    await expect(resolve(7, graph, leaf, { x: 5, y: 6 }, { width: 400, height: 300 })).rejects.toMatchObject({
+      code: "BROWSER_CAPABILITY_UNSUPPORTED",
+      message: "The frame host is outside the viewport even after scrolling (point 74,-38, viewport 0x0).",
+    });
+    expect(calls.filter((call) => call === "map 4")).toHaveLength(11);
+  });
+
   it("runs guarded native fill, select, click and Enter inside a nested frame and waits for its navigation", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
