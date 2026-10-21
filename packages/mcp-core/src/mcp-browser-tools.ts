@@ -25,7 +25,7 @@ export const BROWSER_TOOL_NAMES = [
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
-  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_download",
+  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_download",
   "browser_upload", "browser_console", "browser_network", "browser_trace", "browser_video",
   "browser_pdf", "browser_diagnostics",
 ] as const;
@@ -526,6 +526,11 @@ function definitions(
       () => e.finishTask(assumeParsed(v)),
       (activeContext) => e.finishTask(assumeParsed(v), activeContext),
     ), true),
+    d("browser_plan", "Personal Chrome only. Before acting for a task, show the user its plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first.", c.browserPlanInputSchema, c.browserPlanResultSchema, false, (v, context) => callWithOptionalContext(
+      context,
+      () => e.plan(assumeParsed(v)),
+      (activeContext) => e.plan(assumeParsed(v), activeContext),
+    )),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.download(assumeParsed(v)),

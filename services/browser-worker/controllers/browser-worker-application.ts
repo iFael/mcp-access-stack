@@ -352,6 +352,7 @@ async function execute(
     case "goForward": return runtime.goForward(input as never);
     case "closeTab": return runtime.closeTab(input as never);
     case "finishTask": return runtime.finishTask(input as never, context);
+    case "plan": return runtime.plan(input as never);
     case "download": return runtime.download(input as never);
     case "upload": return runtime.upload(input as never);
     case "console": return runtime.console(input as never);

@@ -6,6 +6,7 @@ import type { BrowserExecutor } from "../src/browser-executor.js";
 import type { WorkspaceExecutor } from "../src/workspace-executor.js";
 import {
   browserFinishTaskInputSchema,
+  browserPlanInputSchema,
   browserTabActionInputSchema,
   browserDialogInputSchema,
   browserViewportInputSchema,
@@ -264,6 +265,25 @@ describe("browser upload file contract", () => {
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", text: "Bem-vindo" }).success).toBe(false);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: " " }).success).toBe(false);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "x".repeat(201) }).success).toBe(false);
+  });
+
+  it("accepts a whole plan proposal or a bare planId to keep waiting", () => {
+    const proposal = {
+      taskId: "t1", summary: "Comprar o livro", steps: ["Abrir a loja"],
+      domains: ["Shop.Example ", "pay.example"], actions: ["navigate", "fill"],
+    };
+    expect(browserPlanInputSchema.parse(proposal).domains).toEqual(["shop.example", "pay.example"]);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: [], tabIds: ["personal:3"] }).success).toBe(true);
+    expect(browserPlanInputSchema.safeParse({ planId: "plan_00000001-aaaa", timeoutMs: 1_000 }).success).toBe(true);
+    expect(browserPlanInputSchema.safeParse({ planId: "plan_00000001-aaaa", taskId: "t1" }).success).toBe(false);
+    const { steps: _steps, ...withoutSteps } = proposal;
+    expect(browserPlanInputSchema.safeParse(withoutSteps).success).toBe(false);
+    for (const domain of ["https://shop.example", "shop.example/path", "shop.example:443", "localhost", "10.0.0.1", "*.shop.example"]) {
+      expect(browserPlanInputSchema.safeParse({ ...proposal, domains: [domain] }).success).toBe(false);
+    }
+    expect(browserPlanInputSchema.safeParse({ ...proposal, domains: ["shop.example", "SHOP.example"] }).success).toBe(false);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: ["navigate", "navigate"] }).success).toBe(false);
+    expect(browserPlanInputSchema.safeParse({ ...proposal, actions: ["read"] }).success).toBe(false);
   });
 
   it("accepts screenshot zoom only for a clipped region", () => {

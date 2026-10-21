@@ -24094,6 +24094,178 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Personal Chrome only. Before acting for a task, show the user its plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "enum": [
+              "navigate",
+              "interact",
+              "fill",
+              "upload",
+              "download",
+              "evaluate"
+            ],
+            "type": "string"
+          },
+          "maxItems": 6,
+          "type": "array"
+        },
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "domains": {
+          "items": {
+            "maxLength": 253,
+            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "planId": {
+          "pattern": "^plan_[a-z0-9-]{8,64}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tabIds": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
+        },
+        "taskId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timeoutMs": {
+          "exclusiveMinimum": 0,
+          "maximum": 120000,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "browser_plan",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "enum": [
+              "navigate",
+              "interact",
+              "fill",
+              "upload",
+              "download",
+              "evaluate"
+            ],
+            "type": "string"
+          },
+          "maxItems": 6,
+          "type": "array"
+        },
+        "domains": {
+          "items": {
+            "maxLength": 253,
+            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "feedback": {
+          "maxLength": 500,
+          "type": "string"
+        },
+        "planId": {
+          "pattern": "^plan_[a-z0-9-]{8,64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "superseded"
+          ],
+          "type": "string"
+        },
+        "tabIds": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "type": "array"
+        },
+        "taskId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId",
+        "taskId",
+        "status",
+        "domains",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "title": "browser_plan"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Downloads into private runtime storage.",
     "execution": {
       "taskSupport": "forbidden"
@@ -25011,13 +25183,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "787c8f3664f9ce969bbbd2de891fe1a1a0eea5359d3559459fc1e01a1422173f",
-  "serverVersion": "0.4.0-catalog.c787c8f3664f9.saca8cfec86ad",
-  "toolCount": 109,
-  "toolSetRevision": "aca8cfec86ad0af1a07a707ea01da4283892c9f9acd72930a7895002c1f20864"
+  "contractRevision": "3200961150caa5f8063d2ddf8250af97478958eee0f93a48c8f1ab65aae8d3fb",
+  "serverVersion": "0.4.0-catalog.c3200961150ca.s66c99ae6ff87",
+  "toolCount": 110,
+  "toolSetRevision": "66c99ae6ff8736654b7dfa6ddd0185712e0a9fcc8689e9cb0507d1d84cf1cd65"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c787c8f3664f9.saca8cfec86ad"
+  "version": "0.4.0-catalog.c3200961150ca.s66c99ae6ff87"
 } as const;

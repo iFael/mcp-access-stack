@@ -26,6 +26,8 @@ import type {
   BrowserEvaluateResult,
   BrowserFinishTaskInput,
   BrowserFinishTaskResult,
+  BrowserPlanInput,
+  BrowserPlanResult,
   BrowserFrameClickInput,
   BrowserFrameExtractInput,
   BrowserFrameExtractResult,
@@ -117,6 +119,7 @@ export interface BrowserExecutor {
   goForward(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
   closeTab(input: BrowserCloseTabInput, context?: OperationContext): Promise<BrowserActionResult>;
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext): Promise<BrowserFinishTaskResult>;
+  plan(input: BrowserPlanInput, context?: OperationContext): Promise<BrowserPlanResult>;
   download(input: BrowserDownloadInput, context?: OperationContext): Promise<BrowserDownloadResult>;
   upload(input: BrowserUploadInput, context?: OperationContext): Promise<BrowserUploadResult>;
   console(input: BrowserConsoleInput, context?: OperationContext): Promise<BrowserConsoleResult>;

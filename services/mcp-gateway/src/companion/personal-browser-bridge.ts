@@ -613,6 +613,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return result;
   }
 
+  async plan(...args: Parameters<BrowserExecutor["plan"]>): ReturnType<BrowserExecutor["plan"]> {
+    return this.call("plan", args[0], args[1]);
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
@@ -909,6 +913,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       writeFile(
         path.join(this.extensionDirectory, "tab-sharing.js"),
         assets.tabSharingScript,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "plan-review.html"),
+        assets.planReviewHtml,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "plan-review.js"),
+        assets.planReviewScript,
         { encoding: "utf8", mode: 0o600 },
       ),
     ]);
@@ -1403,7 +1417,7 @@ function resolveCallTimeoutMs(
       ? input.timeoutMs : 60_000;
     timeoutMs = Math.max(timeoutMs, Math.min(120_000, pathTimeout) + 5_000);
   }
-  if (operation === "wait" && isRecord(input) &&
+  if ((operation === "wait" || operation === "plan") && isRecord(input) &&
       typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)) {
     timeoutMs = Math.max(timeoutMs, Math.min(120_000, input.timeoutMs) + 5_000);
   }

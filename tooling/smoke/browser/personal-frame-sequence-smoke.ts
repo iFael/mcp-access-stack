@@ -467,6 +467,49 @@ async function main(): Promise<void> {
       throw new Error("The user handoff did not pause and resume MCP as expected.");
     }
 
+    // A plan opens in a Chrome window of its own; the user trims it there, MCP is
+    // then held to the approved sites and actions, and on opt-in tasks without
+    // an approved plan are refused.
+    const planTask = "personal-plan-smoke";
+    const reviewOpened = context.waitForEvent("page", (page) => page.url().includes("plan-review.html"));
+    const proposed = await bridge.plan({
+      taskId: planTask, summary: "Marcar a aba de teste", steps: ["Abrir a página", "Clicar em Marcar"],
+      domains: ["share-site.test", "plain-site.test"], actions: ["navigate", "interact", "evaluate"], timeoutMs: 300,
+    });
+    const review = await reviewOpened;
+    await review.waitForSelector("#domains input");
+    const reviewSteps = await review.locator("#steps li").count();
+    await review.locator("#domains label", { hasText: "plain-site.test" }).locator("input").uncheck();
+    await review.locator("#actions label", { hasText: "JavaScript" }).locator("input").uncheck();
+    await review.fill("#feedback", "Sem JavaScript");
+    await review.click("#approve");
+    const approved = await bridge.plan({ planId: proposed.planId, timeoutMs: 5_000 });
+    await review.waitForEvent("close", { timeout: 5_000 });
+    const planTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: planTask })).tab.tabId;
+    const planRef = (await bridge.snapshot({ tabId: planTab })).refs.find((item) => item.name === "Marcar")?.ref;
+    await bridge.click({ tabId: planTab, ref: planRef! });
+    const planMarked = await bridge.extract({ tabId: planTab, selector: "#estado" });
+    const errorCode = (error: { code?: string }) => error.code;
+    const offSite = await bridge.navigate({ tabId: planTab, url: `http://plain-site.test:${sitePort}/` })
+      .then(() => "allowed", errorCode);
+    const script = { tabId: planTab, function: "() => document.title" };
+    const scriptConfirmation = await bridge.evaluate(script).then(() => "", confirmationIdOf);
+    const noScript = await bridge.evaluate({ ...script, confirmationId: scriptConfirmation }).then(() => "allowed", errorCode);
+    await popupCall("mcp-tab-require-plan", { enabled: true });
+    const unplanned = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-unplanned" })
+      .then(() => "allowed", errorCode);
+    const requireState = await popupCall("mcp-tab-require-plan", { enabled: false });
+    await bridge.finishTask({ taskId: planTask });
+    const afterPlan = await bridge.plan({ planId: proposed.planId }).then(() => "kept", errorCode);
+    report("plan approval", { proposed, reviewSteps, approved, offSite, noScript, unplanned, afterPlan });
+    if (proposed.status !== "pending" || reviewSteps !== 2 || approved.status !== "approved" ||
+        approved.domains.join() !== "share-site.test" || approved.actions.join() !== "navigate,interact" ||
+        approved.feedback !== "Sem JavaScript" || planMarked.value !== "clicado pelo MCP" ||
+        offSite !== "ACTION_BLOCKED_BY_POLICY" || noScript !== "ACTION_BLOCKED_BY_POLICY" ||
+        unplanned !== "ACTION_BLOCKED_BY_POLICY" || requireState.requirePlan !== false || afterPlan !== "EXECUTION_NOT_FOUND") {
+      throw new Error("The plan did not bound MCP to what the user approved.");
+    }
+
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     await context?.close().catch(() => undefined);

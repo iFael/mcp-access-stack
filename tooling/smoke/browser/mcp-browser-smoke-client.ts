@@ -196,6 +196,12 @@ export class McpBrowserSmokeClient implements BrowserExecutor {
     );
   }
 
+  async plan(input: c.BrowserPlanInput): Promise<c.BrowserPlanResult> {
+    return c.browserPlanResultSchema.parse(
+      await this.callTool("browser_plan", c.browserPlanInputSchema.parse(input)),
+    );
+  }
+
   async finishTask(
     input: c.BrowserFinishTaskInput,
   ): Promise<c.BrowserFinishTaskResult> {

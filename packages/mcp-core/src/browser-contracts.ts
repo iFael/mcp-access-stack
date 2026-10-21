@@ -995,6 +995,75 @@ export const browserFinishTaskResultSchema = z
   .strict();
 export type BrowserFinishTaskResult = z.infer<typeof browserFinishTaskResultSchema>;
 
+// A plan the user approves in personal Chrome before MCP acts for a task.
+// Reading pages on the approved sites is always included; every other kind of
+// action is granted on its own, and the user may approve a subset.
+export const browserPlanActionSchema = z.enum(["navigate", "interact", "fill", "upload", "download", "evaluate"]);
+export type BrowserPlanAction = z.infer<typeof browserPlanActionSchema>;
+const browserPlanDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .regex(
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+    "Use a bare public hostname such as example.com, without scheme, port or path; it also covers its subdomains.",
+  );
+const browserPlanIdSchema = z.string().regex(/^plan_[a-z0-9-]{8,64}$/);
+export const browserPlanInputSchema = z
+  .object({
+    planId: browserPlanIdSchema.optional(),
+    taskId: taskIdSchema.optional(),
+    summary: z.string().trim().min(1).max(500).optional(),
+    steps: z.array(z.string().trim().min(1).max(200)).min(1).max(20).optional(),
+    domains: z.array(browserPlanDomainSchema).min(1).max(20).optional(),
+    actions: z.array(browserPlanActionSchema).max(6).optional(),
+    tabIds: z.array(tabIdSchema).min(1).max(10).optional(),
+    timeoutMs: z.number().int().positive().max(120_000).optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const proposal = ["taskId", "summary", "steps", "domains", "actions", "tabIds"] as const;
+    if (input.planId !== undefined) {
+      if (proposal.some((key) => input[key] !== undefined)) {
+        context.addIssue({
+          code: "custom",
+          path: ["planId"],
+          message: "planId only keeps waiting for an earlier plan; pass it alone, optionally with timeoutMs.",
+        });
+      }
+      return;
+    }
+    for (const key of ["taskId", "summary", "steps", "domains", "actions"] as const) {
+      if (input[key] === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "A new plan requires taskId, summary, steps, domains and actions.",
+        });
+      }
+    }
+    for (const key of ["domains", "actions", "tabIds"] as const) {
+      const values = input[key];
+      if (values && new Set(values).size !== values.length) {
+        context.addIssue({ code: "custom", path: [key], message: `Repeated ${key} are not allowed.` });
+      }
+    }
+  });
+export type BrowserPlanInput = z.infer<typeof browserPlanInputSchema>;
+export const browserPlanResultSchema = z
+  .object({
+    planId: browserPlanIdSchema,
+    taskId: taskIdSchema,
+    status: z.enum(["pending", "approved", "rejected", "superseded"]),
+    domains: z.array(browserPlanDomainSchema).max(20),
+    actions: z.array(browserPlanActionSchema).max(6),
+    tabIds: z.array(tabIdSchema).max(10).optional(),
+    feedback: z.string().max(500).optional(),
+  })
+  .strict();
+export type BrowserPlanResult = z.infer<typeof browserPlanResultSchema>;
+
 export const browserDownloadInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -1365,6 +1434,7 @@ export const browserOperationSchema = z.enum([
   "goForward",
   "closeTab",
   "finishTask",
+  "plan",
   "download",
   "upload",
   "console",
@@ -1445,6 +1515,7 @@ export const browserOperationInputSchemas = {
   goForward: browserTabActionInputSchema,
   closeTab: browserCloseTabInputSchema,
   finishTask: browserFinishTaskInputSchema,
+  plan: browserPlanInputSchema,
   download: browserDownloadInputSchema,
   upload: browserUploadInputSchema,
   console: browserConsoleInputSchema,
@@ -1494,6 +1565,7 @@ export const browserOperationResultSchemas = {
   goForward: browserTabResultSchema,
   closeTab: browserActionResultSchema,
   finishTask: browserFinishTaskResultSchema,
+  plan: browserPlanResultSchema,
   download: browserDownloadResultSchema,
   upload: browserUploadResultSchema,
   console: browserConsoleResultSchema,

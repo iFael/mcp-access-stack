@@ -1,8 +1,8 @@
 /**
  * Popup controls for sharing the user's own tabs with MCP V3, handing a tab
- * back after a login or CAPTCHA, and task notifications. Only the user,
- * clicking in the extension popup, can do any of this; neither the bridge nor
- * a page can reach these messages.
+ * back after a login or CAPTCHA, task notifications, and requiring an approved
+ * plan before MCP acts. Only the user, clicking in the extension popup, can do
+ * any of this; neither the bridge nor a page can reach these messages.
  */
 export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
 (() => {
@@ -12,7 +12,8 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const context = document.getElementById("tab-context");
   const resume = document.getElementById("tab-resume");
   const notify = document.getElementById("tab-notify");
-  const controls = [share, unshare, context, resume, notify];
+  const requirePlan = document.getElementById("tab-require-plan");
+  const controls = [share, unshare, context, resume, notify, requirePlan];
   let tabId;
   async function call(type, extra) {
     const response = await chrome.runtime.sendMessage({ type, tabId, ...extra });
@@ -22,6 +23,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   function render(state) {
     context.checked = state.context === true;
     notify.checked = state.notify === true;
+    requirePlan.checked = state.requirePlan === true;
     share.hidden = !(state.shareable && !state.shared);
     unshare.hidden = !state.shared;
     resume.hidden = typeof state.waiting !== "string";
@@ -60,6 +62,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   unshare.addEventListener("click", () => void act("mcp-tab-unshare"));
   context.addEventListener("change", () => void act("mcp-tab-context", { enabled: context.checked }));
   notify.addEventListener("change", () => void act("mcp-tab-notify", { enabled: notify.checked }));
+  requirePlan.addEventListener("change", () => void act("mcp-tab-require-plan", { enabled: requirePlan.checked }));
   resume.addEventListener("click", () => void act("mcp-tab-resume"));
   void refresh();
 })();`;

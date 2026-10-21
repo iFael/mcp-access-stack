@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.9.0";
+export const HANDOFF_EXTENSION_VERSION = "1.10.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -27,6 +27,7 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
 <label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
 <label><input id="tab-notify" type="checkbox"> Avisar quando o MCP terminar uma tarefa</label>
+<label><input id="tab-require-plan" type="checkbox"> Pedir minha aprovação de um plano antes de o MCP agir</label>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>

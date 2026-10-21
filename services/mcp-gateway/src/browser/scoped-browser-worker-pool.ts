@@ -294,6 +294,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return result;
   }
 
+  plan(...args: Parameters<BrowserExecutor["plan"]>): ReturnType<BrowserExecutor["plan"]> {
+    return this.invoke(args[1], (client) => client.plan(...args));
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {

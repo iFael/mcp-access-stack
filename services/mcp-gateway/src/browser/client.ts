@@ -30,6 +30,7 @@ import {
   type BrowserFindInput,
   type BrowserEvaluateInput,
   type BrowserFinishTaskInput,
+  type BrowserPlanInput,
   type BrowserFrameClickInput,
   type BrowserFrameExtractInput,
   type BrowserFrameFillInput,
@@ -244,6 +245,10 @@ export class BrowserWorkerClient implements BrowserExecutor {
 
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext) {
     return this.call("finishTask", input, context);
+  }
+
+  plan(input: BrowserPlanInput, context?: OperationContext) {
+    return this.call("plan", input, context);
   }
 
   download(input: BrowserDownloadInput, context?: OperationContext) {

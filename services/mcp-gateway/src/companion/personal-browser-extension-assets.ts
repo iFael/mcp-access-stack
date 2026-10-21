@@ -1,5 +1,6 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
 import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
+import { PLAN_REVIEW_HTML, PLAN_REVIEW_SCRIPT } from "./personal-browser-plan-review-assets.js";
 import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 
 export interface PersonalBrowserExtensionAssets {
@@ -8,6 +9,8 @@ export interface PersonalBrowserExtensionAssets {
   popupHtml: string;
   popupScript: string;
   tabSharingScript: string;
+  planReviewHtml: string;
+  planReviewScript: string;
 }
 
 export function sanitizePersonalDiagnosticText(value: string, maxChars = 8_000): string {
@@ -34,6 +37,7 @@ export const PERSONAL_BROWSER_MUTATING_OPERATIONS = [
 
 export const PERSONAL_BROWSER_CAPABILITIES = [
   "tabs",
+  "plan",
   "selectTab",
   "dialog",
   "viewport",
@@ -278,6 +282,7 @@ async function runRequest(operation, input, signal, timing) {
     const started = performance.now();
     const previousSnapshot = timing?.snapshotMs ?? 0;
     await refuseDuringPersonalHandoff(operation, input);
+    await enforcePersonalPlan(operation, input);
     try { return await perform(operation, input, signal, timing); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
   };
@@ -343,6 +348,7 @@ async function perform(operation, input, signal, timing) {
     case "goForward": return goForward(input, signal);
     case "closeTab": return closeTab(input, signal);
     case "finishTask": return finishTask(input, signal);
+    case "plan": return personalPlan(input, signal);
     default: throw coded("BROWSER_CAPABILITY_UNSUPPORTED", operation + " is not supported by personal browser mode.");
   }
 }
@@ -402,12 +408,14 @@ async function personalTabContextEnabled() {
 // tab stays the user's: MCP never closes it, and finishing tasks or "Parar de
 // compartilhar" only releases it.
 async function personalTabSharingDispatch(message) {
-  if (message.type === "mcp-tab-context" || message.type === "mcp-tab-notify") {
+  if (["mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan"].includes(message.type)) {
     if (typeof message.enabled !== "boolean") throw Error("invalid");
     if (message.type === "mcp-tab-context") {
       await chrome.storage.session.set({ [PERSONAL_TAB_CONTEXT_KEY]: message.enabled });
     } else {
-      await chrome.storage.local.set({ [PERSONAL_NOTIFY_ON_FINISH_KEY]: message.enabled });
+      await chrome.storage.local.set({
+        [message.type === "mcp-tab-notify" ? PERSONAL_NOTIFY_ON_FINISH_KEY : PERSONAL_REQUIRE_PLAN_KEY]: message.enabled,
+      });
     }
   }
   if (!Number.isSafeInteger(message.tabId)) throw Error("no-tab");
@@ -433,7 +441,7 @@ async function personalTabSharingDispatch(message) {
     await releasePersonalSharedTab(tab.id);
   } else if (message.type === "mcp-tab-resume") {
     if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
-  } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify"].includes(message.type)) {
+  } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan"].includes(message.type)) {
     throw Error("unsupported");
   }
   const owned = await readOwnedTabs();
@@ -449,7 +457,7 @@ async function personalTabSharingDispatch(message) {
   const waiting = handoff && !handoff.done ? handoff.reason : undefined;
   const notify = (await chrome.storage.local.get(PERSONAL_NOTIFY_ON_FINISH_KEY).catch(() => ({})))?.[PERSONAL_NOTIFY_ON_FINISH_KEY] === true;
   return { ok: true, shared: metadata?.ownership === "user", mcp: metadata?.ownership === "mcp",
-    shareable, context: await personalTabContextEnabled(), notify,
+    shareable, context: await personalTabContextEnabled(), notify, requirePlan: await personalPlanRequired(),
     ...(waiting ? { waiting } : {}) };
 }
 
@@ -566,6 +574,279 @@ async function notifyPersonalTaskFinished(taskId, closed, released) {
       released + " devolvida(s) a você.",
     priority: 0,
   })).catch(() => undefined);
+}
+
+const PERSONAL_PLANS_KEY = "mcpV3PersonalPlans";
+const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";
+const PERSONAL_PLAN_ACTIONS = ["navigate", "interact", "fill", "upload", "download", "evaluate"];
+const PERSONAL_PLAN_CATEGORIES = {
+  open: "navigate", navigate: "navigate", goBack: "navigate", goForward: "navigate",
+  snapshot: "read", find: "read", extract: "read", frameExtract: "read", profilePage: "read", domIndex: "read",
+  screenshot: "read", console: "read", networkList: "read", networkInspect: "read", pdf: "read",
+  click: "interact", hover: "interact", drag: "interact", scroll: "interact", press: "interact",
+  frameClick: "interact", navigatePath: "interact",
+  fill: "fill", formInput: "fill", type: "fill", frameFill: "fill",
+  upload: "upload", download: "download", evaluate: "evaluate",
+};
+const PERSONAL_PLAN_STEP_CATEGORIES = {
+  navigate: "navigate", click: "interact", hover: "interact", scroll: "interact", drag: "interact", press: "interact",
+  fill: "fill", formInput: "fill", type: "fill", select: "fill",
+  wait: "read", extract: "read", index: "read", assert: "read", waitFor: "read",
+};
+let personalPlanTail = Promise.resolve();
+
+function withPersonalPlanLock(callback) {
+  const run = personalPlanTail.then(callback, callback);
+  personalPlanTail = run.catch(() => undefined);
+  return run;
+}
+
+async function readPersonalPlans() {
+  const value = await chrome.storage.session.get(PERSONAL_PLANS_KEY).catch(() => ({}));
+  const plans = value?.[PERSONAL_PLANS_KEY];
+  return plans && typeof plans === "object" ? plans : {};
+}
+
+async function writePersonalPlans(plans) {
+  await chrome.storage.session.set({ [PERSONAL_PLANS_KEY]: plans });
+}
+
+async function personalPlanRequired() {
+  const value = await chrome.storage.local.get(PERSONAL_REQUIRE_PLAN_KEY).catch(() => ({}));
+  return value?.[PERSONAL_REQUIRE_PLAN_KEY] === true;
+}
+
+function personalPlanResult(plan) {
+  const approved = plan.status === "approved";
+  return {
+    planId: plan.planId, taskId: plan.taskId, status: plan.status,
+    domains: approved ? plan.approvedDomains : plan.domains,
+    actions: approved ? plan.approvedActions : plan.actions,
+    ...(plan.tabIds.length > 0 ? { tabIds: plan.tabIds } : {}),
+    ...(plan.feedback ? { feedback: plan.feedback } : {}),
+  };
+}
+
+// Shows the plan in a Chrome window of its own and waits for the user. Only a
+// click in that window decides it; MCP can only propose or keep waiting.
+async function personalPlan(input, signal) {
+  const planId = typeof input.planId === "string" ? input.planId : await proposePersonalPlan(input);
+  const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 50000;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const plan = (await readPersonalPlans())[planId];
+    if (!plan) {
+      throw coded("EXECUTION_NOT_FOUND", "Plan " + planId +
+        " no longer exists: its task finished or Chrome restarted. Propose a new plan with browser_plan.");
+    }
+    if (plan.status !== "pending" || Date.now() >= deadline) return personalPlanResult(plan);
+    await delay(Math.min(250, Math.max(1, deadline - Date.now())), signal);
+  }
+}
+
+async function proposePersonalPlan(input) {
+  const domains = [...new Set(input.domains.map((domain) => String(domain).trim().toLowerCase().replace(/\\.$/u, "")))];
+  const actions = PERSONAL_PLAN_ACTIONS.filter((action) => input.actions.includes(action));
+  const tabIds = Array.isArray(input.tabIds) ? input.tabIds : [];
+  const tabs = [];
+  for (const tabId of tabIds) {
+    const chromeTabId = chromeTabIdFrom(tabId);
+    await requireOwnedMetadata(chromeTabId);
+    const tab = await chrome.tabs.get(chromeTabId);
+    tabs.push(String(tab.title || new URL(tab.url).hostname).slice(0, 120));
+  }
+  const planId = "plan_" + crypto.randomUUID();
+  const now = Date.now();
+  const superseded = await withPersonalPlanLock(async () => {
+    const plans = await readPersonalPlans();
+    const replaced = [];
+    for (const plan of Object.values(plans)) {
+      if (plan.status === "pending" && plan.taskId === input.taskId) {
+        plan.status = "superseded";
+        plan.decidedAt = now;
+        replaced.push(plan);
+      } else if (plan.status !== "pending" && plan.status !== "approved" && now - (plan.decidedAt ?? 0) > 1800000) {
+        delete plans[plan.planId];
+      }
+    }
+    plans[planId] = {
+      planId, taskId: input.taskId, summary: String(input.summary).slice(0, 500),
+      steps: input.steps.map((step) => String(step).slice(0, 200)).slice(0, 20),
+      domains, actions, tabIds, tabs, status: "pending", createdAt: now,
+    };
+    await writePersonalPlans(plans);
+    return replaced;
+  });
+  for (const plan of superseded) await settlePersonalPlanSignals(plan, true);
+  let window;
+  try {
+    window = await chrome.windows.create({
+      url: chrome.runtime.getURL("plan-review.html#" + planId), type: "popup", width: 480, height: 840, focused: true,
+    });
+  } catch {
+    await clearPersonalPlans(input.taskId, planId);
+    throw coded("EXECUTION_STATE_INVALID", "Chrome could not open the plan window for the user.");
+  }
+  await withPersonalPlanLock(async () => {
+    const plans = await readPersonalPlans();
+    if (!plans[planId]) return;
+    plans[planId].windowId = window.id;
+    await writePersonalPlans(plans);
+  });
+  await Promise.resolve(chrome.notifications?.create?.("mcp-plan:" + planId, {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP propõe um plano",
+    message: String(input.summary).slice(0, 160) + " Sites: " + domains.join(", ").slice(0, 120),
+    requireInteraction: true, priority: 2,
+  })).catch(() => undefined);
+  return planId;
+}
+
+// Called only from the plan window. The user may approve a subset of the sites
+// and actions; a newly approved plan replaces the task's previous one.
+async function decidePersonalPlan(message) {
+  if (typeof message.planId !== "string" || typeof message.approve !== "boolean") throw Error("invalid");
+  const decided = await withPersonalPlanLock(async () => {
+    const plans = await readPersonalPlans();
+    const plan = plans[message.planId];
+    if (!plan || plan.status !== "pending") throw Error("not-pending");
+    const feedback = typeof message.feedback === "string" ? message.feedback.trim().slice(0, 500) : "";
+    if (message.approve) {
+      const domains = plan.domains.filter((domain) => Array.isArray(message.domains) && message.domains.includes(domain));
+      const actions = plan.actions.filter((action) => Array.isArray(message.actions) && message.actions.includes(action));
+      if (domains.length === 0) throw Error("no-domains");
+      for (const other of Object.values(plans)) {
+        if (other.taskId === plan.taskId && other.status === "approved") other.status = "superseded";
+      }
+      Object.assign(plan, { status: "approved", approvedDomains: domains, approvedActions: actions });
+    } else {
+      plan.status = "rejected";
+    }
+    if (feedback) plan.feedback = feedback;
+    plan.decidedAt = Date.now();
+    await writePersonalPlans(plans);
+    return plan;
+  });
+  await settlePersonalPlanSignals(decided, false);
+  return { ok: true, status: decided.status };
+}
+
+async function personalPlanReviewDispatch(message) {
+  if (message.type === "mcp-plan-decide") return decidePersonalPlan(message);
+  if (message.type !== "mcp-plan-get") throw Error("unsupported");
+  const plan = (await readPersonalPlans())[message.planId];
+  if (!plan) throw Error("missing");
+  return { ok: true, plan: { planId: plan.planId, taskId: plan.taskId, summary: plan.summary, steps: plan.steps,
+    domains: plan.domains, actions: plan.actions, tabs: plan.tabs, status: plan.status } };
+}
+
+// Closing the window without a decision rejects the plan.
+async function rejectPersonalPlanWindow(windowId) {
+  const closed = await withPersonalPlanLock(async () => {
+    const plans = await readPersonalPlans();
+    const plan = Object.values(plans).find((candidate) => candidate.windowId === windowId && candidate.status === "pending");
+    if (!plan) return undefined;
+    Object.assign(plan, { status: "rejected", feedback: "The user closed the plan window without approving it.",
+      decidedAt: Date.now() });
+    await writePersonalPlans(plans);
+    return plan;
+  });
+  if (closed) await settlePersonalPlanSignals(closed, false);
+}
+
+async function settlePersonalPlanSignals(plan, closeWindow) {
+  await Promise.resolve(chrome.notifications?.clear?.("mcp-plan:" + plan.planId)).catch(() => undefined);
+  if (closeWindow && Number.isInteger(plan.windowId)) await chrome.windows.remove(plan.windowId).catch(() => undefined);
+}
+
+// Plans end with their task; without a taskId, with every task.
+async function clearPersonalPlans(taskId, onlyPlanId) {
+  const removed = await withPersonalPlanLock(async () => {
+    const plans = await readPersonalPlans();
+    const matches = Object.values(plans).filter((plan) => onlyPlanId ? plan.planId === onlyPlanId
+      : taskId === undefined || plan.taskId === taskId);
+    if (matches.length === 0) return matches;
+    for (const plan of matches) delete plans[plan.planId];
+    await writePersonalPlans(plans);
+    return matches;
+  });
+  for (const plan of removed) if (plan.status === "pending") await settlePersonalPlanSignals(plan, true);
+}
+
+function personalPlanNeeds(operation, input) {
+  if (operation === "dialog") return input?.action === "respond" ? ["interact"] : [];
+  if (operation === "sequence" || operation === "frameSequence") {
+    const steps = Array.isArray(input?.steps) ? input.steps : [];
+    return [...new Set(["read", ...steps.map((step) => PERSONAL_PLAN_STEP_CATEGORIES[step?.action] ?? "interact")])];
+  }
+  const category = PERSONAL_PLAN_CATEGORIES[operation];
+  return category ? [category] : [];
+}
+
+function personalPlanAllowsUrl(plan, url) {
+  if (url === "about:blank") return true;
+  let host;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    host = parsed.hostname.toLowerCase().replace(/\\.$/u, "");
+  } catch {
+    return false;
+  }
+  return plan.approvedDomains.some((domain) => host === domain || host.endsWith("." + domain));
+}
+
+// An approved plan bounds what MCP does for its task: only its sites, only its
+// actions. With "Pedir um plano" on in the popup, nothing runs without one.
+async function enforcePersonalPlan(operation, input) {
+  const needs = personalPlanNeeds(operation, input);
+  if (needs.length === 0) return;
+  const approved = Object.values(await readPersonalPlans()).filter((plan) => plan.status === "approved");
+  if (approved.length === 0 && !(await personalPlanRequired())) return;
+  let plan;
+  let chromeTabId;
+  if (operation === "open") {
+    plan = typeof input?.taskId === "string" ? approved.find((candidate) => candidate.taskId === input.taskId) : undefined;
+  } else {
+    try {
+      chromeTabId = chromeTabIdFrom(input?.tabId);
+    } catch {
+      return;
+    }
+    const metadata = (await readOwnedTabs())[String(chromeTabId)];
+    plan = approved
+      .filter((candidate) => (typeof metadata?.taskId === "string" && candidate.taskId === metadata.taskId) ||
+        candidate.tabIds.includes(input.tabId))
+      .sort((left, right) => right.decidedAt - left.decidedAt)[0];
+  }
+  if (!plan) {
+    if (!(await personalPlanRequired())) return;
+    throw coded("ACTION_BLOCKED_BY_POLICY", "The user requires an approved plan before MCP acts in Chrome. " +
+      "Call browser_plan with the task's taskId, steps, sites and actions first" +
+      (operation === "open" ? ", then open its tabs with that taskId." : "; list a shared tab in tabIds."));
+  }
+  const missing = needs.filter((need) => need !== "read" && !plan.approvedActions.includes(need));
+  if (missing.length > 0) {
+    throw coded("ACTION_BLOCKED_BY_POLICY", "The approved plan " + plan.planId + " does not allow " +
+      missing.join(", ") + ". Call browser_plan with a new plan to ask the user.");
+  }
+  const targets = [];
+  if ((operation === "open" || operation === "navigate") && typeof input.url === "string") targets.push(input.url);
+  if (operation === "sequence" && Array.isArray(input.steps)) {
+    for (const step of input.steps) if (step?.action === "navigate" && typeof step.url === "string") targets.push(step.url);
+  }
+  if (!["open", "navigate", "goBack", "goForward"].includes(operation)) {
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (typeof tab?.url === "string") targets.push(tab.url);
+  }
+  for (const url of targets) {
+    if (personalPlanAllowsUrl(plan, url)) continue;
+    let host = String(url).slice(0, 200);
+    try {
+      host = new URL(url).hostname || host;
+    } catch {}
+    throw coded("ACTION_BLOCKED_BY_POLICY", host + " is outside the sites approved in plan " + plan.planId + " (" +
+      plan.approvedDomains.join(", ") + "). Call browser_plan with a new plan to ask the user.");
+  }
 }
 
 async function finalizePersonalDialog(chromeTabId, dismiss) {
@@ -4484,6 +4765,7 @@ async function finishTask(input) {
     for (const target of targets) await clearPersonalHandoff(target.chromeTabId);
     for (const target of targets) if (target.shared) await setPersonalSharedBadge(target.chromeTabId, false);
     await notifyPersonalTaskFinished(input.taskId, 0, targets.length);
+    await clearPersonalPlans(input.taskId);
     await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const target of targets) delete owned[String(target.chromeTabId)];
@@ -4515,6 +4797,7 @@ async function finishTask(input) {
   });
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
   await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
+  await clearPersonalPlans(input.taskId);
   return {
     completed: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -5089,6 +5372,19 @@ if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.run
   return true;
 });
 
+if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (typeof message?.type !== "string" || !message.type.startsWith("mcp-plan-")) return false;
+  // Only the plan window the extension opened, never a page, the bridge or another extension.
+  if (sender.id !== chrome.runtime.id ||
+      String(sender.url).split("#")[0] !== chrome.runtime.getURL("plan-review.html")) return false;
+  void personalPlanReviewDispatch(message).then(
+    (result) => reply(result),
+    () => reply({ ok: false, code: "refused" }),
+  );
+  return true;
+});
+chrome.windows?.onRemoved?.addListener((windowId) => void rejectPersonalPlanWindow(windowId));
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   personalViewportSessions.delete(String(tabId));
   void removeOwnedTab(tabId);
@@ -5101,6 +5397,13 @@ chrome.notifications?.onButtonClicked?.addListener((id) => {
   if (match) void resumePersonalHandoff(Number(match[1]));
 });
 chrome.notifications?.onClicked?.addListener((id) => {
+  if (id.startsWith("mcp-plan:")) {
+    void readPersonalPlans().then((plans) => {
+      const windowId = plans[id.slice("mcp-plan:".length)]?.windowId;
+      return Number.isInteger(windowId) ? chrome.windows.update(windowId, { focused: true }) : undefined;
+    }).catch(() => undefined);
+    return;
+  }
   const match = /^mcp-handoff:(\\d+)$/u.exec(id);
   if (!match) return;
   void chrome.tabs.update(Number(match[1]), { active: true })
@@ -5134,5 +5437,5 @@ connect();
 `;
 
   return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
-    tabSharingScript: TAB_SHARING_POPUP_SCRIPT };
+    tabSharingScript: TAB_SHARING_POPUP_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT };
 }

@@ -292,6 +292,17 @@ export class BrowserModeRouter implements BrowserExecutor {
     return result;
   }
 
+  async plan(...args: Parameters<BrowserExecutor["plan"]>): ReturnType<BrowserExecutor["plan"]> {
+    const [input] = args;
+    if (input.taskId && this.taskModes.get(input.taskId) === "managed") {
+      throw new AppError(
+        "BROWSER_OPERATION_MODE_UNSUPPORTED",
+        `Browser task ${input.taskId} runs in managed mode; plans are approved only in personal Chrome.`,
+      );
+    }
+    return this.requirePersonal().plan(...args);
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
