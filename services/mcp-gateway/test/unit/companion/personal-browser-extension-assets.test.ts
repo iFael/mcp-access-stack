@@ -410,6 +410,7 @@ describe("personal browser extension assets", () => {
       "#salvar": { label: "Salvar", role: "input:submit", submitLike: true },
     };
     const probed: string[] = [];
+    const order: string[] = [];
     let changedLabel = false;
     let selected = false;
     const context = vm.createContext({
@@ -420,6 +421,8 @@ describe("personal browser extension assets", () => {
       inspectPersonalFrameGraph: async () => graph,
       domIndex: async () => ({ items: [] }),
       attachGuardedDebugger: async () => true, detachGuardedDebugger: async () => undefined,
+      // Geometry is measured only after the fresh attach's infobar settles.
+      settlePersonalViewport: async () => { order.push("settle"); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       parseChromeKey: (key: string) => ({ key, code: key, keyCode: 13, modifiers: 0 }),
       chrome: {
@@ -446,6 +449,7 @@ describe("personal browser extension assets", () => {
         }) => {
           const [frameId] = target.frameIds;
           if (func.name === "probePersonalChildFramePoint") {
+            order.push("map");
             const childInfo = args[1] as { name: string };
             return [{ frameId, documentId: frameId === 0 ? "d0" : "d4",
               result: { x: frameId === 0 ? 300 : 100 + (childInfo.name === "b" ? 10 : 0),
@@ -507,6 +511,8 @@ describe("personal browser extension assets", () => {
     expect(commands.filter((c) => c.params.key === "ArrowDown")).toHaveLength(4);
     expect(commands.filter((c) => c.params.key === "Enter")).toHaveLength(4);
     expect(listeners.begin.size + listeners.end.size).toBe(0);
+    expect(order.filter((entry, index) => entry === "settle" && order[index + 1] === "map")).toHaveLength(3);
+    expect(order[0]).toBe("settle");
   });
 
   it("walks legacy menu paths with trusted clicks, keeps expanded levels and refuses unconfirmed submits", async () => {

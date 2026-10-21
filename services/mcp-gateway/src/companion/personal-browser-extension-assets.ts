@@ -2826,43 +2826,60 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
   const enter = step.action === "press" && personalLegacyEnter(step.key);
   const keys = step.action === "press" ? String(step.key).trim().split(/\\s+/u).map(parseChromeKey) : [];
   if (keys.length > 100) throw coded("LIMIT_EXCEEDED", "Chrome key sequence exceeds 100 inputs.");
-  const resolved = step.action !== "press" || step.locator
-    ? await probePersonalLegacyTarget(input, chromeTabId, step, false,
-      Math.min(deadline, Date.now() + 10000), signal, started)
-    : undefined;
-  const observed = resolved?.observed;
-  if (step.action === "click" || enter) {
-    const target = observed?.target ?? { label: "keyboard:Enter", role: "keyboard", submitLike: true };
-    if (!expected || expected.label !== target.label || expected.role !== target.role ||
-        expected.submitLike !== target.submitLike) {
-      throw coded("BROWSER_CONFIRMATION_INVALID", "The legacy target of step " + index + " changed after preflight.");
-    }
-  }
-  const point = resolved
-    ? await resolvePersonalFramePoint(chromeTabId, resolved.graph, resolved.frame, observed.point,
-      observed.viewport, signal)
-    : undefined;
-  // Input routed into an out-of-process frame is acknowledged before that
-  // renderer applies it, so focus/value checks poll briefly before failing.
-  const verify = async (mode, value) => {
-    for (let attempt = 0; ; attempt += 1) {
-      const [check] = await chrome.scripting.executeScript({
-        target: { tabId: chromeTabId, frameIds: [resolved.frame.frameId] },
-        func: verifyPersonalLegacyActionTarget, args: [resolved.frame.url, mode, value ?? null],
-      });
-      if (!check || check.frameId !== resolved.frame.frameId ||
-          (resolved.frame.documentId && check.documentId !== resolved.frame.documentId)) return false;
-      if (check.result === true) return true;
-      if (attempt >= 10 || mode === "scriptFocus") return false;
-      await delay(50, signal);
-    }
+  const debuggee = { tabId: chromeTabId };
+  let attached = false;
+  let holding = false;
+  let watcher;
+  const release = async () => {
+    if (!holding) return;
+    holding = false;
+    await detachGuardedDebugger(debuggee, attached).catch(() => undefined);
   };
-  const watcher = watchPersonalFrameNavigations(chromeTabId);
   try {
-    const debuggee = { tabId: chromeTabId };
-    let attached = false;
     try {
+      // A fresh attach shows Chrome's debugging infobar, which shrinks the page and
+      // every frameset row; geometry is measured only once that settles, or native
+      // input would land on stale coordinates.
       attached = await attachGuardedDebugger(debuggee);
+      holding = true;
+      if (attached) await settlePersonalViewport(debuggee, signal);
+    } catch (error) {
+      if (error?.code) throw error;
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
+    }
+    const resolved = step.action !== "press" || step.locator
+      ? await probePersonalLegacyTarget(input, chromeTabId, step, false,
+        Math.min(deadline, Date.now() + 10000), signal, started)
+      : undefined;
+    const observed = resolved?.observed;
+    if (step.action === "click" || enter) {
+      const target = observed?.target ?? { label: "keyboard:Enter", role: "keyboard", submitLike: true };
+      if (!expected || expected.label !== target.label || expected.role !== target.role ||
+          expected.submitLike !== target.submitLike) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The legacy target of step " + index + " changed after preflight.");
+      }
+    }
+    const point = resolved
+      ? await resolvePersonalFramePoint(chromeTabId, resolved.graph, resolved.frame, observed.point,
+        observed.viewport, signal)
+      : undefined;
+    // Input routed into an out-of-process frame is acknowledged before that
+    // renderer applies it, so focus/value checks poll briefly before failing.
+    const verify = async (mode, value) => {
+      for (let attempt = 0; ; attempt += 1) {
+        const [check] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId, frameIds: [resolved.frame.frameId] },
+          func: verifyPersonalLegacyActionTarget, args: [resolved.frame.url, mode, value ?? null],
+        });
+        if (!check || check.frameId !== resolved.frame.frameId ||
+            (resolved.frame.documentId && check.documentId !== resolved.frame.documentId)) return false;
+        if (check.result === true) return true;
+        if (attempt >= 10 || mode === "scriptFocus") return false;
+        await delay(50, signal);
+      }
+    };
+    watcher = watchPersonalFrameNavigations(chromeTabId);
+    try {
       throwIfAborted(signal, "frameSequence", started);
       const current = await chrome.tabs.get(chromeTabId);
       if (current.url !== input.guard.url) {
@@ -2925,12 +2942,13 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
       if (error?.code) throw error;
       throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
     } finally {
-      await detachGuardedDebugger(debuggee, attached).catch(() => undefined);
+      await release();
     }
     // Text entry rarely navigates; other actions get a short window to start one.
     await watcher.settle(deadline, signal, step.action === "fill" ? 0 : 400);
   } finally {
-    watcher.dispose();
+    await release();
+    watcher?.dispose();
   }
   return { index, action: step.action, completed: true, strategy: "chrome-frame-native-input" };
 }
