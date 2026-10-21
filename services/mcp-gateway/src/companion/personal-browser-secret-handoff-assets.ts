@@ -27,7 +27,7 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <button id="tab-share" type="button" hidden>Compartilhar esta aba com o MCP</button>
 <button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
 <p id="tab-approval" class="warning" hidden></p>
-<button id="tab-approve" type="button" hidden>Permitir por 30 min neste site</button>
+<button id="tab-approve" type="button" hidden>Permitir neste site</button>
 <p id="tab-grants" hidden></p>
 <button id="tab-revoke" type="button" hidden>Revogar as permissões deste site</button>
 <label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>

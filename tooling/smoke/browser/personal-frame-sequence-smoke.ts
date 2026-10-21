@@ -511,8 +511,9 @@ async function main(): Promise<void> {
     }
 
     // A refused script asks Chrome for a site approval; once the user allows it in
-    // the popup, scripts on that site run for the task without a confirmation, and
-    // automatic approval covers a host the user listed. Both end as the user says.
+    // the popup, scripts on that site run until the task ends (or, in a shared tab,
+    // while it stays shared) without a confirmation, and automatic approval covers a
+    // host the user listed. Both end as the user says.
     const popupTab = (type: string, chromeTabId: number, extra: Record<string, unknown> = {}) => popup.evaluate(
       `chrome.runtime.sendMessage(${JSON.stringify({ type, tabId: chromeTabId, ...extra })})`) as Promise<Record<string, unknown>>;
     const until = async <T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
@@ -547,12 +548,32 @@ async function main(): Promise<void> {
     await bridge.snapshot({ tabId: nextTab });
     const afterTask = await bridge.evaluate({ ...title, tabId: nextTab }).then(() => "allowed", errorCode);
     await bridge.finishTask({ taskId: approvalTask });
+    const userChromeId = Number(shared.tabId.slice("personal:".length));
+    await popupTab("mcp-tab-share", userChromeId);
+    await bridge.snapshot({ tabId: shared.tabId });
+    const sharedTitle = { tabId: shared.tabId, function: "() => document.title" };
+    const sharedFirst = await bridge.evaluate(sharedTitle).then(() => "allowed", errorCode);
+    await until(() => popupTab("mcp-tab-status", userChromeId), (state) => state.approval === "execute-script");
+    const sharedApproved = await popupTab("mcp-tab-approve", userChromeId);
+    const sharedGranted = await until(() => bridge.evaluate(sharedTitle).then((result) => result.value, errorCode),
+      (value) => value === "Minha aba");
+    await popupTab("mcp-tab-unshare", userChromeId);
+    await popupTab("mcp-tab-share", userChromeId);
+    await bridge.snapshot({ tabId: shared.tabId });
+    const reshared = await until(() => bridge.evaluate(sharedTitle).then(() => "allowed", errorCode),
+      (value) => value === "ACTION_REQUIRES_CONFIRMATION");
+    await popupTab("mcp-tab-unshare", userChromeId);
     report("site approvals", { firstScript, asked: asked.approval, approvedState: approvedState.grants, granted,
-      beforeAuto, autoSites: autoState.autoSites, automatic, afterTask });
+      beforeAuto, autoSites: autoState.autoSites, automatic, afterTask,
+      sharedFirst, sharedApproved: sharedApproved.grants, sharedGranted, reshared });
     if (firstScript !== "ACTION_REQUIRES_CONFIRMATION+siteApproval" || asked.approval !== "execute-script" ||
-        !Array.isArray(approvedState.grants) || approvedState.grants.length !== 1 || granted !== "Minha aba" ||
+        JSON.stringify(approvedState.grants) !== '[{"category":"execute-script","until":"task"}]' ||
+        granted !== "Minha aba" ||
         beforeAuto !== "ACTION_REQUIRES_CONFIRMATION" || JSON.stringify(autoState.autoSites) !== '["plain-site.test"]' ||
-        automatic !== "Plain" || afterTask !== "ACTION_REQUIRES_CONFIRMATION") {
+        automatic !== "Plain" || afterTask !== "ACTION_REQUIRES_CONFIRMATION" ||
+        sharedFirst !== "ACTION_REQUIRES_CONFIRMATION" ||
+        JSON.stringify(sharedApproved.grants) !== '[{"category":"execute-script","until":"tab"}]' ||
+        sharedGranted !== "Minha aba" || reshared !== "ACTION_REQUIRES_CONFIRMATION") {
       throw new Error("Site approvals did not follow what the user allowed in Chrome.");
     }
 

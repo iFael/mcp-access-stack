@@ -35,12 +35,15 @@ export interface PersonalActionGuard {
 }
 
 /**
- * Approvals the user gave in Chrome: a category on one origin for 30 minutes
- * (and no longer than its task), or every approvable category on a host the
- * user listed for automatic approval. Only the extension reports them.
+ * Approvals the user gave in Chrome: a category on one origin until its task
+ * ends (or, for a tab without a task, while that tab stays with MCP), or every
+ * approvable category on a host the user listed for automatic approval. Only
+ * the extension reports them.
  */
+export type PersonalSiteGrant = { origin: string; category: string } & ({ taskId: string } | { tabId: string });
+
 export interface PersonalSiteApprovals {
-  grants: ReadonlyArray<{ origin: string; category: string; taskId?: string; expiresAt: number }>;
+  grants: readonly PersonalSiteGrant[];
   autoSites: readonly string[];
 }
 
@@ -451,9 +454,8 @@ export class PersonalBrowserActionPolicy {
     const approvals = this.siteApprovals;
     if (!approvals || !this.siteApprovable(binding)) return false;
     const taskId = this.pages.get(binding.tabId)?.taskId;
-    const now = Date.now();
     if (approvals.grants.some((grant) => grant.origin === binding.origin && grant.category === binding.category &&
-        grant.expiresAt > now && (grant.taskId === undefined || grant.taskId === taskId))) return true;
+        ("taskId" in grant ? grant.taskId === taskId : grant.tabId === binding.tabId))) return true;
     return approvals.autoSites.includes(new URL(binding.origin).hostname);
   }
 
@@ -473,8 +475,8 @@ export class PersonalBrowserActionPolicy {
       `Confirmation required: ${JSON.stringify({
         ...confirmation, category: binding.category, action: binding.action, target: binding.target,
         ...(siteApprovable ? {
-          siteApproval: `Alternatively the user can allow ${binding.category} on ${binding.origin} for 30 minutes ` +
-            "from the MCP V3 notification or popup in Chrome; then retry without confirmationId.",
+          siteApproval: `Alternatively the user can allow ${binding.category} on ${binding.origin} until the task ` +
+            "ends from the MCP V3 notification or popup in Chrome; then retry without confirmationId.",
         } : {}),
       })}`,
     );

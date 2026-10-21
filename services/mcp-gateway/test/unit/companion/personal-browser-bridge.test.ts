@@ -586,11 +586,24 @@ describe("PersonalBrowserBridge", () => {
         type: "site-approval-request", tabId, origin: "https://example.com", category: "execute-script",
       });
       extension.on("message", respond);
-      // A report granting a category that is never approvable per site is ignored as a whole.
+      // A report granting a category that is never approvable per site, or a grant bound to
+      // no task and no tab (or to both), is ignored as a whole.
+      for (const invalid of [
+        { origin: "https://example.com", category: "delete-or-cancel", tabId },
+        { origin: "https://example.com", category: "execute-script" },
+        { origin: "https://example.com", category: "execute-script", tabId, taskId: "t1" },
+      ]) {
+        extension.send(JSON.stringify({ type: "site-approvals", autoSites: [], grants: [
+          { origin: "https://example.com", category: "execute-script", tabId }, invalid,
+        ] }));
+        await settle();
+        await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      }
       extension.send(JSON.stringify({ type: "site-approvals", autoSites: [], grants: [
-        { origin: "https://example.com", category: "execute-script", expiresAt: Date.now() + 60_000 },
-        { origin: "https://example.com", category: "delete-or-cancel", expiresAt: Date.now() + 60_000 },
-      ] }));
+        { origin: "https://example.com", category: "execute-script", tabId }] }));
+      await settle();
+      await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Example" });
+      extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: [] }));
       await settle();
       await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
       extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: ["example.com"] }));

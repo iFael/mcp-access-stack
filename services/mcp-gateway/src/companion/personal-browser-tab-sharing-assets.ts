@@ -41,8 +41,8 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     approval.textContent = state.approval ? "O MCP pediu permissão para " + LABELS[state.approval] + " neste site." : "";
     const granted = Array.isArray(state.grants) ? state.grants : [];
     grants.hidden = revoke.hidden = granted.length === 0;
-    grants.textContent = "Liberado neste site: " + granted.map((grant) => LABELS[grant.category] + " até " +
-      new Date(grant.expiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })).join("; ") + ".";
+    grants.textContent = "Liberado neste site: " + granted.map((grant) => LABELS[grant.category] +
+      (grant.until === "task" ? " até o fim da tarefa" : " enquanto a aba estiver com o MCP")).join("; ") + ".";
     autoRow.hidden = state.autoEligible !== true;
     auto.checked = state.auto === true;
     const sites = Array.isArray(state.autoSites) ? state.autoSites : [];

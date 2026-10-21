@@ -38,6 +38,7 @@ import {
   type PersonalLegacyFrameTarget,
   type PersonalSiteApprovalRequest,
   type PersonalSiteApprovals,
+  type PersonalSiteGrant,
 } from "./personal-browser-action-policy.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 
@@ -1476,17 +1477,23 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
 function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
   const { grants, autoSites } = message;
   if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200) return undefined;
-  const parsedGrants: Array<PersonalSiteApprovals["grants"][number]> = [];
+  const parsedGrants: PersonalSiteGrant[] = [];
   for (const grant of grants) {
     if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
         typeof grant.category !== "string" ||
-        !PERSONAL_SITE_APPROVABLE_CATEGORIES.has(grant.category as BrowserConfirmationCategory) ||
-        typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt) ||
-        (grant.taskId !== undefined && (typeof grant.taskId !== "string" || grant.taskId.length < 1 || grant.taskId.length > 128))) {
+        !PERSONAL_SITE_APPROVABLE_CATEGORIES.has(grant.category as BrowserConfirmationCategory)) {
       return undefined;
     }
-    parsedGrants.push({ origin: grant.origin, category: grant.category, expiresAt: grant.expiresAt,
-      ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : {}) });
+    // Each grant belongs to exactly one task, or to one tab that has none.
+    if (grant.taskId !== undefined && grant.tabId === undefined && typeof grant.taskId === "string" &&
+        grant.taskId.length >= 1 && grant.taskId.length <= 128) {
+      parsedGrants.push({ origin: grant.origin, category: grant.category, taskId: grant.taskId });
+    } else if (grant.tabId !== undefined && grant.taskId === undefined && typeof grant.tabId === "string" &&
+        /^personal:\d{1,12}$/u.test(grant.tabId)) {
+      parsedGrants.push({ origin: grant.origin, category: grant.category, tabId: grant.tabId });
+    } else {
+      return undefined;
+    }
   }
   if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
   return { grants: parsedGrants, autoSites: [...autoSites] as string[] };

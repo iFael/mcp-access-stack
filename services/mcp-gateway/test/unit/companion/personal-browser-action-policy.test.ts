@@ -236,25 +236,24 @@ describe("personal browser authorization", () => {
     };
     const upload = { tabId: sample.tabId, selector: "input[type=file]", files: [{ name: "a.txt", contentBase64: "aGVsbG8=" }] };
     const script = { tabId: sample.tabId, function: "() => document.title" };
-    const now = Date.now();
-    const grant = { origin: "https://example.com", category: "upload-file", taskId: "task-1", expiresAt: now + 60_000 };
+    const grant = { origin: "https://example.com", category: "upload-file", taskId: "task-1" };
 
     // Without an approval, Chrome is asked to offer one and the caller learns how it works.
     expect(message(() => policy.guardUpload(upload)))
-      .toContain('"siteApproval":"Alternatively the user can allow upload-file on https://example.com for 30 minutes');
+      .toContain('"siteApproval":"Alternatively the user can allow upload-file on https://example.com until the task ends');
     expect(requests).toEqual([{ tabId: sample.tabId, origin: "https://example.com", category: "upload-file" }]);
 
-    // A grant covers its origin, category and task until it expires.
+    // A grant covers its origin, category and task, or its one tab when it has no task. It has no time limit.
     policy.setSiteApprovals({ grants: [grant], autoSites: [] });
     expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
     expect(outcome(() => policy.guardEvaluate(script))).toBe("ACTION_REQUIRES_CONFIRMATION");
-    for (const other of [{ ...grant, taskId: "task-2" }, { ...grant, expiresAt: now - 1 },
+    const tabGrant = { origin: grant.origin, category: grant.category, tabId: sample.tabId };
+    for (const other of [{ ...grant, taskId: "task-2" }, { ...tabGrant, tabId: "personal:8" },
       { ...grant, origin: "https://other.example" }, { ...grant, origin: "http://example.com" }]) {
       policy.setSiteApprovals({ grants: [other], autoSites: [] });
       expect(outcome(() => policy.guardUpload(upload))).toBe("ACTION_REQUIRES_CONFIRMATION");
     }
-    const { taskId: _taskId, ...anyTask } = grant;
-    policy.setSiteApprovals({ grants: [anyTask], autoSites: [] });
+    policy.setSiteApprovals({ grants: [tabGrant], autoSites: [] });
     expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
 
     // Automatic approval covers the listed host for forms, uploads and scripts only.

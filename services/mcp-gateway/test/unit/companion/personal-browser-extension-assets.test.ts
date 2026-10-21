@@ -2721,6 +2721,7 @@ describe("personal browser extension assets", () => {
       taskGroups: new Map(),
       clearPersonalPlans: async () => undefined,
       clearPersonalTaskApprovals: async () => undefined,
+      clearPersonalTabApprovals: async () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
         tabs: {
@@ -3197,6 +3198,7 @@ describe("personal browser extension assets", () => {
     const grant = vm.runInContext("grantPersonalSiteApproval", context) as (chromeTabId: number) => Promise<boolean>;
     const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
       (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
+    const clearTab = vm.runInContext("clearPersonalTabApprovals", context) as (chromeTabId: number) => Promise<void>;
     const dispatch = vm.runInContext("personalTabSharingDispatch", context) as
       (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
     const ask = (tabId: string, origin: string, category = "upload-file") =>
@@ -3209,8 +3211,8 @@ describe("personal browser extension assets", () => {
     expect(notifications).toEqual([]);
     await ask("personal:7", "https://shop.example");
     expect(notifications).toEqual([["create", "mcp-approval:7", expect.objectContaining({
-      title: "O MCP pede permissão em shop.example", buttons: [{ title: "Permitir por 30 min" }], requireInteraction: true,
-      message: "Enviar arquivos. Permitir libera isso neste site por 30 minutos, no máximo até a tarefa acabar.",
+      title: "O MCP pede permissão em shop.example", buttons: [{ title: "Permitir neste site" }], requireInteraction: true,
+      message: "Enviar arquivos. Permitir libera isso neste site até o fim da tarefa.",
     })]]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
       approval: "upload-file", grants: [], auto: false, autoEligible: true });
@@ -3221,30 +3223,56 @@ describe("personal browser extension assets", () => {
     expect(sent).toEqual([]);
     urls[7] = "https://shop.example/cart";
     await ask("personal:7", "https://shop.example");
-    const before = Date.now();
     await expect(grant(7)).resolves.toBe(true);
-    const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown> & { expiresAt: number }>; autoSites: string[] };
+    const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown>>; autoSites: string[] };
     expect(report).toEqual({ type: "site-approvals", autoSites: [],
-      grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1", expiresAt: expect.any(Number) }] });
-    expect(report.grants[0]!.expiresAt - before).toBeGreaterThanOrEqual(30 * 60 * 1000);
-    expect(report.grants[0]!.expiresAt - before).toBeLessThan(30 * 60 * 1000 + 5_000);
+      grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1" }] });
+    // No time limit: the grant is held until its task ends.
+    expect(session.get("mcpV3SiteGrants")).toEqual([{ origin: "https://shop.example", category: "upload-file",
+      tabId: "personal:7", taskId: "t1", grantedAt: expect.any(Number) }]);
     expect(notifications.at(-1)).toEqual(["clear", "mcp-approval:7"]);
     await expect(grant(7)).resolves.toBe(false);
     await expect(dispatch({ type: "mcp-tab-approve", tabId: 7 })).rejects.toThrow("not-requested");
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
+      grants: [{ category: "upload-file", until: "task" }] });
 
-    // A shared tab's grant lasts only its 30 minutes; the popup can grant, show and revoke.
+    // A shared tab has no task: its grant is bound to that tab, granted from the popup.
     await ask("personal:8", "https://docs.example", "execute-script");
+    expect(notifications.at(-1)).toEqual(["create", "mcp-approval:8", expect.objectContaining({
+      message: "Executar JavaScript. Permitir libera isso neste site enquanto esta aba estiver com o MCP." })]);
     await expect(dispatch({ type: "mcp-tab-approve", tabId: 8 })).resolves.toMatchObject({
-      grants: [{ category: "execute-script", expiresAt: expect.any(Number) }] });
+      grants: [{ category: "execute-script", until: "tab" }] });
     expect(session.has("mcpV3ApprovalRequest:8")).toBe(false);
+    expect((sent.at(-1) as typeof report).grants).toEqual([
+      { origin: "https://shop.example", category: "upload-file", taskId: "t1" },
+      { origin: "https://docs.example", category: "execute-script", tabId: "personal:8" }]);
 
-    // Finishing the task ends its grants and pending requests, but not time-only ones.
+    // Finishing the task ends its grants and pending requests, but not those of a tab outside it.
     await ask("personal:7", "https://shop.example", "submit-form");
     await clearTask("t1", [7]);
     expect(session.has("mcpV3ApprovalRequest:7")).toBe(false);
     expect((sent.at(-1) as typeof report).grants).toEqual([
-      { origin: "https://docs.example", category: "execute-script", expiresAt: expect.any(Number) }]);
+      { origin: "https://docs.example", category: "execute-script", tabId: "personal:8" }]);
+    // Releasing or closing that tab ends its grant; the user can also revoke from the popup.
+    await clearTab(8);
+    expect((sent.at(-1) as typeof report).grants).toEqual([]);
+    await ask("personal:8", "https://docs.example", "execute-script");
+    await grant(8);
     await dispatch({ type: "mcp-tab-revoke", tabId: 8 });
+    expect((sent.at(-1) as typeof report).grants).toEqual([]);
+    // A click that arrives after MCP let go of the tab grants nothing.
+    await ask("personal:8", "https://docs.example", "execute-script");
+    const shared = owned["8"]!;
+    delete owned["8"];
+    await expect(grant(8)).resolves.toBe(false);
+    owned["8"] = shared;
+
+    // A grant and clean-ups started together never bring a removed grant back.
+    await ask("personal:7", "https://shop.example");
+    await grant(7);
+    await ask("personal:8", "https://docs.example", "execute-script");
+    await Promise.all([grant(8), clearTask("t1", [7]), clearTab(8)]);
+    expect(session.get("mcpV3SiteGrants")).toEqual([]);
     expect((sent.at(-1) as typeof report).grants).toEqual([]);
 
     // Automatic approval is set per public host from the popup and reported to the bridge.

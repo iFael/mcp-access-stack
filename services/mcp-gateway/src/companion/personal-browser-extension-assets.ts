@@ -452,7 +452,7 @@ async function personalTabSharingDispatch(message) {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {
     const origin = new URL(tab.url).origin;
-    await writePersonalSiteGrants((await readPersonalSiteGrants()).filter((grant) => grant.origin !== origin));
+    await withPersonalSiteGrants(() => changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin)));
   } else if (message.type === "mcp-tab-auto") {
     if (typeof message.enabled !== "boolean") throw Error("invalid");
     const host = new URL(assertPersonalNavigationTarget(tab.url)).hostname;
@@ -492,8 +492,9 @@ async function personalApprovalStatus(tab) {
   const autoSites = await readPersonalAutoSites();
   return {
     autoEligible: true, auto: autoSites.includes(url.hostname), autoSites,
-    grants: (await readPersonalSiteGrants()).filter((grant) => grant.origin === url.origin)
-      .map((grant) => ({ category: grant.category, expiresAt: grant.expiresAt })),
+    grants: [...new Set((await readPersonalSiteGrants()).filter((grant) => grant.origin === url.origin)
+      .map((grant) => grant.category + " " + (typeof grant.taskId === "string" ? "task" : "tab")))]
+      .map((key) => ({ category: key.split(" ")[0], until: key.split(" ")[1] })),
     ...(request?.origin === url.origin ? { approval: request.category } : {}),
   };
 }
@@ -501,7 +502,6 @@ async function personalApprovalStatus(tab) {
 const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants";
 const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites";
 const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";
-const PERSONAL_SITE_GRANT_MS = 30 * 60 * 1000;
 // Deleting, paying, sending, publishing, credentials and contracts are never
 // approved per site: each one keeps its own confirmation.
 const PERSONAL_APPROVAL_LABELS = {
@@ -513,13 +513,30 @@ const PERSONAL_APPROVAL_LABELS = {
 async function readPersonalSiteGrants() {
   const value = await chrome.storage.session.get(PERSONAL_SITE_GRANTS_KEY).catch(() => ({}));
   const grants = Array.isArray(value?.[PERSONAL_SITE_GRANTS_KEY]) ? value[PERSONAL_SITE_GRANTS_KEY] : [];
-  const now = Date.now();
-  return grants.filter((grant) => grant && typeof grant.origin === "string" && grant.expiresAt > now);
+  return grants.filter((grant) => grant && typeof grant.origin === "string" && typeof grant.category === "string" &&
+    typeof grant.tabId === "string");
 }
 
 async function writePersonalSiteGrants(grants) {
   await chrome.storage.session.set({ [PERSONAL_SITE_GRANTS_KEY]: grants });
   await pushPersonalSiteApprovals();
+}
+
+// Requests, grants and their clean-ups run one at a time, so a click and a
+// clean-up never overwrite each other or revive a request.
+let personalSiteGrantsQueue = Promise.resolve();
+function withPersonalSiteGrants(task) {
+  const next = personalSiteGrantsQueue.then(task);
+  personalSiteGrantsQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function changePersonalSiteGrants(change) {
+  const grants = await readPersonalSiteGrants();
+  const updated = change(grants);
+  if (updated.length !== grants.length || updated.some((grant, index) => grant !== grants[index])) {
+    await writePersonalSiteGrants(updated);
+  }
 }
 
 async function readPersonalAutoSites() {
@@ -533,8 +550,8 @@ async function pushPersonalSiteApprovals() {
   const grants = await readPersonalSiteGrants();
   send({
     type: "site-approvals",
-    grants: grants.map((grant) => ({ origin: grant.origin, category: grant.category, expiresAt: grant.expiresAt,
-      ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : {}) })),
+    grants: grants.map((grant) => ({ origin: grant.origin, category: grant.category,
+      ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : { tabId: grant.tabId }) })),
     autoSites: await readPersonalAutoSites(),
   });
 }
@@ -552,55 +569,74 @@ async function clearPersonalApprovalRequest(chromeTabId) {
 
 // The bridge asks after it refused an action. The request is recorded only
 // for an MCP or shared tab still on that origin, with the tab's own task, and
-// the user answers from the notification or the popup.
-async function recordPersonalApprovalRequest(message) {
-  if (!Object.hasOwn(PERSONAL_APPROVAL_LABELS, message.category) || typeof message.origin !== "string") return;
-  const chromeTabId = chromeTabIdFrom(message.tabId);
-  const metadata = (await readOwnedTabs())[String(chromeTabId)];
-  const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
-  if (!metadata || !tab) return;
-  const origin = new URL(tab.url).origin;
-  if (origin !== message.origin) return;
-  const taskId = typeof metadata.taskId === "string" ? metadata.taskId : undefined;
-  await chrome.storage.session.set({ [PERSONAL_APPROVAL_REQUEST_PREFIX + chromeTabId]: {
-    origin, category: message.category, ...(taskId ? { taskId } : {}), requestedAt: Date.now(),
-  } });
-  await Promise.resolve(chrome.notifications?.create?.("mcp-approval:" + chromeTabId, {
-    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP pede permissão em " + new URL(origin).host,
-    message: PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site por 30 minutos" +
-      (taskId ? ", no máximo até a tarefa acabar." : "."),
-    buttons: [{ title: "Permitir por 30 min" }], requireInteraction: true, priority: 1,
-  })).catch(() => undefined);
+// the user answers from the notification or the popup. There is no time
+// limit: a grant lasts until its task ends or, for a tab without a task, until
+// that tab leaves MCP.
+function recordPersonalApprovalRequest(message) {
+  return withPersonalSiteGrants(async () => {
+    if (!Object.hasOwn(PERSONAL_APPROVAL_LABELS, message.category) || typeof message.origin !== "string") return;
+    const chromeTabId = chromeTabIdFrom(message.tabId);
+    const metadata = (await readOwnedTabs())[String(chromeTabId)];
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (!metadata || !tab) return;
+    const origin = new URL(tab.url).origin;
+    if (origin !== message.origin) return;
+    const taskId = typeof metadata.taskId === "string" ? metadata.taskId : undefined;
+    await chrome.storage.session.set({ [PERSONAL_APPROVAL_REQUEST_PREFIX + chromeTabId]: {
+      origin, category: message.category, ...(taskId ? { taskId } : {}), requestedAt: Date.now(),
+    } });
+    await Promise.resolve(chrome.notifications?.create?.("mcp-approval:" + chromeTabId, {
+      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP pede permissão em " + new URL(origin).host,
+      message: PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
+        (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
+      buttons: [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
+    })).catch(() => undefined);
+  });
 }
 
-async function grantPersonalSiteApproval(chromeTabId) {
-  const request = await readPersonalApprovalRequest(chromeTabId);
-  await clearPersonalApprovalRequest(chromeTabId);
-  if (!request) return false;
-  const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
-  let origin;
-  try {
-    origin = new URL(tab?.url).origin;
-  } catch {
-    return false;
-  }
-  // The tab left that site after asking: nothing is granted.
-  if (origin !== request.origin) return false;
-  const now = Date.now();
-  const grants = (await readPersonalSiteGrants()).filter((grant) => grant.origin !== request.origin ||
-    grant.category !== request.category || grant.taskId !== request.taskId);
-  grants.push({ origin, category: request.category, ...(request.taskId ? { taskId: request.taskId } : {}),
-    grantedAt: now, expiresAt: now + PERSONAL_SITE_GRANT_MS });
-  await writePersonalSiteGrants(grants);
-  return true;
+function grantPersonalSiteApproval(chromeTabId) {
+  return withPersonalSiteGrants(async () => {
+    const request = await readPersonalApprovalRequest(chromeTabId);
+    await clearPersonalApprovalRequest(chromeTabId);
+    if (!request) return false;
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    let origin;
+    try {
+      origin = new URL(tab?.url).origin;
+    } catch {
+      return false;
+    }
+    // The tab left that site, or MCP no longer holds it in that task: nothing is granted.
+    const metadata = (await readOwnedTabs())[String(chromeTabId)];
+    if (origin !== request.origin || !metadata || metadata.taskId !== request.taskId) return false;
+    const grant = { origin, category: request.category, tabId: PERSONAL_PREFIX + chromeTabId,
+      ...(request.taskId ? { taskId: request.taskId } : {}), grantedAt: Date.now() };
+    const owner = (candidate) => typeof candidate.taskId === "string" ? "task:" + candidate.taskId : "tab:" + candidate.tabId;
+    await changePersonalSiteGrants((grants) => [...grants.filter((candidate) => candidate.origin !== origin ||
+      candidate.category !== grant.category || owner(candidate) !== owner(grant)), grant]);
+    return true;
+  });
 }
 
-// Approvals given for a task end with it; requests on its tabs are dropped.
-async function clearPersonalTaskApprovals(taskId, chromeTabIds) {
-  for (const chromeTabId of chromeTabIds) await clearPersonalApprovalRequest(chromeTabId);
-  const grants = await readPersonalSiteGrants();
-  const kept = grants.filter((grant) => typeof grant.taskId !== "string" || (taskId !== undefined && grant.taskId !== taskId));
-  if (kept.length !== grants.length) await writePersonalSiteGrants(kept);
+// Approvals given for a task end with it, as do those of its tabs that have
+// no task; requests on its tabs are dropped.
+function clearPersonalTaskApprovals(taskId, chromeTabIds) {
+  return withPersonalSiteGrants(async () => {
+    for (const chromeTabId of chromeTabIds) await clearPersonalApprovalRequest(chromeTabId);
+    const tabIds = chromeTabIds.map((chromeTabId) => PERSONAL_PREFIX + chromeTabId);
+    await changePersonalSiteGrants((grants) => grants.filter((grant) => typeof grant.taskId === "string"
+      ? taskId !== undefined && grant.taskId !== taskId
+      : !tabIds.includes(grant.tabId)));
+  });
+}
+
+// A tab without a task keeps its approvals only while it stays with MCP.
+function clearPersonalTabApprovals(chromeTabId) {
+  return withPersonalSiteGrants(async () => {
+    await clearPersonalApprovalRequest(chromeTabId);
+    await changePersonalSiteGrants((grants) => grants.filter((grant) => typeof grant.taskId === "string" ||
+      grant.tabId !== PERSONAL_PREFIX + chromeTabId));
+  });
 }
 
 async function releasePersonalSharedTab(chromeTabId) {
@@ -608,7 +644,7 @@ async function releasePersonalSharedTab(chromeTabId) {
   await resetPersonalViewport(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   await clearPersonalHandoff(chromeTabId);
-  await clearPersonalApprovalRequest(chromeTabId);
+  await clearPersonalTabApprovals(chromeTabId);
   await setPersonalSharedBadge(chromeTabId, false);
 }
 
@@ -5535,7 +5571,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void removeOwnedTab(tabId);
   void chrome.storage.session.remove(PERSONAL_HANDOFF_PREFIX + tabId).catch(() => undefined);
   void Promise.resolve(chrome.notifications?.clear?.("mcp-handoff:" + tabId)).catch(() => undefined);
-  void clearPersonalApprovalRequest(tabId);
+  void clearPersonalTabApprovals(tabId);
 });
 // A notification button is Chrome UI: only the user can press it.
 chrome.notifications?.onButtonClicked?.addListener((id) => {
