@@ -93,7 +93,8 @@ export function buildPersonalBrowserExtensionAssets(
     version: PERSONAL_BROWSER_EXTENSION_VERSION,
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
-    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation", "notifications"],
+    permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation", "notifications",
+      "declarativeNetRequest"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
@@ -949,6 +950,42 @@ async function clearPersonalPlans(taskId, onlyPlanId) {
     return matches;
   });
   for (const plan of removed) if (plan.status === "pending") await settlePersonalPlanSignals(plan, true);
+}
+
+// An approved plan also holds the task's MCP tabs to its sites in Chrome
+// itself: a click, redirect or script that would load another site there is
+// blocked before the page loads. Tabs the user shared stay theirs to browse;
+// there, MCP's next action is refused instead. If Chrome cannot apply the
+// rules, that next-action check still holds.
+const PERSONAL_PLAN_RULE_BASE = 7000;
+const PERSONAL_PLAN_RULE_LIMIT = 1000;
+let personalPlanRulesQueue = Promise.resolve();
+
+function syncPersonalPlanNavigationRules() {
+  personalPlanRulesQueue = personalPlanRulesQueue.then(applyPersonalPlanNavigationRules).catch(() => undefined);
+  return personalPlanRulesQueue;
+}
+
+async function applyPersonalPlanNavigationRules() {
+  const rules = chrome.declarativeNetRequest;
+  if (!rules?.updateSessionRules) return;
+  const approved = Object.values(await readPersonalPlans()).filter((plan) => plan.status === "approved")
+    .sort((left, right) => right.decidedAt - left.decidedAt);
+  const tabsByPlan = new Map();
+  for (const [key, metadata] of Object.entries(await readOwnedTabs())) {
+    const chromeTabId = Number(key);
+    if (metadata?.ownership !== "mcp" || !Number.isSafeInteger(chromeTabId)) continue;
+    const plan = approved.find((candidate) => (typeof metadata.taskId === "string" && candidate.taskId === metadata.taskId) ||
+      candidate.tabIds.includes(metadata.tabId));
+    if (plan) tabsByPlan.set(plan, [...(tabsByPlan.get(plan) ?? []), chromeTabId]);
+  }
+  const addRules = [...tabsByPlan].slice(0, PERSONAL_PLAN_RULE_LIMIT).map(([plan, tabIds], index) => ({
+    id: PERSONAL_PLAN_RULE_BASE + index, priority: 1, action: { type: "block" },
+    condition: { tabIds, resourceTypes: ["main_frame"], excludedRequestDomains: plan.approvedDomains },
+  }));
+  const removeRuleIds = (await rules.getSessionRules()).map((rule) => rule.id)
+    .filter((id) => id >= PERSONAL_PLAN_RULE_BASE && id < PERSONAL_PLAN_RULE_BASE + PERSONAL_PLAN_RULE_LIMIT);
+  await rules.updateSessionRules({ removeRuleIds, addRules });
 }
 
 function personalPlanNeeds(operation, input) {
@@ -5617,6 +5654,13 @@ setInterval(() => {
 }, 20000);
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+// Plans and MCP tabs change in many places; the plan's navigation rules follow both.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === "session" && changes[PERSONAL_PLANS_KEY]) || (area === "local" && changes[OWNED_TABS_KEY])) {
+    void syncPersonalPlanNavigationRules();
+  }
+});
+void syncPersonalPlanNavigationRules();
 connect();
 `;
 

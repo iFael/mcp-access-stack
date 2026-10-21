@@ -1033,7 +1033,7 @@ describe("personal browser extension assets", () => {
       setTimeout, clearTimeout, setInterval: () => 0,
       WebSocket: class { static OPEN = 1; static CONNECTING = 0; readyState = 1; send(raw: string) { sent.push(JSON.parse(raw) as Record<string, unknown>); } },
       chrome: { tabs: { onRemoved: { addListener() {} } }, runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } },
-        storage: { session: { get: async () => ({}) }, local: { get: async () => ({}) } } },
+        storage: { session: { get: async () => ({}) }, local: { get: async () => ({}) }, onChanged: { addListener() {} } } },
       collect: (m: Record<string, unknown>) => sent.push(m), tick: () => { clock += 10; } });
     vm.runInContext(serviceWorker, context);
     vm.runInContext('perform = async (operation, input) => { tick(); await Promise.resolve(); return { tabId: input.tabId, completed: true, content: "secret-page" }; };', context);
@@ -2624,7 +2624,8 @@ describe("personal browser extension assets", () => {
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
     expect(parsedManifest.version).toBe("1.10.0");
-    expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation"]));
+    expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation",
+      "declarativeNetRequest"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
     expect(serviceWorker).toContain("capabilities: CAPABILITIES");
     expect(serviceWorker).toContain('"screenshot"');
@@ -3012,6 +3013,8 @@ describe("personal browser extension assets", () => {
     let onTick: (() => Promise<void>) | undefined;
     let uuid = 0;
     const coded = (code: string, message: string) => Object.assign(new Error(message), { code });
+    type Rule = Record<string, unknown> & { id: number };
+    let sessionRules: Rule[] = [{ id: 1, priority: 1, action: { type: "allow" }, condition: { urlFilter: "other" } }];
     const context = vm.createContext({
       URL, Date, Number, String, Math, Promise, Array, Object, Set, coded,
       PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
@@ -3039,9 +3042,22 @@ describe("personal browser extension assets", () => {
           create: async (id: string, options: Record<string, unknown>) => { notifications.push(["create", id, options]); },
           clear: async (id: string) => { notifications.push(["clear", id]); },
         },
+        declarativeNetRequest: {
+          getSessionRules: async () => sessionRules,
+          updateSessionRules: async ({ removeRuleIds, addRules }: { removeRuleIds: number[]; addRules: Rule[] }) => {
+            sessionRules = [...sessionRules.filter((rule) => !removeRuleIds.includes(rule.id)), ...addRules];
+          },
+        },
       },
     });
     vm.runInContext(serviceWorker.slice(start, end), context);
+    const syncRules = vm.runInContext("syncPersonalPlanNavigationRules", context) as () => Promise<void>;
+    const planRules = async () => {
+      await syncRules();
+      return sessionRules.filter((rule) => rule.id !== 1);
+    };
+    const blockOutside = (tabIds: number[], domains: string[], id = 7000) => ({ id, priority: 1, action: { type: "block" },
+      condition: { tabIds, resourceTypes: ["main_frame"], excludedRequestDomains: domains } });
     type Plan = Record<string, unknown> & { planId: string };
     const plan = vm.runInContext("personalPlan", context) as (input: Record<string, unknown>) => Promise<Plan>;
     const review = vm.runInContext("personalPlanReviewDispatch", context) as
@@ -3054,6 +3070,7 @@ describe("personal browser extension assets", () => {
 
     // Without a plan or the popup setting, nothing changes.
     await expect(enforce("evaluate", { tabId: "personal:7" })).resolves.toBeUndefined();
+    await expect(planRules()).resolves.toEqual([]);
 
     // Nobody decides yet: MCP gets "pending", and the window and the notification wait for the user.
     const proposal = {
@@ -3090,6 +3107,11 @@ describe("personal browser extension assets", () => {
     expect(notifications.at(-1)).toEqual(["clear", "mcp-plan:" + planId]);
     expect(removedWindows).toEqual([]);
     await expect(review({ type: "mcp-plan-decide", planId, approve: false })).rejects.toThrow("not-pending");
+
+    // Chrome itself blocks the task's MCP tabs from loading any other site. The shared tab stays the
+    // user's to browse, another task's tab is untouched, and rules that are not the plan's are kept.
+    await expect(planRules()).resolves.toEqual([blockOutside([7], ["shop.example"])]);
+    expect(sessionRules[0]).toMatchObject({ id: 1 });
 
     // The task's tabs and the listed shared tab work on the approved site and its subdomains.
     await expect(enforce("click", { tabId: "personal:7" })).resolves.toBeUndefined();
@@ -3140,11 +3162,14 @@ describe("personal browser extension assets", () => {
     await review({ type: "mcp-plan-decide", planId: fourth.planId, approve: true, domains: ["pay.example"], actions: ["navigate"] });
     await expect(plan({ planId, timeoutMs: 1 })).resolves.toMatchObject({ status: "superseded" });
     await expect(enforce("open", { taskId: "t1", url: "https://pay.example/" })).resolves.toBeUndefined();
+    await expect(planRules()).resolves.toEqual([blockOutside([7], ["pay.example"])]);
     await expect(enforce("snapshot", { tabId: "personal:8" })).rejects.toMatchObject(blocked("requires"));
 
     // Only owned or shared tabs can be listed, and finishing the task ends its plans.
     await expect(plan({ ...proposal, tabIds: ["personal:12"] })).rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
     await clear("t1");
+    await expect(planRules()).resolves.toEqual([]);
+    expect(sessionRules).toEqual([expect.objectContaining({ id: 1 })]);
     await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
     await expect(enforce("click", { tabId: "personal:7" })).rejects.toMatchObject(blocked("requires"));
   });
