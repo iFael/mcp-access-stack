@@ -374,7 +374,7 @@ describe("personal browser extension assets", () => {
     expect(map("https://parent.example/", child, { x: 20, y: 30 }))
       .toMatchObject({ x: 71, y: 91, viewport: { width: 800, height: 600 } });
     expect(map("https://parent.example/", { ...child, width: 150 }, { x: 20, y: 30 }))
-      .toMatchObject({ missing: true });
+      .toMatchObject({ missing: true, sizes: ["200x100"] });
     hosts = [host(), host()];
     expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ ambiguous: true });
     hosts = [host()];
@@ -387,10 +387,13 @@ describe("personal browser extension assets", () => {
     let scrolled = 0;
     hosts = [host({ getBoundingClientRect: () => ({ left: 50, top, width: 202, height: 102 }),
       scrollIntoView: () => { scrolled += 1; top = 100; } })];
-    expect(map("https://parent.example/", child, { x: 20, y: 30 }, false)).toMatchObject({ outside: true });
+    expect(map("https://parent.example/", child, { x: 20, y: 30 }, false))
+      .toMatchObject({ outside: true, at: "71,931", size: "800x600" });
     expect(scrolled).toBe(0);
     expect(map("https://parent.example/", child, { x: 20, y: 30 }, true)).toMatchObject({ x: 71, y: 131 });
     expect(scrolled).toBe(1);
+    (ctx as unknown as { document: { elementFromPoint: () => unknown } }).document.elementFromPoint = () => ({ tagName: "DIV" });
+    expect(map("https://parent.example/", child, { x: 20, y: 30 })).toMatchObject({ obscured: true, by: "div" });
   });
 
   it("runs guarded native fill, select, click and Enter inside a nested frame and waits for its navigation", async () => {

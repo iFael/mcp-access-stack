@@ -3317,11 +3317,18 @@ function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScrol
       width: node.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0),
       height: node.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0) };
   };
+  const named = candidates;
   candidates = candidates.filter((node) => {
     const measured = metrics(node);
     return Math.abs(measured.width - child.width) <= 2 && Math.abs(measured.height - child.height) <= 2;
   });
-  if (candidates.length !== 1) return { ambiguous: candidates.length > 1, missing: candidates.length === 0 };
+  if (candidates.length !== 1) {
+    return { ambiguous: candidates.length > 1, missing: candidates.length === 0,
+      sizes: named.slice(0, 4).map((node) => {
+        const measured = metrics(node);
+        return Math.round(measured.width) + "x" + Math.round(measured.height);
+      }) };
+  }
   const host = candidates[0];
   const locate = () => {
     const measured = metrics(host);
@@ -3336,8 +3343,11 @@ function probePersonalChildFramePoint(expectedUrl, child, localPoint, allowScrol
     host.scrollIntoView({ block: "nearest", inline: "nearest" });
     point = locate();
   }
-  if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) return { outside: true };
-  if (document.elementFromPoint(point.x, point.y) !== host) return { obscured: true };
+  if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) {
+    return { outside: true, at: Math.round(point.x) + "," + Math.round(point.y), size: innerWidth + "x" + innerHeight };
+  }
+  const covering = document.elementFromPoint(point.x, point.y);
+  if (covering !== host) return { obscured: true, by: String(covering?.tagName || "nothing").toLowerCase().slice(0, 40) };
   return { x: point.x, y: point.y, viewport: { width: innerWidth, height: innerHeight } };
 }
 
@@ -3381,8 +3391,15 @@ async function mapPersonalFramePoint(chromeTabId, graph, frame, localPoint, view
     }
     const result = mapped.result;
     if (!Number.isFinite(result?.x) || !Number.isFinite(result?.y)) {
+      // Say which check failed, so a refusal in the user's Chrome can be diagnosed.
       throw coded(result?.ambiguous ? "LOCATOR_AMBIGUOUS" : "BROWSER_CAPABILITY_UNSUPPORTED",
-        "The frame host is ambiguous, transformed, obscured or outside the viewport.");
+        result?.ambiguous ? "Several frame hosts match the frame's name or address and size." :
+          result?.missing ? "No frame host matches the frame's name or address and its " + size.width + "x" +
+            size.height + " size (found " + (result.sizes?.join(", ") || "none") + ")." :
+            result?.outside ? "The frame host is outside the viewport even after scrolling (point " + result.at +
+              ", viewport " + result.size + ")." :
+              result?.obscured ? "Another element (" + result.by + ") covers the frame host at the action point." :
+                "The frame host is transformed or scaled, so a native click could miss it.");
     }
     point = { x: result.x, y: result.y };
     size = result.viewport;
