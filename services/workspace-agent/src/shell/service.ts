@@ -20,6 +20,7 @@ import {
   protectedGitPushReason,
 } from "./command-risk.js";
 import { decideCommandAuthorization } from "./confirmation-policy.js";
+import { scheduledTaskPolicyReason } from "./scheduled-task-policy.js";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import { normalizeRelativePath, PathSecurity } from "../path-security.js";
 import {
@@ -105,6 +106,7 @@ export class ShellService {
     }
     const cwd = await resolveShellCwd(workspace, input.cwd);
     enforceGitPushPolicy(input.shell, input.command);
+    enforceScheduledTaskPolicy(input.shell, input.command, false);
     return runShellCommandToFiles(
       input.shell,
       input.command,
@@ -146,8 +148,9 @@ export class ShellService {
 
     const cwd = await resolveShellCwd(workspace, input.cwd);
     enforceGitPushPolicy(input.shell, input.command);
-    const risk = classifyCommandRisk(input.shell, input.command);
     const elevated = "elevated" in input && input.elevated === true;
+    enforceScheduledTaskPolicy(input.shell, input.command, elevated);
+    const risk = classifyCommandRisk(input.shell, input.command);
     const authorization = await decideCommandAuthorization({
       workspace,
       shell: input.shell,
@@ -250,6 +253,17 @@ function enforceGitPushPolicy(
   const blockedReason = protectedGitPushReason(intent);
   if (blockedReason) {
     throw new AppError("PERMISSION_DENIED", blockedReason);
+  }
+}
+
+function enforceScheduledTaskPolicy(
+  shell: ShellName,
+  command: string,
+  elevated: boolean,
+): void {
+  const reason = scheduledTaskPolicyReason(shell, command, elevated);
+  if (reason) {
+    throw new AppError("PERMISSION_DENIED", reason);
   }
 }
 
