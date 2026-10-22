@@ -12,25 +12,29 @@ import {
 
 const deployment = "10535ed8-c51b-418e-a387-3cf9ba8fde82";
 const version = "7b536d5f-8afb-4da0-927e-44cf6e23b6d6";
-const revision = "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1";
-const previousRevision = "da7f5d3967de5325b5daa36951ce87417767a308ebf5eb0d3a999019d7780c92";
+const revision = "3200961150caa5f8063d2ddf8250af97478958eee0f93a48c8f1ab65aae8d3fb";
+const previousRevision = "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1";
 const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const config = JSON.parse(await readFile(path.join(base, "services/mcp-edge-gateway/wrangler.jsonc"), "utf8"));
 const manifest = await readFile(path.join(base, "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts"), "utf8");
 
-test("Edge staging accepts only the pinned 99-tool manifest and rejects legacy 97", () => {
-  const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": 99\n}`;
+test("Edge staging accepts only the pinned 110-tool manifest and rejects the active 99", () => {
+  const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": 110\n}`;
   assert.equal(verifyLocalCandidate(config, pinned, revision), revision);
   assert.throws(() => verifyLocalCandidate(config, pinned, previousRevision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
-  assert.throws(() => verifyLocalCandidate(config, pinned.replace('"toolCount": 99', '"toolCount": 97'), revision),
+  assert.throws(() => verifyLocalCandidate(config, pinned.replace('"toolCount": 110', '"toolCount": 99'), revision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
-test("frozen Edge staging rejects the newer MCP catalog instead of changing its pinned CAS", () => {
-  // This staging gate stays pinned to the published 99-tool revision. The
-  // current catalog is larger and must not be staged as that candidate.
-  assert.doesNotMatch(manifest, /"toolCount":\s*99\b/u);
-  assert.throws(() => verifyLocalCandidate(config, manifest, revision),
+test("Edge staging takes the checked-out catalog only while it is the pinned 110-tool revision", () => {
+  // A later catalog must move this pin deliberately instead of being staged as 110.
+  if (manifest.includes(`"contractRevision": "${revision}"`)) {
+    assert.equal(verifyLocalCandidate(config, manifest, revision), revision);
+  } else {
+    assert.throws(() => verifyLocalCandidate(config, manifest, revision),
+      /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
+  }
+  assert.throws(() => verifyLocalCandidate(config, manifest, previousRevision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
 test("cannot stage a mismatched revision, fake manifest, missing secret, DO or migration drift", () => {

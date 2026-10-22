@@ -32,7 +32,7 @@ export function verifyLocalCandidate(config, source, expectedRevision) {
   }
   const match = /"contractRevision":\s*"([a-f0-9]{64})"/u.exec(source);
   if (!match || match[1] !== expectedRevision ||
-      !/"toolCount":\s*99\b/u.test(source)) deny("BUILD_CONTRACT_MISMATCH");
+      !/"toolCount":\s*110\b/u.test(source)) deny("BUILD_CONTRACT_MISMATCH");
   return expectedRevision;
 }
 export function requirePublisherPrerequisites(report, expectedDeployment, expectedVersion, options = {}) {
