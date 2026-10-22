@@ -70,6 +70,9 @@ export async function resolvePublishedRelease({ repository, channel, assetSuffix
   });
   if (!response.ok) throw new Error("RELEASE_CATALOG_UNAVAILABLE");
   const releases = await response.json();
+  // The anonymous catalog has been observed returning a transient empty page;
+  // never report that as "up-to-date" when this repository always has releases.
+  if (Array.isArray(releases) && releases.length === 0) throw new Error("RELEASE_CATALOG_EMPTY");
   return selectPublishedRelease(releases, { channel, assetSuffix, currentReleaseId });
 }
 

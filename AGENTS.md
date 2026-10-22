@@ -52,6 +52,10 @@ Prefer persisted background-task mechanisms for commands that may outlive a sync
 
 Do not restart production components, Docker, Scheduled Tasks, Windows, the Browser Worker, the Workspace Agent or the MCP transport unless the authorized task requires it and the recovery path is observable.
 
+## Windows local companion updates
+
+Update or roll the Windows local companion only through the official path: `prepare_release` / `promote_release`, which hand off to the `MCP V3 local updater` Scheduled Task (`Start-McpV3LocalUpdate.ps1` → `Invoke-McpV3LocalUpdateTask.ps1` → `Update-McpV3Local.ps1`). Never improvise the release switch from a command sent through the companion: no ad-hoc or elevated (`RunLevel Highest`) Scheduled Tasks, no `-ExecutionPolicy Bypass` recovery scripts, and no direct `Register-ScheduledTask`/`schtasks /Create` of companion tasks. On 2026-10-22 that improvised chain made Bitdefender Advanced Threat Control (`ATC.SuspiciousBehavior`) kill the companion `node.exe` and quarantine the active release. If the updater task is missing or uses a stale contract, ask the owner to re-run `Install-McpV3LocalUpdateTask.ps1` from the active release outside the companion.
+
 ## Validation
 
 Use the smallest validation set that proves the change. GitHub Actions remains the authority for heavy repository-wide gates when the project workflow delegates them remotely. Always review the final diff and run `git diff --check` for source changes. Never report a validation as passed unless it actually ran and passed.
