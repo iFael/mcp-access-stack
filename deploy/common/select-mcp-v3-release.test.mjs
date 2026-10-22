@@ -61,6 +61,10 @@ test("resolves only public typed metadata and refuses bad upstream",async()=>{
   assert.equal(calls,1);
   assert.equal(response.tag,"v1.1.0-beta.100");
   await assert.rejects(()=>resolvePublishedRelease({
+    repository:"iFael/mcp-access-stack",channel:"companion",
+    assetSuffix:asset,currentReleaseId:"1.1.0-companion.998",
+  },async()=>({ok:true,json:async()=>[]})),/RELEASE_CATALOG_EMPTY/u);
+  await assert.rejects(()=>resolvePublishedRelease({
     repository:"../secret",channel:"stable",assetSuffix:asset,currentReleaseId:"1.1.0",
   },async()=>{throw Error("should not fetch")}),/RELEASE_REPOSITORY_INVALID/u);
 });
