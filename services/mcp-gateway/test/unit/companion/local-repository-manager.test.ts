@@ -46,6 +46,70 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     ]);
   });
 
+  it("denies external roots unless they are explicitly approved in local configuration", async () => {
+    const fixture = await createGitFixture();
+    const home = path.join(fixture.root, "home");
+    await mkdir(home);
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(home, "state"),
+      managedRoot: path.join(home, "managed"),
+      homeDirectory: home,
+    });
+
+    await expect(manager.discoverLocalRepositories({ root: fixture.repository }))
+      .rejects.toMatchObject({ code: "PATH_OUTSIDE_ALLOWED_ROOTS" });
+    await expect(manager.bindRepositories([repositoryBinding(fixture.repository)]))
+      .rejects.toMatchObject({ code: "PATH_OUTSIDE_ALLOWED_ROOTS" });
+
+    const approved = await LocalRepositoryManager.create({
+      stateDirectory: path.join(home, "state"),
+      managedRoot: path.join(home, "managed"),
+      homeDirectory: home,
+      approvedDiscoveryRoots: [fixture.repository],
+    });
+    await expect(approved.discoverLocalRepositories({ root: fixture.repository }))
+      .resolves.toMatchObject({ repositories: [expect.objectContaining({ path: fixture.repository })] });
+    await expect(approved.bindRepositories([repositoryBinding(fixture.repository)]))
+      .resolves.toHaveLength(1);
+    await expect(approved.discoverLocalRepositories({ root: fixture.root }))
+      .rejects.toMatchObject({ code: "PATH_OUTSIDE_ALLOWED_ROOTS" });
+  });
+
+  it("does not expand an approval to sibling directories", async () => {
+    const fixture = await createGitFixture();
+    const home = path.join(fixture.root, "home");
+    const sibling = path.join(fixture.root, "other");
+    await mkdir(home);
+    await mkdir(sibling);
+    await execFileAsync("git", ["init", sibling]);
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(home, "state"),
+      managedRoot: path.join(home, "managed"),
+      homeDirectory: home,
+      approvedDiscoveryRoots: [fixture.repository],
+    });
+    await expect(manager.discoverLocalRepositories({ root: sibling }))
+      .rejects.toMatchObject({ code: "PATH_OUTSIDE_ALLOWED_ROOTS" });
+  });
+
+  it("rejects invalid or overly broad local discovery approvals", async () => {
+    const fixture = await createGitFixture();
+    for (const roots of [
+      ["relative"],
+      [path.parse(fixture.root).root],
+      ["", fixture.repository],
+      [fixture.repository, fixture.repository],
+      Array.from({ length: 17 }, () => fixture.repository),
+    ]) {
+      await expect(LocalRepositoryManager.create({
+        stateDirectory: path.join(fixture.root, "state"),
+        managedRoot: path.join(fixture.root, "managed"),
+        homeDirectory: fixture.root,
+        approvedDiscoveryRoots: roots,
+      })).rejects.toMatchObject({ code: "POLICY_INVALID" });
+    }
+  });
+
   it("validates bindings in dry-run mode without persisting state", async () => {
     const fixture = await createGitFixture();
     const onChanged = jest.fn(async () => undefined);
