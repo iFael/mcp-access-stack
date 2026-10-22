@@ -55,33 +55,30 @@ if (Test-Path -LiteralPath $requestPath) {
     throw 'An MCP V3 local update request is already pending.'
 }
 
+# The companion runs this script as its own child. Bitdefender's Advanced
+# Threat Control kills a node process whose child registers, enables or starts
+# a Scheduled Task, so this handoff only reads the updater task and writes the
+# request. The person runs the updater task from Task Scheduler, or its daily
+# trigger picks the request up.
 $existingTask = Get-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction SilentlyContinue
-if ($existingTask -and [string]$existingTask.State -eq 'Running') {
+$reinstall = "Install it once from the Windows console: Install-McpV3LocalUpdateTask.ps1 -InstallationRoot '$installation' -StateRoot '$state' -Execute -Force"
+if (-not $existingTask) {
+    throw "MCP V3 updater task is missing: $UpdaterTaskName. $reinstall"
+}
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+if (-not (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existingTask.Principal.UserId) -Right $currentUser)) {
+    throw "Refusing to use MCP V3 updater task owned by another user: $UpdaterTaskName"
+}
+if (-not [bool]$existingTask.Settings.Enabled) {
+    throw "MCP V3 updater task is disabled, so it cannot pick up update requests: $UpdaterTaskName. $reinstall"
+}
+$updaterActions = @($existingTask.Actions)
+if ($updaterActions.Count -ne 1 -or
+    [string]$updaterActions[0].Arguments -notlike '*-File "*\updater\Invoke-McpV3LocalActiveUpdater.ps1"') {
+    throw "MCP V3 updater task predates update request pickup: $UpdaterTaskName. $reinstall"
+}
+if ([string]$existingTask.State -eq 'Running') {
     throw 'The MCP V3 local updater task is already running.'
-}
-$restoreEnabled = $false
-if ($existingTask) {
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    if (-not (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existingTask.Principal.UserId) -Right $currentUser)) {
-        throw "Refusing to use MCP V3 updater task owned by another user: $UpdaterTaskName"
-    }
-    $restoreEnabled = [bool]$existingTask.Settings.Enabled
-}
-
-$installer = Join-Path $PSScriptRoot 'Install-McpV3LocalUpdateTask.ps1'
-Assert-McpPublicFile -Path $installer -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-$installed = & $installer `
-    -InstallationRoot $installation `
-    -StateRoot $state `
-    -Repository $Repository `
-    -CompanionTaskName $CompanionTaskName `
-    -TaskName $UpdaterTaskName `
-    -Execute `
-    -Force `
-    -Activate:$restoreEnabled `
-    -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
-if ([string]$installed.taskName -ne $UpdaterTaskName) {
-    throw 'MCP V3 updater task installation returned unexpected evidence.'
 }
 
 $operationId = [guid]::NewGuid().ToString('N')
@@ -92,7 +89,7 @@ $request = [ordered]@{
     version = 1
     operationId = $operationId
     tag = if ([string]::IsNullOrWhiteSpace($Tag)) { $null } else { $Tag }
-    restoreEnabled = $restoreEnabled
+    restoreEnabled = $true
     requestedAt = [DateTimeOffset]::UtcNow.ToString('O')
 }
 $requestCreated = $false
@@ -120,18 +117,10 @@ try {
         throw 'An MCP V3 local update request is already pending.'
     }
 
-    $task = Get-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction Stop
-    if (-not [bool]$task.Settings.Enabled) {
-        Enable-ScheduledTask -TaskName $UpdaterTaskName | Out-Null
-    }
-    Start-ScheduledTask -TaskName $UpdaterTaskName
 }
 catch {
     if ($requestCreated) {
         Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $restoreEnabled) {
-        Disable-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction SilentlyContinue | Out-Null
     }
     throw
 }

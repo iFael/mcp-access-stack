@@ -153,7 +153,10 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     '-RunLevel Limited',
     'Set-McpWindowsScheduledTaskOwnerAccess',
     'updater\Invoke-McpV3LocalActiveUpdater.ps1',
-    '-ExecutionPolicy RemoteSigned -File'
+    '-ExecutionPolicy RemoteSigned -File',
+    'updater\settings.json',
+    'autoUpdate = [bool]$Activate',
+    'Enable-ScheduledTask -TaskName $TaskName'
 )
 # Endpoint protection treats hidden tasks and encoded PowerShell as malware signals.
 Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @('-EncodedCommand', '-Hidden')
@@ -176,17 +179,24 @@ Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -
 $updateHandoff = Read-ProjectFile 'deploy\windows\Start-McpV3LocalUpdate.ps1'
 Assert-ContainsAll -Label 'MCP V3 local update handoff' -Source $updateHandoff -Tokens @(
     'update-request.v1.json',
-    'Install-McpV3LocalUpdateTask.ps1',
-    'Start-ScheduledTask -TaskName $UpdaterTaskName',
+    'Get-ScheduledTask -TaskName $UpdaterTaskName',
+    'updater\Invoke-McpV3LocalActiveUpdater.ps1',
     '[IO.FileMode]::CreateNew',
     "status = 'accepted'",
     'restoreEnabled',
     'resultPath'
 )
+# The companion runs this handoff as its own child, and endpoint protection
+# kills a node process whose child changes or starts a Scheduled Task.
 Assert-ContainsNone -Label 'MCP V3 local update handoff' -Source $updateHandoff -Tokens @(
     'RunLevel Highest',
     'LocalSystem',
-    'ExecutionPolicy Bypass'
+    'ExecutionPolicy Bypass',
+    'Register-ScheduledTask',
+    'Enable-ScheduledTask',
+    'Disable-ScheduledTask',
+    'Start-ScheduledTask',
+    'Install-McpV3LocalUpdateTask.ps1 -InstallationRoot $'
 )
 
 $updateRunner = Read-ProjectFile 'deploy\windows\Invoke-McpV3LocalUpdateTask.ps1'
@@ -195,9 +205,11 @@ Assert-ContainsAll -Label 'MCP V3 local update task runner' -Source $updateRunne
     'Update-McpV3Local.ps1',
     "status = 'succeeded'",
     "status = 'failed'",
-    'Disable-ScheduledTask -TaskName $UpdaterTaskName',
+    'updater\settings.json',
+    'no-request-and-auto-update-off',
     'result-$operationId.json'
 )
+Assert-ContainsNone -Label 'MCP V3 local update task runner' -Source $updateRunner -Tokens @('Disable-ScheduledTask')
 
 $uninstaller = Read-ProjectFile 'deploy\windows\Uninstall-McpV3Local.ps1'
 Assert-ContainsAll -Label 'MCP V3 local uninstaller' -Source $uninstaller -Tokens @(
