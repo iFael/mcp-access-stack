@@ -101,9 +101,11 @@ export function buildPersonalBrowserExtensionAssets(
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
     commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
+    // Chrome fetches a notification's data: icon under this policy; without
+    // data: every chrome.notifications.create call fails.
     content_security_policy: {
       extension_pages:
-        "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:" + port,
+        "script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:" + port,
     },
   }, null, 2) + "\n";
 

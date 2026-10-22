@@ -193,6 +193,16 @@ async function main(): Promise<void> {
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
 
+    // Every extension notification uses the embedded data: icon, which Chrome
+    // only loads when the extension's CSP allows it.
+    const extensionWorker = context.serviceWorkers()
+      .find((candidate) => candidate.url().startsWith("chrome-extension://"))!;
+    const notification = await extensionWorker.evaluate(`new Promise((resolve) => chrome.notifications.create({
+      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "MCP smoke", message: "smoke" },
+      (id) => resolve({ id, error: chrome.runtime.lastError?.message ?? null })))`) as { id?: string; error: string | null };
+    report("notification", notification);
+    if (notification.error || !notification.id) throw new Error("The extension could not show a notification.");
+
     const opened = await bridge.open({ url: `http://parent-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
     const tabId = opened.tab.tabId;
     await bridge.snapshot({ tabId });
