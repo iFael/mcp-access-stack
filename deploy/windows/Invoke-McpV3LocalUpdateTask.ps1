@@ -46,7 +46,6 @@ New-Item -ItemType Directory -Force -Path $updatesRoot | Out-Null
 $request = $null
 $operationId = $null
 $requestedTag = $null
-$restoreEnabled = $true
 $resultPath = $null
 
 function Write-McpV3UpdateResult {
@@ -83,8 +82,18 @@ try {
             $requestedTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$') {
             throw 'MCP V3 local update request tag is invalid.'
         }
-        $restoreEnabled = [bool]$request.restoreEnabled
         $resultPath = Join-Path $updatesRoot ("result-$operationId.json")
+    }
+    else {
+        $settingsPath = Join-Path $state 'updater\settings.json'
+        $autoUpdate = $true
+        if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+            $autoUpdate = [bool](Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).autoUpdate
+        }
+        if (-not $autoUpdate) {
+            [pscustomobject]@{ status = 'idle'; reason = 'no-request-and-auto-update-off' } | ConvertTo-Json -Compress
+            return
+        }
     }
 
     $updater = Join-Path $PSScriptRoot 'Update-McpV3Local.ps1'
@@ -131,8 +140,5 @@ catch {
 finally {
     if ($null -ne $request) {
         Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue
-        if (-not $restoreEnabled) {
-            Disable-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction SilentlyContinue | Out-Null
-        }
     }
 }

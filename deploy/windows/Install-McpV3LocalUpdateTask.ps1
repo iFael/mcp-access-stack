@@ -106,22 +106,23 @@ if (-not $alreadyInstalled) {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
     $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $state
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour))
-    $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Checks for and atomically activates signed MCP V3 local releases.'
+    $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Applies MCP V3 local release requests from promote_release and, when auto-update is on, checks for new releases daily. Run it to apply a pending request.'
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 
 $null = Set-McpWindowsScheduledTaskOwnerAccess -TaskName $TaskName -UserId $userId
-if ($Activate) {
-    Enable-ScheduledTask -TaskName $TaskName | Out-Null
-}
-else {
-    Disable-ScheduledTask -TaskName $TaskName | Out-Null
-}
+# The task stays enabled so the person can run it to apply a promote_release
+# request; -Activate only decides whether its daily run also checks for updates.
+$settingsPath = Join-Path $state 'updater\settings.json'
+$settingsJson = ([ordered]@{ version = 1; autoUpdate = [bool]$Activate } | ConvertTo-Json -Compress) + [Environment]::NewLine
+[IO.File]::WriteAllText($settingsPath, $settingsJson, [Text.UTF8Encoding]::new($false))
+Enable-ScheduledTask -TaskName $TaskName | Out-Null
 
 [pscustomobject]@{
     status = if ($alreadyInstalled) { 'already-installed' } else { 'installed' }
     changed = -not $alreadyInstalled
     activated = [bool]$Activate
+    settingsPath = $settingsPath
     taskName = $TaskName
     companionTaskName = $CompanionTaskName
     repository = $Repository

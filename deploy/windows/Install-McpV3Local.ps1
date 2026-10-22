@@ -159,27 +159,17 @@ catch {
 
 $autoUpdateActivated = $false
 $autoUpdateError = $null
-if (-not $DisableAutoUpdate) {
-    try {
-        $updateTask = & $updateTaskInstaller -InstallationRoot $installation -StateRoot $state -Repository $Repository -CompanionTaskName $TaskName -TaskName $UpdateTaskName -Hour $UpdateHour -Execute -Force -Activate -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
-        if ($updateTask.activated -ne $true -or [string]$updateTask.taskName -ne $UpdateTaskName) {
-            throw 'MCP V3 local updater task installation returned unexpected evidence.'
-        }
-        $autoUpdateActivated = $true
+# The updater task is installed either way: it is how promote_release requests
+# get applied. -DisableAutoUpdate only turns off its daily release check.
+try {
+    $updateTask = & $updateTaskInstaller -InstallationRoot $installation -StateRoot $state -Repository $Repository -CompanionTaskName $TaskName -TaskName $UpdateTaskName -Hour $UpdateHour -Execute -Force -Activate:(-not $DisableAutoUpdate) -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+    if ($updateTask.activated -ne (-not $DisableAutoUpdate) -or [string]$updateTask.taskName -ne $UpdateTaskName) {
+        throw 'MCP V3 local updater task installation returned unexpected evidence.'
     }
-    catch {
-        $autoUpdateError = $_.Exception.Message
-    }
+    $autoUpdateActivated = [bool]$updateTask.activated
 }
-else {
-    $existingUpdateTask = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
-    if ($existingUpdateTask) {
-        $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-        if (-not (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existingUpdateTask.Principal.UserId) -Right $currentUser)) {
-            throw "Refusing to disable MCP V3 updater task owned by another user: $UpdateTaskName"
-        }
-        Disable-ScheduledTask -TaskName $UpdateTaskName | Out-Null
-    }
+catch {
+    $autoUpdateError = $_.Exception.Message
 }
 
 [pscustomobject]@{
