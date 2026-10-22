@@ -66,9 +66,13 @@ $script = @(
         (ConvertTo-McpSingleQuotedLiteral $CompanionTaskName),
         (ConvertTo-McpSingleQuotedLiteral $TaskName)),
     'if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}'
-) -join '; '
-$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-$arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -EncodedCommand $encoded"
+) -join [Environment]::NewLine
+# A plain script file keeps the updater readable to the person and to endpoint
+# protection; base64-encoded PowerShell is a classic malware signal.
+$runnerPath = Join-Path $state 'updater\Invoke-McpV3LocalActiveUpdater.ps1'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runnerPath) | Out-Null
+[IO.File]::WriteAllText($runnerPath, $script + [Environment]::NewLine, [Text.UTF8Encoding]::new($true))
+$arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"' -f $runnerPath
 $pwshCommand = Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $pwsh = [IO.Path]::GetFullPath([string]$pwshCommand.Source)
 if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {
@@ -99,7 +103,7 @@ if ($existing) {
 
 if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -Hidden
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
     $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $state
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour))
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Checks for and atomically activates signed MCP V3 local releases.'

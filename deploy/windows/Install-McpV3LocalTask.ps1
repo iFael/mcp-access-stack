@@ -149,7 +149,7 @@ if ($existing) {
 
 if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances $MultipleInstances -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -Hidden
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances $MultipleInstances -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     $action = New-ScheduledTaskAction -Execute $launcherPath -Argument $argumentText -WorkingDirectory $releaseRoot
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
     if ($DelaySeconds -gt 0) {
