@@ -151,9 +151,14 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     '-UpdaterTaskName',
     '-LogonType Interactive',
     '-RunLevel Limited',
-    'Set-McpWindowsScheduledTaskOwnerAccess'
+    'Set-McpWindowsScheduledTaskOwnerAccess',
+    'updater\Invoke-McpV3LocalActiveUpdater.ps1',
+    '-ExecutionPolicy RemoteSigned -File'
 )
+# Endpoint protection treats hidden tasks and encoded PowerShell as malware signals.
+Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @('-EncodedCommand', '-Hidden')
 $localTaskInstaller = Read-ProjectFile 'deploy\windows\Install-McpV3LocalTask.ps1'
+Assert-ContainsNone -Label 'MCP V3 local task visibility' -Source $localTaskInstaller -Tokens @('-Hidden')
 Assert-ContainsAll -Label 'MCP V3 local task handover contract' -Source $localTaskInstaller -Tokens @(
     "[ValidateSet('IgnoreNew', 'Parallel')]",
     'MCP_V3_HANDOVER_FROM_INSTANCE_ID',
