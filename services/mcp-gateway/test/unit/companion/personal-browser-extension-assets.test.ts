@@ -2845,8 +2845,12 @@ describe("personal browser extension assets", () => {
       3361,
       ["https://private.example.test"],
     );
-    const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[] };
-    expect(parsedManifest.version).toBe("1.11.0");
+    const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
+      content_security_policy: { extension_pages: string } };
+    expect(parsedManifest.version).toBe("1.11.1");
+    // Notification icons are data: URLs that Chrome fetches under this policy.
+    expect(parsedManifest.content_security_policy.extension_pages)
+      .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
     expect(parsedManifest.permissions).toEqual(expect.arrayContaining(["debugger", "tabGroups", "webNavigation",
       "declarativeNetRequest"]));
     expect(serviceWorker).toContain("protocolVersion: PROTOCOL_VERSION");
