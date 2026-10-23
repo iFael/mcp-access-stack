@@ -72,6 +72,12 @@ import {
   inspectWorkspaceBatchResultSchema,
 } from "./read-orchestration-contracts.js";
 import {
+  describeReleaseNextStep,
+  getOperationGuide,
+  getOperationGuideInputSchema,
+  operationGuideSchema,
+} from "./operation-guide.js";
+import {
   getReleaseStateInputSchema,
   getReleaseStateResultSchema,
   prepareReleaseInputSchema,
@@ -219,6 +225,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
 ] as const satisfies readonly SourceControlToolName[];
 
 const BASE_WORKSPACE_TOOL_NAMES = [
+  "get_operation_guide",
   "list_workspaces",
   "list_workspace_roots",
   "list_files",
@@ -384,6 +391,32 @@ export function registerWorkspaceTools(
 ): void {
   const meta = toolMeta(options);
   const include = options.includeTools;
+
+  if (shouldInclude("get_operation_guide", include)) {
+    server.registerTool(
+      "get_operation_guide",
+      {
+        title: "Get operation guide",
+        description:
+          "Returns the step-by-step playbook for a recurring job: which typed tools to call, in which order and in which workspace. " +
+          "Call it before a multi-step job (topic release, workspaces, source_control, background_tasks or browser) and after any refusal (topic refusals). " +
+          "Without a topic it returns the index.",
+        inputSchema: getOperationGuideInputSchema,
+        outputSchema: operationGuideSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        const structuredContent = getOperationGuide(input.topic);
+        return {
+          content: [{ type: "text", text: `${structuredContent.title}: ${structuredContent.steps.length} step(s).` }],
+          structuredContent,
+        };
+      },
+    );
+  }
 
   if (shouldInclude("list_workspaces", include)) {
     server.registerTool(
@@ -1252,7 +1285,8 @@ export function registerWorkspaceTools(
       {
         title: "Get release state",
         description:
-          "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps.",
+          "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps. " +
+          "nextStep names the tool for the next lifecycle phase; get_operation_guide topic=release has the full order.",
         inputSchema: getReleaseStateInputSchema,
         outputSchema: getReleaseStateResultSchema,
         annotations: toolAnnotations,
@@ -1262,7 +1296,7 @@ export function registerWorkspaceTools(
         const authError = validateAuthentication(options, extra.authInfo);
         if (authError) return authError;
         try {
-          const structuredContent = getReleaseStateResultSchema.parse(
+          const state = getReleaseStateResultSchema.parse(
             await withToolOperationContext(
               options.operationContextFactory,
               extra,
@@ -1270,8 +1304,9 @@ export function registerWorkspaceTools(
               (context) => executor.getReleaseState(input, context),
             ),
           );
+          const structuredContent = { ...state, nextStep: describeReleaseNextStep(state) };
           return {
-            content: [{ type: "text", text: `Active release: ${structuredContent.state.active?.releaseId ?? "none"}; candidate: ${structuredContent.state.candidate?.releaseId ?? "none"}.` }],
+            content: [{ type: "text", text: `Active release: ${structuredContent.state.active?.releaseId ?? "none"}; candidate: ${structuredContent.state.candidate?.releaseId ?? "none"}. Next: ${structuredContent.nextStep.summary}` }],
             structuredContent,
           };
         } catch (error) {
@@ -1324,7 +1359,8 @@ export function registerWorkspaceTools(
       {
         title: "Prepare release",
         description:
-          "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path.",
+          "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path. " +
+          "This is the only supported way to stage a candidate (never run the updater through a shell); follow the returned task with wait_background_task. See get_operation_guide topic=release.",
         inputSchema: prepareReleaseInputSchema,
         outputSchema: prepareReleaseResultSchema,
         annotations: {
@@ -1364,7 +1400,8 @@ export function registerWorkspaceTools(
       {
         title: "Promote release",
         description:
-          "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths.",
+          "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths. " +
+          "This is the only supported cutover route and needs the user's explicit go-ahead; afterwards read get_release_state until the candidate is empty. See get_operation_guide topic=release.",
         inputSchema: promoteReleaseInputSchema,
         outputSchema: promoteReleaseResultSchema,
         annotations: {
@@ -1695,7 +1732,8 @@ export function registerWorkspaceTools(
           "Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. " +
           "Commands classified as potentially destructive return confirmation_required before execution. " +
           "Set elevated=true only when Windows administrator rights are required; elevated commands always require bound confirmation and stay foreground. " +
-          "Non-elevated commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open.",
+          "Non-elevated commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open. " +
+          "For stack operations (releases, cutover, Git and GitHub flows) use the typed tools listed by get_operation_guide instead of shell commands.",
         inputSchema: runCommandTransportInputSchema,
         outputSchema: runCommandMcpResultSchema,
         annotations: {
@@ -3309,7 +3347,7 @@ export function registerSourceControlTools(
       "github_workflow_operation",
       {
         title: "Run or reconcile guarded release workflow",
-        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
+        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Run it in the Linux execution-node workspace; get_operation_guide topic=release has the full order.",
         inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
         outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
         annotations: sourceControlAnnotations.github_workflow_operation,

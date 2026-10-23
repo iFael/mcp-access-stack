@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   AppError,
+  MCP_AGENT_INSTRUCTIONS,
   MCP_SERVER_BASE_VERSION,
   MCP_SERVER_NAME,
   MCP_TOOL_CATALOG_META_KEY,
@@ -56,6 +57,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
           [MCP_TOOL_CATALOG_META_KEY]: catalog,
         },
       },
+      instructions: MCP_AGENT_INSTRUCTIONS,
     },
   );
   const securitySchemes = options.auth

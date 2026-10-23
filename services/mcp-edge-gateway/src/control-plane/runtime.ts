@@ -18,6 +18,7 @@ import {
 import {
   EDGE_MCP_CATALOG_METADATA,
   EDGE_MCP_SERVER_IDENTITY,
+  EDGE_MCP_SERVER_INSTRUCTIONS,
   EDGE_MCP_TOOL_MANIFEST,
 } from "../generated/mcp-tool-manifest.js";
 
@@ -79,6 +80,11 @@ export function createEdgeControlPlaneRuntime(
     catalogMetadata: catalog.catalogMetadata,
     serverIdentity: catalog.serverIdentity,
     ...(localTools === undefined ? {} : { localTools }),
+    // The instructions point agents at get_operation_guide, so only a catalog
+    // that serves that tool may carry them.
+    ...(catalog.manifest.some((tool) => tool.name === "get_operation_guide")
+      ? { instructions: EDGE_MCP_SERVER_INSTRUCTIONS }
+      : {}),
   });
   const router = createMcpSessionRouter({ oauth, controlPlane });
   return { authenticator, oauth, controlPlane, router };

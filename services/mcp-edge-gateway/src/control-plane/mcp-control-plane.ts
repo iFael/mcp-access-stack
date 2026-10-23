@@ -60,6 +60,7 @@ export interface EdgeMcpControlPlaneOptions extends EdgeMcpCatalog {
   authenticator: EdgeAuthenticator;
   execution: EdgeExecutionTransport;
   localTools?: EdgeLocalMcpToolHandler;
+  instructions?: string;
 }
 
 export interface EdgeMcpControlPlane {
@@ -90,6 +91,7 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
             },
           },
           serverInfo: options.serverIdentity,
+          ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
         });
         attachCatalogDiagnostic(response, options);
         return response;

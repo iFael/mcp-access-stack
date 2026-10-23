@@ -1416,6 +1416,9 @@ describe("registerWorkspaceTools", () => {
     );
 
     expect(state.isError).not.toBe(true);
+    expect(state.structuredContent).toMatchObject({
+      nextStep: { tool: "prepare_release" },
+    });
     expect(prepared.structuredContent).toMatchObject({
       status: "background_task_started",
       tag: "v1.1.0-beta.50",
@@ -1871,7 +1874,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-one source-control tools inside the 55-tool workspace surface", () => {
+  it("publishes twenty-one source-control tools inside the 56-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1896,8 +1899,8 @@ describe("registerSourceControlTools", () => {
       "github_merge_pull_request",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(21);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(55);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(55);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(56);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(56);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

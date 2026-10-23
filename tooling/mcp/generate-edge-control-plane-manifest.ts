@@ -46,8 +46,9 @@ try {
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const listed = await client.listTools();
   const serverIdentity = client.getServerVersion();
+  const serverInstructions = client.getInstructions();
   const catalogMetadata = listed._meta?.[MCP_TOOL_CATALOG_META_KEY];
-  if (!serverIdentity || !catalogMetadata) {
+  if (!serverIdentity || !catalogMetadata || !serverInstructions) {
     throw new Error("Canonical MCP server did not publish catalog identity");
   }
 
@@ -55,6 +56,7 @@ try {
     tools: canonicalize(listed.tools),
     catalogMetadata: canonicalize(catalogMetadata),
     serverIdentity: canonicalize(serverIdentity),
+    serverInstructions,
     requiredScope,
   });
 
@@ -81,6 +83,7 @@ function renderEdgeManifestModule(value: {
   tools: unknown;
   catalogMetadata: unknown;
   serverIdentity: unknown;
+  serverInstructions: string;
   requiredScope: string;
 }): string {
   return [
@@ -94,6 +97,8 @@ function renderEdgeManifestModule(value: {
     `export const EDGE_MCP_CATALOG_METADATA = ${JSON.stringify(value.catalogMetadata, null, 2)} as const;`,
     "",
     `export const EDGE_MCP_SERVER_IDENTITY = ${JSON.stringify(value.serverIdentity, null, 2)} as const;`,
+    "",
+    `export const EDGE_MCP_SERVER_INSTRUCTIONS = ${JSON.stringify(value.serverInstructions)};`,
     "",
   ].join("\n");
 }

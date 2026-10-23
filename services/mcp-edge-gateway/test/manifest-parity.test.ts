@@ -13,6 +13,7 @@ import {
   EDGE_MCP_CATALOG_METADATA,
   EDGE_MCP_REQUIRED_SCOPE,
   EDGE_MCP_SERVER_IDENTITY,
+  EDGE_MCP_SERVER_INSTRUCTIONS,
   EDGE_MCP_TOOL_MANIFEST,
 } from "../src/generated/mcp-tool-manifest.js";
 
@@ -69,6 +70,7 @@ describe("Edge MCP generated manifest parity", () => {
         createMcpToolContractRevision(listed.tools),
       );
       expect(EDGE_MCP_SERVER_IDENTITY).toEqual(identity);
+      expect(EDGE_MCP_SERVER_INSTRUCTIONS).toBe(client.getInstructions());
 
       const scopes = new Set(
         listed.tools.flatMap((tool) =>
