@@ -223,6 +223,39 @@ test("candidate preparation ambiguous failure stops and emits no token", async (
   assert.equal(post,1);
 });
 
+test("candidate preparation names the Edge refusal and retries only an old-build refusal", async () => {
+  let post=0,waits=0;
+  const fetchImpl=async(_url,request)=>{
+    if(request.method==="GET")return response(health(post>2 ? "prepared" : "deployed"));
+    post++;
+    return post<=2 ? response({error:"build_contract_mismatch",activeContractRevision:CATALOG.previousRevision},409)
+      : response(prepared());
+  };
+  assert.equal(await prepareOnce(input,{compare:async()=>provenance("after"),fetchImpl,sleep:async()=>{waits++;}}),true);
+  assert.equal(post,3);
+  assert.equal(waits,2);
+
+  let other=0;
+  await assert.rejects(prepareOnce(input,{compare:async()=>provenance("after"),sleep:async()=>{},
+    fetchImpl:async(_url,request)=>{
+      if(request.method==="GET")return response(health("deployed"));
+      other++;
+      return response({error:"active_contract_mismatch"},409);
+    }}),
+    /EDGE_CATALOG_PREPARE_OUTCOME_UNKNOWN_HTTP_409_active_contract_mismatch/);
+  assert.equal(other,1);
+
+  let stuck=0;
+  await assert.rejects(prepareOnce(input,{compare:async()=>provenance("after"),sleep:async()=>{},
+    fetchImpl:async(_url,request)=>{
+      if(request.method==="GET")return response(health("deployed"));
+      stuck++;
+      return response({error:"build_contract_mismatch"},409);
+    }}),
+    /EDGE_CATALOG_PREPARE_OUTCOME_UNKNOWN_HTTP_409_build_contract_mismatch/);
+  assert.equal(stuck,10);
+});
+
 test("workflow isolates CI/Stage identity, Environment and Cloudflare mutation", async () => {
   const source=await readFile(path.join(root,".github/workflows/edge-catalog-activate.yml"),"utf8");
   const parsed=YAML.parseDocument(source,{uniqueKeys:true});
