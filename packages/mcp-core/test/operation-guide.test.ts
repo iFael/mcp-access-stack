@@ -56,6 +56,12 @@ describe("operation guide", () => {
     expect(release.rules.join(" ")).toMatch(/never run Update-McpAccessStack\.sh/iu);
   });
 
+  it("closes the shell route for read-only checks too", () => {
+    expect(getOperationGuide().rules.join(" ")).toMatch(/do not use a shell to read stack state/iu);
+    expect(getOperationGuide("release").rules.join(" ")).toMatch(/do not check the main ref, the CI run or whether the tag exists/iu);
+    expect(getOperationGuide("refusals").rules.join(" ")).toContain("SHELL_NOT_ALLOWED");
+  });
+
   it("points server instructions at the guide", () => {
     expect(MCP_AGENT_INSTRUCTIONS).toContain("get_operation_guide");
   });
