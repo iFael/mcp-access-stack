@@ -22,6 +22,15 @@ export const getReleaseStateInputSchema = z
 
 export type GetReleaseStateInput = z.infer<typeof getReleaseStateInputSchema>;
 
+export const releaseNextStepSchema = z
+  .object({
+    tool: z.enum(["prepare_release", "promote_release"]).nullable(),
+    summary: z.string().min(1),
+  })
+  .strict();
+
+export type ReleaseNextStep = z.infer<typeof releaseNextStepSchema>;
+
 export const getReleaseStateResultSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -33,6 +42,8 @@ export const getReleaseStateResultSchema = z
         cutoverScriptPresent: z.boolean(),
       })
       .strict(),
+    // Added by the MCP tool layer so agents need not know the lifecycle order.
+    nextStep: releaseNextStepSchema.optional(),
   })
   .strict();
 

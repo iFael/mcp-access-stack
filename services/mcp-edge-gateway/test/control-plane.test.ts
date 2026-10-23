@@ -317,3 +317,28 @@ function jsonResponse(body: unknown): Response {
     headers: { "content-type": "application/json" },
   });
 }
+
+describe("Edge MCP control plane instructions", () => {
+  it("returns server instructions on initialize only when configured", async () => {
+    const initialize = mcpRequest(jsonRpc(1, "initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "instructions-client", version: "1.0.0" },
+    }));
+    const base = {
+      authenticator: { authenticate: async () => principal },
+      execution: new FakeExecutionTransport(),
+      manifest,
+      catalogMetadata,
+      serverIdentity,
+    };
+
+    const withInstructions = await createMcpControlPlane({ ...base, instructions: "Use the guide." })
+      .handle(initialize.clone());
+    expect(await withInstructions.json()).toMatchObject({ result: { instructions: "Use the guide." } });
+
+    const without = await createMcpControlPlane(base).handle(initialize);
+    const body = await without.json() as { result: Record<string, unknown> };
+    expect(body.result).not.toHaveProperty("instructions");
+  });
+});

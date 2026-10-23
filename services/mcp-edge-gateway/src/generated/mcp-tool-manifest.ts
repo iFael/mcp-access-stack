@@ -21,6 +21,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Returns the step-by-step playbook for a recurring job: which typed tools to call, in which order and in which workspace. Call it before a multi-step job (topic release, workspaces, source_control, background_tasks or browser) and after any refusal (topic refusals). Without a topic it returns the index.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "topic": {
+          "enum": [
+            "index",
+            "release",
+            "workspaces",
+            "refusals",
+            "source_control",
+            "background_tasks",
+            "browser"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_operation_guide",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "otherTopics": {
+          "items": {
+            "enum": [
+              "index",
+              "release",
+              "workspaces",
+              "refusals",
+              "source_control",
+              "background_tasks",
+              "browser"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "steps": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "topic": {
+          "enum": [
+            "index",
+            "release",
+            "workspaces",
+            "refusals",
+            "source_control",
+            "background_tasks",
+            "browser"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "title",
+        "summary",
+        "steps",
+        "rules",
+        "tools",
+        "otherTopics"
+      ],
+      "type": "object"
+    },
+    "title": "Get operation guide"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Lists enabled top-level workspaces authorized in the connected local agent. Use this for initial workspace discovery. workspaceKind distinguishes repository from aggregate; when an aggregate root is not already known, use list_workspace_roots next instead of recursive traversal.",
     "execution": {
       "taskSupport": "forbidden"
@@ -1646,7 +1761,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps.",
+    "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps. nextStep names the tool for the next lifecycle phase; get_operation_guide topic=release has the full order.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -1688,6 +1803,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "installationRoot": {
           "minLength": 1,
           "type": "string"
+        },
+        "nextStep": {
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "tool": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "prepare_release",
+                    "promote_release"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "tool",
+            "summary"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -1917,6 +2060,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "installationRoot": {
                   "minLength": 1,
                   "type": "string"
+                },
+                "nextStep": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "summary": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "tool": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "prepare_release",
+                            "promote_release"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "summary"
+                  ],
+                  "type": "object"
                 },
                 "state": {
                   "additionalProperties": false,
@@ -2163,7 +2334,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path.",
+    "description": "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path. This is the only supported way to stage a candidate (never run the updater through a shell); follow the returned task with wait_background_task. See get_operation_guide topic=release.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2540,7 +2711,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths.",
+    "description": "Starts the signed detached cutover for the exact staged candidate release using only persisted local production configuration. The caller cannot provide shell commands, credentials, URLs or filesystem paths. This is the only supported cutover route and needs the user's explicit go-ahead; afterwards read get_release_state until the candidate is empty. See get_operation_guide topic=release.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -4277,7 +4448,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. Commands classified as potentially destructive return confirmation_required before execution. Set elevated=true only when Windows administrator rights are required; elevated commands always require bound confirmation and stay foreground. Non-elevated commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open.",
+    "description": "Preferred general command runner. Executes one explicit command in an allowed shell with the workspace root as the default working directory. Use it for PowerShell, pwsh, cmd, wsl or git-bash when the caller needs to choose the shell explicitly. Commands classified as potentially destructive return confirmation_required before execution. Set elevated=true only when Windows administrator rights are required; elevated commands always require bound confirmation and stay foreground. Non-elevated commands with timeoutMs above 60000 are started as persisted background tasks instead of holding the MCP request open. For stack operations (releases, cutover, Git and GitHub flows) use the typed tools listed by get_operation_guide instead of shell commands.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -11947,7 +12118,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion.",
+    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Run it in the Linux execution-node workspace; get_operation_guide topic=release has the full order.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25183,13 +25354,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "3200961150caa5f8063d2ddf8250af97478958eee0f93a48c8f1ab65aae8d3fb",
-  "serverVersion": "0.4.0-catalog.c3200961150ca.s66c99ae6ff87",
-  "toolCount": 110,
-  "toolSetRevision": "66c99ae6ff8736654b7dfa6ddd0185712e0a9fcc8689e9cb0507d1d84cf1cd65"
+  "contractRevision": "b8b8dd9834ba51966c459c4703fef67b574ed37ee729cb796bc406ae7a70e0d4",
+  "serverVersion": "0.4.0-catalog.cb8b8dd9834ba.sbe9beef5fb89",
+  "toolCount": 111,
+  "toolSetRevision": "be9beef5fb891b1260cb56d1268d198e63049b608a02ef293073d0449376a8cd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c3200961150ca.s66c99ae6ff87"
+  "version": "0.4.0-catalog.cb8b8dd9834ba.sbe9beef5fb89"
 } as const;
+
+export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

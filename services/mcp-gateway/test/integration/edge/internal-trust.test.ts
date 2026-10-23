@@ -237,6 +237,9 @@ describe("embedded Gateway edge-trusted mode", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       });
       expect(response.status).toBe(200);
+      // Drain the large tools/list body; an unread stream keeps the socket
+      // open and stalls server.close() for seconds.
+      await expect(response.text()).resolves.toContain("get_operation_guide");
     } finally {
       await http.close();
     }

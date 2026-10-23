@@ -19,6 +19,7 @@ export * from "./mcp-tool-catalog.js";
 export * from "./mcp-tool-publication.js";
 export * from "./mcp-workspace-tools.js";
 export * from "./mutation-receipts.js";
+export * from "./operation-guide.js";
 export * from "./policy.js";
 export * from "./policy-merge.js";
 export * from "./project-write-policy.js";
