@@ -222,30 +222,59 @@ async function reconcileDeployment(input, cause, compare, fetchImpl, sleep) {
   deny("DEPLOYMENT_OUTCOME_UNKNOWN_" + cause);
 }
 
-export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch} = {}) {
+/** The Edge's refusal code, read only from a bounded, non-200 JSON body. */
+async function refusalCode(response) {
+  try {
+    const raw = await response.text();
+    if (raw.length > 8192) return "";
+    const code = JSON.parse(raw)?.error;
+    return typeof code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(code) ? code : "";
+  } catch { return ""; }
+}
+
+// Right after a deployment the session Durable Object can still run the
+// previous build for a while; it then refuses with build_contract_mismatch and
+// applies nothing. Only that refusal is retried.
+const BUILD_MISMATCH_ATTEMPTS = 10;
+const BUILD_MISMATCH_DELAY_MS = 30000;
+
+export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {
   if (!UUID.test(input.newDeployment ?? "") ||
       typeof input.prepareToken !== "string" || input.prepareToken.length < 43 ||
       input.prepareToken === input.token) deny("PREPARE_INPUT_INVALID");
   verifyProvenance(await provenance(input, compare), input, "after", input.newDeployment);
   verifyHealth(await health(fetchImpl), "deployed");
   verifyProvenance(await provenance(input, compare), input, "after", input.newDeployment);
-  let response;
-  try {
-    response = await fetchImpl(CATALOG.origin + "/_internal/contract-rollout/prepare", {
-      method: "POST", headers: {
-        authorization: "Bearer " + input.prepareToken,
-        "content-type": "application/json", accept: "application/json",
-      },
-      body: JSON.stringify({
-        expectedActiveContractRevision: CATALOG.previousRevision,
-        expectedCandidateContractRevision: CATALOG.targetRevision,
-      }),
-      redirect: "error", signal: AbortSignal.timeout(20000),
-    });
-  } catch { deny("PREPARE_OUTCOME_UNKNOWN"); }
-  if (response.status !== 200) deny("PREPARE_OUTCOME_UNKNOWN");
-  try { verifyPrepareReceipt(await json(response, 8192)); }
-  catch { deny("PREPARE_OUTCOME_UNKNOWN"); }
+  for (let attempt = 1; ; attempt++) {
+    let response;
+    try {
+      response = await fetchImpl(CATALOG.origin + "/_internal/contract-rollout/prepare", {
+        method: "POST", headers: {
+          authorization: "Bearer " + input.prepareToken,
+          "content-type": "application/json", accept: "application/json",
+        },
+        body: JSON.stringify({
+          expectedActiveContractRevision: CATALOG.previousRevision,
+          expectedCandidateContractRevision: CATALOG.targetRevision,
+        }),
+        redirect: "error", signal: AbortSignal.timeout(20000),
+      });
+    } catch { deny("PREPARE_OUTCOME_UNKNOWN"); }
+    if (response.status !== 200) {
+      const status = Number.isInteger(response.status) &&
+        response.status >= 100 && response.status <= 599 ? response.status : 0;
+      const code = status === 401 ? "" : await refusalCode(response);
+      if (status === 409 && code === "build_contract_mismatch" && attempt < BUILD_MISMATCH_ATTEMPTS) {
+        console.error("EDGE_CATALOG_PREPARE_WAITING_FOR_NEW_BUILD attempt=" + attempt);
+        await sleep(BUILD_MISMATCH_DELAY_MS);
+        continue;
+      }
+      deny("PREPARE_OUTCOME_UNKNOWN_HTTP_" + status + (code ? "_" + code : ""));
+    }
+    try { verifyPrepareReceipt(await json(response, 8192)); }
+    catch { deny("PREPARE_OUTCOME_UNKNOWN_RECEIPT"); }
+    break;
+  }
   verifyHealth(await health(fetchImpl), "prepared");
   return true;
 }

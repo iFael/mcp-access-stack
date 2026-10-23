@@ -1,0 +1,194 @@
+name: Recover Edge catalog candidate preparation (no deployment)
+
+run-name: mcp-edge-catalog-recovery-${{ inputs.activation_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact main SHA with successful CI
+        required: true
+        type: string
+      activation_run_id:
+        description: edge-catalog-activate.yml run whose deployment passed and whose candidate preparation failed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: public-release-edge
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      expected_active_deployment_id: ${{ steps.original.outputs.expected_active_deployment_id }}
+      expected_active_version_id: ${{ steps.original.outputs.expected_active_version_id }}
+      staged_version_id: ${{ steps.original.outputs.staged_version_id }}
+      new_deployment_id: ${{ steps.original.outputs.new_deployment_id }}
+      stage_run_id: ${{ steps.original.outputs.stage_run_id }}
+      operation_id: ${{ steps.original.outputs.operation_id }}
+    steps:
+      - name: Derive the original activation's verified deployment without credentials
+        id: original
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          ACTIVATION_RUN_ID: ${{ inputs.activation_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$ACTIVATION_RUN_ID" =~ ^[1-9][0-9]{4,20}$ ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+          ci_count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
+            --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
+            --json headSha,status,conclusion \
+            --jq '[.[] | select(.headSha == env.EXPECTED_MAIN_SHA and .status == "completed" and .conclusion == "success")] | length')"
+          [[ "$ci_count" =~ ^[1-9][0-9]*$ ]]
+
+          # One recovery per activation run.
+          count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-catalog-recover-prepare.yml \
+            --limit 100 --json databaseId,displayTitle \
+            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.ACTIVATION_RUN_ID))] | length')"
+          [[ "$count" == "1" ]]
+
+          original="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ACTIVATION_RUN_ID" \
+            --jq '[.head_sha,.head_branch,.event,.status,.conclusion,.run_attempt,.path,.display_title] | @tsv')"
+          IFS=$'\t' read -r original_sha original_branch original_event original_status original_conclusion original_attempt original_path original_title <<< "$original"
+          [[ "$original_sha" =~ ^[a-f0-9]{40}$ && "$original_branch" == "main" ]]
+          [[ "$original_event" == "workflow_dispatch" && "$original_status" == "completed" ]]
+          [[ "$original_conclusion" == "failure" && "$original_attempt" == "1" ]]
+          [[ "$original_path" == ".github/workflows/edge-catalog-activate.yml" ]]
+          operation_id="${original_title#mcp-edge-catalog-}"
+          [[ "$original_title" == "mcp-edge-catalog-$operation_id" ]]
+          [[ "$operation_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+
+          # The deployment step passed; only the candidate preparation failed.
+          jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ACTIVATION_RUN_ID/jobs")"
+          [[ "$(jq -r '[.jobs[] | select(.name == "preflight" and .conclusion == "success")] | length' <<< "$jobs")" == "1" ]]
+          [[ "$(jq -r '[.jobs[] | select(.name == "publish") | .steps[] | select(.name == "Read-only dual Cloudflare CAS and active contract health" and .conclusion == "success")] | length' <<< "$jobs")" == "1" ]]
+          [[ "$(jq -r '[.jobs[] | select(.name == "publish") | .steps[] | select(.name == "ONE 100-percent Cloudflare deployment, no automatic retry" and .conclusion == "success")] | length' <<< "$jobs")" == "1" ]]
+          [[ "$(jq -r '[.jobs[] | select(.name == "publish") | .steps[] | select(.name == "ONE authenticated candidate preparation after verified deployment" and .conclusion == "failure")] | length' <<< "$jobs")" == "1" ]]
+
+          # Every pinned identity comes from the original run's own log, never from input.
+          log="$(gh run view "$ACTIVATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --log)"
+          one() {
+            local values
+            values="$(grep -oE "(^|[^A-Z_])$1: [a-f0-9-]+" <<< "$log" | sed -E 's/^[^A-Z_]//' | sort -u || true)"
+            [[ "$(grep -c . <<< "$values" || true)" == "1" ]] || return 1
+            printf '%s\n' "${values##*: }"
+          }
+          uuid='^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
+          active_deployment="$(one EXPECTED_ACTIVE_DEPLOYMENT_ID)"
+          active_version="$(one EXPECTED_ACTIVE_VERSION_ID)"
+          staged_version="$(one STAGED_VERSION_ID)"
+          new_deployment="$(one NEW_DEPLOYMENT_ID)"
+          stage_run_id="$(one EDGE_CATALOG_STAGE_RUN_ID)"
+          [[ "$(one EDGE_CATALOG_OPERATION_ID)" == "$operation_id" ]]
+          for id in "$active_deployment" "$active_version" "$staged_version" "$new_deployment"; do
+            [[ "$id" =~ $uuid ]]
+          done
+          [[ "$stage_run_id" =~ ^[1-9][0-9]{4,20}$ ]]
+          [[ "$new_deployment" != "$active_deployment" && "$staged_version" != "$active_version" ]]
+          verified="$(grep -oE 'EDGE_CATALOG_DEPLOYMENT_VERIFIED id=[a-f0-9-]+' <<< "$log" | sort -u)"
+          [[ "$verified" == "EDGE_CATALOG_DEPLOYMENT_VERIFIED id=$new_deployment" ]]
+
+          # The staged version was built from the activation's main.
+          staged="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$stage_run_id" \
+            --jq '[.head_sha,.event,.status,.conclusion,.run_attempt,.path] | @tsv')"
+          IFS=$'\t' read -r stage_sha stage_event stage_status stage_conclusion stage_attempt stage_path <<< "$staged"
+          [[ "$stage_sha" == "$original_sha" ]]
+          [[ "$stage_event" == "workflow_dispatch" && "$stage_status" == "completed" && "$stage_conclusion" == "success" ]]
+          [[ "$stage_attempt" == "1" && "$stage_path" == ".github/workflows/edge-cas-candidate-stage.yml" ]]
+          receipt="$(gh run view "$stage_run_id" --repo "$GITHUB_REPOSITORY" --log |
+            grep -oE 'EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=[a-f0-9-]+' | sort -u || true)"
+          [[ "$receipt" == "EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=$staged_version" ]]
+
+          # Main may have moved, but never in the Worker, its catalog or the rollout config.
+          if [[ "$original_sha" != "$EXPECTED_MAIN_SHA" ]]; then
+            compare="$(gh api "repos/$GITHUB_REPOSITORY/compare/$original_sha...$EXPECTED_MAIN_SHA")"
+            [[ "$(jq -r .status <<< "$compare")" == "ahead" ]]
+            [[ "$(jq -r '.files | length' <<< "$compare")" -lt 300 ]]
+            if jq -r '.files[].filename' <<< "$compare" |
+                grep -E '^(services/mcp-edge-gateway/|packages/|tooling/release/edge-catalog-rollout\.json$)'; then
+              echo "EDGE_CATALOG_RECOVERY_SOURCE_DRIFT" >&2
+              exit 1
+            fi
+          fi
+
+          {
+            echo "expected_active_deployment_id=$active_deployment"
+            echo "expected_active_version_id=$active_version"
+            echo "staged_version_id=$staged_version"
+            echo "new_deployment_id=$new_deployment"
+            echo "stage_run_id=$stage_run_id"
+            echo "operation_id=$operation_id"
+          } >> "$GITHUB_OUTPUT"
+          echo "EDGE_CATALOG_RECOVERY_PREFLIGHT_VERIFIED deployment=$new_deployment version=$staged_version"
+
+  prepare:
+    needs: preflight
+    if: ${{ needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: public-release
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout the exact validated main SHA without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.expected_main_sha }}
+          persist-credentials: false
+      - name: Set up pinned Node.js 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+      - name: Reconcile SHA and single recovery after Environment approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          ACTIVATION_RUN_ID: ${{ inputs.activation_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN_SHA" ]]
+          [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
+          count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-catalog-recover-prepare.yml \
+            --limit 100 --json databaseId,displayTitle \
+            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.ACTIVATION_RUN_ID))] | length')"
+          [[ "$count" == "1" ]]
+      - name: Install pinned packages and validate recovery contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          node --test tooling/release/edge-catalog-recover-prepare.test.mjs \
+            tooling/release/activate-edge-catalog.test.mjs
+      - name: Authenticated candidate preparation, no Worker deployment
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ needs.preflight.outputs.expected_active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ needs.preflight.outputs.expected_active_version_id }}
+          STAGED_VERSION_ID: ${{ needs.preflight.outputs.staged_version_id }}
+          NEW_DEPLOYMENT_ID: ${{ needs.preflight.outputs.new_deployment_id }}
+          EDGE_CATALOG_STAGE_RUN_ID: ${{ needs.preflight.outputs.stage_run_id }}
+          EDGE_CATALOG_OPERATION_ID: ${{ needs.preflight.outputs.operation_id }}
+        run: |
+          set -euo pipefail
+          node tooling/release/activate-edge-catalog.mjs prepare
