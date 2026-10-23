@@ -96,6 +96,25 @@ describe("GitHubHttpClient fixed transport", () => {
     });
   });
 
+  it("dispatches the Edge catalog workflows with only main, operation and stage run inputs", async () => {
+    const fetchImpl=jest.fn(async()=>new Response(null,{status:204}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    const op="11111111-2222-4333-8444-555555555555";
+    await client.dispatchWorkflow("octo","app","edge-cas-candidate-stage.yml","a".repeat(40),
+      {operation_id:op,stage_run_id:"123",expected_active_deployment_id:"must-not-forward"});
+    await client.dispatchWorkflow("octo","app","edge-catalog-activate.yml","a".repeat(40),
+      {operation_id:op,stage_run_id:"40033066092",expected_active_version_id:"must-not-forward"});
+    await client.dispatchWorkflow("octo","app","edge-catalog-recover-prepare.yml","a".repeat(40),{operation_id:op});
+    expect(requestOf(fetchImpl,0).url).toBe(
+      "https://api.github.com/repos/octo/app/actions/workflows/edge-cas-candidate-stage.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl,0).init.body)).inputs).toEqual({
+      operation_id:op,expected_main_sha:"a".repeat(40)});
+    expect(JSON.parse(String(requestOf(fetchImpl,1).init.body)).inputs).toEqual({
+      operation_id:op,expected_main_sha:"a".repeat(40),stage_run_id:"40033066092"});
+    expect(JSON.parse(String(requestOf(fetchImpl,2).init.body)).inputs).toEqual({
+      operation_id:op,expected_main_sha:"a".repeat(40)});
+  });
+
   it("builds only the fixed GitHub API endpoints, methods and headers", async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ ok: true }));
     const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });

@@ -97,6 +97,21 @@ describe("unified workflow bootstrap provenance",()=>{
     expect(githubWorkflowOperationInputSchema.safeParse({...base,
       workflow:"release-tag-bootstrap.yml",bootstrapOperationId}).success).toBe(false);
   });
+  it("accepts the Edge catalog workflows without tag or bootstrap, and stageRunId only on activation",()=>{
+    const edge={workspaceId:"repo",owner:"octo",repository:"app",mode:"dispatch" as const,
+      expectedMainSha:shaA,operationId:"11111111-2222-4333-8444-555555555557"};
+    for (const workflow of ["edge-cas-candidate-stage.yml","edge-catalog-recover-prepare.yml"] as const) {
+      expect(githubWorkflowOperationInputSchema.safeParse({...edge,workflow}).success).toBe(true);
+      expect(githubWorkflowOperationInputSchema.safeParse({...edge,workflow,stageRunId:40033066092}).success).toBe(false);
+      expect(githubWorkflowOperationInputSchema.safeParse({...edge,workflow,tag:"v1.1.0-beta.90"}).success).toBe(false);
+    }
+    const activation={...edge,workflow:"edge-catalog-activate.yml" as const};
+    expect(githubWorkflowOperationInputSchema.safeParse(activation).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...activation,stageRunId:40033066092}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...activation,mode:"reconcile"}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...activation,stageRunId:0}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...activation,workflow:"deploy.yml",stageRunId:1}).success).toBe(false);
+  });
 });
 
 const forbiddenEscapeHatchValues = {

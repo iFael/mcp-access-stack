@@ -13,7 +13,7 @@ const workflow = yaml.toJS();
 
 test("prepare-only recovery is YAML-valid, dispatch-only, main-pinned and protected", () => {
   assert.deepEqual(yaml.errors, []);
-  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs), ["expected_main_sha", "activation_run_id"]);
+  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs), ["expected_main_sha", "operation_id"]);
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.permissions.actions, "read");
   assert.equal(workflow.concurrency.group, "public-release-edge");
@@ -64,7 +64,10 @@ test("Cloudflare credentials appear only in the single preparation step, fed by 
 });
 
 test("one recovery per activation run, checked before and after the Environment gate", () => {
-  assert.equal(workflow["run-name"], "mcp-edge-catalog-recovery-${{ inputs.activation_run_id }}");
+  assert.equal(workflow["run-name"], "mcp-edge-catalog-recovery-${{ inputs.operation_id }}");
   assert.equal((workflowSource.match(/--workflow edge-catalog-recover-prepare\.yml/g) ?? []).length, 2);
   assert.equal((workflowSource.match(/\[\[ "\$count" == "1" \]\]/g) ?? []).length, 2);
+  // The activation is found by its own operation title, never by a caller-supplied run id.
+  assert.ok(workflowSource.includes('("mcp-edge-catalog-" + env.OPERATION_ID)'));
+  assert.ok(workflowSource.includes('"$original_title" == "mcp-edge-catalog-$OPERATION_ID"'));
 });

@@ -78,7 +78,7 @@ test("rollout config is strict and the source must match its target catalog", ()
       CATALOG.requiredTools.map((tool) => `{"name": "${tool}"}`).join(", ") + "]}";
   assert.equal(requireExactSource(pinnedSource), true);
   for (const source of [
-    pinnedSource.replace(`"toolCount": ${CATALOG.targetToolCount}`, `"toolCount": ${CATALOG.previousToolCount}`),
+    pinnedSource.replace(`"toolCount": ${CATALOG.targetToolCount}`, `"toolCount": ${CATALOG.targetToolCount + 1}`),
     pinnedSource.replace(CATALOG.targetRevision, "0".repeat(64)),
     ...CATALOG.requiredTools.map((tool) => pinnedSource.replace(`"name": "${tool}"`, '"name": "missing"')),
   ]) assert.throws(() => requireExactSource(source), /EDGE_CATALOG_SOURCE_MISMATCH/);
@@ -287,4 +287,14 @@ test("workflow isolates CI/Stage identity, Environment and Cloudflare mutation",
     "${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}");
   assert.equal(steps[deploy].env.MCP_CONTRACT_PREPARE_TOKEN,undefined);
   assert.doesNotMatch(source,/wrangler deploy|wrangler secret put|release-tag-bootstrap|\/_internal\/contract-rollout\/promote/);
+  // Cloudflare pins default to the ones the stage run verified; explicit ones must agree.
+  for (const name of ["expected_active_deployment_id","expected_active_version_id"]) {
+    assert.equal(workflow.on.workflow_dispatch.inputs[name].required,false);
+  }
+  assert.ok(source.includes("EDGE_CAS_STAGE_PINNED_ACTIVE deployment_id="));
+  assert.ok(source.includes('"$EXPECTED_ACTIVE_DEPLOYMENT_ID" == "$pinned_deployment"'));
+  for (const step of [steps[pre],steps[deploy],steps[prep]]) {
+    assert.equal(step.env.EXPECTED_ACTIVE_DEPLOYMENT_ID,"${{ needs.preflight.outputs.active_deployment_id }}");
+    assert.equal(step.env.EXPECTED_ACTIVE_VERSION_ID,"${{ needs.preflight.outputs.active_version_id }}");
+  }
 });

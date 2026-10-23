@@ -9,6 +9,7 @@ import type { GetReleaseStateResult, ReleaseNextStep } from "./release-lifecycle
 export const OPERATION_GUIDE_TOPICS = [
   "index",
   "release",
+  "edge_catalog",
   "workspaces",
   "refusals",
   "source_control",
@@ -48,7 +49,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "every recurring flow already has typed tools, so a shell command is never the first choice.",
     steps: [
       "Call list_workspaces once and choose the workspace by what the job needs (topic workspaces).",
-      "Call get_operation_guide with the matching topic: release, source_control, background_tasks or browser.",
+      "Call get_operation_guide with the matching topic: release, edge_catalog, source_control, background_tasks or browser.",
       "Follow that topic's steps in order and stop at the first refusal; read topic refusals before trying anything else.",
     ],
     rules: [
@@ -86,6 +87,26 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "read_background_task_output",
       "promote_release",
     ],
+  },
+  edge_catalog: {
+    title: "Roll out a new Edge tool catalog",
+    summary:
+      "When a change alters the MCP tool contract, the Edge Worker must serve the new catalog before the connector " +
+      "release that carries it is cut over. Three guarded workflows do it, all through github_workflow_operation in " +
+      "the Linux execution-node workspace; each pins the current Cloudflare deployment itself.",
+    steps: [
+      "Check: github_get_commit_checks on the exact main SHA must be green.",
+      "Stage: github_workflow_operation workflow=edge-cas-candidate-stage.yml mode=dispatch with expectedMainSha and a new operationId; reconcile until completed and success. The run uploads a Worker version with no traffic; note its runId.",
+      "Activate: github_workflow_operation workflow=edge-catalog-activate.yml mode=dispatch with the same expectedMainSha, stageRunId = the stage runId and a new operationId; reconcile until completed. It deploys the staged version and prepares the new contract as candidate.",
+      "Recover only if the activation failed at its candidate preparation: github_workflow_operation workflow=edge-catalog-recover-prepare.yml mode=dispatch with expectedMainSha and operationId = the activation operationId; reconcile until completed.",
+      "Then follow topic release: publish the connector release built from the same main, prepare_release, and promote_release with the user's go-ahead. The cutover promotes the new contract.",
+    ],
+    rules: [
+      "Each workflow runs once per operationId; on outcome_unknown only reconcile with the same identifiers.",
+      "Never recover a failed deployment step: the recovery workflow refuses it, report it to the user instead.",
+      "Each step is a separate authorization unless the user approved the whole rollout.",
+    ],
+    tools: ["github_get_commit_checks", "github_workflow_operation", "get_release_state", "prepare_release", "promote_release"],
   },
   workspaces: {
     title: "Choose the right workspace",

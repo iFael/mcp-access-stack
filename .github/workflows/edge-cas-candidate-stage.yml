@@ -1,5 +1,7 @@
 name: Stage current Edge CAS candidate (no traffic)
 
+run-name: mcp-edge-stage-${{ inputs.operation_id || github.run_id }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,16 +10,24 @@ on:
         required: true
         type: string
       expected_active_deployment_id:
-        description: Pinned active deployment UUID for 100% traffic
-        required: true
+        description: Pinned active deployment UUID for 100% traffic (empty = read the active one)
+        required: false
+        default: ""
         type: string
       expected_active_version_id:
-        description: Pinned immutable active Worker version UUID
-        required: true
+        description: Pinned immutable active Worker version UUID (empty = read the active one)
+        required: false
+        default: ""
         type: string
       expected_contract_revision:
-        description: Full catalog contract revision embedded in pinned main
-        required: true
+        description: Full catalog contract revision embedded in pinned main (empty = rollout target)
+        required: false
+        default: ""
+        type: string
+      operation_id:
+        description: Stable UUID identifying this one-shot stage (set by github_workflow_operation)
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -42,15 +52,28 @@ jobs:
           EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
           EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
           EXPECTED_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+          OPERATION_ID: ${{ inputs.operation_id }}
         run: |
           set -euo pipefail
+          uuid='^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
           [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
           [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
           [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
           [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
-          [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
-          [[ "$EXPECTED_CONTRACT_REVISION" =~ ^[a-f0-9]{64}$ ]]
+          # Pins are both given or both read from Cloudflare in the protected job.
+          if [[ -n "$EXPECTED_ACTIVE_DEPLOYMENT_ID$EXPECTED_ACTIVE_VERSION_ID" ]]; then
+            [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ $uuid ]]
+            [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ $uuid ]]
+          fi
+          [[ -z "$EXPECTED_CONTRACT_REVISION" || "$EXPECTED_CONTRACT_REVISION" =~ ^[a-f0-9]{64}$ ]]
+          if [[ -n "$OPERATION_ID" ]]; then
+            [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+            # Never reuse this operationId across multiple dispatches, even after failure.
+            existing="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-cas-candidate-stage.yml \
+              --limit 100 --json databaseId,displayTitle \
+              --jq '[.[] | select(.displayTitle == ("mcp-edge-stage-" + env.OPERATION_ID))] | length')"
+            [[ "$existing" == "1" ]]
+          fi
           [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
           ci_count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
             --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
@@ -101,13 +124,26 @@ jobs:
           npm run build --workspace @mcp-access-stack/edge-protocol
           npm run build --workspace @mcp-access-stack/mcp-owner-auth
 
+      - name: Resolve Cloudflare CAS pins (read-only)
+        id: pins
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          INPUT_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
+          INPUT_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+          INPUT_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+        run: |
+          set -euo pipefail
+          node tooling/release/stage-edge-cas-candidate.mjs pins
+
       - name: Validate exact CAS candidate source without network
         shell: bash
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
-          EXPECTED_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ steps.pins.outputs.deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ steps.pins.outputs.version_id }}
+          EXPECTED_CONTRACT_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
           set -euo pipefail
           node tooling/release/stage-edge-cas-candidate.mjs preflight
@@ -119,9 +155,9 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
-          EXPECTED_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ steps.pins.outputs.deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ steps.pins.outputs.version_id }}
+          EXPECTED_CONTRACT_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
           set -euo pipefail
           node tooling/release/stage-edge-cas-candidate.mjs before
@@ -133,9 +169,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
-          EXPECTED_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ steps.pins.outputs.deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ steps.pins.outputs.version_id }}
+          EXPECTED_CONTRACT_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
           set -euo pipefail
           umask 077
@@ -158,9 +194,9 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
-          EXPECTED_CONTRACT_REVISION: ${{ inputs.expected_contract_revision }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ steps.pins.outputs.deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ steps.pins.outputs.version_id }}
+          EXPECTED_CONTRACT_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
           set -euo pipefail
           node tooling/release/stage-edge-cas-candidate.mjs after
