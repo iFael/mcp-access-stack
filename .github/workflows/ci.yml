@@ -572,7 +572,9 @@ jobs:
 
       - name: Validate Linux execution runtime
         shell: bash
-        run: bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
+        run: |
+          bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
+          bash deploy/linux/Test-McpAccessStackOperation.sh
 
   pr-runtime-assurance-core:
     needs: impact
@@ -765,7 +767,9 @@ jobs:
 
       - name: Validate Linux execution runtime
         shell: bash
-        run: bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
+        run: |
+          bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
+          bash deploy/linux/Test-McpAccessStackOperation.sh
 
   main-browser:
     name: main-browser
