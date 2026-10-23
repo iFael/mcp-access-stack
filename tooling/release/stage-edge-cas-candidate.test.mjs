@@ -9,25 +9,27 @@ import {
   verifyLocalCandidate, requirePublisherPrerequisites, verifyNoTrafficChange, parseInput,
   writeStageSecretFile, verifyVersionSecretBinding,
 } from "./stage-edge-cas-candidate.mjs";
+import { CATALOG } from "./activate-edge-catalog.mjs";
 
 const deployment = "10535ed8-c51b-418e-a387-3cf9ba8fde82";
 const version = "7b536d5f-8afb-4da0-927e-44cf6e23b6d6";
-const revision = "3200961150caa5f8063d2ddf8250af97478958eee0f93a48c8f1ab65aae8d3fb";
-const previousRevision = "6c8f2d03a166f5a2e57768f8410ade365beb75c2fd51d9ab0c07c48a01dbf7d1";
+const revision = CATALOG.targetRevision;
+const previousRevision = CATALOG.previousRevision;
 const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const config = JSON.parse(await readFile(path.join(base, "services/mcp-edge-gateway/wrangler.jsonc"), "utf8"));
 const manifest = await readFile(path.join(base, "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts"), "utf8");
 
-test("Edge staging accepts only the pinned 110-tool manifest and rejects the active 99", () => {
-  const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": 110\n}`;
+test("Edge staging accepts only the rollout's target catalog and rejects the active one", () => {
+  const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": ${CATALOG.targetToolCount}\n}`;
   assert.equal(verifyLocalCandidate(config, pinned, revision), revision);
   assert.throws(() => verifyLocalCandidate(config, pinned, previousRevision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
-  assert.throws(() => verifyLocalCandidate(config, pinned.replace('"toolCount": 110', '"toolCount": 99'), revision),
-    /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
+  assert.throws(() => verifyLocalCandidate(config,
+    pinned.replace(`"toolCount": ${CATALOG.targetToolCount}`, `"toolCount": ${CATALOG.previousToolCount}`), revision),
+  /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
-test("Edge staging takes the checked-out catalog only while it is the pinned 110-tool revision", () => {
-  // A later catalog must move this pin deliberately instead of being staged as 110.
+test("Edge staging takes the checked-out catalog only while it is the rollout target", () => {
+  // A later catalog must move edge-catalog-rollout.json deliberately.
   if (manifest.includes(`"contractRevision": "${revision}"`)) {
     assert.equal(verifyLocalCandidate(config, manifest, revision), revision);
   } else {
