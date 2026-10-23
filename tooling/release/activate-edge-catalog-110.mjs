@@ -128,6 +128,32 @@ async function health(fetchImpl) {
 const provenance = (input, compare) =>
   compare({ accountId: input.accountId, token: input.token, referenceVersionId: input.targetVersion });
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
+const deploymentMessage = input => "MCP Edge 110 stage " + input.stageRunId +
+  " operation " + input.operationId + " run " + input.runId;
+
+// Read-only reconciliation after an unverifiable POST: the operation-unique
+// annotation identifies the deployment this run created, if Cloudflare applied it.
+export async function findDeploymentByMessage(input, fetchImpl, sleep = sleepDefault) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetchImpl(API + input.accountId + "/workers/scripts/" + CATALOG110.worker + "/deployments", {
+        method: "GET", headers: { authorization: "Bearer " + input.token, accept: "application/json" },
+        redirect: "error", signal: AbortSignal.timeout(10000),
+      });
+      if (response.status === 200) {
+        const data = await json(response, 262144);
+        const deployments = data?.success === true && Array.isArray(data.result?.deployments) ? data.result.deployments : [];
+        const matches = deployments.filter(d => d?.annotations?.["workers/message"] === deploymentMessage(input));
+        if (matches.length > 1) deny("DEPLOYMENT_RECONCILE_AMBIGUOUS");
+        if (matches.length === 1) return verifyDeploymentReceipt({ success: true, result: matches[0] }, input);
+      }
+    } catch (error) {
+      if (error instanceof Catalog110Refused && error.message === "EDGE_110_DEPLOYMENT_RECONCILE_AMBIGUOUS") throw error;
+    }
+    if (attempt < 2) await sleep(2000);
+  }
+  return null;
+}
 
 export async function preflight(input, {compare = compareWorkerVersions, fetchImpl = fetch} = {}) {
   verifyProvenance(await provenance(input, compare), input, "before");
@@ -136,9 +162,9 @@ export async function preflight(input, {compare = compareWorkerVersions, fetchIm
   return true;
 }
 
-export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {
+export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault, log = console.error} = {}) {
   await preflight(input, {compare, fetchImpl});
-  let response;
+  let response, receipt = null, reason = "FETCH_FAILED";
   try {
     response = await fetchImpl(API + input.accountId + "/workers/scripts/" + CATALOG110.worker + "/deployments", {
       method: "POST", headers: {
@@ -148,19 +174,22 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
       body: JSON.stringify({
         strategy: "percentage",
         versions: [{ percentage: 100, version_id: input.targetVersion }],
-        annotations: {
-          "workers/message": "MCP Edge 110 stage " + input.stageRunId +
-            " operation " + input.operationId + " run " + input.runId,
-        },
+        annotations: { "workers/message": deploymentMessage(input) },
       }),
       redirect: "error", signal: AbortSignal.timeout(20000),
     });
-  } catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
-  // Any non-success status can still follow an applied remote mutation. Never POST again.
-  if (![200,201].includes(response.status)) deny("DEPLOYMENT_OUTCOME_UNKNOWN");
-  let receipt;
-  try { receipt = verifyDeploymentReceipt(await json(response), input); }
-  catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
+    reason = "HTTP_" + response.status;
+    // Any non-success status can still follow an applied remote mutation. Never POST again.
+    if ([200,201].includes(response.status)) receipt = verifyDeploymentReceipt(await json(response), input);
+  } catch (error) {
+    if (error instanceof Catalog110Refused) reason = error.message.replace(/^EDGE_110_/u, "");
+  }
+  if (receipt === null) {
+    log("EDGE_110_DEPLOYMENT_RESPONSE_UNVERIFIED reason=" + reason);
+    receipt = await findDeploymentByMessage(input, fetchImpl, sleep);
+    if (receipt === null) deny("DEPLOYMENT_OUTCOME_UNKNOWN");
+    log("EDGE_110_DEPLOYMENT_RECONCILED id=" + receipt);
+  }
   let found = false;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {

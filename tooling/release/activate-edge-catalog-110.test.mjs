@@ -144,17 +144,67 @@ test("successful deployment sends exactly ONE POST then checks GET-only after st
 
 test("timeout and non-200 POST never retry, even when CF may have committed", async () => {
   for (const failure of ["throw", "http"]) {
-    let posts=0;
-    const fetchImpl=async(_url,init)=>{
+    let posts=0,lists=0;
+    const logs=[];
+    const fetchImpl=async(url,init)=>{
+      if(init.method==="GET"&&url.endsWith("/deployments")){
+        lists++;
+        return response({success:true,result:{deployments:[]}});
+      }
       if(init.method==="GET")return response(health());
       posts++;
       if(failure==="throw")throw Error("network timeout");
       return response({errors:[{message:"sensitive-SECRET-NEVER-LOG"}]},500);
     };
-    await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
+    await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl,
+      sleep:async()=>{},log:line=>logs.push(line)}),
       /EDGE_110_DEPLOYMENT_OUTCOME_UNKNOWN/);
     assert.equal(posts,1);
+    assert.equal(lists,3);
+    assert.deepEqual(logs,["EDGE_110_DEPLOYMENT_RESPONSE_UNVERIFIED reason=" +
+      (failure==="throw"?"FETCH_FAILED":"HTTP_500")]);
   }
+});
+
+test("unverifiable POST response is reconciled read-only by the operation annotation", async () => {
+  let posts=0,phase="before";
+  const logs=[];
+  const message="MCP Edge 110 stage " + input.stageRunId + " operation " + OP + " run " + input.runId;
+  const fetchImpl=async(url,init)=>{
+    if(init.method==="GET"&&url.endsWith("/deployments")){
+      return response({success:true,result:{deployments:[
+        {id:DEPLOY,strategy:"percentage",versions:[{version_id:ACTIVE,percentage:100}],
+          annotations:{"workers/message":"MCP Edge 99 stage 1 operation x run 2"}},
+        {id:RECEIPT,strategy:"percentage",versions:[{version_id:TARGET,percentage:100}],
+          annotations:{"workers/message":message}},
+      ]}});
+    }
+    if(init.method==="GET")return response(health(phase));
+    posts++;
+    phase="deployed";
+    return response({success:true,result:{id:RECEIPT,unexpected:"shape"}});
+  };
+  const compare=async()=>provenance(posts?"after":"before");
+  assert.equal(await deployOnce(input,{compare,fetchImpl,sleep:async()=>{},log:line=>logs.push(line)}),RECEIPT);
+  assert.equal(posts,1);
+  assert.deepEqual(logs,[
+    "EDGE_110_DEPLOYMENT_RESPONSE_UNVERIFIED reason=DEPLOYMENT_RECEIPT_INVALID",
+    "EDGE_110_DEPLOYMENT_RECONCILED id=" + RECEIPT,
+  ]);
+});
+
+test("reconciliation refuses duplicate operation annotations", async () => {
+  const message="MCP Edge 110 stage " + input.stageRunId + " operation " + OP + " run " + input.runId;
+  const entry=id=>({id,strategy:"percentage",versions:[{version_id:TARGET,percentage:100}],
+    annotations:{"workers/message":message}});
+  const fetchImpl=async(url,init)=>{
+    if(init.method==="GET"&&url.endsWith("/deployments"))
+      return response({success:true,result:{deployments:[entry(RECEIPT),entry(DEPLOY)]}});
+    if(init.method==="GET")return response(health());
+    throw Error("network timeout");
+  };
+  await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl,
+    sleep:async()=>{},log:()=>{}}),/EDGE_110_DEPLOYMENT_RECONCILE_AMBIGUOUS/);
 });
 
 test("post-deploy preparation sends ONE isolated-token POST, never promotes", async () => {

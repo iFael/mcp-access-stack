@@ -23,6 +23,8 @@ function fixture(options = {}) {
     ...options.input,
   };
   let remoteTag = options.tagSha ?? null;
+  let hiddenReads = options.tagHiddenReads ?? 0;
+  let postReadFailures = options.postReadFailures ?? 0;
   const calls = [];
   const respond = (status, body) => ({ status, json: async () => body });
   const fetchImpl = async (rawUrl, init) => {
@@ -60,6 +62,14 @@ function fixture(options = {}) {
     }
     if (method === "GET" && suffix === "/git/ref/tags/" + TAG) {
       if (options.tagReadFails) return respond(502, {});
+      if (calls.some((call) => call.method === "POST") && postReadFailures > 0) {
+        postReadFailures--;
+        return respond(502, {});
+      }
+      if (remoteTag && hiddenReads > 0) {
+        hiddenReads--;
+        return respond(404, { message: "Not Found" });
+      }
       if (!remoteTag) return respond(404, { message: "Not Found" });
       return respond(200, {
         ref: "refs/tags/" + TAG,
@@ -94,6 +104,7 @@ function fixture(options = {}) {
     fetchImpl,
     calls,
     posts: () => calls.filter((call) => call.method === "POST"),
+    tagReads: () => calls.filter((call) => call.method === "GET" && call.path === "/git/ref/tags/" + TAG),
     remoteTag: () => remoteTag,
   };
 }
@@ -184,7 +195,30 @@ test("an unknown POST applied exactly once is reconciled against the same tag", 
 
 test("an unknown POST with no resulting ref stops without retry", async () => {
   const f = fixture({ postMode: "throw-no-create" });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "TAG_PUBLISH_OUTCOME_UNKNOWN" });
+  const sleeps = [];
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, async (ms) => { sleeps.push(ms); }),
+    { code: "TAG_PUBLISH_OUTCOME_UNKNOWN" });
+  assert.equal(f.posts().length, 1);
+  assert.equal(f.tagReads().length, 6);
+  assert.deepEqual(sleeps, [2000, 2000, 2000, 2000]);
+});
+
+test("a created tag that is not yet readable is reconciled by bounded GET-only re-reads", async () => {
+  for (const options of [{ tagHiddenReads: 2 }, { postMode: "throw-after-create", tagHiddenReads: 3 },
+    { postReadFailures: 2 }]) {
+    const f = fixture(options);
+    const sleeps = [];
+    const result = await bootstrapReleaseTag(f.input, f.fetchImpl, async (ms) => { sleeps.push(ms); });
+    assert.equal(result.status, options.postMode ? "reconciled" : "published");
+    assert.equal(f.posts().length, 1);
+    assert.equal(sleeps.length, options.tagHiddenReads ?? options.postReadFailures);
+  }
+});
+
+test("a persistently unreadable tag after POST stays outcome_unknown", async () => {
+  const f = fixture({ postReadFailures: 5 });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, async () => {}),
+    { code: "TAG_PUBLISH_OUTCOME_UNKNOWN" });
   assert.equal(f.posts().length, 1);
 });
 
@@ -199,8 +233,9 @@ test("concurrent tag creation reconciles exact identity or rejects a conflicting
 
 test("a denied POST and absent tag reports failure without retry", async () => {
   const f = fixture({ postMode: "denied" });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "TAG_CREATE_FAILED" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, async () => {}), { code: "TAG_CREATE_FAILED" });
   assert.equal(f.posts().length, 1);
+  assert.equal(f.tagReads().length, 2);
 });
 
 test("failure of reconciliation after POST preserves outcome_unknown", async () => {

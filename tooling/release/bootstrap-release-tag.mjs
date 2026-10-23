@@ -62,7 +62,9 @@ async function readRef(api, resource, fullRef) {
   return gitRef(result.body, fullRef);
 }
 
-export async function bootstrapReleaseTag(input, fetchImpl = fetch) {
+const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function bootstrapReleaseTag(input, fetchImpl = fetch, sleep = sleepDefault) {
   const {
     tag, expectedSha, repository, token,
     eventName, eventRef, eventSha, workflowRunId,
@@ -125,12 +127,23 @@ export async function bootstrapReleaseTag(input, fetchImpl = fetch) {
     if (!(error instanceof BootstrapError) || error.code !== "API_OUTCOME_UNKNOWN") throw error;
   }
 
-  let after;
-  try {
-    after = await readRef(api, refResource, fullRef);
-  } catch {
-    throw new BootstrapError("TAG_PUBLISH_OUTCOME_UNKNOWN");
+  // A freshly created ref (or one whose POST response was lost) may not be
+  // readable immediately; re-read a bounded number of times before giving up.
+  let after = null;
+  let readFailed = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      after = await readRef(api, refResource, fullRef);
+      readFailed = false;
+    } catch (error) {
+      if (error instanceof BootstrapError && error.code === "GIT_REF_INVALID") throw error;
+      readFailed = true;
+    }
+    // Only a definitive refusal (e.g. 403) proves no ref will appear.
+    if (after !== null || (!readFailed && ![null, 201, 422].includes(createStatus))) break;
+    if (attempt < 4) await sleep(2000);
   }
+  if (readFailed) throw new BootstrapError("TAG_PUBLISH_OUTCOME_UNKNOWN");
   if (after === null) {
     throw new BootstrapError(createStatus === 201 ? "TAG_PUBLISH_OUTCOME_UNKNOWN" :
       createStatus === 422 ? "TAG_CREATE_CONFLICT_UNRESOLVED" :
