@@ -34,6 +34,9 @@ $execute || fail 'Update preparation is intentionally gated. Re-run with --execu
 [[ -d "$installation_root" ]] || fail "Installation root was not found: $installation_root"
 
 installation_root="$(readlink -f -- "$installation_root")"
+# sudo -u keeps the caller's cwd (e.g. /home/ubuntu), which the service user may not
+# be able to read; find then fails on exit and pipefail turns that into a false error.
+cd -- "$installation_root"
 state_root="$installation_root/state"
 state_path="$state_root/lifecycle-state.v1.json"
 releases_root="$installation_root/releases"
@@ -124,7 +127,7 @@ else
   native_manifest="$source_root/runtime/native-libs/packages.v1.tsv"
   [[ -d "$native_lib_dir" ]] || fail 'Prepared release is missing the Browser native library bundle.'
   [[ -d "$native_font_dir" ]] || fail 'Prepared release is missing the Browser font bundle.'
-  find "$native_font_dir" -type f -name '*.ttf' -print -quit | grep -q . ||
+  [[ -n "$(find "$native_font_dir" -type f -name '*.ttf' -print -quit)" ]] ||
     fail 'Prepared release Browser font bundle contains no TrueType fonts.'
   [[ -s "$native_manifest" ]] || fail 'Prepared release is missing the Browser native package manifest.'
 

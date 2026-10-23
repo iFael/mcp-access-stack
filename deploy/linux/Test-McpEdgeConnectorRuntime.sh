@@ -93,6 +93,13 @@ grep -Fq 'Prepare-McpBrowserRuntime.sh' "$root/deploy/linux/Update-McpAccessStac
 grep -Fq 'npx playwright install chromium' "$root/deploy/linux/Prepare-McpBrowserRuntime.sh"
 grep -Fq 'chromium_headless_shell-' "$root/deploy/linux/Update-McpAccessStack.sh"
 grep -Fq 'ffmpeg-' "$root/deploy/linux/Update-McpAccessStack.sh"
+grep -Fq 'cd -- "$installation_root"' "$root/deploy/linux/Update-McpAccessStack.sh"
+grep -Fq 'cd -- "$installation_root"' "$root/deploy/linux/Install-McpAccessStack.sh"
+grep -Fq 'cd -- "$source_root"' "$root/deploy/linux/Prepare-McpBrowserRuntime.sh"
+if grep -Fq -- '-print -quit | grep -q .' "$root/deploy/linux/Update-McpAccessStack.sh" "$root/deploy/linux/Install-McpAccessStack.sh" "$root/deploy/linux/Prepare-McpBrowserRuntime.sh"; then
+  echo 'pipefail-sensitive find | grep -q font check regression detected' >&2
+  exit 1
+fi
 if command -v pwsh >/dev/null 2>&1; then
   pwsh -NoLogo -NoProfile -NonInteractive -Command '& { $tokens=$null; $errors=$null; [Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$tokens,[ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 } }' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 fi

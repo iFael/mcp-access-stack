@@ -27,6 +27,8 @@ done
 $execute || fail 'Browser runtime preparation is intentionally gated. Re-run with --execute.'
 [[ -d "$source_root" ]] || fail "Source root was not found: $source_root"
 source_root="$(readlink -f -- "$source_root")"
+# Run from a directory the preparing user can always read (see Update-McpAccessStack.sh).
+cd -- "$source_root"
 
 for command in node npx apt dpkg-deb ldd mktemp readlink sha256sum; do
   command -v "$command" >/dev/null 2>&1 || fail "Required command was not found: $command"
@@ -94,7 +96,7 @@ libdir="$native_root/usr/lib/x86_64-linux-gnu"
 fontdir="$native_root/usr/share/fonts"
 [[ -d "$libdir" ]] || fail 'Prepared native library directory is missing.'
 [[ -d "$fontdir" ]] || fail 'Prepared Browser font directory is missing.'
-find "$fontdir" -type f -name '*.ttf' -print -quit | grep -q . ||
+[[ -n "$(find "$fontdir" -type f -name '*.ttf' -print -quit)" ]] ||
   fail 'Prepared Browser font directory contains no TrueType fonts.'
 
 shopt -s nullglob
