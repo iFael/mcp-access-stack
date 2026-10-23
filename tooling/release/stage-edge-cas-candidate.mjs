@@ -5,6 +5,7 @@ import { compareWorkerVersions } from "./compare-cloudflare-worker-versions.mjs"
 import { inspectPublisherReadOnly } from "./inspect-cloudflare-publisher-policy.mjs";
 import { validateActiveProvenance, readUploadedVersionId, verifyUploadedVersion } from "./stage-edge-beta84-bridge-guard.mjs";
 import { classifyUploadLogFile } from "./diagnose-edge-beta84-stage-upload.mjs";
+import { CATALOG } from "./activate-edge-catalog.mjs";
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const HEX32 = /^[a-f0-9]{32}$/u;
@@ -16,7 +17,7 @@ const SECRET_FILE = "edge-cas-candidate-secrets.json";
 const ROOT = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 function deny(code) { throw new Error("EDGE_CAS_STAGE_" + code); }
-export function verifyLocalCandidate(config, source, expectedRevision) {
+export function verifyLocalCandidate(config, source, expectedRevision, catalog = CATALOG) {
   if (!REVISION.test(expectedRevision) ||
       config?.name !== WORKER || config?.main !== "src/index.ts" ||
       config?.workers_dev !== true || config?.alias !== undefined ||
@@ -31,8 +32,10 @@ export function verifyLocalCandidate(config, source, expectedRevision) {
     deny("CONFIG_DRIFT");
   }
   const match = /"contractRevision":\s*"([a-f0-9]{64})"/u.exec(source);
-  if (!match || match[1] !== expectedRevision ||
-      !/"toolCount":\s*110\b/u.test(source)) deny("BUILD_CONTRACT_MISMATCH");
+  // Only the catalog named in edge-catalog-rollout.json can be staged.
+  const count = /"toolCount":\s*(\d+)\b/u.exec(source);
+  if (!match || match[1] !== expectedRevision || expectedRevision !== catalog.targetRevision ||
+      Number(count?.[1]) !== catalog.targetToolCount) deny("BUILD_CONTRACT_MISMATCH");
   return expectedRevision;
 }
 export function requirePublisherPrerequisites(report, expectedDeployment, expectedVersion, options = {}) {
