@@ -8,6 +8,7 @@ import { bootstrapReleaseTag } from "./bootstrap-release-tag.mjs";
 const SHA = "9e61e52afea67add59561a7d2f94ffebc51019ca";
 const OTHER = "860393252316edc211ec7c2127186514f8fe55df";
 const TAG = "v1.1.0-beta.84";
+const noSleep = async () => {};
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function fixture(options = {}) {
@@ -23,6 +24,7 @@ function fixture(options = {}) {
     ...options.input,
   };
   let remoteTag = options.tagSha ?? null;
+  let lagReads = 0;
   const calls = [];
   const respond = (status, body) => ({ status, json: async () => body });
   const fetchImpl = async (rawUrl, init) => {
@@ -60,7 +62,7 @@ function fixture(options = {}) {
     }
     if (method === "GET" && suffix === "/git/ref/tags/" + TAG) {
       if (options.tagReadFails) return respond(502, {});
-      if (!remoteTag) return respond(404, { message: "Not Found" });
+      if (!remoteTag || (remoteTag && lagReads-- > 0)) return respond(404, { message: "Not Found" });
       return respond(200, {
         ref: "refs/tags/" + TAG,
         object: { type: options.tagType ?? "commit", sha: remoteTag },
@@ -85,6 +87,7 @@ function fixture(options = {}) {
       }
       if (options.postMode === "denied") return respond(403, {});
       remoteTag = SHA;
+      lagReads = options.lagReadsAfterCreate ?? 0;
       return respond(201, {});
     }
     throw new Error("Unexpected mocked endpoint");
@@ -100,7 +103,7 @@ function fixture(options = {}) {
 
 test("publishes an exact new release tag once after validating main and canonical CI", async () => {
   const f = fixture();
-  const outcome = await bootstrapReleaseTag(f.input, f.fetchImpl);
+  const outcome = await bootstrapReleaseTag(f.input, f.fetchImpl, noSleep);
   assert.deepEqual(outcome, {
     status: "published", tag: TAG, sha: SHA,
     ciRunId: 37718544668, workflowRunId: "999001",
@@ -118,26 +121,26 @@ test("publishes an exact new release tag once after validating main and canonica
 
 test("an identical existing lightweight tag is idempotent without a POST", async () => {
   const f = fixture({ tagSha: SHA });
-  assert.equal((await bootstrapReleaseTag(f.input, f.fetchImpl)).status, "already_published");
+  assert.equal((await bootstrapReleaseTag(f.input, f.fetchImpl, noSleep)).status, "already_published");
   assert.equal(f.posts().length, 0);
 });
 
 test("a mismatched existing tag fails closed without a POST", async () => {
   const f = fixture({ tagSha: OTHER });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "RELEASE_TAG_CONFLICT" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep), { code: "RELEASE_TAG_CONFLICT" });
   assert.equal(f.posts().length, 0);
 });
 
 test("an annotated tag cannot masquerade as an exact commit ref", async () => {
   const f = fixture({ tagSha: SHA, tagType: "tag" });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "GIT_REF_INVALID" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep), { code: "GIT_REF_INVALID" });
   assert.equal(f.posts().length, 0);
 });
 
 test("stale remote main or unavailable remote main prevents publication", async () => {
   for (const options of [{ mainSha: OTHER }, { mainReadFails: true }]) {
     const f = fixture(options);
-    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl));
+    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep));
     assert.equal(f.posts().length, 0);
   }
 });
@@ -147,7 +150,7 @@ test("canonical CI must be successful on the exact main push", async () => {
     { ciInvalid: true }, { ciFails: true }, { ciWrongBranch: true }, { ciReadFails: true },
   ]) {
     const f = fixture(options);
-    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl));
+    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep));
     assert.equal(f.posts().length, 0);
   }
 });
@@ -169,14 +172,14 @@ test("rejects other workflow refs, stale dispatch SHA, malformed tags, missing t
   ];
   for (const input of cases) {
     const f = fixture({ input });
-    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl));
+    await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep));
     assert.equal(f.calls.length, 0);
   }
 });
 
 test("an unknown POST applied exactly once is reconciled against the same tag", async () => {
   const f = fixture({ postMode: "throw-after-create" });
-  const result = await bootstrapReleaseTag(f.input, f.fetchImpl);
+  const result = await bootstrapReleaseTag(f.input, f.fetchImpl, noSleep);
   assert.equal(result.status, "reconciled");
   assert.equal(f.posts().length, 1);
   assert.equal(f.remoteTag(), SHA);
@@ -184,28 +187,36 @@ test("an unknown POST applied exactly once is reconciled against the same tag", 
 
 test("an unknown POST with no resulting ref stops without retry", async () => {
   const f = fixture({ postMode: "throw-no-create" });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "TAG_PUBLISH_OUTCOME_UNKNOWN" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep), { code: "TAG_PUBLISH_OUTCOME_UNKNOWN" });
   assert.equal(f.posts().length, 1);
+});
+
+test("a created tag that still reads as 404 is re-read, never re-posted", async () => {
+  const f = fixture({ lagReadsAfterCreate: 2 });
+  const result = await bootstrapReleaseTag(f.input, f.fetchImpl, noSleep);
+  assert.equal(result.status, "published");
+  assert.equal(f.posts().length, 1);
+  assert.equal(f.calls.filter((call) => call.method === "GET" && call.path === "/git/ref/tags/" + TAG).length, 4);
 });
 
 test("concurrent tag creation reconciles exact identity or rejects a conflicting SHA", async () => {
   const same = fixture({ postMode: "conflict-same" });
-  assert.equal((await bootstrapReleaseTag(same.input, same.fetchImpl)).status, "reconciled");
+  assert.equal((await bootstrapReleaseTag(same.input, same.fetchImpl, noSleep)).status, "reconciled");
   assert.equal(same.posts().length, 1);
   const other = fixture({ postMode: "conflict-different" });
-  await assert.rejects(bootstrapReleaseTag(other.input, other.fetchImpl), { code: "RELEASE_TAG_CONFLICT" });
+  await assert.rejects(bootstrapReleaseTag(other.input, other.fetchImpl, noSleep), { code: "RELEASE_TAG_CONFLICT" });
   assert.equal(other.posts().length, 1);
 });
 
 test("a denied POST and absent tag reports failure without retry", async () => {
   const f = fixture({ postMode: "denied" });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "TAG_CREATE_FAILED" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep), { code: "TAG_CREATE_FAILED" });
   assert.equal(f.posts().length, 1);
 });
 
 test("failure of reconciliation after POST preserves outcome_unknown", async () => {
   const f = fixture({ tagReadFails: true });
-  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl), { code: "GIT_REF_READ_FAILED" });
+  await assert.rejects(bootstrapReleaseTag(f.input, f.fetchImpl, noSleep), { code: "GIT_REF_READ_FAILED" });
   assert.equal(f.posts().length, 0);
 });
 

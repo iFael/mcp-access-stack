@@ -62,7 +62,9 @@ async function readRef(api, resource, fullRef) {
   return gitRef(result.body, fullRef);
 }
 
-export async function bootstrapReleaseTag(input, fetchImpl = fetch) {
+const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function bootstrapReleaseTag(input, fetchImpl = fetch, sleep = sleepDefault) {
   const {
     tag, expectedSha, repository, token,
     eventName, eventRef, eventSha, workflowRunId,
@@ -125,12 +127,18 @@ export async function bootstrapReleaseTag(input, fetchImpl = fetch) {
     if (!(error instanceof BootstrapError) || error.code !== "API_OUTCOME_UNKNOWN") throw error;
   }
 
-  let after;
-  try {
-    after = await readRef(api, refResource, fullRef);
-  } catch {
-    throw new BootstrapError("TAG_PUBLISH_OUTCOME_UNKNOWN");
+  // A ref created a moment ago can still read as 404 (or fail transiently);
+  // re-reading is safe, re-posting is not.
+  let after = null;
+  let readable = false;
+  for (let attempt = 0; attempt < 5 && after === null; attempt++) {
+    if (attempt > 0) await sleep(2_000);
+    try {
+      after = await readRef(api, refResource, fullRef);
+      readable = true;
+    } catch { /* keep reconciling read-only */ }
   }
+  if (!readable) throw new BootstrapError("TAG_PUBLISH_OUTCOME_UNKNOWN");
   if (after === null) {
     throw new BootstrapError(createStatus === 201 ? "TAG_PUBLISH_OUTCOME_UNKNOWN" :
       createStatus === 422 ? "TAG_CREATE_CONFLICT_UNRESOLVED" :
