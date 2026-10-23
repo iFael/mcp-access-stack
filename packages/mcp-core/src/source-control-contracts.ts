@@ -777,17 +777,29 @@ export type GitHubCreateRepositoryResult = z.infer<
   typeof githubCreateRepositoryResultSchema
 >;
 
+/** Fixed workflows github_workflow_operation may dispatch and reconcile. */
+export const GITHUB_OPERATION_WORKFLOWS = [
+  "edge-f09-guarded-rollout.yml",
+  "release-tag-bootstrap.yml",
+  "release.yml",
+  "edge-cas-candidate-stage.yml",
+  "edge-catalog-activate.yml",
+  "edge-catalog-recover-prepare.yml",
+] as const;
+export type GitHubOperationWorkflow = (typeof GITHUB_OPERATION_WORKFLOWS)[number];
+
 export const githubWorkflowOperationInputSchema = z.object({
   workspaceId: workspaceIdSchema,
   root: rootSchema.optional(),
   owner: githubOwnerSchema,
   repository: githubRepositoryNameSchema,
-  workflow: z.enum(["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml"]),
+  workflow: z.enum(GITHUB_OPERATION_WORKFLOWS),
   tag: z.string().regex(/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u).optional(),
   mode: z.enum(["dispatch", "reconcile"]),
   expectedMainSha: gitShaSchema,
   operationId: z.uuid(),
   bootstrapOperationId: z.uuid().optional(),
+  stageRunId: z.number().int().positive().optional(),
 }).strict().superRefine((input,ctx)=>{
   const isPublic=input.workflow==="release.yml";
   const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
@@ -796,6 +808,11 @@ export const githubWorkflowOperationInputSchema = z.object({
       (isPublic && input.mode==="dispatch" && !input.bootstrapOperationId) ||
       (!isPublic && input.bootstrapOperationId!==undefined)){
     ctx.addIssue({code:"custom",message:"Public release dispatch needs an exact bootstrapOperationId; other workflows forbid that field."});
+  }
+  const isActivation=input.workflow==="edge-catalog-activate.yml";
+  if((isActivation && input.mode==="dispatch" && input.stageRunId===undefined) ||
+      (!isActivation && input.stageRunId!==undefined)){
+    ctx.addIssue({code:"custom",message:"Edge catalog activation dispatch needs stageRunId; other workflows forbid that field."});
   }
 });
 export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;

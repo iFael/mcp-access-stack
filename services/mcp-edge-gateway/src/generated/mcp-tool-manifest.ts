@@ -33,6 +33,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "enum": [
             "index",
             "release",
+            "edge_catalog",
             "workspaces",
             "refusals",
             "source_control",
@@ -54,6 +55,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "enum": [
               "index",
               "release",
+              "edge_catalog",
               "workspaces",
               "refusals",
               "source_control",
@@ -97,6 +99,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "enum": [
             "index",
             "release",
+            "edge_catalog",
             "workspaces",
             "refusals",
             "source_control",
@@ -12118,7 +12121,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Run it in the Linux execution-node workspace; get_operation_guide topic=release has the full order.",
+    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Edge catalog rollouts use edge-cas-candidate-stage.yml, then edge-catalog-activate.yml with the stage runId as stageRunId, and edge-catalog-recover-prepare.yml with the activation operationId when only its candidate preparation failed. Run it in the Linux execution-node workspace; get_operation_guide topic=release or topic=edge_catalog has the full order.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12162,6 +12165,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "stageRunId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
         "tag": {
           "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$",
           "type": "string"
@@ -12170,7 +12178,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "enum": [
             "edge-f09-guarded-rollout.yml",
             "release-tag-bootstrap.yml",
-            "release.yml"
+            "release.yml",
+            "edge-cas-candidate-stage.yml",
+            "edge-catalog-activate.yml",
+            "edge-catalog-recover-prepare.yml"
           ],
           "type": "string"
         },
@@ -25354,15 +25365,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "b8b8dd9834ba51966c459c4703fef67b574ed37ee729cb796bc406ae7a70e0d4",
-  "serverVersion": "0.4.0-catalog.cb8b8dd9834ba.sbe9beef5fb89",
+  "contractRevision": "9efa3bcc9c835644517ba8edd4c114adc1cc4dcb27c77033e79e0994649ae8e0",
+  "serverVersion": "0.4.0-catalog.c9efa3bcc9c83.sbe9beef5fb89",
   "toolCount": 111,
   "toolSetRevision": "be9beef5fb891b1260cb56d1268d198e63049b608a02ef293073d0449376a8cd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cb8b8dd9834ba.sbe9beef5fb89"
+  "version": "0.4.0-catalog.c9efa3bcc9c83.sbe9beef5fb89"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

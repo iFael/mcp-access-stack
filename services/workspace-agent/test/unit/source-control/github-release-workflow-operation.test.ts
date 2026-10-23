@@ -235,3 +235,55 @@ describe("GitHub release workflow operation using canonical mutation receipts",(
     expect(f.dispatched()).toBe(0);
   });
 });
+
+describe("Edge catalog workflows",()=>{
+  function edgeSetup(){
+    const calls:{workflow:string;details:Record<string,string>}[]=[];
+    let runs:(GitHubWorkflowRunRecord & {workflow:string})[]=[];
+    const coordinator=new GitHubReleaseWorkflowOperation({
+      receipts:new InMemoryMutationReceiptStore(),authorize:async()=>true,
+      client:{
+        getMainRef:async()=>({ref:"refs/heads/main",object:{sha,type:"commit"}}),
+        getWorkflowRuns:async(_owner,_repo,workflow)=>{
+          const filtered=runs.filter(run=>run.workflow===workflow);
+          return {total_count:filtered.length,workflow_runs:filtered};
+        },
+        dispatchWorkflow:async(_owner,_repo,workflow,_expected,details)=>{calls.push({workflow,details});},
+      },
+    });
+    const addRun=(workflow:string,title:string)=>runs.push({workflow,id:4242001,workflow_id:7,name:workflow,
+      display_title:title,head_sha:sha,event:"workflow_dispatch",status:"completed",conclusion:"success",run_attempt:1});
+    return {coordinator,calls,addRun};
+  }
+  const edge={workspaceId:"mcp-access-stack",owner:"iFael",repository:"mcp-access-stack",expectedMainSha:sha,operationId};
+
+  it("forwards the stage run id to the activation and finds each run by its own title",async()=>{
+    const f=edgeSetup();
+    const activation:GitHubReleaseWorkflowInput={...edge,workflow:"edge-catalog-activate.yml",stageRunId:40033066092};
+    expect(await f.coordinator.dispatch(activation,context)).toEqual({status:"submitted",operationId});
+    expect(f.calls).toEqual([{workflow:"edge-catalog-activate.yml",
+      details:{operation_id:operationId,stage_run_id:"40033066092"}}]);
+    // A release-style title must not be mistaken for the activation run.
+    f.addRun("edge-catalog-activate.yml","mcp-release-"+operationId);
+    expect((await f.coordinator.reconcile(activation,context)).status).toBe("outcome_unknown");
+    const g=edgeSetup();
+    g.addRun("edge-catalog-activate.yml","mcp-edge-catalog-"+operationId);
+    expect(await g.coordinator.reconcile(activation,context)).toEqual({
+      status:"observed",operationId,runId:4242001,state:"completed",conclusion:"success"});
+    for (const [workflow,title] of [["edge-cas-candidate-stage.yml","mcp-edge-stage-"],
+      ["edge-catalog-recover-prepare.yml","mcp-edge-catalog-recovery-"]] as const) {
+      const h=edgeSetup();
+      h.addRun(workflow,title+operationId);
+      expect((await h.coordinator.reconcile({...edge,workflow},context)).status).toBe("observed");
+    }
+  });
+
+  it("refuses an activation without stage run id and a stage run id elsewhere",async()=>{
+    const f=edgeSetup();
+    await expect(f.coordinator.dispatch({...edge,workflow:"edge-catalog-activate.yml"},context))
+      .rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    await expect(f.coordinator.dispatch({...edge,workflow:"edge-cas-candidate-stage.yml",stageRunId:1},context))
+      .rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    expect(f.calls).toHaveLength(0);
+  });
+});

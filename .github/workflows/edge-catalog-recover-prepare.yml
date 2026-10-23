@@ -1,6 +1,6 @@
 name: Recover Edge catalog candidate preparation (no deployment)
 
-run-name: mcp-edge-catalog-recovery-${{ inputs.activation_run_id }}
+run-name: mcp-edge-catalog-recovery-${{ inputs.operation_id }}
 
 on:
   workflow_dispatch:
@@ -9,8 +9,8 @@ on:
         description: Exact main SHA with successful CI
         required: true
         type: string
-      activation_run_id:
-        description: edge-catalog-activate.yml run whose deployment passed and whose candidate preparation failed
+      operation_id:
+        description: operation_id of the edge-catalog-activate.yml run whose deployment passed and whose candidate preparation failed
         required: true
         type: string
 
@@ -41,14 +41,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
-          ACTIVATION_RUN_ID: ${{ inputs.activation_run_id }}
+          OPERATION_ID: ${{ inputs.operation_id }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
           [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
           [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
           [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$ACTIVATION_RUN_ID" =~ ^[1-9][0-9]{4,20}$ ]]
+          [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
           [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
           ci_count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
             --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
@@ -56,11 +56,17 @@ jobs:
             --jq '[.[] | select(.headSha == env.EXPECTED_MAIN_SHA and .status == "completed" and .conclusion == "success")] | length')"
           [[ "$ci_count" =~ ^[1-9][0-9]*$ ]]
 
-          # One recovery per activation run.
+          # One recovery per activation operation.
           count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-catalog-recover-prepare.yml \
             --limit 100 --json databaseId,displayTitle \
-            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.ACTIVATION_RUN_ID))] | length')"
+            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.OPERATION_ID))] | length')"
           [[ "$count" == "1" ]]
+
+          # The activation run is the single one carrying this operation's title.
+          ACTIVATION_RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-catalog-activate.yml \
+            --limit 100 --json databaseId,displayTitle \
+            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-" + env.OPERATION_ID)) | .databaseId] | if length == 1 then .[0] else "" end')"
+          [[ "$ACTIVATION_RUN_ID" =~ ^[1-9][0-9]{4,20}$ ]]
 
           original="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ACTIVATION_RUN_ID" \
             --jq '[.head_sha,.head_branch,.event,.status,.conclusion,.run_attempt,.path,.display_title] | @tsv')"
@@ -69,9 +75,8 @@ jobs:
           [[ "$original_event" == "workflow_dispatch" && "$original_status" == "completed" ]]
           [[ "$original_conclusion" == "failure" && "$original_attempt" == "1" ]]
           [[ "$original_path" == ".github/workflows/edge-catalog-activate.yml" ]]
-          operation_id="${original_title#mcp-edge-catalog-}"
-          [[ "$original_title" == "mcp-edge-catalog-$operation_id" ]]
-          [[ "$operation_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+          [[ "$original_title" == "mcp-edge-catalog-$OPERATION_ID" ]]
+          operation_id="$OPERATION_ID"
 
           # The deployment step passed; only the candidate preparation failed.
           jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ACTIVATION_RUN_ID/jobs")"
@@ -160,7 +165,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
-          ACTIVATION_RUN_ID: ${{ inputs.activation_run_id }}
+          OPERATION_ID: ${{ inputs.operation_id }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
@@ -168,7 +173,7 @@ jobs:
           [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
           count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow edge-catalog-recover-prepare.yml \
             --limit 100 --json databaseId,displayTitle \
-            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.ACTIVATION_RUN_ID))] | length')"
+            --jq '[.[] | select(.displayTitle == ("mcp-edge-catalog-recovery-" + env.OPERATION_ID))] | length')"
           [[ "$count" == "1" ]]
       - name: Install pinned packages and validate recovery contract
         shell: bash

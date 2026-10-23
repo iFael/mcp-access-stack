@@ -191,15 +191,13 @@ function parity(left, right) {
     left === right ? "matching" : "different";
 }
 
-export async function compareWorkerVersions(input, fetchImpl = fetch) {
+function scriptReader(input, fetchImpl) {
   const accountId = requireString(input.accountId, ACCOUNT, "ACCOUNT_ID_INVALID");
-  const referenceVersionId = requireString(
-    input.referenceVersionId, UUID, "REFERENCE_VERSION_INVALID");
   if (typeof input.token !== "string" || input.token.length < 12) {
     throw new ProvenanceError("READ_TOKEN_MISSING");
   }
   const prefix = API + accountId + "/workers/scripts/" + SCRIPT;
-  const read = async (suffix) => {
+  return async (suffix) => {
     let response;
     try {
       response = await fetchImpl(prefix + suffix, {
@@ -217,6 +215,25 @@ export async function compareWorkerVersions(input, fetchImpl = fetch) {
     }
     return boundedJson(response);
   };
+}
+
+/** The active 100% deployment and its version, read twice so a concurrent
+ * deployment is never pinned. Read-only. */
+export async function readActiveDeployment(input, fetchImpl = fetch) {
+  const read = scriptReader(input, fetchImpl);
+  const first = deployment(await read("/deployments"));
+  const second = deployment(await read("/deployments"));
+  if (first.id !== second.id || first.versionId !== second.versionId ||
+      first.createdOn !== second.createdOn) {
+    throw new ProvenanceError("DEPLOYMENT_CHANGED_DURING_READ");
+  }
+  return { deploymentId: first.id, versionId: first.versionId };
+}
+
+export async function compareWorkerVersions(input, fetchImpl = fetch) {
+  const read = scriptReader(input, fetchImpl);
+  const referenceVersionId = requireString(
+    input.referenceVersionId, UUID, "REFERENCE_VERSION_INVALID");
 
   const first = deployment(await read("/deployments"));
   const active = version(

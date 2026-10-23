@@ -1,7 +1,7 @@
 import { readFile, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { compareWorkerVersions } from "./compare-cloudflare-worker-versions.mjs";
+import { compareWorkerVersions, readActiveDeployment } from "./compare-cloudflare-worker-versions.mjs";
 import { inspectPublisherReadOnly } from "./inspect-cloudflare-publisher-policy.mjs";
 import { validateActiveProvenance, readUploadedVersionId, verifyUploadedVersion } from "./stage-edge-beta84-bridge-guard.mjs";
 import { classifyUploadLogFile } from "./diagnose-edge-beta84-stage-upload.mjs";
@@ -101,6 +101,31 @@ export function verifyNoTrafficChange(before, after) {
       before?.activeVersionId !== after?.activeVersionId) deny("ACTIVE_CAS_CHANGED");
   return true;
 }
+/** The Cloudflare CAS pins and contract revision for this run. Explicit pins
+ * are kept as given (later steps verify them against Cloudflare); when both are
+ * omitted they are read from the active 100% deployment, and the revision
+ * defaults to the catalog rollout target. */
+export async function resolvePins(env, { read = readActiveDeployment, catalog = CATALOG } = {}) {
+  const deployment = env.INPUT_ACTIVE_DEPLOYMENT_ID ?? "";
+  const version = env.INPUT_ACTIVE_VERSION_ID ?? "";
+  const revision = env.INPUT_CONTRACT_REVISION || catalog.targetRevision;
+  if (!REVISION.test(revision) || revision !== catalog.targetRevision) deny("PIN_REVISION_INVALID");
+  if (deployment !== "" || version !== "") {
+    if (!UUID.test(deployment) || !UUID.test(version)) deny("PIN_INPUT_INVALID");
+    return { deploymentId: deployment, versionId: version, revision, source: "input" };
+  }
+  if (!HEX32.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") ||
+      typeof env.CLOUDFLARE_API_TOKEN !== "string" || env.CLOUDFLARE_API_TOKEN.length < 12) {
+    deny("READ_CREDENTIAL_UNAVAILABLE");
+  }
+  let active;
+  try {
+    active = await read({ accountId: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN });
+  } catch { deny("PIN_READ_FAILED"); }
+  if (!UUID.test(active?.deploymentId ?? "") || !UUID.test(active?.versionId ?? "")) deny("PIN_READ_FAILED");
+  return { deploymentId: active.deploymentId, versionId: active.versionId, revision, source: "cloudflare" };
+}
+
 export function parseInput(mode, env) {
   if (!["preflight", "before", "after", "diagnose", "secret-file"].includes(mode)) deny("MODE_INVALID");
   if (!HEX32.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") ||
@@ -153,6 +178,15 @@ async function immutableVersion(input, id) {
 async function main() {
   const mode = process.argv[2];
   if (process.argv.length !== 3) deny("MODE_INVALID");
+  if (mode === "pins") {
+    const pins = await resolvePins(process.env);
+    if (!process.env.GITHUB_OUTPUT) deny("OUTPUT_UNAVAILABLE");
+    await appendFile(process.env.GITHUB_OUTPUT, "deployment_id=" + pins.deploymentId +
+      "\nversion_id=" + pins.versionId + "\nrevision=" + pins.revision + "\n", "utf8");
+    console.log("EDGE_CAS_STAGE_PINNED_ACTIVE deployment_id=" + pins.deploymentId +
+      " version_id=" + pins.versionId + " source=" + pins.source);
+    return;
+  }
   const input = parseInput(mode, process.env);
   if (mode === "diagnose") {
     const reason = await classifyUploadLogFile(path.join(input.temp, LOG));

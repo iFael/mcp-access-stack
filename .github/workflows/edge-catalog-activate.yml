@@ -14,12 +14,14 @@ on:
         required: true
         type: string
       expected_active_deployment_id:
-        description: Fresh CAS pin for current active Cloudflare deployment
-        required: true
+        description: Fresh CAS pin for current active Cloudflare deployment (empty = the stage run's pin)
+        required: false
+        default: ""
         type: string
       expected_active_version_id:
-        description: Fresh CAS pin for current 100 percent Worker version
-        required: true
+        description: Fresh CAS pin for current 100 percent Worker version (empty = the stage run's pin)
+        required: false
+        default: ""
         type: string
       operation_id:
         description: Stable UUID identifying the one-shot Edge catalog operation
@@ -41,6 +43,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       staged_version_id: ${{ steps.stage.outputs.version_id }}
+      active_deployment_id: ${{ steps.stage.outputs.active_deployment_id }}
+      active_version_id: ${{ steps.stage.outputs.active_version_id }}
     steps:
       - name: Pin one main CI and independently successful staged version without credentials
         id: stage
@@ -60,8 +64,11 @@ jobs:
           [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$STAGE_RUN_ID" =~ ^[1-9][0-9]{4,20}$ ]]
           [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
-          [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
-          [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+          uuid='^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
+          if [[ -n "$EXPECTED_ACTIVE_DEPLOYMENT_ID$EXPECTED_ACTIVE_VERSION_ID" ]]; then
+            [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ $uuid ]]
+            [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ $uuid ]]
+          fi
           [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]
           ci_count="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
             --commit "$EXPECTED_MAIN_SHA" --event push --status success --limit 20 \
@@ -82,13 +89,31 @@ jobs:
           [[ "$stage_branch" == "main" && "$stage_event" == "workflow_dispatch" ]]
           [[ "$stage_status" == "completed" && "$stage_conclusion" == "success" && "$stage_attempt" == "1" ]]
           [[ "$stage_path" == ".github/workflows/edge-cas-candidate-stage.yml" ]]
-          receipts="$(gh run view "$STAGE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log |
-            grep -oE 'EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=[a-f0-9-]+' || true)"
+          stage_log="$(gh run view "$STAGE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log)"
+          receipts="$(grep -oE 'EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=[a-f0-9-]+' <<< "$stage_log" || true)"
           [[ "$(printf '%s\n' "$receipts" | grep -c '^EDGE_CAS_STAGE_UPLOADED_NO_TRAFFIC version_id=' || true)" == "1" ]]
           version_id="${receipts##*=}"
           [[ "$version_id" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]]
+
+          # The Cloudflare pins the stage verified; explicit inputs must agree with them.
+          pinned="$(grep -oE 'EDGE_CAS_STAGE_PINNED_ACTIVE deployment_id=[a-f0-9-]+ version_id=[a-f0-9-]+' <<< "$stage_log" | sort -u || true)"
+          if [[ -n "$pinned" ]]; then
+            [[ "$(grep -c . <<< "$pinned")" == "1" ]]
+            pinned_deployment="$(sed -E 's/.*deployment_id=([a-f0-9-]+) .*/\1/' <<< "$pinned")"
+            pinned_version="${pinned##*version_id=}"
+            [[ -z "$EXPECTED_ACTIVE_DEPLOYMENT_ID" || "$EXPECTED_ACTIVE_DEPLOYMENT_ID" == "$pinned_deployment" ]]
+            [[ -z "$EXPECTED_ACTIVE_VERSION_ID" || "$EXPECTED_ACTIVE_VERSION_ID" == "$pinned_version" ]]
+            EXPECTED_ACTIVE_DEPLOYMENT_ID="$pinned_deployment"
+            EXPECTED_ACTIVE_VERSION_ID="$pinned_version"
+          fi
+          [[ "$EXPECTED_ACTIVE_DEPLOYMENT_ID" =~ $uuid ]]
+          [[ "$EXPECTED_ACTIVE_VERSION_ID" =~ $uuid ]]
           [[ "$version_id" != "$EXPECTED_ACTIVE_VERSION_ID" ]]
-          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "version_id=$version_id"
+            echo "active_deployment_id=$EXPECTED_ACTIVE_DEPLOYMENT_ID"
+            echo "active_version_id=$EXPECTED_ACTIVE_VERSION_ID"
+          } >> "$GITHUB_OUTPUT"
 
   publish:
     needs: preflight
@@ -136,8 +161,8 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ needs.preflight.outputs.active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ needs.preflight.outputs.active_version_id }}
           STAGED_VERSION_ID: ${{ needs.preflight.outputs.staged_version_id }}
           EDGE_CATALOG_STAGE_RUN_ID: ${{ inputs.stage_run_id }}
           EDGE_CATALOG_OPERATION_ID: ${{ inputs.operation_id }}
@@ -150,8 +175,8 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ needs.preflight.outputs.active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ needs.preflight.outputs.active_version_id }}
           STAGED_VERSION_ID: ${{ needs.preflight.outputs.staged_version_id }}
           EDGE_CATALOG_STAGE_RUN_ID: ${{ inputs.stage_run_id }}
           EDGE_CATALOG_OPERATION_ID: ${{ inputs.operation_id }}
@@ -164,8 +189,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MCP_CONTRACT_PREPARE_TOKEN: ${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}
-          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ inputs.expected_active_deployment_id }}
-          EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+          EXPECTED_ACTIVE_DEPLOYMENT_ID: ${{ needs.preflight.outputs.active_deployment_id }}
+          EXPECTED_ACTIVE_VERSION_ID: ${{ needs.preflight.outputs.active_version_id }}
           STAGED_VERSION_ID: ${{ needs.preflight.outputs.staged_version_id }}
           NEW_DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
           EDGE_CATALOG_STAGE_RUN_ID: ${{ inputs.stage_run_id }}

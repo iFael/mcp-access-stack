@@ -8,6 +8,7 @@ import YAML from "yaml";
 import {
   verifyLocalCandidate, requirePublisherPrerequisites, verifyNoTrafficChange, parseInput,
   writeStageSecretFile, verifyVersionSecretBinding,
+  resolvePins,
 } from "./stage-edge-cas-candidate.mjs";
 import { CATALOG } from "./activate-edge-catalog.mjs";
 
@@ -25,7 +26,7 @@ test("Edge staging accepts only the rollout's target catalog and rejects the act
   assert.throws(() => verifyLocalCandidate(config, pinned, previousRevision),
     /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
   assert.throws(() => verifyLocalCandidate(config,
-    pinned.replace(`"toolCount": ${CATALOG.targetToolCount}`, `"toolCount": ${CATALOG.previousToolCount}`), revision),
+    pinned.replace(`"toolCount": ${CATALOG.targetToolCount}`, `"toolCount": ${CATALOG.targetToolCount + 1}`), revision),
   /EDGE_CAS_STAGE_BUILD_CONTRACT_MISMATCH/u);
 });
 test("Edge staging takes the checked-out catalog only while it is the rollout target", () => {
@@ -159,8 +160,14 @@ test("workflow stages ONE immutable version, no deploy, no secrets values, no DO
   const yaml = parsed.toJS();
   assert.deepEqual(Object.keys(yaml.on.workflow_dispatch.inputs), [
     "expected_main_sha", "expected_active_deployment_id", "expected_active_version_id",
-    "expected_contract_revision",
+    "expected_contract_revision", "operation_id",
   ]);
+  for (const name of ["expected_active_deployment_id", "expected_active_version_id",
+    "expected_contract_revision", "operation_id"]) {
+    assert.equal(yaml.on.workflow_dispatch.inputs[name].required, false, name);
+  }
+  assert.equal(yaml["run-name"], "mcp-edge-stage-${{ inputs.operation_id || github.run_id }}");
+  assert.match(workflow, /"mcp-edge-stage-" \+ env\.OPERATION_ID/u);
   assert.equal(yaml.concurrency.group, "public-release-edge");
   assert.equal(yaml.concurrency["cancel-in-progress"], false);
   assert.equal(yaml.jobs.stage.environment, "public-release");
@@ -174,7 +181,13 @@ test("workflow stages ONE immutable version, no deploy, no secrets values, no DO
   const pre = steps.findIndex(s => s.name === "GET-only Cloudflare CAS and secret prerequisites before upload");
   const upload = steps.findIndex(s => s.id === "upload");
   const verify = steps.findIndex(s => s.id === "verify");
-  assert.ok(build >= 0 && build < check && check < pre && pre < upload && upload < verify);
+  const pins = steps.findIndex(s => s.id === "pins");
+  assert.ok(build >= 0 && build < pins && pins < check && check < pre && pre < upload && upload < verify);
+  assert.match(steps[pins].run, /stage-edge-cas-candidate\.mjs pins/u);
+  for (const step of [steps[check], steps[pre], steps[upload], steps[verify]]) {
+    assert.equal(step.env.EXPECTED_ACTIVE_DEPLOYMENT_ID, "${{ steps.pins.outputs.deployment_id }}");
+    assert.equal(step.env.EXPECTED_ACTIVE_VERSION_ID, "${{ steps.pins.outputs.version_id }}");
+  }
   assert.equal((workflow.match(/wrangler versions upload/gu) ?? []).length, 1);
   assert.match(steps[upload].run, /wrangler versions upload --strict --keep-vars/u);
   assert.match(steps[upload].run, /--secrets-file ["']?\$RUNNER_TEMP\/edge-cas-candidate-secrets\.json/u);
@@ -191,7 +204,30 @@ test("workflow stages ONE immutable version, no deploy, no secrets values, no DO
   assert.doesNotMatch(workflow, /wrangler (?:versions deploy|secret put)/u);
   assert.match(steps[check].run, /wrangler deploy[^\n]*--dry-run/u);
   assert.ok(!steps.some(s => s.id !== "upload" && /wrangler versions upload/u.test(s.run ?? "")));
-  assert.equal(steps[upload].env.EXPECTED_CONTRACT_REVISION, "${{ inputs.expected_contract_revision }}");
+  assert.equal(steps[upload].env.EXPECTED_CONTRACT_REVISION, "${{ steps.pins.outputs.revision }}");
   assert.doesNotMatch(workflow, /\/_internal\/contract-rollout|\/health\b/u);
   assert.doesNotMatch(workflow, /secrets\.MCP_OWNER_TOKEN/u);
+});
+
+test("pins: explicit pins pass through, empty pins are read from Cloudflare, never half-given", async () => {
+  const D = "11111111-1111-4111-8111-111111111111", V = "22222222-2222-4222-8222-222222222222";
+  const creds = { CLOUDFLARE_ACCOUNT_ID: "a".repeat(32), CLOUDFLARE_API_TOKEN: "t".repeat(40) };
+  let reads = 0;
+  const read = async (input) => {
+    reads++;
+    assert.equal(input.accountId, creds.CLOUDFLARE_ACCOUNT_ID);
+    return { deploymentId: D, versionId: V };
+  };
+  assert.deepEqual(await resolvePins({ ...creds, INPUT_ACTIVE_DEPLOYMENT_ID: V, INPUT_ACTIVE_VERSION_ID: D }, { read }),
+    { deploymentId: V, versionId: D, revision: CATALOG.targetRevision, source: "input" });
+  assert.equal(reads, 0);
+  assert.deepEqual(await resolvePins({ ...creds, INPUT_ACTIVE_DEPLOYMENT_ID: "", INPUT_ACTIVE_VERSION_ID: "" }, { read }),
+    { deploymentId: D, versionId: V, revision: CATALOG.targetRevision, source: "cloudflare" });
+  assert.equal(reads, 1);
+  await assert.rejects(resolvePins({ ...creds, INPUT_ACTIVE_DEPLOYMENT_ID: D }, { read }), /EDGE_CAS_STAGE_PIN_INPUT_INVALID/u);
+  await assert.rejects(resolvePins({ ...creds, INPUT_CONTRACT_REVISION: "f".repeat(64) }, { read }),
+    /EDGE_CAS_STAGE_PIN_REVISION_INVALID/u);
+  await assert.rejects(resolvePins({}, { read }), /EDGE_CAS_STAGE_READ_CREDENTIAL_UNAVAILABLE/u);
+  await assert.rejects(resolvePins(creds, { read: async () => { throw new Error("cf body"); } }),
+    /EDGE_CAS_STAGE_PIN_READ_FAILED/u);
 });

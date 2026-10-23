@@ -9,17 +9,31 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const F09_WORKFLOW = "edge-f09-guarded-rollout.yml" as const;
 const TAG_BOOTSTRAP = "release-tag-bootstrap.yml" as const;
 const PUBLIC_RELEASE = "release.yml" as const;
+const EDGE_STAGE = "edge-cas-candidate-stage.yml" as const;
+const EDGE_ACTIVATE = "edge-catalog-activate.yml" as const;
+const EDGE_RECOVER = "edge-catalog-recover-prepare.yml" as const;
+const WORKFLOWS = [F09_WORKFLOW, TAG_BOOTSTRAP, PUBLIC_RELEASE, EDGE_STAGE, EDGE_ACTIVATE, EDGE_RECOVER] as const;
+// Each workflow's run-name; the operation finds its own run only by this title.
+const RUN_TITLE_PREFIX: Record<(typeof WORKFLOWS)[number], string> = {
+  [F09_WORKFLOW]: "mcp-release-",
+  [TAG_BOOTSTRAP]: "mcp-release-",
+  [PUBLIC_RELEASE]: "mcp-release-",
+  [EDGE_STAGE]: "mcp-edge-stage-",
+  [EDGE_ACTIVATE]: "mcp-edge-catalog-",
+  [EDGE_RECOVER]: "mcp-edge-catalog-recovery-",
+};
 const PUBLIC_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u;
 
 export interface GitHubReleaseWorkflowInput {
   workspaceId: string;
   owner: string;
   repository: string;
-  workflow: typeof F09_WORKFLOW | typeof TAG_BOOTSTRAP | typeof PUBLIC_RELEASE;
+  workflow: (typeof WORKFLOWS)[number];
   tag?: string | undefined;
   expectedMainSha: string;
   operationId: string;
   bootstrapOperationId?: string | undefined;
+  stageRunId?: number | undefined;
 }
 export type GitHubReleaseWorkflowObservation =
   | { status: "submitted" | "outcome_unknown"; operationId: string }
@@ -44,6 +58,9 @@ export class GitHubReleaseWorkflowOperation {
     const identity = this.identity(input, context);
     if (input.workflow === PUBLIC_RELEASE && !UUID.test(input.bootstrapOperationId ?? "")) {
       throw new AppError("INVALID_ARGUMENT", "Public release dispatch requires the original bootstrap operation identity.");
+    }
+    if (input.workflow === EDGE_ACTIVATE && input.stageRunId === undefined) {
+      throw new AppError("INVALID_ARGUMENT", "Edge catalog activation dispatch requires the stage run id.");
     }
     if (!await this.options.authorize(input, context)) {
       throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
@@ -73,7 +90,8 @@ export class GitHubReleaseWorkflowOperation {
       await this.options.receipts.markExecuting(identity);
       await this.options.client.dispatchWorkflow(input.owner,input.repository,input.workflow,
         input.expectedMainSha,{operation_id:input.operationId,
-          ...(input.tag===undefined?{}:{tag:input.tag})},context);
+          ...(input.tag===undefined?{}:{tag:input.tag}),
+          ...(input.stageRunId===undefined?{}:{stage_run_id:String(input.stageRunId)})},context);
       await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
       return {status:"submitted",operationId:input.operationId};
     } catch {
@@ -177,7 +195,7 @@ export class GitHubReleaseWorkflowOperation {
         response.workflow_runs.length>100 || response.workflow_runs.length>response.total_count) {
       throw new Error("RELEASE_WORKFLOW_RUNS_NOT_EXHAUSTIVE");
     }
-    const title="mcp-release-"+input.operationId;
+    const title=RUN_TITLE_PREFIX[input.workflow]+input.operationId;
     const matches=response.workflow_runs.filter(run=>run.display_title===title);
     if(matches.length>1)throw new Error("RELEASE_WORKFLOW_IDENTITY_AMBIGUOUS");
     const run=matches[0];
@@ -195,12 +213,15 @@ export class GitHubReleaseWorkflowOperation {
   private identity(input:GitHubReleaseWorkflowInput,context:OperationContext):MutationReceiptIdentity {
     if(!input.workspaceId || !/^[a-zA-Z0-9-]{1,100}$/.test(input.owner) ||
       !/^[a-zA-Z0-9_.-]{1,100}$/.test(input.repository) ||
-      ![F09_WORKFLOW,TAG_BOOTSTRAP,PUBLIC_RELEASE].includes(input.workflow) ||
+      !WORKFLOWS.includes(input.workflow) ||
       (input.workflow===PUBLIC_RELEASE || input.workflow===TAG_BOOTSTRAP
         ? !input.tag || !PUBLIC_TAG.test(input.tag) || input.tag.includes("-oracle.") ||
           input.tag.includes("-companion.") : input.tag!==undefined) ||
       (input.workflow !== PUBLIC_RELEASE && input.bootstrapOperationId!==undefined) ||
       (input.bootstrapOperationId!==undefined && !UUID.test(input.bootstrapOperationId)) ||
+      (input.workflow === EDGE_ACTIVATE
+        ? input.stageRunId!==undefined && (!Number.isSafeInteger(input.stageRunId) || input.stageRunId<1)
+        : input.stageRunId!==undefined) ||
       !SHA.test(input.expectedMainSha) ||
       !UUID.test(input.operationId) || !context.ownerScope) {
       throw new AppError("INVALID_ARGUMENT","Invalid pinned release workflow operation identity.");
@@ -210,6 +231,7 @@ export class GitHubReleaseWorkflowOperation {
       workspaceId:input.workspaceId,owner:input.owner,repository:input.repository,
       workflow:input.workflow,tag:input.tag??null,expectedMainSha:input.expectedMainSha,
       operationId:input.operationId,bootstrapOperationId:input.bootstrapOperationId??null,
+      ...(input.stageRunId===undefined?{}:{stageRunId:input.stageRunId}),
       ownerScopeDigest:createHash("sha256").update(context.ownerScope).digest("hex"),
     })).digest("hex");
     return {workspaceId:input.workspaceId,operation:"github_workflow_operation",
@@ -219,6 +241,8 @@ export class GitHubReleaseWorkflowOperation {
       // the SAME immutable tag again, even while GitHub runs are eventually consistent.
       idempotencyKey: input.workflow === F09_WORKFLOW
         ? `release-workflow:${input.workspaceId}:${input.operationId}`
+        : input.workflow === EDGE_STAGE || input.workflow === EDGE_ACTIVATE || input.workflow === EDGE_RECOVER
+          ? `release-workflow:${input.workspaceId}:${input.workflow}:${input.operationId}`
         : input.workflow === TAG_BOOTSTRAP
           ? `release-workflow:${input.workspaceId}:tag-bootstrap:${input.operationId}`
           : `release-workflow:${input.workspaceId}:public:${input.owner.toLowerCase()}/${input.repository.toLowerCase()}:${input.tag}`};
