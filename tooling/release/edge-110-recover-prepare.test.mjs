@@ -51,7 +51,7 @@ test("Cloudflare step has exact version/deployment CAS and isolated prepare cred
   assert.equal(env.EXPECTED_ACTIVE_DEPLOYMENT_ID, "53198352-68ba-40fd-9be6-2cd9254e9c22");
   assert.equal(env.EXPECTED_ACTIVE_VERSION_ID, "779717e8-9f6d-4ecb-b274-99cdbb28e4e5");
   assert.equal(env.STAGED_VERSION_ID, "ef25f841-7b6a-41e1-b4cf-f1fd429c1518");
-  assert.equal(env.NEW_DEPLOYMENT_ID, "NEWDEPLOYMENTID");
+  assert.equal(env.NEW_DEPLOYMENT_ID, "5f1f8bdd-fb57-49ac-9838-c7f0130c145f");
   assert.equal(env.EDGE_CATALOG_STAGE_RUN_ID, "39887613300");
   assert.equal(env.MCP_CONTRACT_PREPARE_TOKEN, "${{ secrets.MCP_CONTRACT_PREPARE_TOKEN }}");
   assert.equal(env.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
