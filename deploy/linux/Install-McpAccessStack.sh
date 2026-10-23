@@ -89,6 +89,9 @@ installation_root="$(readlink -f -- "$installation_root")"
 edge_runtime_root="$(readlink -f -- "$edge_runtime_root")"
 connector_token_file="$(readlink -f -- "$connector_token_file")"
 policy_path="$(readlink -f -- "$policy_path")"
+# Paths are absolute from here on; leave the caller's directory, which the
+# service account may not be able to read (find then fails on exit).
+cd /
 
 [[ "$(git -C "$source_root" status --porcelain=v1 --untracked-files=all)" == "" ]] ||
   fail 'Initial Linux release requires a clean source checkout.'
@@ -135,7 +138,7 @@ native_lib_dir="$source_root/runtime/native-libs/usr/lib/x86_64-linux-gnu"
 native_font_dir="$source_root/runtime/native-libs/usr/share/fonts"
 [[ -d "$native_lib_dir" ]] || fail 'Built source is missing the Browser native library bundle.'
 [[ -d "$native_font_dir" ]] || fail 'Built source is missing the Browser font bundle.'
-find "$native_font_dir" -type f -name '*.ttf' -print -quit | grep -q . ||
+[[ -n "$(find "$native_font_dir" -type f -name '*.ttf' -print -quit)" ]] ||
   fail 'Built source Browser font bundle contains no TrueType fonts.'
 [[ -s "$source_root/runtime/native-libs/packages.v1.tsv" ]] ||
   fail 'Built source is missing the Browser native package manifest.'
