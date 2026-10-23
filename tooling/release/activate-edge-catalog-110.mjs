@@ -155,25 +155,55 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
       }),
       redirect: "error", signal: AbortSignal.timeout(20000),
     });
-  } catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
-  // Any non-success status can still follow an applied remote mutation. Never POST again.
-  if (![200,201].includes(response.status)) deny("DEPLOYMENT_OUTCOME_UNKNOWN");
+  } catch { return reconcileDeployment(input, "TRANSPORT", compare, fetchImpl, sleep); }
+  // Any non-success status can still follow an applied remote mutation. Never POST again;
+  // reconcile read-only against Cloudflare and the Edge instead.
+  if (![200,201].includes(response.status)) {
+    const status = Number.isInteger(response.status) &&
+      response.status >= 100 && response.status <= 599 ? response.status : 0;
+    return reconcileDeployment(input, "HTTP_" + status, compare, fetchImpl, sleep);
+  }
   let receipt;
   try { receipt = verifyDeploymentReceipt(await json(response), input); }
-  catch { deny("DEPLOYMENT_OUTCOME_UNKNOWN"); }
-  let found = false;
+  catch { return reconcileDeployment(input, "RECEIPT", compare, fetchImpl, sleep); }
+  if (!await observeDeployment(input, receipt, compare, fetchImpl, sleep)) {
+    deny("DEPLOYMENT_OUTCOME_UNKNOWN_VERIFY");
+  }
+  return receipt;
+}
+
+async function observeDeployment(input, receipt, compare, fetchImpl, sleep) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       verifyProvenance(await provenance(input, compare), input, "after", receipt);
       verifyHealth(await health(fetchImpl), "deployed");
-      found = true;
-      break;
+      return true;
     } catch {
       if (attempt < 4) await sleep(1500);
     }
   }
-  if (!found) deny("DEPLOYMENT_OUTCOME_UNKNOWN");
-  return receipt;
+  return false;
+}
+
+/** The POST outcome is unknown (transport error, non-2xx or unreadable receipt).
+ * Read Cloudflare only: accept the new deployment when it is active at 100% on the
+ * staged version and differs from the CAS-pinned previous deployment. */
+async function reconcileDeployment(input, cause, compare, fetchImpl, sleep) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const observed = await provenance(input, compare);
+      const id = observed?.activeDeploymentId;
+      if (UUID.test(id ?? "") && id !== input.deployment) {
+        if (await observeDeployment(input, id, compare, fetchImpl, sleep)) {
+          console.error("EDGE_110_DEPLOYMENT_RECONCILED cause=" + cause + " id=" + id);
+          return id;
+        }
+        break;
+      }
+    } catch { /* Cloudflare read failed; try again read-only. */ }
+    if (attempt < 4) await sleep(1500);
+  }
+  deny("DEPLOYMENT_OUTCOME_UNKNOWN_" + cause);
 }
 
 export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch} = {}) {

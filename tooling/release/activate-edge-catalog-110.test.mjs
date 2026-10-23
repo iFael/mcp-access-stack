@@ -151,10 +151,39 @@ test("timeout and non-200 POST never retry, even when CF may have committed", as
       if(failure==="throw")throw Error("network timeout");
       return response({errors:[{message:"sensitive-SECRET-NEVER-LOG"}]},500);
     };
-    await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl}),
-      /EDGE_110_DEPLOYMENT_OUTCOME_UNKNOWN/);
+    await assert.rejects(deployOnce(input,{compare:async()=>provenance(),fetchImpl,sleep:async()=>{}}),
+      failure==="throw" ? /EDGE_110_DEPLOYMENT_OUTCOME_UNKNOWN_TRANSPORT/ : /EDGE_110_DEPLOYMENT_OUTCOME_UNKNOWN_HTTP_500/);
     assert.equal(posts,1);
   }
+});
+
+test("an applied deployment with an unknown POST outcome is reconciled read-only, never re-posted", async () => {
+  for (const failure of ["throw", "http", "receipt"]) {
+    let posts=0, reads=0;
+    const compare=async()=>++reads<=2?provenance():provenance("after");
+    const fetchImpl=async(_url,init)=>{
+      if(init.method==="GET")return response(health(posts?"deployed":"before"));
+      posts++;
+      if(failure==="throw")throw Error("network timeout after commit");
+      if(failure==="http")return response({errors:[{code:10000}]},502);
+      return response({success:true,result:{id:RECEIPT,strategy:"percentage",versions:[]}},200);
+    };
+    assert.equal(await deployOnce(input,{compare,fetchImpl,sleep:async()=>{}}),RECEIPT);
+    assert.equal(posts,1);
+  }
+});
+
+test("reconciliation never accepts the CAS-pinned previous deployment or another version", async () => {
+  let posts=0, reads=0;
+  const compare=async()=>++reads<=2?provenance():{...provenance("after"),activeVersionId:ACTIVE};
+  const fetchImpl=async(_url,init)=>{
+    if(init.method==="GET")return response(health(posts?"deployed":"before"));
+    posts++;
+    throw Error("network timeout");
+  };
+  await assert.rejects(deployOnce(input,{compare,fetchImpl,sleep:async()=>{}}),
+    /EDGE_110_DEPLOYMENT_OUTCOME_UNKNOWN_TRANSPORT/);
+  assert.equal(posts,1);
 });
 
 test("post-deploy preparation sends ONE isolated-token POST, never promotes", async () => {
