@@ -24,6 +24,8 @@ const retryable: RelayOperation[] = [
   "githubGetCommitChecksWatches",
   "githubWaitCommitChecksWatch",
   "githubGetPullRequest",
+  "githubRead",
+  "httpGet",
 ];
 
 const mutatingOrAmbiguous: RelayOperation[] = [
@@ -45,6 +47,7 @@ const mutatingOrAmbiguous: RelayOperation[] = [
   "githubCreatePullRequest",
   "githubClosePullRequest",
   "githubMergePullRequest",
+  "githubIssueWrite",
 ];
 
 describe("relay retry policy", () => {

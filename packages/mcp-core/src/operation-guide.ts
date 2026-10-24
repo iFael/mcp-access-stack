@@ -57,8 +57,9 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Never use sudo, ssh or an elevated shell to do what a typed tool does. A refusal of such a command is final for that route.",
       "An uncertain result (outcome_unknown, 204, timeout) is reconciled read-only with the same identifiers; never dispatch again.",
       "confirmation_required means the user decides: show the reasons, wait for their answer, then call again with the confirmationId.",
+      "A public https URL (a health endpoint, a release page) is read with http_get, not with the browser or curl.",
     ],
-    tools: ["list_workspaces", "get_operation_guide"],
+    tools: ["list_workspaces", "get_operation_guide", "http_get"],
   },
   release: {
     title: "Publish and install a connector release",
@@ -77,10 +78,12 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
       "If a dispatch returns outcome_unknown, only reconcile with the same operationId.",
+      "A failed run is diagnosed with github_read: kind=run_jobs with the runId, then kind=job_logs with the failing jobId.",
     ],
     tools: [
       "github_get_commit_checks",
       "github_workflow_operation",
+      "github_read",
       "get_release_state",
       "prepare_release",
       "wait_background_task",
@@ -146,6 +149,8 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Pull request: github_create_pull_request; follow CI with github_start_commit_checks_watch and github_wait_commit_checks_watch.",
       "Merge only with the user's go-ahead: github_merge_pull_request.",
       "Release tags go through github_workflow_operation (topic release), not git_publish_tag, unless the user asks for a plain tag.",
+      "Read GitHub state with github_read: releases and assets, tags and branches (refs), workflow runs, run jobs, job log tails, issues, comments and pull-request reviews.",
+      "Issues and comments on issues or pull requests: github_issue_write, confirmed like a pull request.",
     ],
     rules: ["Use inspect_workspace_git for exact status and diffs before committing."],
     tools: [
@@ -156,6 +161,8 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "github_create_pull_request",
       "github_wait_commit_checks_watch",
       "github_merge_pull_request",
+      "github_read",
+      "github_issue_write",
       "inspect_workspace_git",
     ],
   },
@@ -167,7 +174,10 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Follow: wait_background_task with the task id, in bounded waits; get_background_task for a quick look.",
       "Result: read_background_task_output (or read_background_task_logs) once the task finished.",
     ],
-    rules: ["Do not start the same command again while a task for it is running; reuse the existing task id."],
+    rules: [
+      "Do not start the same command again while a task for it is running; reuse the existing task id.",
+      "run_command keeps at most 250 KB of each stream. For longer output, run the command with start_background_task and page read_background_task_output with the returned offsets.",
+    ],
     tools: ["start_background_task", "wait_background_task", "get_background_task", "read_background_task_output"],
   },
   browser: {

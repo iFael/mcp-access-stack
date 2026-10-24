@@ -52,7 +52,7 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly fifteen source-control capabilities", () => {
+  test("publishes exactly sixteen source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
       "git.index.write",
@@ -69,6 +69,7 @@ describe("source-control contracts", () => {
       "github.pull_request.create",
       "github.pull_request.close",
       "github.pull_request.merge",
+      "github.issue.write",
     ]);
     expect(sourceControlCapabilitySchema.options).toEqual(sourceControlCapabilities);
   });
@@ -91,7 +92,7 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes twenty operation names and six confirmable operations", () => {
+  test("publishes twenty-two operation names and seven confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -113,6 +114,8 @@ describe("source-control contracts", () => {
       "github_create_pull_request",
       "github_close_pull_request",
       "github_merge_pull_request",
+      "github_read",
+      "github_issue_write",
     ]);
     expect(confirmableSourceControlOperationNameSchema.options).toEqual([
       "git_push_branch",
@@ -121,6 +124,7 @@ describe("source-control contracts", () => {
       "github_create_pull_request",
       "github_close_pull_request",
       "github_merge_pull_request",
+      "github_issue_write",
     ]);
   });
 

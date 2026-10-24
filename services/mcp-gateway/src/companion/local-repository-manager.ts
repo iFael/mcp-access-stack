@@ -51,6 +51,7 @@ const LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES = [
   "github.pull_request.create",
   "github.pull_request.close",
   "github.pull_request.merge",
+  "github.issue.write",
 ] as const satisfies readonly SourceControlCapability[];
 
 type LocalRepositoryRecord = {

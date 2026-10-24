@@ -8254,6 +8254,111 @@ export const EDGE_MCP_TOOL_MANIFEST = [
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Fetches one public https:// URL from the workspace host, e.g. a health endpoint or a release page. Private, loopback and link-local addresses are refused, redirects (at most 3) are re-checked, and the body is cut at maxBytes. No credentials or custom headers are sent.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "maxBytes": {
+          "default": 65536,
+          "maximum": 262144,
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "url": {
+          "maxLength": 2048,
+          "minLength": 9,
+          "pattern": "^https:\\/\\/",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "http_get",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "bodyEncoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        },
+        "contentType": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "redirects": {
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "url": {
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "status",
+        "contentType",
+        "body",
+        "bodyEncoding",
+        "truncated",
+        "redirects"
+      ],
+      "type": "object"
+    },
+    "title": "HTTPS GET a public URL"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false,
       "readOnlyHint": true
     },
@@ -14056,6 +14161,410 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Merge GitHub pull request"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Read-only typed GitHub views for an authorized repository: releases and assets, tags and branches, workflow runs, run jobs, the tail of a job log, issues, issue or pull-request comments, and pull-request reviews and review comments. Results are paged with page/perPage; nextPage is set while more items may exist.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "event": {
+          "enum": [
+            "push",
+            "pull_request",
+            "workflow_dispatch",
+            "schedule",
+            "release"
+          ],
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "jobId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "release (tag, or latest when omitted), releases, refs (refType, prefix), workflow_runs (workflow, branch, headSha, status, event), run_jobs (runId), job_logs (jobId, tailBytes), issues (state, labels), issue, issue_comments, pull_request_reviews and pull_request_review_comments (number).",
+          "enum": [
+            "release",
+            "releases",
+            "refs",
+            "workflow_runs",
+            "run_jobs",
+            "job_logs",
+            "issues",
+            "issue",
+            "issue_comments",
+            "pull_request_reviews",
+            "pull_request_review_comments"
+          ],
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "type": "array"
+        },
+        "number": {
+          "description": "Issue or pull-request number.",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "page": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "perPage": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "prefix": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "refType": {
+          "enum": [
+            "tags",
+            "heads"
+          ],
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed",
+            "all"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed",
+            "success",
+            "failure",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "tag": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tailBytes": {
+          "description": "job_logs only: bytes kept from the end of the log (default 65536).",
+          "maximum": 400000,
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "workflow": {
+          "description": "Workflow file name, e.g. release.yml.",
+          "maxLength": 133,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "name": "github_read",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "release",
+            "releases",
+            "refs",
+            "workflow_runs",
+            "run_jobs",
+            "job_logs",
+            "issues",
+            "issue",
+            "issue_comments",
+            "pull_request_reviews",
+            "pull_request_review_comments"
+          ],
+          "type": "string"
+        },
+        "nextPage": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "page": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "items",
+        "page"
+      ],
+      "type": "object"
+    },
+    "title": "Read GitHub releases, refs, runs, logs, issues and reviews"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Creates an issue, or comments on an issue or pull request, in an authorized GitHub repository after typed confirmation. Retrying with the same arguments never posts twice.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "create_issue",
+            "comment"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "labels": {
+          "description": "create_issue only.",
+          "items": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "type": "array"
+        },
+        "number": {
+          "description": "comment only: issue or pull-request number.",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "description": "create_issue only.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "action",
+        "body"
+      ],
+      "type": "object"
+    },
+    "name": "github_issue_write",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "create_issue",
+            "comment"
+          ],
+          "type": "string"
+        },
+        "commentId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "const": "github_issue_write",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Create GitHub issue or comment"
   },
   {
     "_meta": {
@@ -25365,15 +25874,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "9efa3bcc9c835644517ba8edd4c114adc1cc4dcb27c77033e79e0994649ae8e0",
-  "serverVersion": "0.4.0-catalog.c9efa3bcc9c83.sbe9beef5fb89",
-  "toolCount": 111,
-  "toolSetRevision": "be9beef5fb891b1260cb56d1268d198e63049b608a02ef293073d0449376a8cd"
+  "contractRevision": "41e271dc8033da8ad608a29aea51a71db18849ebabc4927de4b5299f57614e6f",
+  "serverVersion": "0.4.0-catalog.c41e271dc8033.s1ef01eda5639",
+  "toolCount": 114,
+  "toolSetRevision": "1ef01eda5639a67d461508c341751e265c796d77100c081fb51fb3e0b1b352c5"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c9efa3bcc9c83.sbe9beef5fb89"
+  "version": "0.4.0-catalog.c41e271dc8033.s1ef01eda5639"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

@@ -28,6 +28,8 @@ import type {OracleReleaseAdvanceInput,OracleReleaseAdvanceResult} from "./relea
 import type {
   GetWorkspaceContextInput,
   GetWorkspaceContextResult,
+  HttpGetInput,
+  HttpGetResult,
   InspectGitInput,
   InspectGitResult,
   ListFilesInput,
@@ -153,4 +155,6 @@ export interface WorkspaceExecutor {
     input: ReadBackgroundTaskOutputInput,
     context?: OperationContext,
   ): Promise<BackgroundTaskOutputResult>;
+  /** Public HTTPS GET from the workspace host; absent where no node can fetch. */
+  httpGet?(input: HttpGetInput, context?: OperationContext): Promise<HttpGetResult>;
 }

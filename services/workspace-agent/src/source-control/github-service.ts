@@ -29,6 +29,10 @@ import {
   type GitHubMaterializeActionsArtifactResult,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
+  type GitHubIssueWriteInput,
+  type GitHubIssueWriteResult,
+  type GitHubReadInput,
+  type GitHubReadResult,
   type GitHubMergePullRequestInput,
   type GitHubMergePullRequestResult,
   type GitHubPullRequestResult,
@@ -42,6 +46,7 @@ import type {
   GitHubMergePullRequestRequest,
 } from "./github-http-client.js";
 import { GitHubActionsArtifactIngestor } from "./github-actions-artifact-ingestor.js";
+import { readGitHub, writeGitHubIssue } from "./github-read.js";
 
 export class GitHubService implements GitHubExecutor {
   constructor(private readonly client: GitHubApiClient, private readonly artifactIngestor?: GitHubActionsArtifactIngestor) {}
@@ -119,6 +124,14 @@ export class GitHubService implements GitHubExecutor {
         operationContext,
       );
     }
+  }
+
+  githubRead(input: GitHubReadInput, context?: OperationContext): Promise<GitHubReadResult> {
+    return readGitHub(this.client, input, context);
+  }
+
+  githubIssueWrite(input: GitHubIssueWriteInput, context?: OperationContext): Promise<GitHubIssueWriteResult> {
+    return writeGitHubIssue(this.client, input, context);
   }
 
   async getPullRequest(

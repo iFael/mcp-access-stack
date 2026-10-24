@@ -18,7 +18,10 @@ import {
   terminateProcessTreeByPid,
 } from "../process/process-tree.js";
 
-const MAX_OUTPUT_BYTES = 100_000;
+const MAX_OUTPUT_BYTES = 250_000;
+// Points at the paged path for output that does not fit one synchronous result.
+const TRUNCATION_NOTICE =
+  "\n...[output truncated: run it with start_background_task and page it with read_background_task_output]";
 const MAX_REDACTION_LINE_CHARS = 64_000;
 const OMITTED_OUTPUT_LINE = "[output line omitted: exceeded safe redaction buffer]\n";
 
@@ -538,13 +541,13 @@ function appendCapped(current: string, chunk: string): string {
   if (Buffer.byteLength(combined, "utf8") <= MAX_OUTPUT_BYTES) {
     return combined;
   }
-  return `${truncateUtf8(combined, MAX_OUTPUT_BYTES)}\n...[output truncated]`;
+  return `${truncateUtf8(combined, MAX_OUTPUT_BYTES)}${TRUNCATION_NOTICE}`;
 }
 
 async function readCappedFile(filePath: string): Promise<string> {
   const value = await readFile(filePath);
   if (value.byteLength <= MAX_OUTPUT_BYTES) return value.toString("utf8");
-  return `${value.subarray(value.byteLength - MAX_OUTPUT_BYTES).toString("utf8")}\n...[output truncated]`;
+  return `${value.subarray(value.byteLength - MAX_OUTPUT_BYTES).toString("utf8")}${TRUNCATION_NOTICE}`;
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {

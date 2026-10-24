@@ -125,6 +125,11 @@ import {
   githubWaitCommitChecksWatchInputSchema,
   githubWaitCommitChecksWatchResultSchema,
   githubGetPullRequestInputSchema,
+  githubIssueWriteInputSchema,
+  githubIssueWriteResultSchema,
+  githubReadInputSchema,
+  githubReadResultSchema,
+  httpGetInputSchema,
   githubGetRepositoryInputSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
@@ -143,6 +148,13 @@ import {
   type GitHubCreateRepositoryResult,
   type GitHubCommitChecksResult,
   type GitHubExecutor,
+  type GitHubExtendedExecutor,
+  type GitHubIssueWriteInput,
+  type GitHubIssueWriteResult,
+  type GitHubReadInput,
+  type GitHubReadResult,
+  type HttpGetInput,
+  type HttpGetResult,
   type GitHubGetCommitChecksInput,
   type GitHubWorkflowOperationInput,
   type GitHubWorkflowOperationResult,
@@ -196,6 +208,7 @@ import {
 import { parseOracleControlAdvance } from "@mcp-access-stack/update-control-contract";
 import {oracleReleaseAdvanceResultSchema,type OracleReleaseAdvanceResult} from "@vs-code-gpt/shared";
 import { assertPermission, type WorkspaceOperation } from "./permission-profile.js";
+import { httpGet } from "./network/http-get.js";
 import { buildWorkspaceContext } from "./workspace-context-service.js";
 import { WorkspaceRegistry } from "./workspace-registry.js";
 import {
@@ -236,6 +249,8 @@ export interface LocalAgentOptions {
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
+  /** Test seam for http_get; production uses the public-only HTTPS fetcher. */
+  httpGetter?: (input: HttpGetInput, context: OperationContext) => Promise<HttpGetResult>;
   workflowClient?: GitHubWorkflowApiClient;
   commandConfirmationRegistry?: CommandConfirmationRegistry;
   typedConfirmationRegistry?: TypedConfirmationRegistry;
@@ -266,6 +281,7 @@ export class LocalAgent {
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
   private readonly injectedGitOriginResolver: GitOriginResolver | undefined;
   private readonly injectedGitHubExecutor: GitHubExecutor | undefined;
+  private readonly httpGetter: (input: HttpGetInput, context: OperationContext) => Promise<HttpGetResult>;
   private readonly typedConfirmationRegistry: TypedConfirmationRegistry;
   private readonly injectedMutationReceiptStore: MutationReceiptStore | undefined;
   private readonly mutationReceiptStores = new Map<string, MutationReceiptStore>();
@@ -286,6 +302,7 @@ export class LocalAgent {
     this.injectedGitRepositoryExecutor = options.gitRepositoryExecutor;
     this.injectedGitOriginResolver = options.gitOriginResolver;
     this.injectedGitHubExecutor = options.githubExecutor;
+    this.httpGetter = options.httpGetter ?? ((input, context) => httpGet(input, context));
     this.injectedWorkflowClient = options.workflowClient;
     this.typedConfirmationRegistry = options.typedConfirmationRegistry ?? new TypedConfirmationRegistry();
     this.injectedMutationReceiptStore = options.mutationReceiptStore;
@@ -1776,6 +1793,91 @@ export class LocalAgent {
       },
     );
   }
+  async githubRead(
+    input: GitHubReadInput,
+    context: OperationContext = {},
+  ): Promise<GitHubReadResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubRead",
+      githubReadInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        metadata.sourceControlCapability = "github.repository.read";
+        metadata.targetResource = `github:${repository}:${parsed.kind}`;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.repository.read",
+          repository,
+          parsed.root ?? ".",
+          false,
+          activeContext.signal,
+        );
+        const executor = await this.getGitHubExecutor() as GitHubExecutor & Partial<GitHubExtendedExecutor>;
+        if (!executor.githubRead) throw new AppError("CAPABILITY_UNSUPPORTED", "Typed GitHub reads are unavailable.");
+        return githubReadResultSchema.parse(await executor.githubRead(parsed, activeContext));
+      },
+    );
+  }
+
+  async githubIssueWrite(
+    input: GitHubIssueWriteInput,
+    context: OperationContext = {},
+  ): Promise<GitHubIssueWriteResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubIssueWrite",
+      githubIssueWriteInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        const targetResource = parsed.action === "comment"
+          ? `github:${repository}:issues/${parsed.number}/comments`
+          : `github:${repository}:issues`;
+        metadata.sourceControlCapability = "github.issue.write";
+        metadata.targetResource = targetResource;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.issue.write",
+          repository,
+          parsed.root ?? ".",
+          true,
+          activeContext.signal,
+        );
+        const executor = await this.getGitHubExecutor() as GitHubExecutor & Partial<GitHubExtendedExecutor>;
+        if (!executor.githubIssueWrite) throw new AppError("CAPABILITY_UNSUPPORTED", "GitHub issue writes are unavailable.");
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "github_issue_write",
+          confirmableOperation: "github_issue_write",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
+          capability: "github.issue.write",
+          repository,
+          canonicalRepositoryAlreadyAuthorized: true,
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: githubIssueWriteResultSchema,
+          backend: async () => executor.githubIssueWrite!(parsed, activeContext),
+        });
+      },
+    );
+  }
+
+  async httpGet(input: HttpGetInput, context: OperationContext = {}): Promise<HttpGetResult> {
+    return this.runValidatedAudited(
+      "httpGet",
+      "read",
+      httpGetInputSchema,
+      input,
+      context,
+      () => ({}),
+      (_workspace, parsed, activeContext) => this.httpGetter(parsed, activeContext),
+    );
+  }
+
   private async runSourceControlValidatedAudited<
     TInput extends { workspaceId: string },
     TResult,
@@ -1849,7 +1951,8 @@ export class LocalAgent {
         | "github_create_repository"
         | "github_create_pull_request"
         | "github_close_pull_request"
-        | "github_merge_pull_request";
+        | "github_merge_pull_request"
+        | "github_issue_write";
       requireConfirmation?: boolean;
       capability: SourceControlCapability;
       repository?: string;

@@ -20,6 +20,8 @@ export const RETRYABLE_RELAY_OPERATIONS = [
   "githubGetCommitChecksWatches",
   "githubWaitCommitChecksWatch",
   "githubGetPullRequest",
+  "githubRead",
+  "httpGet",
 ] as const satisfies readonly RelayOperation[];
 
 const retryableRelayOperations = new Set<RelayOperation>(RETRYABLE_RELAY_OPERATIONS);

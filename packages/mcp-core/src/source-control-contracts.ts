@@ -175,6 +175,7 @@ export const sourceControlCapabilities = [
   "github.pull_request.create",
   "github.pull_request.close",
   "github.pull_request.merge",
+  "github.issue.write",
 ] as const;
 
 export const sourceControlCapabilitySchema = z.enum(sourceControlCapabilities);
@@ -201,6 +202,8 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_create_pull_request",
   "github_close_pull_request",
   "github_merge_pull_request",
+  "github_read",
+  "github_issue_write",
 ]);
 export type SourceControlOperationName = z.infer<typeof sourceControlOperationNameSchema>;
 
@@ -211,6 +214,7 @@ export const confirmableSourceControlOperationNameSchema = z.enum([
   "github_create_pull_request",
   "github_close_pull_request",
   "github_merge_pull_request",
+  "github_issue_write",
 ]);
 export type ConfirmableSourceControlOperationName = z.infer<
   typeof confirmableSourceControlOperationNameSchema
@@ -940,6 +944,132 @@ export const githubMergePullRequestResultSchema = z.discriminatedUnion("status",
 export type GitHubMergePullRequestResult = z.infer<
   typeof githubMergePullRequestResultSchema
 >;
+
+/** Read-only GitHub views that github_read projects to a few typed fields. */
+export const GITHUB_READ_KINDS = [
+  "release",
+  "releases",
+  "refs",
+  "workflow_runs",
+  "run_jobs",
+  "job_logs",
+  "issues",
+  "issue",
+  "issue_comments",
+  "pull_request_reviews",
+  "pull_request_review_comments",
+] as const;
+export type GitHubReadKind = (typeof GITHUB_READ_KINDS)[number];
+
+const githubReadFilterSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), "Invalid GitHub filter value.");
+
+export const githubReadInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    kind: z.enum(GITHUB_READ_KINDS),
+    tag: githubReadFilterSchema.optional(),
+    refType: z.enum(["tags", "heads"]).optional(),
+    prefix: githubReadFilterSchema.optional(),
+    workflow: z.string().regex(/^[A-Za-z0-9._-]{1,128}\.ya?ml$/u).optional(),
+    branch: githubPullRefSchema.optional(),
+    headSha: gitShaSchema.optional(),
+    status: z.enum(["queued", "in_progress", "completed", "success", "failure", "cancelled"]).optional(),
+    event: z.enum(["push", "pull_request", "workflow_dispatch", "schedule", "release"]).optional(),
+    runId: z.number().int().positive().optional(),
+    jobId: z.number().int().positive().optional(),
+    number: z.number().int().positive().optional(),
+    state: z.enum(["open", "closed", "all"]).optional(),
+    labels: z.array(githubReadFilterSchema).max(10).optional(),
+    tailBytes: z.number().int().min(1_024).max(400_000).optional(),
+    page: z.number().int().min(1).max(100).default(1),
+    perPage: z.number().int().min(1).max(100).default(30),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    const required: Partial<Record<GitHubReadKind, keyof typeof input>> = {
+      run_jobs: "runId",
+      job_logs: "jobId",
+      issue: "number",
+      issue_comments: "number",
+      pull_request_reviews: "number",
+      pull_request_review_comments: "number",
+    };
+    const field = required[input.kind];
+    if (field !== undefined && input[field] === undefined) {
+      ctx.addIssue({ code: "custom", message: `github_read kind=${input.kind} needs ${field}.`, path: [field] });
+    }
+    if (input.tailBytes !== undefined && input.kind !== "job_logs") {
+      ctx.addIssue({ code: "custom", message: "tailBytes applies only to kind=job_logs.", path: ["tailBytes"] });
+    }
+  });
+export type GitHubReadInput = z.input<typeof githubReadInputSchema>;
+
+const githubReadFieldValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string()),
+]);
+
+export const githubReadResultSchema = z
+  .object({
+    kind: z.enum(GITHUB_READ_KINDS),
+    items: z.array(z.record(z.string(), githubReadFieldValueSchema)).max(100),
+    text: z.string().optional(),
+    truncated: z.boolean().optional(),
+    page: z.number().int().positive(),
+    nextPage: z.number().int().positive().optional(),
+  })
+  .strict();
+export type GitHubReadResult = z.infer<typeof githubReadResultSchema>;
+
+export const githubIssueWriteInputSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    root: rootSchema.optional(),
+    owner: githubOwnerSchema,
+    repository: githubRepositoryNameSchema,
+    action: z.enum(["create_issue", "comment"]),
+    number: z.number().int().positive().optional(),
+    title: z.string().trim().min(1).max(256).optional(),
+    body: z.string().min(1).max(65_536),
+    labels: z.array(githubReadFilterSchema).max(10).optional(),
+    confirmationId: confirmationIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    if (input.action === "create_issue" && (input.title === undefined || input.number !== undefined)) {
+      ctx.addIssue({ code: "custom", message: "create_issue needs title and no number." });
+    }
+    if (input.action === "comment" && (input.number === undefined || input.title !== undefined || input.labels !== undefined)) {
+      ctx.addIssue({ code: "custom", message: "comment needs the issue or pull-request number, without title or labels." });
+    }
+  });
+export type GitHubIssueWriteInput = z.input<typeof githubIssueWriteInputSchema>;
+
+const githubIssueWriteConfirmationRequiredSchema = sourceControlConfirmationRequiredSchema.extend({
+  operation: z.literal("github_issue_write"),
+});
+export const githubIssueWriteResultSchema = z.discriminatedUnion("status", [
+  githubIssueWriteConfirmationRequiredSchema,
+  z.object({
+    status: z.literal("completed"),
+    action: z.enum(["create_issue", "comment"]),
+    number: z.number().int().positive(),
+    url: githubUrlSchema,
+    commentId: z.number().int().positive().optional(),
+  }).strict(),
+]);
+export type GitHubIssueWriteResult = z.infer<typeof githubIssueWriteResultSchema>;
 
 function normalizeGitPath(value: string): string {
   return value

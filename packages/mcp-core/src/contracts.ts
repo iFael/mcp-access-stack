@@ -38,6 +38,10 @@ import {
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubGetPullRequestInputSchema,
+  githubIssueWriteInputSchema,
+  githubIssueWriteResultSchema,
+  githubReadInputSchema,
+  githubReadResultSchema,
   githubStartCommitChecksWatchInputSchema,
   githubStartCommitChecksWatchResultSchema,
   githubGetCommitChecksWatchesResultSchema,
@@ -860,6 +864,28 @@ export const relayOperationContextSchema = operationContextSchema.pick({
 
 export type RelayOperationContext = z.infer<typeof relayOperationContextSchema>;
 
+export const httpGetInputSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1),
+    url: z.string().min(9).max(2_048).regex(/^https:\/\//iu, "http_get only fetches https:// URLs."),
+    maxBytes: z.number().int().min(1_024).max(262_144).default(65_536),
+  })
+  .strict();
+export type HttpGetInput = z.input<typeof httpGetInputSchema>;
+
+export const httpGetResultSchema = z
+  .object({
+    url: z.string().url(),
+    status: z.number().int().min(100).max(599),
+    contentType: z.string().max(256).nullable(),
+    body: z.string(),
+    bodyEncoding: z.enum(["utf8", "base64"]),
+    truncated: z.boolean(),
+    redirects: z.number().int().min(0).max(3),
+  })
+  .strict();
+export type HttpGetResult = z.infer<typeof httpGetResultSchema>;
+
 export const sourceControlRelayOperations = [
   "gitCreateBranch",
   "gitStagePaths",
@@ -881,6 +907,8 @@ export const sourceControlRelayOperations = [
   "githubCreatePullRequest",
   "githubClosePullRequest",
   "githubMergePullRequest",
+  "githubRead",
+  "githubIssueWrite",
 ] as const;
 export type SourceControlRelayOperation = (typeof sourceControlRelayOperations)[number];
 
@@ -911,6 +939,7 @@ export const relayOperations = [
   "readBackgroundTaskLogs",
   "writeBackgroundTaskStdin",
   "readBackgroundTaskOutput",
+  "httpGet",
   ...sourceControlRelayOperations,
 ] as const;
 
@@ -1070,6 +1099,9 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   z.object({ ...relayRequestBase, operation: z.literal("githubCreatePullRequest"), input: githubCreatePullRequestInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubClosePullRequest"), input: githubClosePullRequestInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("githubMergePullRequest"), input: githubMergePullRequestInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubRead"), input: githubReadInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("githubIssueWrite"), input: githubIssueWriteInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("httpGet"), input: httpGetInputSchema }).strict(),
 ]);
 
 export type RelayRequest = z.infer<typeof relayRequestSchema>;
@@ -1181,4 +1213,7 @@ export const relayResultSchemas = {
   githubCreatePullRequest: githubCreatePullRequestResultSchema,
   githubClosePullRequest: githubClosePullRequestResultSchema,
   githubMergePullRequest: githubMergePullRequestResultSchema,
+  githubRead: githubReadResultSchema,
+  githubIssueWrite: githubIssueWriteResultSchema,
+  httpGet: httpGetResultSchema,
 } as const;

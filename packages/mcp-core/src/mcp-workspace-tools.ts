@@ -61,6 +61,8 @@ import {
   searchFilesBatchResultSchema,
   writeFileInputSchema,
   writeFileResultSchema,
+  httpGetInputSchema,
+  httpGetResultSchema,
   type OperationContext,
   type RelayOperation,
   type SourceControlRelayOperation,
@@ -134,6 +136,11 @@ import {
   githubWaitCommitChecksWatchResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
+  GITHUB_READ_KINDS,
+  githubIssueWriteInputSchema,
+  githubIssueWriteResultSchema,
+  githubReadInputSchema,
+  githubReadResultSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
@@ -141,7 +148,7 @@ import {
   sourceControlOperationNameSchema,
   type SourceControlOperationName,
 } from "./source-control-contracts.js";
-import type { GitHubChecksWatchExecutor, GitHubExecutor, GitRepositoryExecutor, GitHubWorkflowExecutor } from "./source-control-executor.js";
+import type { GitHubChecksWatchExecutor, GitHubExecutor, GitHubExtendedExecutor, GitRepositoryExecutor, GitHubWorkflowExecutor } from "./source-control-executor.js";
 import { AppError as AppErrorClass, asAppError } from "./errors.js";
 import {
   createOperationDeadline,
@@ -223,6 +230,8 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "github_create_pull_request",
   "github_close_pull_request",
   "github_merge_pull_request",
+  "github_read",
+  "github_issue_write",
 ] as const satisfies readonly SourceControlToolName[];
 
 const BASE_WORKSPACE_TOOL_NAMES = [
@@ -261,6 +270,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "read_background_task_logs",
   "write_background_task_stdin",
   "read_background_task_output",
+  "http_get",
 ] as const;
 
 type BaseWorkspaceToolName = (typeof BASE_WORKSPACE_TOOL_NAMES)[number];
@@ -2198,6 +2208,42 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("http_get", include)) {
+    server.registerTool(
+      "http_get",
+      {
+        title: "HTTPS GET a public URL",
+        description:
+          "Fetches one public https:// URL from the workspace host, e.g. a health endpoint or a release page. " +
+          "Private, loopback and link-local addresses are refused, redirects (at most 3) are re-checked, " +
+          "and the body is cut at maxBytes. No credentials or custom headers are sent.",
+        inputSchema: httpGetInputSchema,
+        outputSchema: httpGetResultSchema,
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          if (!executor.httpGet) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "http_get is unavailable on this host.");
+          const parsed = httpGetInputSchema.parse(input);
+          const structuredContent = httpGetResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.httpGet!(parsed, context)),
+          );
+          return {
+            content: [{ type: "text", text: `HTTP ${structuredContent.status} from ${structuredContent.url}` +
+              (structuredContent.truncated ? " (body truncated)." : ".") }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
   if (shouldInclude("read_background_task_output", include)) {
     server.registerTool(
       "read_background_task_output",
@@ -2528,7 +2574,7 @@ async function executeCommand(
   return result;
 }
 
-export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor & Partial<GitHubWorkflowExecutor>;
+export type SourceControlExecutor = GitRepositoryExecutor & GitHubExecutor & GitHubChecksWatchExecutor & Partial<GitHubWorkflowExecutor> & Partial<GitHubExtendedExecutor>;
 
 export interface RegisterSourceControlToolsOptions {
   securitySchemes?: WorkspaceToolSecurityScheme[];
@@ -2925,6 +2971,57 @@ const sourceControlMcpSchemas = {
       message: "Invalid github_merge_pull_request MCP result.",
     }),
   },
+  github_read: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner,
+      repository: mcpGitHubRepositoryName,
+      kind: z.enum(GITHUB_READ_KINDS).describe("release (tag, or latest when omitted), releases, refs (refType, prefix), workflow_runs (workflow, branch, headSha, status, event), run_jobs (runId), job_logs (jobId, tailBytes), issues (state, labels), issue, issue_comments, pull_request_reviews and pull_request_review_comments (number)."),
+      tag: z.string().min(1).max(255).optional(),
+      refType: z.enum(["tags", "heads"]).optional(),
+      prefix: z.string().min(1).max(255).optional(),
+      workflow: z.string().min(1).max(133).optional().describe("Workflow file name, e.g. release.yml."),
+      branch: mcpGitHubPullRef.optional(),
+      headSha: mcpSourceControlSha.optional(),
+      status: z.enum(["queued", "in_progress", "completed", "success", "failure", "cancelled"]).optional(),
+      event: z.enum(["push", "pull_request", "workflow_dispatch", "schedule", "release"]).optional(),
+      runId: z.number().int().positive().optional(),
+      jobId: z.number().int().positive().optional(),
+      number: z.number().int().positive().optional().describe("Issue or pull-request number."),
+      state: z.enum(["open", "closed", "all"]).optional(),
+      labels: z.array(z.string().min(1).max(255)).max(10).optional(),
+      tailBytes: z.number().int().min(1_024).max(400_000).optional().describe("job_logs only: bytes kept from the end of the log (default 65536)."),
+      page: z.number().int().min(1).max(100).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+    }).strict(),
+    output: githubReadResultSchema,
+  },
+  github_issue_write: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner,
+      repository: mcpGitHubRepositoryName,
+      action: z.enum(["create_issue", "comment"]),
+      number: z.number().int().positive().optional().describe("comment only: issue or pull-request number."),
+      title: z.string().trim().min(1).max(256).optional().describe("create_issue only."),
+      body: z.string().min(1).max(65_536),
+      labels: z.array(z.string().min(1).max(255)).max(10).optional().describe("create_issue only."),
+      confirmationId: mcpSourceControlConfirmationId.optional(),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_issue_write").optional(),
+      action: z.enum(["create_issue", "comment"]).optional(),
+      number: z.number().int().positive().optional(),
+      url: mcpGitHubUrl.optional(),
+      commentId: z.number().int().positive().optional(),
+    }).strict().refine((value) => githubIssueWriteResultSchema.safeParse(value).success, {
+      message: "Invalid github_issue_write MCP result.",
+    }),
+  },
 } as const;
 const sourceControlAnnotations: Record<SourceControlToolName, {
   readOnlyHint: boolean;
@@ -2953,6 +3050,8 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_close_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+  github_read: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_issue_write: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
 };
 
 export function registerSourceControlTools(
@@ -3618,6 +3717,64 @@ export function registerSourceControlTools(
       },
     );
   }
+
+  if (shouldInclude("github_read", include)) {
+    server.registerTool(
+      "github_read",
+      {
+        title: "Read GitHub releases, refs, runs, logs, issues and reviews",
+        description: "Read-only typed GitHub views for an authorized repository: releases and assets, tags and branches, workflow runs, run jobs, the tail of a job log, issues, issue or pull-request comments, and pull-request reviews and review comments. Results are paged with page/perPage; nextPage is set while more items may exist.",
+        inputSchema: sourceControlMcpSchemas.github_read.input,
+        outputSchema: sourceControlMcpSchemas.github_read.output,
+        annotations: sourceControlAnnotations.github_read,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          if (!executor.githubRead) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Typed GitHub reads are unavailable.");
+          const parsed = githubReadInputSchema.parse(input);
+          const structuredContent = githubReadResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
+              (context) => executor.githubRead!(parsed, context)),
+          );
+          return sourceControlSuccess(
+            `GitHub ${structuredContent.kind} read: ${structuredContent.items.length} item(s)` +
+              (structuredContent.truncated ? ", log tail truncated." : "."),
+            structuredContent,
+          );
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("github_issue_write", include)) {
+    server.registerTool(
+      "github_issue_write",
+      {
+        title: "Create GitHub issue or comment",
+        description: "Creates an issue, or comments on an issue or pull request, in an authorized GitHub repository after typed confirmation. Retrying with the same arguments never posts twice.",
+        inputSchema: sourceControlMcpSchemas.github_issue_write.input,
+        outputSchema: sourceControlMcpSchemas.github_issue_write.output,
+        annotations: sourceControlAnnotations.github_issue_write,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          if (!executor.githubIssueWrite) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "GitHub issue writes are unavailable.");
+          const parsed = githubIssueWriteInputSchema.parse(input);
+          const structuredContent = githubIssueWriteResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.githubIssueWrite!(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub issue write processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
 }
 
 function sourceControlSuccess(
@@ -3677,4 +3834,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   githubCreatePullRequest: "github_create_pull_request",
   githubClosePullRequest: "github_close_pull_request",
   githubMergePullRequest: "github_merge_pull_request",
+  githubRead: "github_read",
+  githubIssueWrite: "github_issue_write",
+  httpGet: "http_get",
 };
