@@ -9,8 +9,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(111);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(111);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(114);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(114);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
         ...MCP_REPOSITORY_TOOL_NAMES,
@@ -21,6 +21,9 @@ describe("MCP tool catalog identity", () => {
         "github_materialize_actions_artifact",
         "delete_file",
         "get_operation_guide",
+        "github_read",
+        "github_issue_write",
+        "http_get",
       ]),
     );
   });

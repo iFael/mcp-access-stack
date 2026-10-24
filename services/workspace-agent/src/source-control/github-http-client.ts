@@ -187,6 +187,29 @@ export interface GitHubApiClient {
     request: GitHubMergePullRequestRequest,
     context?: OperationContext,
   ): Promise<GitHubMergeRecord>;
+  /** GET /repos/{owner}/{repository}/{resource}; the resource is built from typed input only. */
+  readRepositoryResource?(
+    owner: string,
+    repository: string,
+    resource: readonly (string | number)[],
+    query: Readonly<Record<string, string>>,
+    context?: OperationContext,
+  ): Promise<unknown>;
+  /** POST /repos/{owner}/{repository}/{resource} with a JSON body built from typed input. */
+  createRepositoryResource?(
+    owner: string,
+    repository: string,
+    resource: readonly (string | number)[],
+    body: object,
+    context?: OperationContext,
+  ): Promise<unknown>;
+  getJobLogTail?(
+    owner: string,
+    repository: string,
+    jobId: number,
+    tailBytes: number,
+    context?: OperationContext,
+  ): Promise<{ text: string; truncated: boolean }>;
 }
 
 export interface GitHubHttpClientOptions {
@@ -510,6 +533,147 @@ export class GitHubHttpClient implements GitHubApiClient {
       context,
     );
   }
+
+  async readRepositoryResource(owner: string, repository: string,
+    resource: readonly (string | number)[], query: Readonly<Record<string, string>>,
+    context?: OperationContext): Promise<unknown> {
+    const search = new URLSearchParams(query).toString();
+    return performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "GET",
+      path: repositoryResourcePath(owner, repository, resource) + (search ? `?${search}` : ""),
+      mutation: false,
+    }, context);
+  }
+
+  async createRepositoryResource(owner: string, repository: string,
+    resource: readonly (string | number)[], body: object,
+    context?: OperationContext): Promise<unknown> {
+    return performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "POST",
+      path: repositoryResourcePath(owner, repository, resource),
+      body,
+      mutation: true,
+    }, context);
+  }
+
+  /** Streams a job log and keeps only its last tailBytes. GitHub answers with a
+   * 302 to signed blob storage, which is fetched without the GitHub token. */
+  async getJobLogTail(owner: string, repository: string, jobId: number, tailBytes: number,
+    context?: OperationContext): Promise<{ text: string; truncated: boolean }> {
+    const signal = context?.signal;
+    if (signal?.aborted) throw abortSignalError(signal, "GitHub request was cancelled.");
+    const credential = await this.#credentialProvider.getCredential(context);
+    if (signal?.aborted) throw abortSignalError(signal, "GitHub request was cancelled.");
+    const path = `/repos/${segment(owner)}/${segment(repository)}/actions/jobs/${positiveInteger(jobId)}/logs`;
+    let response: Response;
+    try {
+      response = await this.#fetchImpl(GITHUB_API_BASE_URL + path, {
+        method: "GET", redirect: "manual", cache: "no-store",
+        headers: { Accept: GITHUB_ACCEPT, "X-GitHub-Api-Version": GITHUB_API_VERSION,
+          Authorization: `Bearer ${credential.token}` },
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch {
+      if (signal?.aborted) throw abortSignalError(signal, "GitHub request was cancelled.");
+      throw unavailableError(false);
+    }
+    if (response.status === 302) {
+      const location = response.headers.get("location");
+      await discardBody(response);
+      const url = trustedJobLogUrl(location);
+      try {
+        // Never forward the GitHub bearer token across origins.
+        response = await this.#fetchImpl(url.href, { method: "GET", redirect: "error", cache: "no-store",
+          ...(signal === undefined ? {} : { signal }) });
+      } catch {
+        if (signal?.aborted) throw abortSignalError(signal, "GitHub request was cancelled.");
+        throw unavailableError(false);
+      }
+    }
+    if (!response.ok) {
+      await discardBody(response);
+      if (response.status === 401 || response.status === 403) {
+        throw new AppError("AUTHENTICATION_FAILED", "GitHub authentication failed " + safeClientErrorDiagnostic(response));
+      }
+      if (response.status === 404 || response.status === 410) {
+        throw new AppError("INVALID_ARGUMENT", "GitHub job log is not available " + safeClientErrorDiagnostic(response));
+      }
+      throw unavailableError(false);
+    }
+    return readTail(response, tailBytes);
+  }
+}
+
+const MAX_JOB_LOG_STREAM_BYTES = 64 * 1024 * 1024;
+
+function repositoryResourcePath(owner: string, repository: string,
+  resource: readonly (string | number)[]): string {
+  if (resource.length === 0 || resource.length > 6) {
+    throw new AppError("INVALID_ARGUMENT", "Invalid GitHub resource path.");
+  }
+  const parts = resource.map((part) => {
+    if (typeof part === "number") return positiveInteger(part);
+    if (part.length === 0 || part.length > 255 || part === "." || part === ".." ||
+      /[\u0000-\u001f\u007f]/u.test(part)) {
+      throw new AppError("INVALID_ARGUMENT", "Invalid GitHub resource path.");
+    }
+    return segment(part);
+  });
+  return `/repos/${segment(owner)}/${segment(repository)}/${parts.join("/")}`;
+}
+
+function trustedJobLogUrl(location: string | null): URL {
+  let url: URL;
+  try {
+    if (!location || location.length > 8192) throw new Error("missing");
+    url = new URL(location);
+  } catch {
+    throw new AppError("INTERNAL_ERROR", "GitHub returned an untrusted job log redirect.");
+  }
+  const host = url.hostname.toLowerCase();
+  const trustedHost = host.endsWith(".blob.core.windows.net") ||
+    host.endsWith(".actions.githubusercontent.com") ||
+    host === "results-receiver.actions.githubusercontent.com";
+  if (url.protocol !== "https:" || !trustedHost || url.username || url.password ||
+    (url.port !== "" && url.port !== "443") || url.hash) {
+    throw new AppError("INTERNAL_ERROR", "GitHub returned an untrusted job log redirect.");
+  }
+  return url;
+}
+
+async function readTail(response: Response, tailBytes: number): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: "", truncated: false };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_JOB_LOG_STREAM_BYTES) {
+        await reader.cancel();
+        throw new AppError("LIMIT_EXCEEDED", "GitHub job log exceeded the configured limit.");
+      }
+      chunks.push(value);
+      kept += value.byteLength;
+      while (chunks.length > 1 && kept - chunks[0]!.byteLength >= tailBytes) {
+        kept -= chunks.shift()!.byteLength;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(kept);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const tail = merged.byteLength > tailBytes ? merged.subarray(merged.byteLength - tailBytes) : merged;
+  return { text: new TextDecoder().decode(tail), truncated: total > tail.byteLength };
 }
 
 interface FixedRequest {

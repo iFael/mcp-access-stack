@@ -19,6 +19,10 @@ import type {
   GitHubMaterializeActionsArtifactInput,
   GitHubMaterializeActionsArtifactResult,
   GitHubGetPullRequestInput,
+  GitHubIssueWriteInput,
+  GitHubIssueWriteResult,
+  GitHubReadInput,
+  GitHubReadResult,
   GitHubGetRepositoryInput,
   GitHubMergePullRequestInput,
   GitHubMergePullRequestResult,
@@ -96,6 +100,13 @@ export interface GitHubChecksWatchExecutor {
 export interface GitHubWorkflowExecutor {
   githubWorkflowOperation(input: GitHubWorkflowOperationInput,
     context?: OperationContext): Promise<GitHubWorkflowOperationResult>;
+}
+
+/** Read-only GitHub views and issue/comment writes for the agent. */
+export interface GitHubExtendedExecutor {
+  githubRead(input: GitHubReadInput, context?: OperationContext): Promise<GitHubReadResult>;
+  githubIssueWrite(input: GitHubIssueWriteInput,
+    context?: OperationContext): Promise<GitHubIssueWriteResult>;
 }
 
 export interface GitHubExecutor {

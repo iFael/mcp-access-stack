@@ -22,6 +22,20 @@ const cases = [
 ] as const;
 
 describe("source-control workspace executor parity", () => {
+  it("InProcessWorkspaceExecutor forwards typed GitHub reads, issue writes and http_get", async () => {
+    const agent: Record<string, unknown> = {};
+    for (const method of ["githubRead", "githubIssueWrite", "httpGet"]) {
+      agent[method] = jest.fn(async (input: unknown, context: unknown) => ({ input, context, method }));
+    }
+    const executor = new InProcessWorkspaceExecutor(agent as unknown as LocalAgent);
+    const context = { correlationId: "corr-2" };
+    for (const method of ["githubRead", "githubIssueWrite", "httpGet"]) {
+      const input = { workspaceId: "test", marker: method };
+      await expect((executor as any)[method](input, context)).resolves.toMatchObject({ input, context, method });
+      expect((agent as any)[method]).toHaveBeenCalledWith(input, context);
+    }
+  });
+
   it("InProcessWorkspaceExecutor maps the fourteen source-control ports to LocalAgent typed methods", async () => {
     const agent: Record<string, unknown> = {};
     for (const [, agentMethod] of cases) {
