@@ -55,7 +55,6 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
     rules: [
       "Prefer the typed tool for a job over run_command or start_background_task. Shell is for project commands (build, test, lint), not for operating the stack.",
       "Never use sudo, ssh or an elevated shell to do what a typed tool does. A refusal of such a command is final for that route.",
-      "Do not use a shell to read stack state either (git refs, tags, CI runs, release assets). If no typed tool reads what a check asks for, skip that check and tell the user which one you skipped.",
       "An uncertain result (outcome_unknown, 204, timeout) is reconciled read-only with the same identifiers; never dispatch again.",
       "confirmation_required means the user decides: show the reasons, wait for their answer, then call again with the confirmationId.",
     ],
@@ -78,7 +77,6 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
       "If a dispatch returns outcome_unknown, only reconcile with the same operationId.",
-      "Do not check the main ref, the CI run or whether the tag exists by hand: the bootstrap and release workflows refuse a moved main, a red CI or an existing tag on their own.",
     ],
     tools: [
       "github_get_commit_checks",
@@ -136,10 +134,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "outcome_unknown or a timeout on a mutation: reconcile read-only with the same identifiers; never repeat the mutation.",
       "AGENT_UNAVAILABLE right after promote_release: the connector is reconnecting; wait and read get_release_state again.",
     ],
-    rules: [
-      "Never retry a refused call unchanged, and never work around a refusal with sudo, ssh or an elevated shell.",
-      "SHELL_NOT_ALLOWED: this workspace has no shell. Use the typed tool for the job; if none exists, report it to the user.",
-    ],
+    rules: ["Never retry a refused call unchanged, and never work around a refusal with sudo, ssh or an elevated shell."],
     tools: ["get_operation_guide"],
   },
   source_control: {
