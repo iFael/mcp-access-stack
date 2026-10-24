@@ -79,6 +79,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
       "If a dispatch returns outcome_unknown, only reconcile with the same operationId.",
       "A failed run is diagnosed with github_read: kind=run_jobs with the runId, then kind=job_logs with the failing jobId.",
+      "Each main commit gets at most one public release: if release.yml already ran for that SHA, the dispatch returns outcome_unknown without starting a run. A new release needs a new main commit and a new tag.",
     ],
     tools: [
       "github_get_commit_checks",
