@@ -13,6 +13,7 @@ export interface NodeJestProjectOptions {
 }
 
 const repositoryRootUrl = new URL("./", import.meta.url);
+const projectTimeoutSetupUrl = new URL("./tooling/testing/jest-project-timeout.ts", import.meta.url);
 const rootTsconfig = JSON.parse(
   readFileSync(new URL("./tsconfig.json", import.meta.url), "utf8"),
 ) as {
@@ -45,9 +46,13 @@ export function createNodeJestProject(
     restoreMocks: true,
     testMatch: options.testMatch,
     moduleNameMapper,
+    // Jest ignores testTimeout inside a project, so each project sets it in a setup file.
     ...(options.testTimeout === undefined
       ? {}
-      : { testTimeout: options.testTimeout }),
+      : {
+          globals: { __PROJECT_TEST_TIMEOUT_MS__: options.testTimeout },
+          setupFilesAfterEnv: [fileURLToPath(projectTimeoutSetupUrl)],
+        }),
     ...(options.detectOpenHandles === undefined
       ? {}
       : { detectOpenHandles: options.detectOpenHandles }),
