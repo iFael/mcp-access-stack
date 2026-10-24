@@ -138,3 +138,14 @@ export const mandatoryBlockedGlobs = [
   "**/build/**",
   "**/coverage/**",
 ] as const;
+
+// Build output and dependencies stay out of listings, searches and writes,
+// but an exact read_file of a file inside them is allowed.
+export const readableGeneratedGlobs = [
+  "**/node_modules/**",
+  "**/bin/**",
+  "**/obj/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/coverage/**",
+] as const;

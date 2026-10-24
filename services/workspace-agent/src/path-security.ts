@@ -1,6 +1,6 @@
 import { lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { AppError } from "@vs-code-gpt/shared";
+import { AppError, readableGeneratedGlobs } from "@vs-code-gpt/shared";
 import { Minimatch } from "minimatch";
 import type {
   AuthorizedPath,
@@ -100,6 +100,8 @@ function isRealEnvironmentFile(relativePath: string): boolean {
     (compared.startsWith(comparisonValue(".env.")) && !templates.has(compared))
   );
 }
+const READABLE_GENERATED: ReadonlySet<string> = new Set(readableGeneratedGlobs);
+
 export class PathSecurity {
   private readonly blockedMatchers: Array<{
     pattern: string;
@@ -122,9 +124,10 @@ export class PathSecurity {
       .map((pattern) => new Minimatch(pattern.slice(0, -3), options));
   }
 
-  matchedBlockedPattern(relativePath: string): string | undefined {
+  matchedBlockedPattern(relativePath: string, readGenerated = false): string | undefined {
     const candidate = relativePath === "." ? "" : relativePath;
-    return this.blockedMatchers.find(({ matcher }) => matcher.match(candidate))
+    return this.blockedMatchers.find(({ pattern, matcher }) =>
+      !(readGenerated && READABLE_GENERATED.has(pattern)) && matcher.match(candidate))
       ?.pattern;
   }
 
@@ -136,9 +139,9 @@ export class PathSecurity {
     const candidate = relativePath === "." ? "" : relativePath;
     return this.subtreeBlockedMatchers.some((matcher) => matcher.match(candidate));
   }
-  authorizeLogical(input: string, allowDot = false, operation?: string): string {
+  authorizeLogical(input: string, allowDot = false, operation?: string, readGenerated = false): string {
     const logicalPath = normalizeRelativePath(input, { allowDot });
-    const policyRule = this.matchedBlockedPattern(logicalPath);
+    const policyRule = this.matchedBlockedPattern(logicalPath, readGenerated);
     if (policyRule) {
       throw this.blockedPathError(logicalPath, policyRule, "Path is blocked by workspace policy.", operation);
     }
@@ -231,6 +234,11 @@ export class PathSecurity {
     return this.authorizeExistingInternal(input, expectedKind, allowDot, true, operation);
   }
 
+  /** Exact file read that may reach build output and dependencies. */
+  async authorizeExistingFileRead(input: string, operation: string): Promise<AuthorizedPath> {
+    return this.authorizeExistingInternal(input, "file", false, true, operation, true);
+  }
+
   async authorizeExistingForSecretScan(
     input: string,
     expectedKind?: "file" | "directory",
@@ -245,9 +253,10 @@ export class PathSecurity {
     allowDot: boolean,
     enforceBlockedPolicy: boolean,
     operation?: string,
+    readGenerated = false,
   ): Promise<AuthorizedPath> {
     const logicalPath = enforceBlockedPolicy
-      ? this.authorizeLogical(input, allowDot, operation)
+      ? this.authorizeLogical(input, allowDot, operation, readGenerated)
       : normalizeRelativePath(input, { allowDot });
     if (!this.isWithinLogicalAllowedRoot(logicalPath)) {
       throw new AppError(
@@ -289,7 +298,7 @@ export class PathSecurity {
       .join("/");
     const portableCanonicalPath = canonicalRelativePath || ".";
     const canonicalPolicyRule = enforceBlockedPolicy
-      ? this.matchedBlockedPattern(portableCanonicalPath)
+      ? this.matchedBlockedPattern(portableCanonicalPath, readGenerated)
       : undefined;
     if (canonicalPolicyRule) {
       throw this.blockedPathError(
