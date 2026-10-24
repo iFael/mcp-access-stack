@@ -227,6 +227,45 @@ describe("file access", () => {
     ).rejects.toMatchObject({ code: "BLOCKED_PATH" });
   });
 
+  test("reads build output by exact path but keeps it out of listings, searches and writes", async () => {
+    fixture = await createFixture({
+      profile: "full-repo-write",
+      allowedRoots: ["."],
+    });
+    await writePolicy(fixture.policyPath, [
+      {
+        ...makeWorkspacePolicy(fixture.workspacePath, {
+          profile: "full-repo-write",
+          allowedRoots: ["."],
+        }),
+        allowWrites: ["."],
+      },
+    ]);
+    await writeWorkspaceFile(fixture.workspacePath, "pkg/dist/index.js", "dist-marker\n");
+    await writeWorkspaceFile(fixture.workspacePath, "node_modules/lib/index.js", "dep-marker\n");
+    await writeWorkspaceFile(fixture.workspacePath, "pkg/dist/.env", "SECRET=value\n");
+    const agent = await LocalAgent.create(fixture.policyPath);
+
+    await expect(
+      agent.readFile({ workspaceId: "test", path: "pkg/dist/index.js" }),
+    ).resolves.toMatchObject({ path: "pkg/dist/index.js", content: "dist-marker\n" });
+    await expect(
+      agent.readFile({ workspaceId: "test", path: "node_modules/lib/index.js" }),
+    ).resolves.toMatchObject({ content: "dep-marker\n" });
+    await expect(
+      agent.readFile({ workspaceId: "test", path: "pkg/dist/.env" }),
+    ).rejects.toMatchObject({ code: "BLOCKED_PATH", details: { policyRule: "**/.env" } });
+
+    const listing = await agent.listFiles({ workspaceId: "test" });
+    expect(listing.files.some((file) => file.includes("dist/") || file.startsWith("node_modules/"))).toBe(false);
+    await expect(
+      agent.searchFiles({ workspaceId: "test", query: "dist-marker" }),
+    ).resolves.toMatchObject({ matches: [] });
+    await expect(
+      agent.writeFile({ workspaceId: "test", path: "pkg/dist/new.js", content: "blocked" }),
+    ).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+  });
+
   test("treats an allowed root file as an exact path", async () => {
     fixture = await createFixture({ allowedRoots: ["allowed.txt"] });
     await writeWorkspaceFile(fixture.workspacePath, "allowed.txt", "allowed");
