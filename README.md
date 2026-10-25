@@ -54,6 +54,23 @@ O Workspace Agent aplica allowlists, roots permitidos, paths bloqueados e classi
 
 Package runners e deploy CLIs mutantes exigem confirmação. Push para `main` é confirmation-bound; formas ambíguas como `git push -C` e `git push --mirror` permanecem bloqueadas. Commit/merge local diretamente em `main` continuam protegidos.
 
+### Aprovação local de diretórios para descoberta
+
+Por padrão, `discover_local_repositories` pesquisa apenas na home do usuário do companion. Diretórios externos (incluindo worktrees no WSL) precisam ser aprovados **localmente**, não pela mensagem enviada ao ChatGPT.
+
+No arquivo já existente `config.json` do companion (por padrão `%LOCALAPPDATA%\MCP V3\config.json` no Windows, ou o caminho definido por `MCP_V3_CONFIG_PATH`), acrescente a propriedade opcional `approvedDiscoveryRoots` com os caminhos exatos desejados. Exemplo de trecho JSON:
+
+```json
+"approvedDiscoveryRoots": [
+  "\\\\wsl.localhost\\Ubuntu\\home\\USUARIO\\Projects\\jarvis",
+  "\\\\wsl.localhost\\Ubuntu\\home\\USUARIO\\Projects\\jarvis-worktrees\\publish-stable-20261017"
+]
+```
+
+Preserve `version`, `edgeBaseUrl` e as demais propriedades existentes. Substitua `USUARIO` pelo usuário Linux real. Cada raiz deve existir, ser absoluta, não ser a raiz de um volume e estar explicitamente listada. A autorização só vale para a descoberta iniciada **na raiz exata aprovada** (não para suas pastas irmãs); a varredura descendente segue os limites e a proteção contra links para fora. Se o WSL estiver indisponível, o companion continua inicializando e o caminho não é autorizado naquela tentativa.
+
+A configuração é lida na inicialização do companion; não altere/reinicie o serviço em produção sem o gate operacional apropriado. Aprovar a descoberta **não registra** repositórios nem concede acesso Git automaticamente: a importação/binding e a política de workspace continuam separadas.
+
 ## Browser Worker
 
 O Browser Worker usa Playwright direto em uma sessão Windows local e perfil Chromium dedicado ao MCP. Não reutiliza o perfil pessoal do usuário e não possui fallback Docker.
