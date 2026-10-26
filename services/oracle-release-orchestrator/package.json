@@ -14,6 +14,6 @@
   },
   "dependencies": {
     "@mcp-access-stack/update-control-contract": "0.1.0",
-    "ws": "^8.21.0"
+    "ws": "^8.22.0"
   }
 }
