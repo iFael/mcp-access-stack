@@ -1410,6 +1410,9 @@ async function open(input, signal) {
   throwIfAborted(signal, "open", false);
   const tab = await chrome.tabs.create({ url: targetUrl, active: true });
   if (typeof tab.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
+  // Group before the page loads so a slow page never sits outside the MCP group.
+  const mcpGroupId = await withOwnershipLock(async () =>
+    assignMcpTaskGroup(tab.id, input.taskId, await readOwnedTabs()));
   try {
     await waitForTabComplete(tab.id, 30000, signal);
   } catch (error) {
@@ -1424,9 +1427,6 @@ async function open(input, signal) {
       const current = await chrome.tabs.get(tab.id).catch(() => undefined);
       if (!current) throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
       const owned = await readOwnedTabs();
-      const mcpGroupId = typeof input.taskId === "string"
-        ? await assignMcpTaskGroup(tab.id, input.taskId, owned)
-        : undefined;
       metadata = {
         tabId: PERSONAL_PREFIX + tab.id,
         ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
@@ -5267,6 +5267,7 @@ async function finishTask(input) {
       await writeOwnedTabs(owned);
     });
     if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+    else taskGroups.clear();
     return {
       completed: true,
       taskId: input.taskId,
@@ -5291,6 +5292,7 @@ async function finishTask(input) {
     await writeOwnedTabs(owned);
   });
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+  else taskGroups.clear();
   await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
   await clearPersonalPlans(input.taskId);
   await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
@@ -5305,23 +5307,37 @@ async function finishTask(input) {
   };
 }
 
+// Tabs opened without a taskId share one MCP group instead of staying loose.
+const UNTASKED_GROUP_KEY = "mcp:untasked";
+
+// Grouping is cosmetic: a failure is reported as no group, never as a failed open.
 async function assignMcpTaskGroup(chromeTabId, taskId, owned) {
+  const key = typeof taskId === "string" ? taskId : UNTASKED_GROUP_KEY;
   const persistedGroupId = Object.values(owned || {})
-    .find((metadata) => metadata?.taskId === taskId && Number.isInteger(metadata?.mcpGroupId))
+    .find((metadata) => (metadata?.taskId ?? UNTASKED_GROUP_KEY) === key && Number.isInteger(metadata?.mcpGroupId))
     ?.mcpGroupId;
-  const existingGroupId = taskGroups.get(taskId) ?? persistedGroupId;
+  const existingGroupId = taskGroups.get(key) ?? persistedGroupId;
   if (Number.isInteger(existingGroupId)) {
     try {
       const groupId = await chrome.tabs.group({ tabIds: chromeTabId, groupId: existingGroupId });
-      taskGroups.set(taskId, groupId);
+      taskGroups.set(key, groupId);
       return groupId;
     } catch {
-      taskGroups.delete(taskId);
+      taskGroups.delete(key);
     }
   }
-  const groupId = await chrome.tabs.group({ tabIds: chromeTabId });
-  await chrome.tabGroups.update(groupId, { title: "MCP" });
-  taskGroups.set(taskId, groupId);
+  let groupId;
+  try {
+    groupId = await chrome.tabs.group({ tabIds: chromeTabId });
+  } catch {
+    return undefined;
+  }
+  try {
+    await chrome.tabGroups.update(groupId, { title: "MCP" });
+  } catch {
+    // The tab is grouped even when Chrome refuses the title.
+  }
+  taskGroups.set(key, groupId);
   return groupId;
 }
 

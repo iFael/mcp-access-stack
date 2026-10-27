@@ -2847,7 +2847,7 @@ describe("personal browser extension assets", () => {
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.11.1");
+    expect(parsedManifest.version).toBe("1.11.2");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3758,7 +3758,7 @@ describe("personal browser extension assets", () => {
         },
       },
     });
-    vm.runInContext("const taskGroups = new Map();", context);
+    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -3793,7 +3793,7 @@ describe("personal browser extension assets", () => {
         tabGroups: { update: async () => undefined },
       },
     });
-    vm.runInContext("const taskGroups = new Map();", context);
+    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -3805,6 +3805,81 @@ describe("personal browser extension assets", () => {
     })).resolves.toBe(23);
 
     expect(groupCalls).toEqual([{ tabIds: 52, groupId: 23 }]);
+  });
+
+  it("groups tabs opened without a taskId into one shared MCP group", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const groupCalls: Array<Record<string, unknown>> = [];
+    const context = vm.createContext({
+      Map,
+      Number,
+      Object,
+      chrome: {
+        tabs: {
+          group: async (input: Record<string, unknown>) => {
+            groupCalls.push(input);
+            return typeof input.groupId === "number" ? input.groupId : 31;
+          },
+        },
+        tabGroups: { update: async () => undefined },
+      },
+    });
+    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    const assignMcpTaskGroup = vm.runInContext(
+      `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
+      context,
+    ) as (tabId: number, taskId: string | undefined, owned: Record<string, unknown>) => Promise<number>;
+
+    await expect(assignMcpTaskGroup(61, undefined, {})).resolves.toBe(31);
+    await expect(assignMcpTaskGroup(62, undefined, {})).resolves.toBe(31);
+    vm.runInContext("taskGroups.clear();", context);
+    // After worker state loss the shared group comes back from untasked metadata only.
+    await expect(assignMcpTaskGroup(63, undefined, {
+      "70": { taskId: "task-a", mcpGroupId: 40 },
+      "61": { mcpGroupId: 31 },
+    })).resolves.toBe(31);
+
+    expect(groupCalls).toEqual([
+      { tabIds: 61 },
+      { tabIds: 62, groupId: 31 },
+      { tabIds: 63, groupId: 31 },
+    ]);
+  });
+
+  it("never fails an open because Chrome refused to group or title the tab", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let groupFails = true;
+    const context = vm.createContext({
+      Map,
+      Number,
+      Object,
+      chrome: {
+        tabs: {
+          group: async () => {
+            if (groupFails) throw new Error("Tabs cannot be grouped in this window.");
+            return 8;
+          },
+        },
+        tabGroups: { update: async () => { throw new Error("Group title refused."); } },
+      },
+    });
+    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    const assignMcpTaskGroup = vm.runInContext(
+      `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
+      context,
+    ) as (tabId: number, taskId: string, owned: Record<string, unknown>) => Promise<number | undefined>;
+
+    await expect(assignMcpTaskGroup(71, "task-b", {})).resolves.toBeUndefined();
+    groupFails = false;
+    await expect(assignMcpTaskGroup(72, "task-b", {})).resolves.toBe(8);
+  });
+
+  it("groups a newly opened tab before waiting for the page to load", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const openSource = extractFunction(serviceWorker, "open");
+    const grouping = openSource.indexOf("assignMcpTaskGroup(tab.id");
+    expect(grouping).toBeGreaterThan(openSource.indexOf("chrome.tabs.create("));
+    expect(grouping).toBeLessThan(openSource.indexOf("waitForTabComplete(tab.id"));
   });
 
   it("serializes mutations that share the same queue key", async () => {
