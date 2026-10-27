@@ -3759,6 +3759,9 @@ describe("personal browser extension assets", () => {
       },
     });
     vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
+${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
+${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -3773,7 +3776,7 @@ describe("personal browser extension assets", () => {
       { tabIds: 41 },
       { tabIds: 42, groupId: 17 },
     ]);
-    expect(updates).toEqual([{ groupId: 17, value: { title: "MCP" } }]);
+    expect(updates).toEqual([{ groupId: 17, value: { title: "MCP", color: expect.any(String) } }]);
   });
 
   it("recovers a task group from persisted MCP-owned metadata after worker state loss", async () => {
@@ -3794,6 +3797,9 @@ describe("personal browser extension assets", () => {
       },
     });
     vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
+${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
+${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -3805,6 +3811,27 @@ describe("personal browser extension assets", () => {
     })).resolves.toBe(23);
 
     expect(groupCalls).toEqual([{ tabIds: 52, groupId: 23 }]);
+  });
+
+  it("gives each task group its own label and color and keeps untasked tabs plain", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({ URL });
+    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
+${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
+    const mcpTaskGroupStyle = vm.runInContext(
+      `(${extractFunction(serviceWorker, "mcpTaskGroupStyle")})`,
+      context,
+    ) as (taskId: string | undefined, label?: string) => { title: string; color: string };
+
+    expect(mcpTaskGroupStyle(undefined, "https://example.com/")).toEqual({ title: "MCP", color: "grey" });
+    expect(mcpTaskGroupStyle("task-a", "https://www.example.com/path?q=1").title).toBe("MCP · example.com");
+    expect(mcpTaskGroupStyle("task-a", "Conferir pedidos da loja online de roupas").title)
+      .toBe("MCP · Conferir pedidos da loj…");
+    expect(mcpTaskGroupStyle("task-a", "  ").title).toBe("MCP");
+    expect(mcpTaskGroupStyle("task-a").color).toBe(mcpTaskGroupStyle("task-a", "other").color);
+    const colors = new Set(["t1", "t2", "t3", "t4", "t5", "t6"].map((taskId) => mcpTaskGroupStyle(taskId).color));
+    expect(colors.size).toBeGreaterThan(1);
+    expect(colors.has("grey")).toBe(false);
   });
 
   it("groups tabs opened without a taskId into one shared MCP group", async () => {
@@ -3825,6 +3852,9 @@ describe("personal browser extension assets", () => {
       },
     });
     vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
+${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
+${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -3864,6 +3894,9 @@ describe("personal browser extension assets", () => {
       },
     });
     vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
+${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
+${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     const assignMcpTaskGroup = vm.runInContext(
       `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
       context,
@@ -4093,4 +4126,10 @@ function fakeElement(options: {
       clickCount += 1;
     },
   };
+}
+
+function extractConst(source: string, name: string): string {
+  const line = source.split("\n").find((candidate) => candidate.startsWith(`const ${name} = `));
+  if (!line) throw new Error(`Constant not found: ${name}`);
+  return line;
 }
