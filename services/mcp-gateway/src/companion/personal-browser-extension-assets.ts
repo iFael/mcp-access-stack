@@ -143,7 +143,9 @@ const personalNetworkEntries = new Map();
 const personalNetworkCaptures = new Map();
 const personalDialogArms = new Map();
 const personalViewportSessions = new Map();
+const personalTaskDebuggers = new Map();
 globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
 globalThis.__mcpV3PersonalDialogArms = personalDialogArms;
 function borrowPersonalDebugger(target) {
   const key = String(target.tabId);
@@ -168,10 +170,23 @@ function borrowPersonalDebugger(target) {
   return recording;
 }
 
+// Like Claude's own browser tool, a task keeps Chrome's debugger (and its
+// "started debugging this browser" bar) on its tab from the first action until
+// the task finishes or pauses, the tab leaves the task, the user takes the turn
+// or the tab sits idle; an action only borrows it. Without that hold, which the
+// worker installs, the action attaches and detaches the debugger itself.
 async function attachGuardedDebugger(target) {
   if (borrowPersonalDebugger(target)) return false;
+  const held = globalThis.__mcpV3PersonalTaskDebuggers;
+  const current = held?.get(String(target.tabId));
+  if (current) {
+    current.arm();
+    return false;
+  }
   await chrome.debugger.attach(target, "1.3");
-  return true;
+  if (!held) return true;
+  holdPersonalTaskDebugger(target.tabId);
+  return false;
 }
 
 async function detachGuardedDebugger(target, attached) {
@@ -180,6 +195,7 @@ async function detachGuardedDebugger(target, attached) {
     return;
   }
   const key = String(target.tabId);
+  globalThis.__mcpV3PersonalTaskDebuggers?.get(key)?.arm();
   const viewport = globalThis.__mcpV3PersonalViewportSessions?.get(key);
   if (viewport && viewport.borrowers > 0) {
     viewport.borrowers -= 1;
@@ -207,7 +223,49 @@ async function detachGuardedDebugger(target, attached) {
   if (recording) recording.borrowers = Math.max(0, recording.borrowers - 1);
 }
 
+const PERSONAL_DEBUGGER_IDLE_MS = 10 * 60 * 1000;
 
+function holdPersonalTaskDebugger(chromeTabId) {
+  const key = String(chromeTabId);
+  const held = { fresh: true, timer: undefined, arm: () => undefined };
+  held.arm = () => {
+    clearTimeout(held.timer);
+    held.timer = setTimeout(() => {
+      if (personalTaskDebuggers.get(key) !== held) return;
+      // A call still running may be using it; look again later.
+      if (inFlightRequests.size > 0) held.arm();
+      else void releasePersonalTaskDebugger(chromeTabId);
+    }, PERSONAL_DEBUGGER_IDLE_MS);
+  };
+  personalTaskDebuggers.set(key, held);
+  held.arm();
+}
+
+// True once, for the action that attached the task's debugger: Chrome's
+// debugging bar has just appeared and resized the page.
+function takeFreshPersonalDebugger(target) {
+  const held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(target.tabId));
+  if (!held?.fresh) return false;
+  held.fresh = false;
+  return true;
+}
+
+async function releasePersonalTaskDebugger(chromeTabId) {
+  const key = String(chromeTabId);
+  const held = personalTaskDebuggers.get(key);
+  if (!held) return;
+  personalTaskDebuggers.delete(key);
+  clearTimeout(held.timer);
+  // A viewport, dialog, network capture or recording still on the tab takes the
+  // debugger over and detaches it when it ends.
+  const heir = personalViewportSessions.get(key) ?? personalDialogArms.get(key) ??
+    personalNetworkCaptures.get(key) ?? personalRecordings.get(key);
+  if (heir) {
+    heir.attached = true;
+    return;
+  }
+  await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+}
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -751,6 +809,8 @@ async function waitForUser(input, signal) {
     return { tabId: input.tabId, completed: true };
   }
   if (!handoff) {
+    // The user's turn runs without MCP's debugger on the tab.
+    await releasePersonalTaskDebugger(chromeTabId);
     handoff = { reason: String(input.forUser).slice(0, 200), startedAt: Date.now() };
     await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: handoff });
     await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#d97706" }))
@@ -1907,7 +1967,7 @@ async function drag(input, signal) {
     // A fresh attach shows Chrome's debugging infobar, which resizes the page
     // and cancels a press already in progress; start once the viewport settles
     // and measure the endpoints again in case the layout moved.
-    if (attached) {
+    if (attached || takeFreshPersonalDebugger(target)) {
       await settlePersonalViewport(target, signal);
       if (!input.from.ref?.startsWith("ax-")) from = await resolve(input.from, input.fromGuard);
       if (!input.to.ref?.startsWith("ax-")) to = await resolve(input.to, input.toGuard);
@@ -1955,7 +2015,8 @@ async function drag(input, signal) {
     if (intercepting) {
       await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined);
     }
-    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId))) {
+    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId)) ||
+        globalThis.__mcpV3PersonalTaskDebuggers?.has(String(target.tabId))) {
       if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
         button: "left", buttons: 0,
@@ -3720,7 +3781,7 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
       // input would land on stale coordinates.
       attached = await attachGuardedDebugger(debuggee);
       holding = true;
-      if (attached) await settlePersonalViewport(debuggee, signal);
+      if (attached || takeFreshPersonalDebugger(debuggee)) await settlePersonalViewport(debuggee, signal);
     } catch (error) {
       if (error?.code) throw error;
       throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
@@ -4265,6 +4326,12 @@ async function collectPersonalConsole(chromeTabId, history, signal) {
     personalConsoleEntries.set(String(chromeTabId), history);
   } finally {
     chrome.debugger.onEvent.removeListener(listener);
+    // A debugger that stays attached replays the page's console on the next
+    // enable only after a disable.
+    if (!attached) {
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Runtime.disable").catch(() => undefined);
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Log.disable").catch(() => undefined);
+    }
     await detachGuardedDebugger({ tabId: chromeTabId }, attached).catch(() => undefined);
   }
 }
@@ -4432,6 +4499,9 @@ async function stopPersonalNetworkCapture(chromeTabId) {
   chrome.debugger.onEvent.removeListener(state.listener);
   await Promise.allSettled([...state.pending]);
   personalNetworkEntries.set(key, { entries: state.entries, truncated: state.truncated });
+  if (state.attached !== true) {
+    await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Network.disable").catch(() => undefined);
+  }
   await detachGuardedDebugger({ tabId: chromeTabId }, state.attached === true).catch(() => undefined);
 }
 
@@ -5326,6 +5396,7 @@ async function finishTask(input) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
     await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
+    await releasePersonalTaskDebugger(target.chromeTabId);
     if (!target.shared) await clearPersonalHandoff(target.chromeTabId);
   }
   if (input.pause === true) return pausePersonalTask(input.taskId, targets);
@@ -5852,6 +5923,7 @@ async function removeOwnedTab(chromeTabId) {
   await clearPersonalConsoleHistory(String(chromeTabId));
   await stopPersonalNetworkCapture(chromeTabId);
   personalNetworkEntries.delete(String(chromeTabId));
+  await releasePersonalTaskDebugger(chromeTabId);
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     if (!owned[String(chromeTabId)]) return;
@@ -6431,6 +6503,11 @@ chrome.notifications?.onClicked?.addListener((id) => {
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
+  const held = personalTaskDebuggers.get(key);
+  if (held) {
+    clearTimeout(held.timer);
+    personalTaskDebuggers.delete(key);
+  }
   personalViewportSessions.delete(key);
   const recording = personalRecordings.get(key);
   if (recording) endPersonalRecording(recording, true);

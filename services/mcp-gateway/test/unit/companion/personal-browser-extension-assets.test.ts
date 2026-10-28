@@ -2264,6 +2264,71 @@ describe("personal browser extension assets", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("keeps the task's Chrome debugger attached across actions and lets it go when idle or released", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    const timers: Array<() => void> = [];
+    const ctx = vm.createContext({
+      Map, String, Buffer,
+      setTimeout: (fn: () => void) => { timers.push(fn); return timers.length; },
+      clearTimeout: () => undefined,
+      chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      base64ByteLength: (data: string) => Buffer.from(data, "base64").length,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        detach: async () => { calls.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          calls.push(method);
+          return method === "Page.printToPDF" ? { data: "JVBERi0xLjQK" } : {};
+        },
+      } },
+    });
+    vm.runInContext(`const inFlightRequests = new Map(); const personalTaskDebuggers = new Map();
+const personalViewportSessions = new Map(); const personalDialogArms = new Map();
+const personalNetworkCaptures = new Map(); const personalRecordings = new Map();
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
+globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "holdPersonalTaskDebugger", "takeFreshPersonalDebugger", "releasePersonalTaskDebugger", "printPersonalPdf"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const print = vm.runInContext("printPersonalPdf", ctx) as (input: unknown) => Promise<unknown>;
+    const fresh = vm.runInContext("takeFreshPersonalDebugger", ctx) as (target: unknown) => boolean;
+    const release = vm.runInContext("releasePersonalTaskDebugger", ctx) as (tabId: number) => Promise<void>;
+    await print({ tabId: "personal:7" });
+    await print({ tabId: "personal:7" });
+    expect(calls.filter((call) => call === "attach")).toHaveLength(1);
+    expect(calls).not.toContain("detach");
+    expect(fresh({ tabId: 7 })).toBe(true);
+    expect(fresh({ tabId: 7 })).toBe(false);
+
+    // An idle hold waits for calls still running, then detaches.
+    vm.runInContext('inFlightRequests.set("r1", {})', ctx);
+    timers.at(-1)!();
+    expect(calls).not.toContain("detach");
+    vm.runInContext("inFlightRequests.clear()", ctx);
+    timers.at(-1)!();
+    await Promise.resolve();
+    expect(calls.filter((call) => call === "detach")).toHaveLength(1);
+    expect(vm.runInContext("personalTaskDebuggers.size", ctx)).toBe(0);
+
+    // Released while a viewport emulation uses it, the viewport takes it over.
+    await print({ tabId: "personal:7" });
+    expect(calls.filter((call) => call === "attach")).toHaveLength(2);
+    vm.runInContext('personalViewportSessions.set("7", { attached: false, borrowers: 0 })', ctx);
+    await release(7);
+    expect(calls.filter((call) => call === "detach")).toHaveLength(1);
+    expect(vm.runInContext('personalViewportSessions.get("7").attached', ctx)).toBe(true);
+    vm.runInContext('personalViewportSessions.clear()', ctx);
+    await print({ tabId: "personal:7" });
+    await release(7);
+    expect(calls.filter((call) => call === "detach")).toHaveLength(2);
+  });
+
   it("records fresh captures as WebP stills, skips unchanged pages and the user's turn, and ends with the page as it is", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<[string, Record<string, unknown> | undefined]> = [];
@@ -2856,7 +2921,7 @@ describe("personal browser extension assets", () => {
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.12.0");
+    expect(parsedManifest.version).toBe("1.12.1");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -2954,6 +3019,7 @@ describe("personal browser extension assets", () => {
       readOwnedTabs: async () => owned,
       writeOwnedTabs: async () => undefined,
       removeOwnedTab: async (id: number) => { delete owned[String(id)]; },
+      releasePersonalTaskDebugger: async () => undefined,
       assignMcpTaskGroup: async (tabId: number, taskId: string) => {
         sharedGroups.push([tabId, taskId]);
         return 40;
@@ -3075,6 +3141,7 @@ describe("personal browser extension assets", () => {
         return owned[String(id)];
       },
       readOwnedTabs: async () => owned,
+      releasePersonalTaskDebugger: async () => undefined,
       delay: async () => { await onTick?.(); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
@@ -3278,6 +3345,7 @@ describe("personal browser extension assets", () => {
         return owned[String(id)];
       },
       readOwnedTabs: async () => owned,
+      releasePersonalTaskDebugger: async () => undefined,
       delay: async () => { await onTick?.(); },
       chrome: {
         runtime: { getURL: (file: string) => "chrome-extension://ext/" + file },
@@ -4446,6 +4514,7 @@ function groupHarness(serviceWorker: string) {
     clearPersonalTaskApprovals: async () => undefined,
     clearPersonalConsoleHistory: async () => undefined,
     stopPersonalNetworkCapture: async () => undefined,
+    releasePersonalTaskDebugger: async () => undefined,
     clearPersonalPlans: async (taskId?: string) => { clearedPlans.push(taskId); },
     readPersonalPlans: async () => ({}),
     finishTask: async (input: Record<string, unknown>) => { finished.push(input); },
