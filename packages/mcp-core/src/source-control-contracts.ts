@@ -856,6 +856,7 @@ export const githubPullRequestResultSchema = z
     headSha: gitShaSchema,
     baseSha: gitShaSchema,
     merged: z.boolean(),
+    draft: z.boolean().optional(),
   })
   .strict();
 export type GitHubPullRequestResult = z.infer<typeof githubPullRequestResultSchema>;
@@ -928,6 +929,10 @@ export const githubMergePullRequestInputSchema = z
     pullNumber: z.number().int().positive(),
     expectedPullRequestHeadSha: gitShaSchema,
     mergeMethod: githubMergeMethodSchema,
+    // A draft pull request cannot be merged. Only with this flag does the merge
+    // first mark a draft ready for review; it stays absent otherwise so an older
+    // companion's strict schema still accepts the request.
+    markReadyForReview: z.literal(true).optional(),
     confirmationId: confirmationIdSchema.optional(),
   })
   .strict();
@@ -942,6 +947,7 @@ export const githubMergePullRequestCompletedResultSchema = z
     number: z.number().int().positive(),
     merged: z.boolean(),
     mergeSha: gitShaSchema,
+    markedReadyForReview: z.literal(true).optional(),
   })
   .strict();
 export const githubMergePullRequestResultSchema = z.discriminatedUnion("status", [

@@ -243,6 +243,23 @@ export class GitHubService implements GitHubExecutor {
         "GitHub pull-request head changed before merge.",
       );
     }
+    let markedReadyForReview = false;
+    if (before.draft === true) {
+      if (parsed.markReadyForReview !== true) {
+        throw new AppError(
+          "INVALID_ARGUMENT",
+          "GitHub pull request is a draft and cannot be merged. Retry github_merge_pull_request with markReadyForReview: true to mark it ready for review and merge it.",
+        );
+      }
+      await this.markReadyForReview(
+        parsed.owner,
+        parsed.repository,
+        parsed.pullNumber,
+        beforeRaw,
+        operationContext,
+      );
+      markedReadyForReview = true;
+    }
     const request: GitHubMergePullRequestRequest = {
       sha: parsed.expectedPullRequestHeadSha,
       merge_method: parsed.mergeMethod,
@@ -255,15 +272,42 @@ export class GitHubService implements GitHubExecutor {
         request,
         operationContext,
       );
-      return mapMergeResult(parsed.pullNumber, raw);
+      return withMarkedReady(mapMergeResult(parsed.pullNumber, raw), markedReadyForReview);
     } catch (error) {
       if (!isAmbiguousMutation(error)) throw error;
-      return this.reconcileMerge(
+      return withMarkedReady(await this.reconcileMerge(
         parsed.owner,
         parsed.repository,
         parsed.pullNumber,
         operationContext,
-      );
+      ), markedReadyForReview);
+    }
+  }
+
+  private async markReadyForReview(
+    owner: string,
+    repository: string,
+    pullNumber: number,
+    pullRequestRaw: unknown,
+    context: OperationContext,
+  ): Promise<void> {
+    if (!this.client.markPullRequestReadyForReview) {
+      throw new AppError("CAPABILITY_UNSUPPORTED", "Marking a GitHub pull request ready for review is not configured.");
+    }
+    const nodeId = readStringField(pullRequestRaw, "node_id");
+    try {
+      const marked = await this.client.markPullRequestReadyForReview(nodeId, context);
+      if (marked.isDraft) throw invalidGitHubResponse();
+    } catch (error) {
+      if (!isAmbiguousMutation(error)) throw error;
+      // The mutation may have applied: merge only once GitHub shows it left draft.
+      let after: GitHubPullRequestResult;
+      try {
+        after = mapPullRequest(await this.client.getPullRequest(owner, repository, pullNumber, context));
+      } catch {
+        throw reconciliationRequired();
+      }
+      if (after.draft !== false) throw reconciliationRequired();
     }
   }
 
@@ -517,6 +561,7 @@ function mapPullRequest(raw: unknown): GitHubPullRequestResult {
     headSha: head.sha,
     baseSha: base.sha,
     merged: record.merged,
+    ...(typeof record.draft === "boolean" ? { draft: record.draft } : {}),
   };
   const parsed = githubPullRequestResultSchema.safeParse(candidate);
   if (!parsed.success) throw invalidGitHubResponse();
@@ -553,6 +598,15 @@ function mapMergeResult(
     merged: record.merged,
     mergeSha: record.sha,
   });
+}
+
+function withMarkedReady(
+  result: GitHubMergePullRequestResult,
+  markedReadyForReview: boolean,
+): GitHubMergePullRequestResult {
+  return markedReadyForReview && result.status === "completed"
+    ? { ...result, markedReadyForReview: true }
+    : result;
 }
 
 function parseMergeResult(value: unknown): GitHubMergePullRequestResult {

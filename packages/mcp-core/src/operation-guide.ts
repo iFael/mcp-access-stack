@@ -202,6 +202,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "A failed check: diagnose it as topic refusals says (run_jobs, job_logs), fix it on the same branch, push, and watch the new head SHA.",
       "Reviews: github_read kind=pull_request_reviews and kind=pull_request_review_comments; fix what is asked on the same branch, or answer with github_issue_write action=comment saying why not.",
       "Merge only with the user's go-ahead: github_get_pull_request for the current head SHA, then github_merge_pull_request with expectedPullRequestHeadSha = that SHA.",
+      "A draft pull request (github_get_pull_request draft=true) cannot be merged: once the user said to merge it, pass markReadyForReview=true to github_merge_pull_request, which marks it ready for review and merges it in the same confirmed call.",
       "Release tags go through github_workflow_operation (topic release), not git_publish_tag, unless the user asks for a plain tag.",
       "Read GitHub state with github_read: releases and assets, tags and branches (refs), workflow runs, run jobs, job log tails, issues, comments and pull-request reviews.",
       "Issues and comments on issues or pull requests: github_issue_write, confirmed like a pull request.",

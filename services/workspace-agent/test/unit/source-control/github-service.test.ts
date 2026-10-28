@@ -86,6 +86,15 @@ describe("GitHubService read mapping", () => {
       baseSha,
       merged: false,
     });
+    const draftService = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ draft: true })),
+    }));
+    await expect(draftService.getPullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+    })).resolves.toMatchObject({ number: 7, draft: true });
   });
 });
 
@@ -414,6 +423,110 @@ describe("GitHubService pull request merge", () => {
         mergeMethod: "merge",
       }),
     ).rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses a draft PR with a clear message unless markReadyForReview is set", async () => {
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>();
+    const markPullRequestReadyForReview = jest.fn<NonNullable<GitHubApiClient["markPullRequestReadyForReview"]>>();
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ draft: true, node_id: "PR_kwDO7" })),
+      mergePullRequest,
+      markPullRequestReadyForReview,
+    }));
+
+    await expect(service.mergePullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+      mergeMethod: "squash",
+    })).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: expect.stringContaining("markReadyForReview: true"),
+    });
+    expect(markPullRequestReadyForReview).not.toHaveBeenCalled();
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("marks a draft PR ready for review and then merges it when asked", async () => {
+    const calls: string[] = [];
+    const markPullRequestReadyForReview = jest.fn<NonNullable<GitHubApiClient["markPullRequestReadyForReview"]>>(async () => {
+      calls.push("ready");
+      return { isDraft: false };
+    });
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>(async () => {
+      calls.push("merge");
+      return { sha: mergeSha, merged: true, message: "merged" };
+    });
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ draft: true, node_id: "PR_kwDO7" })),
+      mergePullRequest,
+      markPullRequestReadyForReview,
+    }));
+
+    await expect(service.mergePullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+      mergeMethod: "squash",
+      markReadyForReview: true,
+    })).resolves.toEqual({ status: "completed", number: 7, merged: true, mergeSha, markedReadyForReview: true });
+    expect(markPullRequestReadyForReview).toHaveBeenCalledWith("PR_kwDO7", expect.anything());
+    expect(calls).toEqual(["ready", "merge"]);
+  });
+
+  it("does not touch a PR that is already ready even when markReadyForReview is set", async () => {
+    const markPullRequestReadyForReview = jest.fn<NonNullable<GitHubApiClient["markPullRequestReadyForReview"]>>();
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ draft: false })),
+      markPullRequestReadyForReview,
+    }));
+
+    await expect(service.mergePullRequest({
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+      mergeMethod: "merge",
+      markReadyForReview: true,
+    })).resolves.toEqual({ status: "completed", number: 7, merged: true, mergeSha });
+    expect(markPullRequestReadyForReview).not.toHaveBeenCalled();
+  });
+
+  it("merges after an ambiguous ready-for-review only once GitHub shows the PR left draft", async () => {
+    const getPullRequest = jest
+      .fn<GitHubApiClient["getPullRequest"]>()
+      .mockResolvedValueOnce(pullRequestRecord({ draft: true, node_id: "PR_kwDO7" }))
+      .mockResolvedValueOnce(pullRequestRecord({ draft: false, node_id: "PR_kwDO7" }));
+    const markPullRequestReadyForReview = jest.fn<NonNullable<GitHubApiClient["markPullRequestReadyForReview"]>>(async () => {
+      throw ambiguousError();
+    });
+    const mergePullRequest = jest.fn<GitHubApiClient["mergePullRequest"]>(async () => ({ sha: mergeSha, merged: true, message: "merged" }));
+    const service = new GitHubService(client({ getPullRequest, markPullRequestReadyForReview, mergePullRequest }));
+    const input = {
+      workspaceId: "repo",
+      owner: "octo",
+      repository: "repo",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: headSha,
+      mergeMethod: "merge" as const,
+      markReadyForReview: true as const,
+    };
+
+    await expect(service.mergePullRequest(input)).resolves.toMatchObject({ merged: true, markedReadyForReview: true });
+
+    getPullRequest
+      .mockResolvedValueOnce(pullRequestRecord({ draft: true, node_id: "PR_kwDO7" }))
+      .mockResolvedValueOnce(pullRequestRecord({ draft: true, node_id: "PR_kwDO7" }));
+    mergePullRequest.mockClear();
+    await expect(service.mergePullRequest(input)).rejects.toMatchObject({
+      code: "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+    });
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 

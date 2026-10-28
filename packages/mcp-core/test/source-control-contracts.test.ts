@@ -639,6 +639,27 @@ describe("source-control contracts", () => {
       merged: true,
       mergeSha: shaB,
     })).toMatchObject({ status: "completed", merged: true, mergeSha: shaB });
+
+    const mergeInput = {
+      workspaceId: "repo",
+      owner: "acme",
+      repository: "app",
+      pullNumber: 7,
+      expectedPullRequestHeadSha: shaA,
+      mergeMethod: "squash" as const,
+    };
+    // Absent unless asked, so a request still fits an older companion's strict schema.
+    expect(githubMergePullRequestInputSchema.parse(mergeInput)).not.toHaveProperty("markReadyForReview");
+    expect(githubMergePullRequestInputSchema.parse({ ...mergeInput, markReadyForReview: true }))
+      .toMatchObject({ markReadyForReview: true });
+    expect(() => githubMergePullRequestInputSchema.parse({ ...mergeInput, markReadyForReview: false })).toThrow();
+    expect(githubMergePullRequestResultSchema.parse({
+      status: "completed",
+      number: 7,
+      merged: true,
+      mergeSha: shaB,
+      markedReadyForReview: true,
+    })).toMatchObject({ markedReadyForReview: true });
   });
 
   test("rejects unknown fields across every public input schema", () => {

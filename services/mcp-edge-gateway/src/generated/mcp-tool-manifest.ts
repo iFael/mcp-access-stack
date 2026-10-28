@@ -13712,6 +13712,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^[a-fA-F0-9]{40}$",
           "type": "string"
         },
+        "draft": {
+          "type": "boolean"
+        },
         "headSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
           "type": "string"
@@ -13849,6 +13852,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
+        },
+        "draft": {
+          "type": "boolean"
         },
         "expiresAt": {
           "format": "date-time",
@@ -13989,6 +13995,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minLength": 1,
           "type": "string"
         },
+        "draft": {
+          "type": "boolean"
+        },
         "expiresAt": {
           "format": "date-time",
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
@@ -14061,7 +14070,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Merges an authorized pull request at an exact expected head SHA after typed confirmation.",
+    "description": "Merges an authorized pull request at an exact expected head SHA after typed confirmation. A draft pull request is refused unless markReadyForReview is true, which marks it ready for review and then merges it.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -14077,6 +14086,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "expectedPullRequestHeadSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
           "type": "string"
+        },
+        "markReadyForReview": {
+          "const": true,
+          "type": "boolean"
         },
         "mergeMethod": {
           "enum": [
@@ -14134,6 +14147,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "format": "date-time",
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
+        },
+        "markedReadyForReview": {
+          "const": true,
+          "type": "boolean"
         },
         "mergeSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
@@ -25918,15 +25935,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "421e6c416b1def945c4124467c381e2f300979651e09999b98d54ac744c8e87f",
-  "serverVersion": "0.4.0-catalog.c421e6c416b1d.s1ef01eda5639",
+  "contractRevision": "7c7034cbf9fae9fc648b5363c96a2b21be2ecb5dbdba9f079113cd6bc94e86f2",
+  "serverVersion": "0.4.0-catalog.c7c7034cbf9fa.s1ef01eda5639",
   "toolCount": 114,
   "toolSetRevision": "1ef01eda5639a67d461508c341751e265c796d77100c081fb51fb3e0b1b352c5"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c421e6c416b1d.s1ef01eda5639"
+  "version": "0.4.0-catalog.c7c7034cbf9fa.s1ef01eda5639"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

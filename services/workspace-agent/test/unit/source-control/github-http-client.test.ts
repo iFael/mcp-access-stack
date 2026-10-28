@@ -223,6 +223,41 @@ describe("GitHubHttpClient fixed transport", () => {
     });
   });
 
+  it("marks a pull request ready for review through one fixed GraphQL mutation", async () => {
+    const fetchImpl = jest.fn(async () =>
+      jsonResponse({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } }),
+    );
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+
+    await expect(client.markPullRequestReadyForReview("PR_kwDO7")).resolves.toEqual({ isDraft: false });
+    const { url, init } = requestOf(fetchImpl);
+    expect(url).toBe("https://api.github.com/graphql");
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(String(init.body)) as { query: string; variables: unknown };
+    expect(body.query).toContain("markPullRequestReadyForReview(input:{pullRequestId:$id})");
+    expect(body.variables).toEqual({ id: "PR_kwDO7" });
+  });
+
+  it("refuses GraphQL errors and bad node ids without reflecting GitHub text", async () => {
+    const fetchImpl = jest.fn(async () =>
+      jsonResponse({ data: null, errors: [{ message: "raw graphql body unit-test-token" }] }),
+    );
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+
+    let captured: unknown;
+    try {
+      await client.markPullRequestReadyForReview("PR_kwDO7");
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(JSON.stringify(captured)).not.toContain("raw graphql body");
+    expect(String((captured as Error).message)).not.toContain("unit-test-token");
+
+    await expect(client.markPullRequestReadyForReview("PR\"}{")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("classifies deterministic 4xx without retryable ambiguity and hides raw response bodies", async () => {
     const fetchImpl = jest.fn(async () =>
       new Response("raw validation body unit-test-token", { status: 422 }),
