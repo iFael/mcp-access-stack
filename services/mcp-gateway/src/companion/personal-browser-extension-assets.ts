@@ -566,7 +566,11 @@ async function personalTabSharingDispatch(message) {
   } else if (message.type === "mcp-tab-resume") {
     if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
   } else if (message.type === "mcp-tab-message") {
+    // "Enviar e devolver": the note goes first, so it reaches the browser_wait that is waiting for the tab.
+    const handoff = message.resume === true ? await readPersonalHandoff(tab.id) : undefined;
+    if (message.resume === true && (!handoff || handoff.done)) throw Error("not-waiting");
     await sendPersonalTaskMessage(tab.id, message.text);
+    if (message.resume === true) await resumePersonalHandoff(tab.id);
   } else if (message.type === "mcp-tab-approve") {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {

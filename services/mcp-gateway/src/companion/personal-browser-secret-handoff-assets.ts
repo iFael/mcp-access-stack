@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.13.0";
+export const HANDOFF_EXTENSION_VERSION = "1.13.1";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -44,6 +44,7 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <p id="task-target">Carregando…</p>
 <textarea id="task-text" maxlength="2000" aria-label="Mensagem para a tarefa" placeholder="Ex.: a barra ficou visível durante todas as ações, sem piscar."></textarea>
 <button id="task-send" type="button">Enviar para a tarefa</button>
+<button id="task-send-resume" type="button" hidden>Enviar e devolver a aba</button>
 <ul id="task-recent" hidden></ul>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
