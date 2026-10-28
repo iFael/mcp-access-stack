@@ -76,12 +76,35 @@ $script = @(
 $runnerPath = Join-Path $state 'updater\Invoke-McpV3LocalActiveUpdater.ps1'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runnerPath) | Out-Null
 [IO.File]::WriteAllText($runnerPath, $script + [Environment]::NewLine, [Text.UTF8Encoding]::new($true))
-$arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"' -f $runnerPath
 $pwshCommand = Get-Command pwsh.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $pwsh = [IO.Path]::GetFullPath([string]$pwshCommand.Source)
 if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {
     throw "PowerShell 7 was not found: $pwsh"
 }
+
+# Started straight from Task Scheduler, pwsh.exe flashes a console window on
+# every 5-minute poll. The companion's own windowless launcher starts it with no
+# window and keeps its output in log files. Release switches prune old
+# releases, so the task runs a copy of the active release's launcher kept next
+# to the runner script.
+$activeReleaseId = [string](Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).active.releaseId
+if ([string]::IsNullOrWhiteSpace($activeReleaseId)) {
+    throw 'MCP V3 active release is unavailable.'
+}
+$activeReleaseRoot = Join-Path $installation ("releases\$activeReleaseId")
+$activeRelease = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $activeReleaseRoot -ExpectedReleaseId $activeReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$launcherRecord = @($activeRelease.executionManifest.artifacts | Where-Object { [string]$_.id -eq 'node-host-launcher' })
+if ($launcherRecord.Count -ne 1) {
+    throw 'MCP V3 active release has no single node-host-launcher artifact.'
+}
+$launcherSource = Resolve-McpPublicChildPath -Root $activeReleaseRoot -RelativePath ([string]$launcherRecord[0].path)
+Assert-McpPublicFile -Path $launcherSource -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$launcher = Join-Path $state 'updater\McpNodeHostLauncher.exe'
+$logs = Join-Path $state 'logs'
+New-Item -ItemType Directory -Force -Path $logs | Out-Null
+$arguments = ('--node "{0}" --stdout-log "{1}" --stderr-log "{2}" --restart-on-failure false -- ' +
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{3}"') -f
+    $pwsh, (Join-Path $logs 'mcp-v3-updater.stdout.log'), (Join-Path $logs 'mcp-v3-updater.stderr.log'), $runnerPath
 
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $pollInterval = 'PT{0}M' -f $PollMinutes
@@ -90,7 +113,7 @@ $alreadyInstalled = $false
 if ($existing) {
     $actions = @($existing.Actions)
     $matches = $actions.Count -eq 1 -and
-        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq $pwsh -and
+        [IO.Path]::GetFullPath([string]$actions[0].Execute) -eq $launcher -and
         [string]$actions[0].Arguments -eq $arguments -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
         [string]$existing.Principal.LogonType -in @('Interactive', 'InteractiveToken') -and
@@ -109,10 +132,19 @@ if ($existing) {
     }
 }
 
+$launcherCurrent = (Test-Path -LiteralPath $launcher -PathType Leaf) -and
+    (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $launcherSource -Algorithm SHA256).Hash
+if (-not $launcherCurrent) {
+    if ($existing -and [string]$existing.State -eq 'Running') {
+        throw "Scheduled Task is running and must finish before its launcher is replaced: $TaskName"
+    }
+    Copy-Item -LiteralPath $launcherSource -Destination $launcher -Force
+}
+
 if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
-    $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $state
+    $action = New-ScheduledTaskAction -Execute $launcher -Argument $arguments -WorkingDirectory $state
     # The repeating trigger lets Task Scheduler, not the companion, start the
     # updater soon after promote_release writes a request; without a request
     # the run exits at once, and the release check still happens once a day.
