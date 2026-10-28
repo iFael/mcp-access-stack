@@ -2921,7 +2921,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.12.1");
+    expect(parsedManifest.version).toBe("1.13.0");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3078,7 +3078,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
-      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [],
+      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], inbox: expect.objectContaining({ recent: [] }),
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
@@ -4413,16 +4413,22 @@ function extractConst(source: string, name: string): string {
   return line;
 }
 
+const TASK_MESSAGE_CONSTANTS = ["PERSONAL_TASK_MESSAGES_KEY", "PERSONAL_TASK_QUESTIONS_KEY",
+  "PERSONAL_TASK_MESSAGE_LIMIT", "PERSONAL_TASK_QUESTION_TTL_MS", "personalTaskMessageQueue"];
+const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMessages", "writePersonalTaskMessages",
+  "readPersonalTaskQuestions", "pushPersonalTaskMessages", "markPersonalTaskMessagesDelivered",
+  "recordPersonalTaskQuestion", "clearPersonalTaskQuestion", "personalTaskMessageTarget", "sendPersonalTaskMessage",
+  "personalTaskInboxStatus"];
 const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
-  "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs"];
+  "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
 const GROUP_SUPPORT_FUNCTIONS = ["readSessionMap", "changeSessionMap", "rememberMcpGroup", "mcpGroupTask",
   "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup", "isPopupShareGroup",
   "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask",
   "readPendingPersonalShare", "answerPersonalShare", "refusePersonalGroupShare", "notifyPersonalShare", "personalDragShareNeedsConfirmation",
   "mcpGroupTitle", "preparePersonalTaskGroup", "takePersonalTaskHome", "closePersonalTaskHomes",
   "personalTaskHomeDispatch", "pausePersonalTask", "resumePersonalTask", "stylePersonalTaskGroups",
-  "refusePausedPersonalTab", "sweepPausedPersonalTasks"];
+  "refusePausedPersonalTab", "sweepPausedPersonalTasks", ...TASK_MESSAGE_FUNCTIONS];
 
 // The task group helpers (sharing by group, the task's first tab, pausing) for a
 // test that runs only part of the service worker.
@@ -4551,3 +4557,100 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     regroup: run<(tabId: number, previousGroupId: number, windowId: number) => Promise<void>>("regroupMovedPersonalTab"),
   };
 }
+
+describe("popup messages to a running task", () => {
+  function inboxHarness(owned: Record<string, Record<string, unknown>>) {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>([["mcpV3OwnedTabs", owned]]);
+    const sent: Array<Record<string, unknown>> = [];
+    const notifications: Array<[string, Record<string, unknown>]> = [];
+    const badges: string[] = [];
+    const area = (store: Map<string, unknown>) => ({
+      get: async (key: string) => ({ [key]: structuredClone(store.get(key)) }),
+      set: async (entries: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(entries)) store.set(key, structuredClone(value));
+      },
+    });
+    let ids = 0;
+    const context = vm.createContext({
+      Object, Number, Date, Array, Promise, String, Set,
+      crypto: { randomUUID: () => `0000000${++ids}-0000-4000-8000-000000000000` },
+      chrome: {
+        storage: { session: area(session), local: area(local) },
+        notifications: { create: async (id: string, options: Record<string, unknown>) => { notifications.push([id, options]); } },
+        action: {
+          setBadgeBackgroundColor: async () => undefined,
+          setBadgeText: async ({ text }: { text: string }) => { badges.push(text); },
+        },
+      },
+      send: (value: Record<string, unknown>) => { sent.push(structuredClone(value)); },
+    });
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,";', context);
+    vm.runInContext(extractFunction(serviceWorker, "readOwnedTabs"), context);
+    for (const name of TASK_MESSAGE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
+    for (const name of TASK_MESSAGE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const run = <T>(name: string) => vm.runInContext(name, context) as T;
+    return {
+      sent, notifications, badges, local,
+      send: run<(tabId: number, text: unknown) => Promise<void>>("sendPersonalTaskMessage"),
+      status: run<(tabId: number) => Promise<Record<string, unknown>>>("personalTaskInboxStatus"),
+      delivered: run<(ids: unknown) => Promise<void>>("markPersonalTaskMessagesDelivered"),
+      ask: run<(message: Record<string, unknown>) => Promise<void>>("recordPersonalTaskQuestion"),
+      push: run<() => Promise<void>>("pushPersonalTaskMessages"),
+    };
+  }
+  const owned = {
+    "7": { tabId: "personal:7", taskId: "task-1", ownership: "mcp", purpose: "Testar a barra", lastUsedAt: "2026-10-28T15:00:00.000Z" },
+    "8": { tabId: "personal:8", taskId: "task-1", ownership: "user", lastUsedAt: "2026-10-28T15:00:00.000Z" },
+    "9": { tabId: "personal:9", taskId: "task-2", ownership: "mcp", purpose: "Outra tarefa", lastUsedAt: "2026-10-28T14:00:00.000Z" },
+  };
+
+  it("sends a message for the current tab's task to the bridge and keeps it until it is delivered", async () => {
+    const harness = inboxHarness(owned);
+    await harness.send(9, "  Na outra aba deu erro 500.  ");
+    expect(harness.sent).toEqual([{ type: "task-messages", messages: [{
+      id: "msg_00000001-0000-4000-8000-000000000000", text: "Na outra aba deu erro 500.",
+      sentAt: expect.any(String), taskId: "task-2", tabIds: ["personal:9"],
+    }] }]);
+    await expect(harness.status(9)).resolves.toEqual({ task: "Outra tarefa",
+      recent: [{ text: "Na outra aba deu erro 500.", sentAt: expect.any(String), delivered: false }] });
+
+    // Undelivered messages go out again (after a reconnect) until the bridge acknowledges them.
+    await harness.push();
+    expect(harness.sent).toHaveLength(2);
+    await harness.delivered(["msg_00000001-0000-4000-8000-000000000000"]);
+    await harness.push();
+    expect(harness.sent).toHaveLength(2);
+    await expect(harness.status(9)).resolves.toMatchObject({ recent: [{ delivered: true }] });
+    await expect(harness.send(9, "   ")).rejects.toThrow("empty");
+  });
+
+  it("answers the latest question when the current tab has no task, and clears it", async () => {
+    const harness = inboxHarness(owned);
+    await harness.ask({ taskId: "task-1", question: "A barra piscou?" });
+    expect(harness.notifications).toEqual([[expect.stringMatching(/^mcp-question:/u), expect.objectContaining({
+      title: "O MCP tem uma pergunta", message: expect.stringContaining("A barra piscou?"),
+    })]]);
+    expect(harness.badges).toEqual(["?"]);
+    await expect(harness.status(42)).resolves.toMatchObject({ task: "Testar a barra", question: "A barra piscou?" });
+
+    await harness.send(42, "Não piscou.");
+    expect(harness.sent.at(-1)).toMatchObject({ messages: [{ text: "Não piscou.", taskId: "task-1",
+      tabIds: ["personal:7", "personal:8"] }] });
+    await expect(harness.status(42)).resolves.not.toHaveProperty("question");
+    expect(harness.badges).toEqual(["?", ""]);
+  });
+
+  it("sends to the task MCP used last, or to no task when none is open", async () => {
+    const harness = inboxHarness(owned);
+    await harness.send(42, "Pode seguir.");
+    expect(harness.sent.at(-1)).toMatchObject({ messages: [{ taskId: "task-1" }] });
+    const empty = inboxHarness({});
+    await empty.send(42, "Pode seguir.");
+    expect(empty.sent.at(-1)).toEqual({ type: "task-messages", messages: [{
+      id: expect.any(String), text: "Pode seguir.", sentAt: expect.any(String), tabIds: [],
+    }] });
+    await expect(empty.status(42)).resolves.not.toHaveProperty("task");
+  });
+});
