@@ -60,8 +60,11 @@ async function main(): Promise<void> {
       brokerPath: runtime.elevationBrokerPath,
     });
   }
+  let personalBrowser: PersonalBrowserBridge | undefined;
   const reloadable = new ReloadableLocalAgent({
     ...(elevationBroker === undefined ? {} : { elevationBroker }),
+    // A finished background task may wake the ChatGPT conversation through the extension.
+    onBackgroundTaskFinished: (event) => personalBrowser?.announceBackgroundTaskFinished(event),
   });
   let connector: CompanionConnector | undefined;
   let repositories!: LocalRepositoryManager;
@@ -98,7 +101,6 @@ async function main(): Promise<void> {
   }
   await reloadable.reload(await repositories.buildPolicy());
 
-  let personalBrowser: PersonalBrowserBridge | undefined;
   if (process.platform === "win32") {
     try {
       personalBrowser = await PersonalBrowserBridge.start({

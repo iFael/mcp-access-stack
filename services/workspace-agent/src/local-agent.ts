@@ -198,7 +198,10 @@ import { ShellService } from "./shell/service.js";
 import type { ElevationBroker } from "./shell/elevation-broker.js";
 import { LinuxServiceControlService } from "./service-control/service.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
-import { BackgroundTaskManager } from "./tasks/background-task-manager.js";
+import {
+  BackgroundTaskManager,
+  type BackgroundTaskFinishedEvent,
+} from "./tasks/background-task-manager.js";
 import { ValidationService } from "./validation/service.js";
 import { ReleaseLifecycleService } from "./release/release-lifecycle-service.js";
 import {
@@ -246,6 +249,8 @@ interface GitOriginResolver {
 }
 
 export interface LocalAgentOptions {
+  /** Called when a background task's process ends, for example to wake the agent. */
+  onBackgroundTaskFinished?: (event: BackgroundTaskFinishedEvent) => void;
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
@@ -308,6 +313,9 @@ export class LocalAgent {
     this.injectedMutationReceiptStore = options.mutationReceiptStore;
     this.backgroundTaskManager = new BackgroundTaskManager({
       stateDirectory: resolveBackgroundTaskStateDirectory(),
+      ...(options.onBackgroundTaskFinished === undefined
+        ? {}
+        : { onTaskFinished: options.onBackgroundTaskFinished }),
       runner: {
         start: (input, signal, execution) => {
           const workspace = this.registry.get(input.workspaceId);

@@ -540,6 +540,56 @@ describe("BackgroundTaskManager", () => {
     );
   });
 
+  it("announces a task whose process ended, but not one that was cancelled", async () => {
+    const finished: unknown[] = [];
+    const start = async (manager: BackgroundTaskManager, command: string) => {
+      const started = await manager.start_background_task({
+        workspaceId: "project",
+        operation: "build",
+        command,
+        shell: "pwsh",
+      });
+      await waitFor(
+        async () =>
+          (await manager.get_background_task(started.id))?.state === "running",
+      );
+      return started.id;
+    };
+
+    const succeeding = new ControlledRunner();
+    const first = new BackgroundTaskManager({
+      stateDirectory,
+      runner: succeeding,
+      onTaskFinished: (event) => finished.push(event),
+    });
+    const succeededId = await start(first, "npm run build");
+    await succeeding.succeed();
+    await waitFor(async () => finished.length === 1);
+    expect(finished).toEqual([
+      { taskId: succeededId, workspaceId: "project", state: "succeeded", exitCode: 0 },
+    ]);
+
+    const failing = new ControlledRunner();
+    const second = new BackgroundTaskManager({
+      stateDirectory,
+      runner: failing,
+      onTaskFinished: (event) => {
+        finished.push(event);
+        throw new Error("a listener error never changes the task");
+      },
+    });
+    const failedId = await start(second, "npm test");
+    failing.fail();
+    await waitFor(async () => finished.length === 2);
+    expect(finished[1]).toEqual({ taskId: failedId, workspaceId: "project", state: "failed" });
+    expect((await second.get_background_task(failedId))?.state).toBe("failed");
+
+    const cancelledId = await start(second, "Start-Sleep -Seconds 60");
+    await second.cancel_background_task(cancelledId);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finished).toHaveLength(2);
+  });
+
   it("persists failures", async () => {
     const runner = new ControlledRunner();
     const manager = new BackgroundTaskManager({ stateDirectory, runner });
