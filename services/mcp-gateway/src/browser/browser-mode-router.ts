@@ -318,6 +318,21 @@ export class BrowserModeRouter implements BrowserExecutor {
     return personal.userMessages(...args);
   }
 
+  async postUserMessage(
+    ...args: Parameters<NonNullable<BrowserExecutor["postUserMessage"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["postUserMessage"]>> {
+    const [input] = args;
+    if (input.taskId && this.taskModes.get(input.taskId) === "managed") {
+      throw new AppError(
+        "BROWSER_OPERATION_MODE_UNSUPPORTED",
+        `Browser task ${input.taskId} runs in managed mode; the user writes to tasks only from personal Chrome.`,
+      );
+    }
+    const personal = this.requirePersonal();
+    if (typeof personal.postUserMessage !== "function") throw unsupported("browser_user_reply");
+    return personal.postUserMessage(...args);
+  }
+
   takeUserMessages(
     ...args: Parameters<NonNullable<BrowserExecutor["takeUserMessages"]>>
   ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {

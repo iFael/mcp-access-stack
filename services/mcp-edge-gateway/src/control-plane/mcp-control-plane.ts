@@ -1,5 +1,6 @@
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError, type EdgeAuthenticator } from "./auth.js";
+import { uiResourcesForManifest } from "./user-messages-card.js";
 
 const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 const AGENT_UNAVAILABLE_ERROR_CODE = -32001;
@@ -78,6 +79,8 @@ export interface EdgeMcpControlPlane {
 }
 
 export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): EdgeMcpControlPlane {
+  // Cards are offered only when the active catalog's tools point at them.
+  const uiResources = uiResourcesForManifest(options.manifest);
   return {
     async handle(request: Request): Promise<Response> {
       let principal: AuthenticatedEdgePrincipal;
@@ -96,6 +99,7 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
           protocolVersion: requestedProtocolVersion,
           capabilities: {
             tools: { listChanged: true },
+            ...(uiResources.length > 0 ? { resources: {} } : {}),
             experimental: {
               [MCP_TOOL_CATALOG_META_KEY]: options.catalogMetadata,
             },
@@ -124,6 +128,25 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
         });
         attachCatalogDiagnostic(response, options);
         return response;
+      }
+
+      if (uiResources.length > 0 && parsed.method === "resources/list") {
+        return jsonRpcResult(parsed.id, {
+          resources: uiResources.map(({ text: _text, ...resource }) => resource),
+        });
+      }
+
+      if (uiResources.length > 0 && parsed.method === "resources/templates/list") {
+        return jsonRpcResult(parsed.id, { resourceTemplates: [] });
+      }
+
+      if (uiResources.length > 0 && parsed.method === "resources/read") {
+        const uri = isRecord(parsed.params) ? parsed.params.uri : undefined;
+        const resource = uiResources.find((candidate) => candidate.uri === uri);
+        if (!resource) return jsonRpcError(parsed.id, -32002, "Resource not found");
+        return jsonRpcResult(parsed.id, {
+          contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text, _meta: resource._meta }],
+        });
       }
 
       const finish = (response: Response): Promise<Response> =>

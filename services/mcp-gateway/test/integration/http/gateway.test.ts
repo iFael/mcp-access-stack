@@ -77,9 +77,14 @@ describe("embedded gateway HTTP surface", () => {
           name:tool.name, outputSchemaType:"object",
         });
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
-        expect(tool._meta).toEqual({
-          securitySchemes: [{ type: "noauth" }],
-        });
+        // Only the reply card's two tools carry more than their security scheme.
+        if (tool.name === "browser_user_messages" || tool.name === "browser_user_reply") {
+          expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
+        } else {
+          expect(tool._meta).toEqual({
+            securitySchemes: [{ type: "noauth" }],
+          });
+        }
       }
 
       expect(

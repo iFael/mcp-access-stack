@@ -30,6 +30,8 @@ import type {
   BrowserPlanResult,
   BrowserUserMessage,
   BrowserUserMessagesInput,
+  BrowserUserReplyInput,
+  BrowserUserReplyResult,
   BrowserUserMessagesResult,
   BrowserFrameClickInput,
   BrowserFrameExtractInput,
@@ -124,6 +126,8 @@ export interface BrowserExecutor {
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext): Promise<BrowserFinishTaskResult>;
   plan(input: BrowserPlanInput, context?: OperationContext): Promise<BrowserPlanResult>;
   userMessages?(input: BrowserUserMessagesInput, context?: OperationContext): Promise<BrowserUserMessagesResult>;
+  /** Queues what the user wrote in the chat card for the agent's next call on the task. */
+  postUserMessage?(input: BrowserUserReplyInput, context?: OperationContext): Promise<BrowserUserReplyResult>;
   /** Takes the user's undelivered popup messages for the task a call works on; never waits. */
   takeUserMessages?(scope: { taskId?: string; tabId?: string }): BrowserUserMessage[];
   download(input: BrowserDownloadInput, context?: OperationContext): Promise<BrowserDownloadResult>;

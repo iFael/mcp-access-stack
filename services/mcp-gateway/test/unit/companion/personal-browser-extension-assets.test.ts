@@ -2921,7 +2921,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.14.0");
+    expect(parsedManifest.version).toBe("1.15.0");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -4451,7 +4451,7 @@ const TASK_MESSAGE_CONSTANTS = ["PERSONAL_TASK_MESSAGES_KEY", "PERSONAL_TASK_QUE
 const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMessages", "writePersonalTaskMessages",
   "readPersonalTaskQuestions", "pushPersonalTaskMessages", "markPersonalTaskMessagesDelivered",
   "recordPersonalTaskQuestion", "clearPersonalTaskQuestion", "personalTaskMessageTarget", "sendPersonalTaskMessage",
-  "personalTaskInboxStatus", ...WAKE_FUNCTIONS];
+  "recordPersonalExternalTaskMessage", "personalTaskInboxStatus", ...WAKE_FUNCTIONS];
 const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
   "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
@@ -4631,6 +4631,7 @@ describe("popup messages to a running task", () => {
       delivered: run<(ids: unknown) => Promise<void>>("markPersonalTaskMessagesDelivered"),
       ask: run<(message: Record<string, unknown>) => Promise<void>>("recordPersonalTaskQuestion"),
       push: run<() => Promise<void>>("pushPersonalTaskMessages"),
+      fromChat: run<(message: unknown) => Promise<void>>("recordPersonalExternalTaskMessage"),
     };
   }
   const owned = {
@@ -4673,6 +4674,23 @@ describe("popup messages to a running task", () => {
       tabIds: ["personal:7", "personal:8"] }] });
     await expect(harness.status(42)).resolves.not.toHaveProperty("question");
     expect(harness.badges).toEqual(["?", ""]);
+  });
+
+  it("shows a reply written in the ChatGPT card like its own, and it answers the open question", async () => {
+    const harness = inboxHarness(owned);
+    await harness.ask({ taskId: "task-1", question: "A barra piscou?" });
+    expect(harness.notifications[0]?.[1]).toMatchObject({ message: expect.stringContaining("Responda no ChatGPT") });
+    const reply = { id: "msg_0000000a-0000-4000-8000-000000000000", text: "Não piscou.", sentAt: "2026-10-28T15:00:00.000Z", taskId: "task-1" };
+    await harness.fromChat(reply);
+    await harness.fromChat(reply);
+    await harness.fromChat({ id: "bad", text: "x", sentAt: "2026-10-28T15:00:00.000Z" });
+    await expect(harness.status(7)).resolves.toEqual({ task: "Testar a barra",
+      recent: [{ text: "Não piscou.", sentAt: "2026-10-28T15:00:00.000Z", delivered: false }] });
+    expect(harness.badges).toEqual(["?", ""]);
+    // The bridge already has it, so nothing goes out now; after a reconnect it is resent like any other.
+    expect(harness.sent).toEqual([]);
+    await harness.push();
+    expect(harness.sent).toEqual([{ type: "task-messages", messages: [{ ...reply, tabIds: [] }] }]);
   });
 
   it("sends to the task MCP used last, or to no task when none is open", async () => {

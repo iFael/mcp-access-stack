@@ -24986,6 +24986,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v1.html",
+      "openai/toolInvocation/invoked": "Conversa com a tarefa",
+      "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
+      "openai/widgetAccessible": true,
       "securitySchemes": [
         {
           "scopes": [
@@ -24993,7 +24997,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           ],
           "type": "oauth2"
         }
-      ]
+      ],
+      "ui": {
+        "resourceUri": "ui://mcp-v3/user-messages-v1.html"
+      }
     },
     "annotations": {
       "destructiveHint": false,
@@ -25001,7 +25008,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads the messages the user wrote in the MCP V3 Chrome extension popup while you work: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. To ask the user something without ending your turn, pass question with the taskId: the popup shows it, and waitMs (up to 50000) waits for the answer; with no answer yet, messages is empty and you may keep working and read again later. Each message is delivered once.",
+    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. Call it once at the start of a long task, with its taskId, so the user has the card to write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. Each message is delivered once.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25084,6 +25091,83 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_user_messages"
+  },
+  {
+    "_meta": {
+      "openai/visibility": "private",
+      "openai/widgetAccessible": true,
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ],
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Only the reply card of browser_user_messages calls this, to send what the user typed there; never call it yourself.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "taskId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "browser_user_reply",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "id": {
+          "pattern": "^msg_[a-z0-9-]{8,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "accepted"
+      ],
+      "type": "object"
+    },
+    "title": "browser_user_reply"
   },
   {
     "_meta": {
@@ -26019,15 +26103,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "98e26e9c6ebe99618d031aceaeb506b7f23c559922e70bf3e86c3a358b61f211",
-  "serverVersion": "0.4.0-catalog.c98e26e9c6ebe.s378bb372f5a1",
-  "toolCount": 115,
-  "toolSetRevision": "378bb372f5a134d2e945e24bcd0bf5d75858f7f1c17ad49923e06f615733ea35"
+  "contractRevision": "9bbf159d2a0995e3f0900d6393dc8034f2aba39e7eee7eab19bcb66a4d47a520",
+  "serverVersion": "0.4.0-catalog.c9bbf159d2a09.sef9ed569aa90",
+  "toolCount": 116,
+  "toolSetRevision": "ef9ed569aa907bf20cde43328293fc5de1addae3c1ebe19d68441b2ccd4ab003"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c98e26e9c6ebe.s378bb372f5a1"
+  "version": "0.4.0-catalog.c9bbf159d2a09.sef9ed569aa90"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

@@ -1508,7 +1508,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   ): Promise<Response> {
     if (!principal.userId || !request) return response;
     const invocation = readMcpToolInvocation(body);
-    if (!invocation || invocation.name === "browser_user_messages" ||
+    if (!invocation || invocation.name === "browser_user_messages" || invocation.name === "browser_user_reply" ||
         invocation.name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX)) return response;
     const holders = this.getReadyCompanionsForUser(principal.userId)
       .filter(({ attachment }) => (attachment.pendingUserMessages ?? 0) > 0);
