@@ -103,6 +103,7 @@ export const browserTabSchema = z
     title: z.string().max(500).optional(),
     lockedUrl: z.url().optional(),
     viewerUrl: z.url().optional(),
+    paused: z.boolean().optional(),
   })
   .strict();
 export type BrowserTab = z.infer<typeof browserTabSchema>;
@@ -970,6 +971,7 @@ export const browserFinishTaskInputSchema = z
   .object({
     taskId: taskIdSchema.optional(),
     keepOpen: z.boolean().optional(),
+    pause: z.boolean().optional(),
   })
   .strict()
   .superRefine((input, context) => {
@@ -978,6 +980,20 @@ export const browserFinishTaskInputSchema = z
         code: "custom",
         path: ["taskId"],
         message: "browser_finish_task keepOpen requires an explicit taskId.",
+      });
+    }
+    if (input.pause === true && input.taskId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskId"],
+        message: "browser_finish_task pause requires an explicit taskId.",
+      });
+    }
+    if (input.pause === true && input.keepOpen === true) {
+      context.addIssue({
+        code: "custom",
+        path: ["pause"],
+        message: "browser_finish_task takes either pause or keepOpen, not both.",
       });
     }
   });
@@ -990,6 +1006,8 @@ export const browserFinishTaskResultSchema = z
     closedTabIds: z.array(tabIdSchema).max(100).optional(),
     releasedTabs: z.number().int().nonnegative().optional(),
     releasedTabIds: z.array(tabIdSchema).max(100).optional(),
+    pausedTabs: z.number().int().nonnegative().optional(),
+    pausedTabIds: z.array(tabIdSchema).max(100).optional(),
     browserClosed: z.boolean(),
   })
   .strict();

@@ -1,6 +1,7 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
 import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
 import { PLAN_REVIEW_HTML, PLAN_REVIEW_SCRIPT } from "./personal-browser-plan-review-assets.js";
+import { TASK_HOME_HTML, TASK_HOME_SCRIPT } from "./personal-browser-task-home-assets.js";
 import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 
 export interface PersonalBrowserExtensionAssets {
@@ -11,6 +12,8 @@ export interface PersonalBrowserExtensionAssets {
   tabSharingScript: string;
   planReviewHtml: string;
   planReviewScript: string;
+  taskHomeHtml: string;
+  taskHomeScript: string;
 }
 
 export function sanitizePersonalDiagnosticText(value: string, maxChars = 8_000): string {
@@ -82,6 +85,8 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "cdpAccessibilityV1",
   "closeTab",
   "finishTask",
+  "groupSharingV1",
+  "pauseTaskV1",
 ] as const;
 
 export function buildPersonalBrowserExtensionAssets(
@@ -96,7 +101,7 @@ export function buildPersonalBrowserExtensionAssets(
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
     permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation", "notifications",
-      "declarativeNetRequest"],
+      "declarativeNetRequest", "alarms"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
     action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
@@ -309,6 +314,7 @@ async function runRequest(operation, input, signal, timing) {
     const started = performance.now();
     const previousSnapshot = timing?.snapshotMs ?? 0;
     await refuseDuringPersonalHandoff(operation, input);
+    await refusePausedPersonalTab(operation, input);
     await enforcePersonalPlan(operation, input);
     try { return await perform(operation, input, signal, timing); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
@@ -437,37 +443,58 @@ async function personalTabContextEnabled() {
 // tab stays the user's: MCP never closes it, and finishing tasks or "Parar de
 // compartilhar" only releases it.
 async function personalTabSharingDispatch(message) {
-  if (["mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan"].includes(message.type)) {
+  if (["mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan", "mcp-tab-confirm-drag"].includes(message.type)) {
     if (typeof message.enabled !== "boolean") throw Error("invalid");
     if (message.type === "mcp-tab-context") {
       await chrome.storage.session.set({ [PERSONAL_TAB_CONTEXT_KEY]: message.enabled });
     } else {
-      await chrome.storage.local.set({
-        [message.type === "mcp-tab-notify" ? PERSONAL_NOTIFY_ON_FINISH_KEY : PERSONAL_REQUIRE_PLAN_KEY]: message.enabled,
-      });
+      const key = { "mcp-tab-notify": PERSONAL_NOTIFY_ON_FINISH_KEY, "mcp-tab-require-plan": PERSONAL_REQUIRE_PLAN_KEY,
+        "mcp-tab-confirm-drag": PERSONAL_CONFIRM_DRAG_KEY }[message.type];
+      await chrome.storage.local.set({ [key]: message.enabled });
     }
   }
   if (!Number.isSafeInteger(message.tabId)) throw Error("no-tab");
   const tab = await chrome.tabs.get(message.tabId);
-  if (message.type === "mcp-tab-share") {
-    await withOwnershipLock(async () => {
+  const pendingShare = await readPendingPersonalShare(tab.id);
+  if (pendingShare && (message.type === "mcp-tab-share" || message.type === "mcp-tab-unshare")) {
+    await answerPersonalShare(tab.id, message.type === "mcp-tab-share");
+  } else if (message.type === "mcp-tab-share") {
+    // A tab shared from the popup gets an MCP group of its own: tabs dragged
+    // into that group are shared too. The group is not a task, so its tabs keep
+    // their approvals while they stay shared, as before.
+    const groupKey = PERSONAL_POPUP_SHARE_PREFIX + crypto.randomUUID();
+    const url = await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       if (owned[String(tab.id)]) throw Error("already-owned");
       const current = await chrome.tabs.get(tab.id);
-      const url = assertPersonalNavigationTarget(current.url);
+      const sharedUrl = assertPersonalNavigationTarget(current.url);
       const now = new Date().toISOString();
       owned[String(tab.id)] = {
         tabId: PERSONAL_PREFIX + tab.id, lifecycle: "external", ownership: "user",
         purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
-        createdAt: now, lastUsedAt: now, requestedUrl: url,
+        createdAt: now, lastUsedAt: now, requestedUrl: sharedUrl,
       };
       await writeOwnedTabs(owned);
+      return sharedUrl;
     });
     await setPersonalSharedBadge(tab.id, true);
+    pendingMcpTabs.add(tab.id);
+    try {
+      const groupId = await assignMcpTaskGroup(tab.id, groupKey, {}, url);
+      if (Number.isInteger(groupId)) await attachSharedTabToTask(tab.id, groupKey, groupId);
+    } finally {
+      pendingMcpTabs.delete(tab.id);
+    }
   } else if (message.type === "mcp-tab-unshare") {
     const owned = await readOwnedTabs();
-    if (owned[String(tab.id)]?.ownership !== "user") throw Error("not-shared");
+    const metadata = owned[String(tab.id)];
+    if (metadata?.ownership !== "user") throw Error("not-shared");
     await releasePersonalSharedTab(tab.id);
+    // Leaving its MCP group undoes a group the share started; Chrome drops an empty group.
+    const current = await chrome.tabs.get(tab.id).catch(() => undefined);
+    if (current && Number.isInteger(metadata.mcpGroupId) && current.groupId === metadata.mcpGroupId) {
+      await chrome.tabs.ungroup(tab.id).catch(() => undefined);
+    }
   } else if (message.type === "mcp-tab-resume") {
     if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
   } else if (message.type === "mcp-tab-approve") {
@@ -482,7 +509,8 @@ async function personalTabSharingDispatch(message) {
     if (message.enabled) sites.push(host);
     await chrome.storage.local.set({ [PERSONAL_AUTO_SITES_KEY]: sites.sort() });
     await pushPersonalSiteApprovals();
-  } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan"].includes(message.type)) {
+  } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan", "mcp-tab-confirm-drag"]
+    .includes(message.type)) {
     throw Error("unsupported");
   }
   const owned = await readOwnedTabs();
@@ -499,6 +527,8 @@ async function personalTabSharingDispatch(message) {
   const notify = (await chrome.storage.local.get(PERSONAL_NOTIFY_ON_FINISH_KEY).catch(() => ({})))?.[PERSONAL_NOTIFY_ON_FINISH_KEY] === true;
   return { ok: true, shared: metadata?.ownership === "user", mcp: metadata?.ownership === "mcp",
     shareable, context: await personalTabContextEnabled(), notify, requirePlan: await personalPlanRequired(),
+    confirmDrag: await personalDragShareNeedsConfirmation(),
+    ...(await readPendingPersonalShare(tab.id) ? { pendingShare: (await readPendingPersonalShare(tab.id)).title } : {}),
     ...(waiting ? { waiting } : {}), ...(await personalApprovalStatus(tab)) };
 }
 
@@ -930,6 +960,10 @@ async function decidePersonalPlan(message) {
     return plan;
   });
   await settlePersonalPlanSignals(decided, false);
+  if (decided.status === "approved") {
+    await resumePersonalTask(decided.taskId);
+    await preparePersonalTaskGroup(decided).catch(() => undefined);
+  }
   return { ok: true, status: decided.status };
 }
 
@@ -1261,10 +1295,18 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     const current = await chrome.windows.get(tab.windowId, { populate: true });
     let windowId = tab.windowId;
     if (current.type !== "normal" || (current.tabs || []).length !== 1) {
-      const created = await chrome.windows.create({
-        tabId: chromeTabId, focused: false, state: "normal", width, height,
-      });
-      windowId = created.id;
+      // Moving the tab takes it out of its task's group; that move is MCP's, not
+      // the user dragging the tab out, so the tab stays owned and is regrouped.
+      pendingMcpTabs.add(chromeTabId);
+      try {
+        const created = await chrome.windows.create({
+          tabId: chromeTabId, focused: false, state: "normal", width, height,
+        });
+        windowId = created.id;
+        await regroupMovedPersonalTab(chromeTabId, tab.groupId, windowId);
+      } finally {
+        pendingMcpTabs.delete(chromeTabId);
+      }
     }
     throwIfAborted(signal, "viewport", true);
     const resized = await chrome.windows.update(windowId, { state: "normal", width, height });
@@ -1290,6 +1332,28 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome cannot resize the owned tab's window.");
   }
+}
+
+// A tab MCP moved into a window of its own gets a group there styled like its
+// task's group, so it still shows as the task's tab and leaves the task only
+// when the user drags it out of that group.
+async function regroupMovedPersonalTab(chromeTabId, previousGroupId, windowId) {
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const metadata = owned[String(chromeTabId)];
+    if (!metadata || !Number.isInteger(metadata.mcpGroupId) || typeof metadata.taskId !== "string") return;
+    let groupId;
+    try {
+      const style = await chrome.tabGroups.get(previousGroupId).catch(() => undefined);
+      groupId = await chrome.tabs.group({ tabIds: chromeTabId, createProperties: { windowId } });
+      if (style) await chrome.tabGroups.update(groupId, { title: style.title, color: style.color }).catch(() => undefined);
+      await rememberMcpGroup(groupId, metadata.taskId);
+    } catch {
+      groupId = undefined;
+    }
+    owned[String(chromeTabId)] = { ...metadata, mcpGroupId: groupId };
+    await writeOwnedTabs(owned);
+  });
 }
 
 async function configurePersonalViewport(input, signal) {
@@ -1383,12 +1447,18 @@ async function selectOwnedTab(input, signal) {
 
 async function open(input, signal) {
   const targetUrl = assertPersonalNavigationTarget(input.url);
+  // Every MCP tab belongs to a task. When the caller names none, the tab gets
+  // its own task, returned as tab.taskId, so finishing it closes only its tabs.
+  const generatedTaskId = typeof input.taskId !== "string";
+  const taskId = generatedTaskId ? "task-" + crypto.randomUUID() : input.taskId;
+  if (!generatedTaskId) await resumePersonalTask(taskId);
 
   if (input.reusable) {
     const restored = await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const [key, metadata] of Object.entries(owned)) {
-        if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? targetUrl)) continue;
+        const sameTask = generatedTaskId ? metadata.generatedTaskId === true : metadata.taskId === taskId;
+        if (!sameTask || metadata.purpose !== (input.purpose ?? targetUrl)) continue;
         const chromeTabId = Number(key);
         const existing = await chrome.tabs.get(chromeTabId).catch(() => undefined);
         if (!existing) {
@@ -1408,8 +1478,21 @@ async function open(input, signal) {
   }
 
   throwIfAborted(signal, "open", false);
-  const tab = await chrome.tabs.create({ url: targetUrl, active: true });
-  if (typeof tab.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
+  await withOwnershipLock(async () => enforcePersonalTaskTabLimit(await readOwnedTabs(), taskId));
+  const tab = (await takePersonalTaskHome(taskId, targetUrl)) ?? await chrome.tabs.create({ url: targetUrl, active: true });
+  if (typeof tab?.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
+  pendingMcpTabs.add(tab.id);
+  try {
+    return await registerOpenedPersonalTab(tab, input, taskId, generatedTaskId, targetUrl, signal);
+  } finally {
+    pendingMcpTabs.delete(tab.id);
+  }
+}
+
+async function registerOpenedPersonalTab(tab, input, taskId, generatedTaskId, targetUrl, signal) {
+  // Group before the page loads so a slow page never sits outside the MCP group.
+  const mcpGroupId = await withOwnershipLock(async () =>
+    assignMcpTaskGroup(tab.id, taskId, await readOwnedTabs(), input.purpose ?? targetUrl));
   try {
     await waitForTabComplete(tab.id, 30000, signal);
   } catch (error) {
@@ -1424,13 +1507,11 @@ async function open(input, signal) {
       const current = await chrome.tabs.get(tab.id).catch(() => undefined);
       if (!current) throw coded("TAB_NOT_FOUND", "The personal browser tab no longer exists.");
       const owned = await readOwnedTabs();
-      const mcpGroupId = typeof input.taskId === "string"
-        ? await assignMcpTaskGroup(tab.id, input.taskId, owned)
-        : undefined;
       metadata = {
         tabId: PERSONAL_PREFIX + tab.id,
-        ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
-        lifecycle: typeof input.taskId === "string" ? "task-scoped" : "persistent",
+        taskId,
+        ...(generatedTaskId ? { generatedTaskId: true } : {}),
+        lifecycle: "task-scoped",
         ownership: "mcp",
         purpose: input.purpose ?? targetUrl,
         reusable: sticky ? false : Boolean(input.reusable),
@@ -5247,6 +5328,9 @@ async function finishTask(input) {
     await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
     if (!target.shared) await clearPersonalHandoff(target.chromeTabId);
   }
+  if (input.pause === true) return pausePersonalTask(input.taskId, targets);
+  await closePersonalTaskHomes(input.taskId);
+  await forgetMcpTaskGroups(input.taskId);
   if (input.keepOpen === true) {
     const groupedTabIds = [];
     for (const target of targets) {
@@ -5267,6 +5351,7 @@ async function finishTask(input) {
       await writeOwnedTabs(owned);
     });
     if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+    else taskGroups.clear();
     return {
       completed: true,
       taskId: input.taskId,
@@ -5285,12 +5370,22 @@ async function finishTask(input) {
     await chrome.tabs.remove(target.chromeTabId).catch(() => undefined);
   }
   for (const target of released) await releasePersonalSharedTab(target.chromeTabId);
+  // A released tab leaves the finished task's group too: the group is the sharing boundary.
+  const releasedGrouped = [];
+  for (const target of released) {
+    const current = await chrome.tabs.get(target.chromeTabId).catch(() => undefined);
+    if (current && Number.isInteger(target.mcpGroupId) && current.groupId === target.mcpGroupId) {
+      releasedGrouped.push(target.chromeTabId);
+    }
+  }
+  if (releasedGrouped.length > 0) await chrome.tabs.ungroup(releasedGrouped).catch(() => undefined);
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     for (const target of targets) delete owned[String(target.chromeTabId)];
     await writeOwnedTabs(owned);
   });
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
+  else taskGroups.clear();
   await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
   await clearPersonalPlans(input.taskId);
   await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
@@ -5305,7 +5400,30 @@ async function finishTask(input) {
   };
 }
 
-async function assignMcpTaskGroup(chromeTabId, taskId, owned) {
+const MCP_TASK_GROUP_COLORS = ["blue", "green", "purple", "cyan", "orange", "pink", "red", "yellow"];
+const MAX_MCP_GROUP_LABEL_CHARS = 24;
+
+// Each task group gets its own label and color so two tasks never look like
+// the same "MCP" group.
+function mcpTaskGroupStyle(taskId, label) {
+  let text = typeof label === "string" ? label.trim() : "";
+  try {
+    const url = new URL(text);
+    if (url.hostname) text = url.hostname.replace(/^www[.]/u, "");
+  } catch {
+    // A free-text purpose is used as written.
+  }
+  if (text.length > MAX_MCP_GROUP_LABEL_CHARS) text = text.slice(0, MAX_MCP_GROUP_LABEL_CHARS - 1).trimEnd() + "…";
+  let hash = 0;
+  for (const char of taskId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return {
+    title: text ? "MCP · " + text : "MCP",
+    color: MCP_TASK_GROUP_COLORS[hash % MCP_TASK_GROUP_COLORS.length],
+  };
+}
+
+// Grouping is cosmetic: a failure is reported as no group, never as a failed open.
+async function assignMcpTaskGroup(chromeTabId, taskId, owned, label) {
   const persistedGroupId = Object.values(owned || {})
     .find((metadata) => metadata?.taskId === taskId && Number.isInteger(metadata?.mcpGroupId))
     ?.mcpGroupId;
@@ -5314,15 +5432,390 @@ async function assignMcpTaskGroup(chromeTabId, taskId, owned) {
     try {
       const groupId = await chrome.tabs.group({ tabIds: chromeTabId, groupId: existingGroupId });
       taskGroups.set(taskId, groupId);
+      await rememberMcpGroup(groupId, taskId);
       return groupId;
     } catch {
       taskGroups.delete(taskId);
     }
   }
-  const groupId = await chrome.tabs.group({ tabIds: chromeTabId });
-  await chrome.tabGroups.update(groupId, { title: "MCP" });
+  let groupId;
+  try {
+    groupId = await chrome.tabs.group({ tabIds: chromeTabId });
+  } catch {
+    return undefined;
+  }
+  try {
+    await chrome.tabGroups.update(groupId, mcpTaskGroupStyle(taskId, label));
+  } catch {
+    // The tab is grouped even when Chrome refuses the title or color.
+  }
   taskGroups.set(taskId, groupId);
+  await rememberMcpGroup(groupId, taskId);
   return groupId;
+}
+
+// The task's tab group is its sharing boundary, as in Claude's own browser
+// tool: a tab the user drags into an MCP group is shared with that task, a tab
+// a task page opens there belongs to the task, and any tab dragged out of the
+// group goes back to the user, still open. The approved plan still bounds what
+// MCP may do in any of them.
+const PERSONAL_GROUP_TASKS_KEY = "mcpV3GroupTasks";
+const PERSONAL_TASK_HOMES_KEY = "mcpV3TaskHomes";
+const PERSONAL_PENDING_SHARES_KEY = "mcpV3PendingShares";
+const PERSONAL_CONFIRM_DRAG_KEY = "mcpV3ConfirmDragShare";
+const MAX_PERSONAL_TASK_TABS = 20;
+const PERSONAL_PAUSE_LIMIT_MS = 24 * 60 * 60 * 1000;
+const PERSONAL_PAUSED_SUFFIX = " (em espera)";
+// The group a popup share starts is keyed by this prefix and is no task.
+const PERSONAL_POPUP_SHARE_PREFIX = "shared-";
+// Tabs the extension itself is opening or regrouping: their group change is not the user's.
+const pendingMcpTabs = new Set();
+
+async function readSessionMap(key) {
+  const value = await chrome.storage.session.get(key).catch(() => ({}));
+  const map = value?.[key];
+  return map && typeof map === "object" ? map : {};
+}
+
+async function changeSessionMap(key, change) {
+  const map = await readSessionMap(key);
+  change(map);
+  await chrome.storage.session.set({ [key]: map });
+}
+
+async function rememberMcpGroup(groupId, taskId) {
+  await changeSessionMap(PERSONAL_GROUP_TASKS_KEY, (groups) => { groups[String(groupId)] = taskId; })
+    .catch(() => undefined);
+}
+
+async function mcpGroupTask(groupId) {
+  if (!Number.isInteger(groupId) || groupId < 0) return undefined;
+  const known = (await readSessionMap(PERSONAL_GROUP_TASKS_KEY))[String(groupId)];
+  if (typeof known === "string") return known;
+  // After a worker restart the owned tabs still name their group, but only a
+  // tab that is still in it counts: Chrome reuses group ids after a restart.
+  for (const [key, metadata] of Object.entries(await readOwnedTabs())) {
+    if (metadata?.mcpGroupId !== groupId || typeof metadata.taskId !== "string") continue;
+    const tab = await chrome.tabs.get(Number(key)).catch(() => undefined);
+    if (tab?.groupId === groupId) return metadata.taskId;
+  }
+  return undefined;
+}
+
+async function forgetMcpTaskGroups(taskId) {
+  await changeSessionMap(PERSONAL_GROUP_TASKS_KEY, (groups) => {
+    for (const [groupId, owner] of Object.entries(groups)) if (taskId === undefined || owner === taskId) delete groups[groupId];
+  }).catch(() => undefined);
+}
+
+function countPersonalTaskTabs(owned, taskId) {
+  return Object.values(owned).filter((metadata) => metadata?.taskId === taskId).length;
+}
+
+function enforcePersonalTaskTabLimit(owned, taskId) {
+  if (countPersonalTaskTabs(owned, taskId) >= MAX_PERSONAL_TASK_TABS) {
+    throw coded("LIMIT_EXCEEDED", "Task " + taskId + " already has " + MAX_PERSONAL_TASK_TABS +
+      " tabs. Reuse one with browser_navigate or close one before opening another.");
+  }
+}
+
+function followPersonalTabGroup(chromeTabId, groupId) {
+  if (pendingMcpTabs.has(chromeTabId)) return Promise.resolve();
+  return enqueueMutation("group:" + chromeTabId, async () => {
+    if (pendingMcpTabs.has(chromeTabId)) return;
+    if (Object.values(await readSessionMap(PERSONAL_TASK_HOMES_KEY)).includes(chromeTabId)) return;
+    // Events can arrive late, after MCP regrouped the tab: act on its group now.
+    const live = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (!live) return;
+    if (Number.isInteger(live.groupId)) groupId = live.groupId;
+    const groupTask = await mcpGroupTask(groupId);
+    const metadata = (await readOwnedTabs())[String(chromeTabId)];
+    if (metadata) {
+      if (Number.isInteger(metadata.mcpGroupId) && metadata.mcpGroupId === groupId) return;
+      if (typeof metadata.taskId === "string" && metadata.taskId === groupTask) return;
+      if (!Number.isInteger(metadata.mcpGroupId)) {
+        // A tab shared from the popup outside any group joins the group it is
+        // dragged into; any other tab that sat in no group stays as it is.
+        if (metadata.ownership === "user" && metadata.taskId === undefined && groupTask) {
+          await attachSharedTabToTask(chromeTabId, groupTask, groupId);
+        }
+        return;
+      }
+      // Only a tab that sat in its task's group can leave it.
+      await releasePersonalGroupTab(chromeTabId, metadata);
+    }
+    await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(chromeTabId)]; })
+      .catch(() => undefined);
+    if (groupTask) await joinPersonalTaskGroup(chromeTabId, groupTask, groupId);
+  }).catch(() => undefined);
+}
+
+function isPopupShareGroup(taskId) {
+  return typeof taskId === "string" && taskId.startsWith(PERSONAL_POPUP_SHARE_PREFIX);
+}
+
+async function attachSharedTabToTask(chromeTabId, taskId, groupId) {
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const metadata = owned[String(chromeTabId)];
+    if (!metadata) return;
+    owned[String(chromeTabId)] = { ...metadata,
+      ...(isPopupShareGroup(taskId) ? {} : { taskId }), mcpGroupId: groupId };
+    await writeOwnedTabs(owned);
+  });
+}
+
+async function releasePersonalGroupTab(chromeTabId, metadata) {
+  if (metadata.ownership === "user") {
+    await releasePersonalSharedTab(chromeTabId);
+    return;
+  }
+  axTargetsByTab.delete(chromeTabId);
+  await finalizePersonalDialog(chromeTabId, true);
+  await resetPersonalViewport(chromeTabId).catch(() => undefined);
+  await clearPersonalHandoff(chromeTabId);
+  await removeOwnedTab(chromeTabId);
+  await clearPersonalTabApprovals(chromeTabId);
+}
+
+async function joinPersonalTaskGroup(chromeTabId, taskId, groupId) {
+  const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+  if (!tab) return;
+  const now = new Date().toISOString();
+  const httpUrl = typeof tab.url === "string" && /^https?:/u.test(tab.url) ? tab.url : undefined;
+  const child = await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const opener = Number.isInteger(tab.openerTabId) ? owned[String(tab.openerTabId)] : undefined;
+    if (opener?.ownership !== "mcp" || opener.taskId !== taskId) return false;
+    if (countPersonalTaskTabs(owned, taskId) >= MAX_PERSONAL_TASK_TABS) return undefined;
+    // A page of the task opened this tab: it is the task's, held to the same plan.
+    owned[String(chromeTabId)] = {
+      tabId: PERSONAL_PREFIX + chromeTabId, taskId, lifecycle: "task-scoped", ownership: "mcp",
+      purpose: "Aba aberta por uma página da tarefa", reusable: false, protected: false, sticky: false,
+      mcpGroupId: groupId, createdAt: now, lastUsedAt: now, ...(httpUrl ? { requestedUrl: httpUrl } : {}),
+    };
+    await writeOwnedTabs(owned);
+    return true;
+  });
+  if (child === true) return;
+  if (child === undefined) {
+    await refusePersonalGroupShare(chromeTabId, "A tarefa já tem " + MAX_PERSONAL_TASK_TABS + " abas.");
+    return;
+  }
+  try {
+    assertPersonalNavigationTarget(tab.url);
+  } catch {
+    await refusePersonalGroupShare(chromeTabId, "Endereço privado, local ou página interna do Chrome.");
+    return;
+  }
+  const title = await mcpGroupTitle(groupId);
+  if (await personalDragShareNeedsConfirmation()) {
+    // The answer is given in the extension popup, the one place for MCP V3 controls.
+    await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => {
+      shares[String(chromeTabId)] = { taskId, groupId, title };
+    });
+    await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: "?" })).catch(() => undefined);
+    await notifyPersonalShare(chromeTabId, "Compartilhar esta aba com " + title + "?",
+      "Abra o MCP V3 nesta aba para confirmar.");
+    return;
+  }
+  if (await sharePersonalTabWithTask(chromeTabId, taskId, groupId)) {
+    await notifyPersonalShare(chromeTabId, "Aba compartilhada com " + title,
+      String(tab.title || "").slice(0, 120) + " Para parar, tire a aba do grupo ou use o MCP V3.");
+  }
+}
+
+async function sharePersonalTabWithTask(chromeTabId, taskId, groupId) {
+  const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+  if (!tab || tab.groupId !== groupId) return false;
+  let url;
+  try {
+    url = assertPersonalNavigationTarget(tab.url);
+  } catch {
+    return false;
+  }
+  const shared = await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    if (owned[String(chromeTabId)] || countPersonalTaskTabs(owned, taskId) >= MAX_PERSONAL_TASK_TABS) return false;
+    const now = new Date().toISOString();
+    owned[String(chromeTabId)] = {
+      tabId: PERSONAL_PREFIX + chromeTabId, ...(isPopupShareGroup(taskId) ? {} : { taskId }),
+      lifecycle: "external", ownership: "user",
+      purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
+      mcpGroupId: groupId, createdAt: now, lastUsedAt: now, requestedUrl: url,
+    };
+    await writeOwnedTabs(owned);
+    return true;
+  });
+  if (shared) await setPersonalSharedBadge(chromeTabId, true);
+  return shared;
+}
+
+async function readPendingPersonalShare(chromeTabId) {
+  return (await readSessionMap(PERSONAL_PENDING_SHARES_KEY))[String(chromeTabId)];
+}
+
+// Only the user answers, from the extension popup: share it, or take it back out of the group.
+async function answerPersonalShare(chromeTabId, share) {
+  const pending = await readPendingPersonalShare(chromeTabId);
+  await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(chromeTabId)]; })
+    .catch(() => undefined);
+  await Promise.resolve(chrome.notifications?.clear?.("mcp-share:" + chromeTabId)).catch(() => undefined);
+  if (pending && share && await sharePersonalTabWithTask(chromeTabId, pending.taskId, pending.groupId)) return;
+  await setPersonalSharedBadge(chromeTabId, false);
+  await chrome.tabs.ungroup(chromeTabId).catch(() => undefined);
+}
+
+async function refusePersonalGroupShare(chromeTabId, reason) {
+  await chrome.tabs.ungroup(chromeTabId).catch(() => undefined);
+  await notifyPersonalShare(chromeTabId, "Esta aba não pode ficar no grupo do MCP", reason);
+}
+
+// Only a heads-up: every answer is given in the extension popup.
+async function notifyPersonalShare(chromeTabId, title, message) {
+  await Promise.resolve(chrome.notifications?.create?.("mcp-share:" + chromeTabId, {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title, message: message || " ", priority: 1,
+  })).catch(() => undefined);
+}
+
+async function personalDragShareNeedsConfirmation() {
+  const value = await chrome.storage.local.get(PERSONAL_CONFIRM_DRAG_KEY).catch(() => ({}));
+  return value?.[PERSONAL_CONFIRM_DRAG_KEY] === true;
+}
+
+async function mcpGroupTitle(groupId) {
+  const group = await chrome.tabGroups.get(groupId).catch(() => undefined);
+  const title = String(group?.title || "MCP");
+  return title.endsWith(PERSONAL_PAUSED_SUFFIX) ? title.slice(0, -PERSONAL_PAUSED_SUFFIX.length) : title;
+}
+
+// Chrome has no empty groups: approving a plan for a task with no tab yet opens
+// the task's first tab, a page of this extension, and starts its group with it.
+async function preparePersonalTaskGroup(plan) {
+  const owned = await readOwnedTabs();
+  if (Object.values(owned).some((metadata) => metadata?.taskId === plan.taskId)) return;
+  const homes = await readSessionMap(PERSONAL_TASK_HOMES_KEY);
+  if (Number.isInteger(homes[plan.taskId]) && await chrome.tabs.get(homes[plan.taskId]).catch(() => undefined)) return;
+  const window = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
+  const home = await chrome.tabs.create({
+    url: chrome.runtime.getURL("task-home.html#" + encodeURIComponent(plan.taskId)), active: true,
+    ...(Number.isInteger(window?.id) ? { windowId: window.id } : {}),
+  }).catch(() => undefined);
+  if (!Number.isInteger(home?.id)) return;
+  await changeSessionMap(PERSONAL_TASK_HOMES_KEY, (map) => { map[plan.taskId] = home.id; });
+  await assignMcpTaskGroup(home.id, plan.taskId, owned, plan.summary);
+}
+
+// The first browser_open of a task navigates its first tab instead of opening another.
+async function takePersonalTaskHome(taskId, targetUrl) {
+  const homes = await readSessionMap(PERSONAL_TASK_HOMES_KEY);
+  const homeId = homes[taskId];
+  if (!Number.isInteger(homeId)) return undefined;
+  await changeSessionMap(PERSONAL_TASK_HOMES_KEY, (map) => { delete map[taskId]; });
+  const current = await chrome.tabs.get(homeId).catch(() => undefined);
+  if (!current || !String(current.url || current.pendingUrl || "").startsWith(chrome.runtime.getURL("task-home.html"))) {
+    return undefined;
+  }
+  pendingMcpTabs.add(homeId);
+  return chrome.tabs.update(homeId, { url: targetUrl, active: true }).catch(() => {
+    pendingMcpTabs.delete(homeId);
+    return undefined;
+  });
+}
+
+async function closePersonalTaskHomes(taskId) {
+  const homes = await readSessionMap(PERSONAL_TASK_HOMES_KEY);
+  const closing = Object.entries(homes).filter(([owner]) => taskId === undefined || owner === taskId);
+  if (closing.length === 0) return;
+  await changeSessionMap(PERSONAL_TASK_HOMES_KEY, (map) => { for (const [owner] of closing) delete map[owner]; });
+  for (const [, homeId] of closing) await chrome.tabs.remove(homeId).catch(() => undefined);
+}
+
+async function personalTaskHomeDispatch(message) {
+  if (message.type !== "mcp-home-get" || typeof message.taskId !== "string") throw Error("unsupported");
+  const plan = Object.values(await readPersonalPlans())
+    .filter((candidate) => candidate.taskId === message.taskId && candidate.status === "approved")
+    .sort((left, right) => right.decidedAt - left.decidedAt)[0];
+  if (!plan) throw Error("missing");
+  return { ok: true, title: mcpTaskGroupStyle(plan.taskId, plan.summary).title, summary: plan.summary,
+    domains: plan.approvedDomains };
+}
+
+// A paused task keeps its tabs in its group, collapsed, until the agent comes
+// back with a new approved plan for it (or, when no plan is required, with
+// browser_open for it). Nothing acts in a paused tab before that.
+async function pausePersonalTask(taskId, targets) {
+  const pausedAt = new Date().toISOString();
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    for (const target of targets) {
+      const metadata = owned[String(target.chromeTabId)];
+      if (metadata) owned[String(target.chromeTabId)] = { ...metadata, paused: true, pausedAt };
+    }
+    await writeOwnedTabs(owned);
+  });
+  await stylePersonalTaskGroups(targets.map((target) => target.chromeTabId), true);
+  await closePersonalTaskHomes(taskId);
+  await clearPersonalPlans(taskId);
+  await clearPersonalTaskApprovals(taskId, targets.map((target) => target.chromeTabId));
+  return {
+    completed: true, taskId, closedTabs: 0, closedTabIds: [],
+    pausedTabs: targets.length, pausedTabIds: targets.map((target) => target.tabId), browserClosed: false,
+  };
+}
+
+async function resumePersonalTask(taskId) {
+  const resumed = await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const ids = [];
+    for (const [key, metadata] of Object.entries(owned)) {
+      if (metadata?.taskId !== taskId || metadata.paused !== true) continue;
+      const { paused: _paused, pausedAt: _pausedAt, ...active } = metadata;
+      owned[key] = { ...active, lastUsedAt: new Date().toISOString() };
+      ids.push(Number(key));
+    }
+    if (ids.length > 0) await writeOwnedTabs(owned);
+    return ids;
+  });
+  if (resumed.length > 0) await stylePersonalTaskGroups(resumed, false);
+  return resumed.length;
+}
+
+async function stylePersonalTaskGroups(chromeTabIds, paused) {
+  const groupIds = new Set();
+  for (const chromeTabId of chromeTabIds) {
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (Number.isInteger(tab?.groupId) && tab.groupId >= 0) groupIds.add(tab.groupId);
+  }
+  for (const groupId of groupIds) {
+    const title = await mcpGroupTitle(groupId);
+    await chrome.tabGroups.update(groupId, paused
+      ? { collapsed: true, title: title + PERSONAL_PAUSED_SUFFIX }
+      : { collapsed: false, title }).catch(() => undefined);
+  }
+}
+
+async function refusePausedPersonalTab(operation, input) {
+  if (["tabs", "plan", "open", "closeTab", "finishTask"].includes(operation) || typeof input?.tabId !== "string") return;
+  let chromeTabId;
+  try {
+    chromeTabId = chromeTabIdFrom(input.tabId);
+  } catch {
+    return;
+  }
+  const metadata = (await readOwnedTabs())[String(chromeTabId)];
+  if (metadata?.paused !== true) return;
+  throw coded("ACTION_BLOCKED_BY_POLICY", "Task " + metadata.taskId + " is paused. Call browser_plan for it " +
+    "(or browser_open with its taskId when no plan is required) to resume its tabs.");
+}
+
+// Paused tasks nobody came back to close after a day, like a finished task.
+async function sweepPausedPersonalTasks() {
+  const cutoff = Date.now() - PERSONAL_PAUSE_LIMIT_MS;
+  const expired = new Set(Object.values(await readOwnedTabs())
+    .filter((metadata) => metadata?.paused === true && Date.parse(metadata.pausedAt) < cutoff)
+    .map((metadata) => metadata.taskId));
+  for (const taskId of expired) if (typeof taskId === "string") await finishTask({ taskId }).catch(() => undefined);
 }
 
 async function requireOwnedMetadata(chromeTabId, forCleanup = false) {
@@ -5378,7 +5871,8 @@ async function writeOwnedTabs(owned) {
 }
 
 function toBrowserTab(metadata, tab) {
-  const { mcpGroupId: _mcpGroupId, lockedUrl: _lockedUrl, ...publicMetadata } = metadata;
+  const { mcpGroupId: _mcpGroupId, lockedUrl: _lockedUrl, generatedTaskId: _generatedTaskId,
+    pausedAt: _pausedAt, ...publicMetadata } = metadata;
   return {
     ...publicMetadata,
     ...(typeof tab.url === "string" &&
@@ -5880,9 +6374,33 @@ if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.run
   return true;
 });
 chrome.windows?.onRemoved?.addListener((windowId) => void rejectPersonalPlanWindow(windowId));
+if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message?.type !== "mcp-home-get") return false;
+  // Only the task's first tab, a page of this extension.
+  if (sender.id !== chrome.runtime.id ||
+      String(sender.url).split("#")[0] !== chrome.runtime.getURL("task-home.html")) return false;
+  void personalTaskHomeDispatch(message).then(
+    (result) => reply(result),
+    () => reply({ ok: false, code: "refused" }),
+  );
+  return true;
+});
 
+chrome.tabs.onUpdated?.addListener?.((tabId, changeInfo) => {
+  if (typeof changeInfo?.groupId === "number") void followPersonalTabGroup(tabId, changeInfo.groupId);
+});
+// A tab a page opens from a grouped tab is born in that group.
+chrome.tabs.onCreated?.addListener?.((tab) => {
+  if (Number.isInteger(tab?.id) && Number.isInteger(tab.groupId) && tab.groupId >= 0) {
+    void followPersonalTabGroup(tab.id, tab.groupId);
+  }
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   personalViewportSessions.delete(String(tabId));
+  void changeSessionMap(PERSONAL_TASK_HOMES_KEY, (homes) => {
+    for (const [taskId, homeId] of Object.entries(homes)) if (homeId === tabId) delete homes[taskId];
+  }).catch(() => undefined);
+  void changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(tabId)]; }).catch(() => undefined);
   const recording = personalRecordings.get(String(tabId));
   if (recording) endPersonalRecording(recording, true);
   void removeOwnedTab(tabId);
@@ -5905,7 +6423,7 @@ chrome.notifications?.onClicked?.addListener((id) => {
     }).catch(() => undefined);
     return;
   }
-  const match = /^mcp-(?:handoff|approval):(\\d+)$/u.exec(id);
+  const match = /^mcp-(?:handoff|approval|share):(\\d+)$/u.exec(id);
   if (!match) return;
   void chrome.tabs.update(Number(match[1]), { active: true })
     .then((tab) => chrome.windows.update(tab.windowId, { focused: true }))
@@ -5943,9 +6461,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 void syncPersonalPlanNavigationRules();
+chrome.alarms?.create?.("mcp-paused-sweep", { periodInMinutes: 30 });
+chrome.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm?.name === "mcp-paused-sweep") void sweepPausedPersonalTasks();
+});
+void sweepPausedPersonalTasks();
 connect();
 `;
 
   return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
-    tabSharingScript: TAB_SHARING_POPUP_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT };
+    tabSharingScript: TAB_SHARING_POPUP_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT,
+    taskHomeHtml: TASK_HOME_HTML, taskHomeScript: TASK_HOME_SCRIPT };
 }

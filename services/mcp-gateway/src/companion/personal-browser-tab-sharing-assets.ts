@@ -14,6 +14,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const resume = document.getElementById("tab-resume");
   const notify = document.getElementById("tab-notify");
   const requirePlan = document.getElementById("tab-require-plan");
+  const confirmDrag = document.getElementById("tab-confirm-drag");
   const approval = document.getElementById("tab-approval");
   const approve = document.getElementById("tab-approve");
   const grants = document.getElementById("tab-grants");
@@ -21,7 +22,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const autoRow = document.getElementById("tab-auto-row");
   const auto = document.getElementById("tab-auto");
   const autoSites = document.getElementById("tab-auto-sites");
-  const controls = [share, unshare, context, resume, notify, requirePlan, approve, revoke, auto];
+  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto];
   const LABELS = {
     "submit-form": "salvar e confirmar formulários",
     "upload-file": "enviar arquivos",
@@ -37,6 +38,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     context.checked = state.context === true;
     notify.checked = state.notify === true;
     requirePlan.checked = state.requirePlan === true;
+    confirmDrag.checked = state.confirmDrag === true;
     approval.hidden = approve.hidden = typeof state.approval !== "string";
     approval.textContent = state.approval ? "O MCP pediu permissão para " + LABELS[state.approval] + " neste site." : "";
     const granted = Array.isArray(state.grants) ? state.grants : [];
@@ -49,9 +51,11 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     autoSites.hidden = sites.length === 0;
     autoSites.textContent = "Aprovação automática em: " + sites.join(", ") + ".";
     share.hidden = !(state.shareable && !state.shared);
-    unshare.hidden = !state.shared;
+    unshare.hidden = !(state.shared || typeof state.pendingShare === "string");
     resume.hidden = typeof state.waiting !== "string";
-    status.textContent = typeof state.waiting === "string"
+    status.textContent = typeof state.pendingShare === "string"
+      ? "Você colocou esta aba no grupo " + state.pendingShare + ". Compartilhe para o MCP usar, ou pare para tirá-la do grupo."
+      : typeof state.waiting === "string"
       ? "O MCP está esperando você nesta aba: " + state.waiting.replace(/[.!?]?$/u, ".") +
         " Quando terminar, clique em Pronto."
       : state.shared
@@ -87,6 +91,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   context.addEventListener("change", () => void act("mcp-tab-context", { enabled: context.checked }));
   notify.addEventListener("change", () => void act("mcp-tab-notify", { enabled: notify.checked }));
   requirePlan.addEventListener("change", () => void act("mcp-tab-require-plan", { enabled: requirePlan.checked }));
+  confirmDrag.addEventListener("change", () => void act("mcp-tab-confirm-drag", { enabled: confirmDrag.checked }));
   resume.addEventListener("click", () => void act("mcp-tab-resume"));
   approve.addEventListener("click", () => void act("mcp-tab-approve"));
   revoke.addEventListener("click", () => void act("mcp-tab-revoke"));

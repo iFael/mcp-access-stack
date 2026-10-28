@@ -313,12 +313,20 @@ export class BrowserModeRouter implements BrowserExecutor {
         "browser_finish_task keepOpen requires an explicit taskId.",
       );
     }
+    if (input.pause === true && !input.taskId) {
+      throw new AppError(
+        "INVALID_ARGUMENT",
+        "browser_finish_task pause requires an explicit taskId.",
+      );
+    }
     if (!this.managed) {
       const result = await this.requirePersonal().finishTask(...args);
       for (const tabId of [
         ...(result.closedTabIds ?? []),
         ...(result.releasedTabIds ?? []),
       ]) this.personalTabIds.delete(tabId);
+      // A paused task keeps its tabs, so it stays bound to personal mode.
+      if (input.pause === true) return result;
       if (input.taskId) this.taskModes.delete(input.taskId);
       else this.taskModes.clear();
       return result;
@@ -335,13 +343,13 @@ export class BrowserModeRouter implements BrowserExecutor {
           ...(result.closedTabIds ?? []),
           ...(result.releasedTabIds ?? []),
         ]) this.personalTabIds.delete(tabId);
-        this.taskModes.delete(input.taskId);
+        if (input.pause !== true) this.taskModes.delete(input.taskId);
         return result;
       }
-      if (input.keepOpen === true) {
+      if (input.keepOpen === true || input.pause === true) {
         throw new AppError(
           "BROWSER_OPERATION_MODE_UNSUPPORTED",
-          "keepOpen is supported only for an explicit personal-browser task.",
+          "keepOpen and pause are supported only for an explicit personal-browser task.",
         );
       }
       const result = await this.managed.finishTask(...args);

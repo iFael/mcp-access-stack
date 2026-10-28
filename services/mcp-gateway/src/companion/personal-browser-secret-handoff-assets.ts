@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.11.1";
+export const HANDOFF_EXTENSION_VERSION = "1.12.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -33,6 +33,7 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
 <label><input id="tab-notify" type="checkbox"> Avisar quando o MCP terminar uma tarefa</label>
 <label><input id="tab-require-plan" type="checkbox"> Pedir minha aprovação de um plano antes de o MCP agir</label>
+<label><input id="tab-confirm-drag" type="checkbox"> Perguntar antes de compartilhar uma aba que eu arrastar para um grupo do MCP</label>
 <label id="tab-auto-row" hidden><input id="tab-auto" type="checkbox"> Aprovar automaticamente neste site. Excluir, pagar, enviar, publicar, senhas e contratos continuam pedindo confirmação.</label>
 <p id="tab-auto-sites" hidden></p>
 <hr>

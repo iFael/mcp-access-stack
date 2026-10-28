@@ -320,6 +320,39 @@ describe("BrowserModeRouter", () => {
     expect(managed.finishTask).not.toHaveBeenCalled();
   });
 
+  it("pauses an explicit personal task and keeps it bound to personal Chrome", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    personal.finishTask = jest.fn(async ({ taskId }) => ({
+      completed: true as const, ...(taskId ? { taskId } : {}), closedTabs: 0, closedTabIds: [],
+      pausedTabs: 1, pausedTabIds: ["personal:42"], browserClosed: false,
+    }));
+    const router = new BrowserModeRouter(managed, personal);
+
+    await router.open({ taskId: "task-pause", url: "https://chatgpt.com/", browserMode: "personal" });
+    await expect(router.finishTask({ taskId: "task-pause", pause: true })).resolves.toMatchObject({
+      closedTabs: 0, pausedTabs: 1, pausedTabIds: ["personal:42"],
+    });
+    // Still bound to personal Chrome: the task cannot drift to managed mode while paused.
+    await expect(router.open({ taskId: "task-pause", url: "https://chatgpt.com/" })).rejects.toMatchObject({
+      message: "Browser task task-pause is already bound to personal mode.",
+    });
+    expect(managed.open).not.toHaveBeenCalled();
+    await expect(router.finishTask({ pause: true })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+
+  it("rejects pause for managed tasks", async () => {
+    const managed = managedExecutor();
+    const personal = personalExecutor();
+    const router = new BrowserModeRouter(managed, personal);
+
+    await router.open({ taskId: "task-managed", url: "https://example.test/" });
+    await expect(router.finishTask({ taskId: "task-managed", pause: true })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    expect(managed.finishTask).not.toHaveBeenCalled();
+  });
+
   it("sends plans to personal Chrome and refuses them for managed tasks", async () => {
     const managed = managedExecutor();
     const personal = personalExecutor();
