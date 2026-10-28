@@ -158,7 +158,11 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     'autoUpdate = [bool]$Activate',
     'Enable-ScheduledTask -TaskName $TaskName',
     '-RepetitionInterval (New-TimeSpan -Minutes $PollMinutes)',
-    'Repetition.Interval -eq $pollInterval'
+    'Repetition.Interval -eq $pollInterval',
+    # The windowless launcher runs pwsh so the 5-minute poll shows no console.
+    'updater\McpNodeHostLauncher.exe',
+    '--restart-on-failure false',
+    'New-ScheduledTaskAction -Execute $launcher'
 )
 # Endpoint protection treats hidden tasks and encoded PowerShell as malware signals.
 Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @('-EncodedCommand', '-Hidden')
