@@ -1383,12 +1383,17 @@ async function selectOwnedTab(input, signal) {
 
 async function open(input, signal) {
   const targetUrl = assertPersonalNavigationTarget(input.url);
+  // Every MCP tab belongs to a task. When the caller names none, the tab gets
+  // its own task, returned as tab.taskId, so finishing it closes only its tabs.
+  const generatedTaskId = typeof input.taskId !== "string";
+  const taskId = generatedTaskId ? "task-" + crypto.randomUUID() : input.taskId;
 
   if (input.reusable) {
     const restored = await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       for (const [key, metadata] of Object.entries(owned)) {
-        if (metadata.taskId !== input.taskId || metadata.purpose !== (input.purpose ?? targetUrl)) continue;
+        const sameTask = generatedTaskId ? metadata.generatedTaskId === true : metadata.taskId === taskId;
+        if (!sameTask || metadata.purpose !== (input.purpose ?? targetUrl)) continue;
         const chromeTabId = Number(key);
         const existing = await chrome.tabs.get(chromeTabId).catch(() => undefined);
         if (!existing) {
@@ -1412,7 +1417,7 @@ async function open(input, signal) {
   if (typeof tab.id !== "number") throw coded("INTERNAL_ERROR", "Chrome did not return a tab id.");
   // Group before the page loads so a slow page never sits outside the MCP group.
   const mcpGroupId = await withOwnershipLock(async () =>
-    assignMcpTaskGroup(tab.id, input.taskId, await readOwnedTabs(), input.purpose ?? targetUrl));
+    assignMcpTaskGroup(tab.id, taskId, await readOwnedTabs(), input.purpose ?? targetUrl));
   try {
     await waitForTabComplete(tab.id, 30000, signal);
   } catch (error) {
@@ -1429,8 +1434,9 @@ async function open(input, signal) {
       const owned = await readOwnedTabs();
       metadata = {
         tabId: PERSONAL_PREFIX + tab.id,
-        ...(typeof input.taskId === "string" ? { taskId: input.taskId } : {}),
-        lifecycle: typeof input.taskId === "string" ? "task-scoped" : "persistent",
+        taskId,
+        ...(generatedTaskId ? { generatedTaskId: true } : {}),
+        lifecycle: "task-scoped",
         ownership: "mcp",
         purpose: input.purpose ?? targetUrl,
         reusable: sticky ? false : Boolean(input.reusable),
@@ -5307,16 +5313,12 @@ async function finishTask(input) {
   };
 }
 
-// Tabs opened without a taskId share one MCP group instead of staying loose.
-const UNTASKED_GROUP_KEY = "mcp:untasked";
-
 const MCP_TASK_GROUP_COLORS = ["blue", "green", "purple", "cyan", "orange", "pink", "red", "yellow"];
 const MAX_MCP_GROUP_LABEL_CHARS = 24;
 
 // Each task group gets its own label and color so two tasks never look like
-// the same "MCP" group; the shared untasked group stays plain grey "MCP".
+// the same "MCP" group.
 function mcpTaskGroupStyle(taskId, label) {
-  if (typeof taskId !== "string") return { title: "MCP", color: "grey" };
   let text = typeof label === "string" ? label.trim() : "";
   try {
     const url = new URL(text);
@@ -5335,18 +5337,17 @@ function mcpTaskGroupStyle(taskId, label) {
 
 // Grouping is cosmetic: a failure is reported as no group, never as a failed open.
 async function assignMcpTaskGroup(chromeTabId, taskId, owned, label) {
-  const key = typeof taskId === "string" ? taskId : UNTASKED_GROUP_KEY;
   const persistedGroupId = Object.values(owned || {})
-    .find((metadata) => (metadata?.taskId ?? UNTASKED_GROUP_KEY) === key && Number.isInteger(metadata?.mcpGroupId))
+    .find((metadata) => metadata?.taskId === taskId && Number.isInteger(metadata?.mcpGroupId))
     ?.mcpGroupId;
-  const existingGroupId = taskGroups.get(key) ?? persistedGroupId;
+  const existingGroupId = taskGroups.get(taskId) ?? persistedGroupId;
   if (Number.isInteger(existingGroupId)) {
     try {
       const groupId = await chrome.tabs.group({ tabIds: chromeTabId, groupId: existingGroupId });
-      taskGroups.set(key, groupId);
+      taskGroups.set(taskId, groupId);
       return groupId;
     } catch {
-      taskGroups.delete(key);
+      taskGroups.delete(taskId);
     }
   }
   let groupId;
@@ -5360,7 +5361,7 @@ async function assignMcpTaskGroup(chromeTabId, taskId, owned, label) {
   } catch {
     // The tab is grouped even when Chrome refuses the title or color.
   }
-  taskGroups.set(key, groupId);
+  taskGroups.set(taskId, groupId);
   return groupId;
 }
 
@@ -5417,7 +5418,7 @@ async function writeOwnedTabs(owned) {
 }
 
 function toBrowserTab(metadata, tab) {
-  const { mcpGroupId: _mcpGroupId, lockedUrl: _lockedUrl, ...publicMetadata } = metadata;
+  const { mcpGroupId: _mcpGroupId, lockedUrl: _lockedUrl, generatedTaskId: _generatedTaskId, ...publicMetadata } = metadata;
   return {
     ...publicMetadata,
     ...(typeof tab.url === "string" &&

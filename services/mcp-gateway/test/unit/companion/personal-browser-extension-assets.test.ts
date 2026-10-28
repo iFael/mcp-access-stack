@@ -2847,7 +2847,7 @@ describe("personal browser extension assets", () => {
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.11.2");
+    expect(parsedManifest.version).toBe("1.11.3");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3758,7 +3758,7 @@ describe("personal browser extension assets", () => {
         },
       },
     });
-    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext("const taskGroups = new Map();", context);
     vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
 ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
 ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
@@ -3796,7 +3796,7 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
         tabGroups: { update: async () => undefined },
       },
     });
-    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext("const taskGroups = new Map();", context);
     vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
 ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
 ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
@@ -3813,7 +3813,7 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     expect(groupCalls).toEqual([{ tabIds: 52, groupId: 23 }]);
   });
 
-  it("gives each task group its own label and color and keeps untasked tabs plain", () => {
+  it("gives each task group its own label and color", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const context = vm.createContext({ URL });
     vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
@@ -3821,9 +3821,8 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     const mcpTaskGroupStyle = vm.runInContext(
       `(${extractFunction(serviceWorker, "mcpTaskGroupStyle")})`,
       context,
-    ) as (taskId: string | undefined, label?: string) => { title: string; color: string };
+    ) as (taskId: string, label?: string) => { title: string; color: string };
 
-    expect(mcpTaskGroupStyle(undefined, "https://example.com/")).toEqual({ title: "MCP", color: "grey" });
     expect(mcpTaskGroupStyle("task-a", "https://www.example.com/path?q=1").title).toBe("MCP · example.com");
     expect(mcpTaskGroupStyle("task-a", "Conferir pedidos da loja online de roupas").title)
       .toBe("MCP · Conferir pedidos da loj…");
@@ -3834,45 +3833,53 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     expect(colors.has("grey")).toBe(false);
   });
 
-  it("groups tabs opened without a taskId into one shared MCP group", async () => {
+  it("gives a tab opened without a taskId its own task and group", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const groupCalls: Array<Record<string, unknown>> = [];
+    const groupCalls: Array<{ tabId: number; taskId: string }> = [];
+    let owned: Record<string, Record<string, unknown>> = {};
+    let nextTabId = 80;
     const context = vm.createContext({
-      Map,
-      Number,
       Object,
+      crypto: { randomUUID: () => "uuid-" + nextTabId },
       chrome: {
         tabs: {
-          group: async (input: Record<string, unknown>) => {
-            groupCalls.push(input);
-            return typeof input.groupId === "number" ? input.groupId : 31;
-          },
+          create: async ({ url }: { url: string }) => ({ id: nextTabId++, url }),
+          get: async (id: number) => ({ id, url: "https://example.com/", title: "Example" }),
+          update: async () => undefined,
         },
-        tabGroups: { update: async () => undefined },
       },
+      assertPersonalNavigationTarget: (url: string) => url,
+      throwIfAborted: () => undefined,
+      waitForTabComplete: async () => undefined,
+      withOwnershipLock: async <T>(work: () => Promise<T>) => work(),
+      readOwnedTabs: async () => structuredClone(owned),
+      writeOwnedTabs: async (next: typeof owned) => { owned = structuredClone(next); },
+      assignMcpTaskGroup: async (tabId: number, taskId: string) => {
+        groupCalls.push({ tabId, taskId });
+        return 9;
+      },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
     });
-    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
-    vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
-${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
-${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
-    const assignMcpTaskGroup = vm.runInContext(
-      `(${extractFunction(serviceWorker, "assignMcpTaskGroup")})`,
-      context,
-    ) as (tabId: number, taskId: string | undefined, owned: Record<string, unknown>) => Promise<number>;
+    vm.runInContext(`const PERSONAL_PREFIX = "personal:";
+${extractFunction(serviceWorker, "toBrowserTab")}`, context);
+    const open = vm.runInContext(`(${extractFunction(serviceWorker, "open")})`, context) as (
+      input: Record<string, unknown>,
+    ) => Promise<{ tab: Record<string, unknown>; restoredFromCache?: boolean }>;
 
-    await expect(assignMcpTaskGroup(61, undefined, {})).resolves.toBe(31);
-    await expect(assignMcpTaskGroup(62, undefined, {})).resolves.toBe(31);
-    vm.runInContext("taskGroups.clear();", context);
-    // After worker state loss the shared group comes back from untasked metadata only.
-    await expect(assignMcpTaskGroup(63, undefined, {
-      "70": { taskId: "task-a", mcpGroupId: 40 },
-      "61": { mcpGroupId: 31 },
-    })).resolves.toBe(31);
+    const first = await open({ url: "https://example.com/", reusable: true });
+    const second = await open({ url: "https://example.com/" });
+    const named = await open({ url: "https://example.com/", taskId: "task-named" });
+    const restored = await open({ url: "https://example.com/", reusable: true });
 
+    expect(first.tab).toMatchObject({ taskId: "task-uuid-80", lifecycle: "task-scoped" });
+    expect(first.tab).not.toHaveProperty("generatedTaskId");
+    expect(second.tab.taskId).toBe("task-uuid-81");
+    expect(named.tab.taskId).toBe("task-named");
+    expect(restored).toMatchObject({ restoredFromCache: true, tab: { tabId: "personal:80" } });
     expect(groupCalls).toEqual([
-      { tabIds: 61 },
-      { tabIds: 62, groupId: 31 },
-      { tabIds: 63, groupId: 31 },
+      { tabId: 80, taskId: "task-uuid-80" },
+      { tabId: 81, taskId: "task-uuid-81" },
+      { tabId: 82, taskId: "task-named" },
     ]);
   });
 
@@ -3893,7 +3900,7 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
         tabGroups: { update: async () => { throw new Error("Group title refused."); } },
       },
     });
-    vm.runInContext('const taskGroups = new Map(); const UNTASKED_GROUP_KEY = "mcp:untasked";', context);
+    vm.runInContext("const taskGroups = new Map();", context);
     vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
 ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}
 ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
