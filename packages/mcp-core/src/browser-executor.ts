@@ -28,6 +28,9 @@ import type {
   BrowserFinishTaskResult,
   BrowserPlanInput,
   BrowserPlanResult,
+  BrowserUserMessage,
+  BrowserUserMessagesInput,
+  BrowserUserMessagesResult,
   BrowserFrameClickInput,
   BrowserFrameExtractInput,
   BrowserFrameExtractResult,
@@ -120,6 +123,9 @@ export interface BrowserExecutor {
   closeTab(input: BrowserCloseTabInput, context?: OperationContext): Promise<BrowserActionResult>;
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext): Promise<BrowserFinishTaskResult>;
   plan(input: BrowserPlanInput, context?: OperationContext): Promise<BrowserPlanResult>;
+  userMessages?(input: BrowserUserMessagesInput, context?: OperationContext): Promise<BrowserUserMessagesResult>;
+  /** Takes the user's undelivered popup messages for the task a call works on; never waits. */
+  takeUserMessages?(scope: { taskId?: string; tabId?: string }): BrowserUserMessage[];
   download(input: BrowserDownloadInput, context?: OperationContext): Promise<BrowserDownloadResult>;
   upload(input: BrowserUploadInput, context?: OperationContext): Promise<BrowserUploadResult>;
   console(input: BrowserConsoleInput, context?: OperationContext): Promise<BrowserConsoleResult>;

@@ -104,6 +104,7 @@ async function main(): Promise<void> {
       personalBrowser = await PersonalBrowserBridge.start({
         stateRoot: runtime.stateRoot,
         log: writeLog,
+        onUserMessagesPending: (pending) => connector?.announceUserMessages(pending),
       });
     } catch (error) {
       const browserError = asAppError(error);
@@ -167,6 +168,9 @@ async function main(): Promise<void> {
     capabilities,
     ...(runtime.displayName === undefined ? {} : { displayName: runtime.displayName }),
     log: writeLog,
+    ...(personalBrowser === undefined ? {} : {
+      pendingUserMessages: () => personalBrowser?.pendingUserMessages() ?? 0,
+    }),
   });
 
   const controller = new AbortController();

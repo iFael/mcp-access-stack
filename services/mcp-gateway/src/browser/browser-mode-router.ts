@@ -303,6 +303,35 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.requirePersonal().plan(...args);
   }
 
+  async userMessages(
+    ...args: Parameters<NonNullable<BrowserExecutor["userMessages"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["userMessages"]>> {
+    const [input] = args;
+    if (input.taskId && this.taskModes.get(input.taskId) === "managed") {
+      throw new AppError(
+        "BROWSER_OPERATION_MODE_UNSUPPORTED",
+        `Browser task ${input.taskId} runs in managed mode; the user writes to tasks only from personal Chrome.`,
+      );
+    }
+    const personal = this.requirePersonal();
+    if (typeof personal.userMessages !== "function") throw unsupported("browser_user_messages");
+    return personal.userMessages(...args);
+  }
+
+  takeUserMessages(
+    ...args: Parameters<NonNullable<BrowserExecutor["takeUserMessages"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {
+    const [scope] = args;
+    if (!this.personal?.isConnected()) return [];
+    // A managed tab or task is not one the popup knows; such a call is unscoped.
+    const taskId = scope.taskId && this.taskModes.get(scope.taskId) !== "managed" ? scope.taskId : undefined;
+    const tabId = scope.tabId && isPersonalTabId(scope.tabId) ? scope.tabId : undefined;
+    return this.personal.takeUserMessages?.({
+      ...(taskId === undefined ? {} : { taskId }),
+      ...(tabId === undefined ? {} : { tabId }),
+    }) ?? [];
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {

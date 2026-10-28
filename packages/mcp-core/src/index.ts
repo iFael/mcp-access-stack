@@ -17,6 +17,7 @@ export * from "./mcp-operation-context.js";
 export * from "./mcp-repository-tools.js";
 export * from "./mcp-tool-catalog.js";
 export * from "./mcp-tool-publication.js";
+export * from "./mcp-user-messages.js";
 export * from "./mcp-workspace-tools.js";
 export * from "./mutation-receipts.js";
 export * from "./operation-guide.js";

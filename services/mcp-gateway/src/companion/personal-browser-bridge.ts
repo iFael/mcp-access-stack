@@ -45,6 +45,7 @@ import {
   personalRecordingTransportSchema,
 } from "./personal-browser-recording.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
+import { PersonalBrowserTaskInbox } from "./personal-browser-task-inbox.js";
 
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -71,6 +72,8 @@ export interface PersonalBrowserBridgeOptions {
   stateRoot: string;
   port?: number;
   log?: (entry: Record<string, unknown>) => void;
+  /** Called whenever the number of popup messages waiting for the agent changes. */
+  onUserMessagesPending?: (pending: number) => void;
 }
 
 export class PersonalBrowserBridge implements PersonalBrowserExecutor {
@@ -80,6 +83,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly pending = new Map<string, PendingCall>();
   private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
+  private readonly inbox = new PersonalBrowserTaskInbox();
   private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
@@ -635,6 +639,64 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("plan", args[0], args[1]);
   }
 
+  async userMessages(
+    ...args: Parameters<NonNullable<BrowserExecutor["userMessages"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["userMessages"]>> {
+    const [input, context] = args;
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !this.peerInfo) {
+      throw new AppError("BROWSER_WORKER_UNAVAILABLE",
+        "Personal browser mode requires the MCP V3 Chrome extension to be loaded and connected.");
+    }
+    if (!this.peerInfo.capabilities.includes("taskMessagesV1")) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
+        `Personal Chrome extension ${this.peerInfo.extensionVersion ?? "unknown"} must support taskMessagesV1 for popup messages. Reload the updated extension.`);
+    }
+    const scope = input.taskId === undefined ? {} : { taskId: input.taskId };
+    const all = input.taskId === undefined;
+    let asked = false;
+    if (input.question !== undefined && input.taskId !== undefined) {
+      socket.send(JSON.stringify({ type: "task-question", taskId: input.taskId, question: input.question }));
+      asked = true;
+    }
+    let waitMs = input.waitMs ?? 0;
+    const deadlineAt = context?.deadline?.deadlineAt;
+    if (deadlineAt) {
+      const remainingMs = Date.parse(deadlineAt) - Date.now() - 1_000;
+      if (Number.isFinite(remainingMs)) waitMs = Math.min(waitMs, Math.max(0, remainingMs));
+    }
+    await this.inbox.waitFor(scope, all, waitMs, context?.signal);
+    const messages = this.deliverUserMessages(this.inbox.take(scope, all), true);
+    return { messages, ...(asked ? { asked: true } : {}) };
+  }
+
+  takeUserMessages(
+    ...args: Parameters<NonNullable<BrowserExecutor["takeUserMessages"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {
+    // Only the extension that announced taskMessagesV1 sends messages, so an older one simply has none.
+    const [scope] = args;
+    return this.deliverUserMessages(this.inbox.take(scope, scope.taskId === undefined && scope.tabId === undefined), true);
+  }
+
+  // Tells the extension which messages reached the agent, so the popup shows
+  // them as delivered and stops sending them again.
+  pendingUserMessages(): number {
+    return this.inbox.size;
+  }
+
+  private deliverUserMessages<T extends { id: string }>(messages: T[], taken = false): T[] {
+    if (taken && messages.length > 0) this.options.onUserMessagesPending?.(this.inbox.size);
+    const socket = this.socket;
+    if (messages.length > 0 && socket?.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({ type: "task-messages-delivered", ids: messages.map((message) => message.id) }));
+      } catch {
+        // The extension sends them again after a reconnect; the inbox drops repeats.
+      }
+    }
+    return messages;
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
@@ -1135,6 +1197,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     if (message.type === "site-approvals") {
       const approvals = parsePersonalSiteApprovals(message);
       if (approvals) this.actions.setSiteApprovals(approvals);
+      return;
+    }
+    if (message.type === "task-messages") {
+      const { added, alreadyDelivered } = this.inbox.accept(message);
+      this.deliverUserMessages(alreadyDelivered.map((id) => ({ id })));
+      if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
       return;
     }
     if (message.type === "recording-frame") {

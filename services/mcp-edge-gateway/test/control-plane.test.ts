@@ -270,6 +270,40 @@ describe("Edge MCP control plane availability", () => {
     });
   });
 
+  it("finishes every tool call, answered locally, relayed or unavailable, and nothing else", async () => {
+    const execution = new FakeExecutionTransport();
+    const finished: string[] = [];
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest,
+      catalogMetadata,
+      serverIdentity,
+      localTools: {
+        handle: async (body) => (body as { params: { name: string } }).params.name === "get_operation_guide"
+          ? jsonResponse({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "guide" }] } })
+          : null,
+      },
+      finishToolCall: async (body, caller, response, request) => {
+        expect(caller).toEqual(principal);
+        expect(request).toBeInstanceOf(Request);
+        finished.push((body as { params: { name: string } }).params.name);
+        const result = await response.json() as { result?: { content?: unknown[] } };
+        result.result?.content?.push({ type: "text", text: "note" });
+        return jsonResponse(result);
+      },
+    });
+
+    const local = await controlPlane.handle(mcpRequest(jsonRpc(1, "tools/call", { name: "get_operation_guide", arguments: {} })));
+    expect(await local.json()).toMatchObject({ result: { content: [{ text: "guide" }, { text: "note" }] } });
+    await controlPlane.handle(mcpRequest(jsonRpc(2, "tools/call", { name: "read_file", arguments: {} })));
+    execution.ready = true;
+    execution.generation = 1;
+    await controlPlane.handle(mcpRequest(jsonRpc(3, "tools/call", { name: "read_file", arguments: {} })));
+    await controlPlane.handle(mcpRequest(jsonRpc(4, "ping", {})));
+    expect(finished).toEqual(["get_operation_guide", "read_file", "read_file"]);
+  });
+
   it("keeps ping and notifications/initialized local while execution is offline", async () => {
     const execution = new FakeExecutionTransport();
     const controlPlane = createMcpControlPlane({

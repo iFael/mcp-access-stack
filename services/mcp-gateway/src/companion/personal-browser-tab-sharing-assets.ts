@@ -1,7 +1,8 @@
 /**
  * Popup controls for sharing the user's own tabs with MCP V3, handing a tab
  * back after a login or CAPTCHA, task notifications, requiring an approved
- * plan before MCP acts, and approvals per site. Only the user, clicking in the
+ * plan before MCP acts, approvals per site, and messages to a running task.
+ * Only the user, clicking in the
  * extension popup, can do any of this; neither the bridge nor a page can reach
  * these messages.
  */
@@ -22,7 +23,13 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const autoRow = document.getElementById("tab-auto-row");
   const auto = document.getElementById("tab-auto");
   const autoSites = document.getElementById("tab-auto-sites");
-  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto];
+  const question = document.getElementById("task-question");
+  const target = document.getElementById("task-target");
+  const text = document.getElementById("task-text");
+  const send = document.getElementById("task-send");
+  const sendResume = document.getElementById("task-send-resume");
+  const recent = document.getElementById("task-recent");
+  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto, send, sendResume];
   const LABELS = {
     "submit-form": "salvar e confirmar formulários",
     "upload-file": "enviar arquivos",
@@ -34,7 +41,27 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     if (!response || response.ok !== true) throw Error(response?.code || "unavailable");
     return response;
   }
+  function renderInbox(inbox, waiting) {
+    const asked = typeof inbox?.question === "string" ? "O MCP perguntou: " + inbox.question
+      : typeof waiting === "string" ? "O MCP pediu sua verificação: " + waiting : "";
+    question.hidden = !asked;
+    question.textContent = asked;
+    sendResume.hidden = typeof waiting !== "string";
+    target.textContent = typeof waiting === "string"
+      ? "Escreva o que encontrou e clique em Enviar e devolver. O agente recebe sua observação junto com a aba."
+      : typeof inbox?.task === "string"
+      ? "Vai para a tarefa " + inbox.task + ". O agente recebe na próxima ação, sem parar o que está fazendo."
+      : "Nenhuma tarefa do MCP aberta agora. A mensagem vai para a próxima ação do agente.";
+    const messages = Array.isArray(inbox?.recent) ? inbox.recent : [];
+    recent.hidden = messages.length === 0;
+    recent.replaceChildren(...messages.map((message) => {
+      const item = document.createElement("li");
+      item.textContent = (message.delivered ? "Entregue: " : "Aguardando o agente: ") + message.text;
+      return item;
+    }));
+  }
   function render(state) {
+    renderInbox(state.inbox, state.waiting);
     context.checked = state.context === true;
     notify.checked = state.notify === true;
     requirePlan.checked = state.requirePlan === true;
@@ -79,9 +106,11 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     for (const control of controls) control.disabled = true;
     try {
       render(await call(type, extra));
+      return true;
     } catch {
       await refresh();
       status.textContent = "Ação recusada. " + status.textContent;
+      return false;
     } finally {
       for (const control of controls) control.disabled = false;
     }
@@ -93,8 +122,20 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   requirePlan.addEventListener("change", () => void act("mcp-tab-require-plan", { enabled: requirePlan.checked }));
   confirmDrag.addEventListener("change", () => void act("mcp-tab-confirm-drag", { enabled: confirmDrag.checked }));
   resume.addEventListener("click", () => void act("mcp-tab-resume"));
+  async function sendMessage(resume) {
+    if (!text.value.trim()) return;
+    if (await act("mcp-tab-message", { text: text.value, resume })) text.value = "";
+  }
+  send.addEventListener("click", () => void sendMessage(false));
+  // Sending a note and handing the tab back stay separate buttons; this one does both, note first.
+  sendResume.addEventListener("click", () => void sendMessage(true));
+  text.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void sendMessage(false);
+  });
   approve.addEventListener("click", () => void act("mcp-tab-approve"));
   revoke.addEventListener("click", () => void act("mcp-tab-revoke"));
   auto.addEventListener("change", () => void act("mcp-tab-auto", { enabled: auto.checked }));
   void refresh();
+  // Shows when the agent received a message and when it asks something new.
+  setInterval(() => void refresh(), 3000);
 })();`;

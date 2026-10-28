@@ -2264,6 +2264,71 @@ describe("personal browser extension assets", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("keeps the task's Chrome debugger attached across actions and lets it go when idle or released", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    const timers: Array<() => void> = [];
+    const ctx = vm.createContext({
+      Map, String, Buffer,
+      setTimeout: (fn: () => void) => { timers.push(fn); return timers.length; },
+      clearTimeout: () => undefined,
+      chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      base64ByteLength: (data: string) => Buffer.from(data, "base64").length,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        detach: async () => { calls.push("detach"); },
+        sendCommand: async (_target: unknown, method: string) => {
+          calls.push(method);
+          return method === "Page.printToPDF" ? { data: "JVBERi0xLjQK" } : {};
+        },
+      } },
+    });
+    vm.runInContext(`const inFlightRequests = new Map(); const personalTaskDebuggers = new Map();
+const personalViewportSessions = new Map(); const personalDialogArms = new Map();
+const personalNetworkCaptures = new Map(); const personalRecordings = new Map();
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
+globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+      "holdPersonalTaskDebugger", "takeFreshPersonalDebugger", "releasePersonalTaskDebugger", "printPersonalPdf"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const print = vm.runInContext("printPersonalPdf", ctx) as (input: unknown) => Promise<unknown>;
+    const fresh = vm.runInContext("takeFreshPersonalDebugger", ctx) as (target: unknown) => boolean;
+    const release = vm.runInContext("releasePersonalTaskDebugger", ctx) as (tabId: number) => Promise<void>;
+    await print({ tabId: "personal:7" });
+    await print({ tabId: "personal:7" });
+    expect(calls.filter((call) => call === "attach")).toHaveLength(1);
+    expect(calls).not.toContain("detach");
+    expect(fresh({ tabId: 7 })).toBe(true);
+    expect(fresh({ tabId: 7 })).toBe(false);
+
+    // An idle hold waits for calls still running, then detaches.
+    vm.runInContext('inFlightRequests.set("r1", {})', ctx);
+    timers.at(-1)!();
+    expect(calls).not.toContain("detach");
+    vm.runInContext("inFlightRequests.clear()", ctx);
+    timers.at(-1)!();
+    await Promise.resolve();
+    expect(calls.filter((call) => call === "detach")).toHaveLength(1);
+    expect(vm.runInContext("personalTaskDebuggers.size", ctx)).toBe(0);
+
+    // Released while a viewport emulation uses it, the viewport takes it over.
+    await print({ tabId: "personal:7" });
+    expect(calls.filter((call) => call === "attach")).toHaveLength(2);
+    vm.runInContext('personalViewportSessions.set("7", { attached: false, borrowers: 0 })', ctx);
+    await release(7);
+    expect(calls.filter((call) => call === "detach")).toHaveLength(1);
+    expect(vm.runInContext('personalViewportSessions.get("7").attached', ctx)).toBe(true);
+    vm.runInContext('personalViewportSessions.clear()', ctx);
+    await print({ tabId: "personal:7" });
+    await release(7);
+    expect(calls.filter((call) => call === "detach")).toHaveLength(2);
+  });
+
   it("records fresh captures as WebP stills, skips unchanged pages and the user's turn, and ends with the page as it is", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<[string, Record<string, unknown> | undefined]> = [];
@@ -2856,7 +2921,7 @@ describe("personal browser extension assets", () => {
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.12.0");
+    expect(parsedManifest.version).toBe("1.13.1");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -2954,6 +3019,7 @@ describe("personal browser extension assets", () => {
       readOwnedTabs: async () => owned,
       writeOwnedTabs: async () => undefined,
       removeOwnedTab: async (id: number) => { delete owned[String(id)]; },
+      releasePersonalTaskDebugger: async () => undefined,
       assignMcpTaskGroup: async (tabId: number, taskId: string) => {
         sharedGroups.push([tabId, taskId]);
         return 40;
@@ -3012,7 +3078,7 @@ describe("personal browser extension assets", () => {
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
-      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [],
+      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], inbox: expect.objectContaining({ recent: [] }),
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
@@ -3062,19 +3128,27 @@ describe("personal browser extension assets", () => {
     const notifications: Array<[string, string, Record<string, unknown>?]> = [];
     const owned: Record<string, Record<string, unknown>> = { "7": { tabId: "personal:7", ownership: "mcp" } };
     let onTick: (() => Promise<void>) | undefined;
+    // Each popup message pushed to the bridge, and whether the tab was still with the user then.
+    const pushed: Array<{ texts: unknown[]; userHadTab: boolean }> = [];
     const storageArea = (map: Map<string, unknown>) => ({
       get: async (key: string) => ({ [key]: map.get(key) }),
       set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
       remove: async (key: string) => { map.delete(key); },
     });
     const context = vm.createContext({
-      Date, Number, String, Math, Promise, Array, Object,
+      Date, Number, String, Math, Promise, Array, Object, Set,
+      crypto: { randomUUID: () => "00000001-0000-4000-8000-000000000000" },
+      send: (value: { messages: Array<{ text: unknown }> }) => {
+        const handoff = session.get("mcpV3PersonalHandoff:7") as { done?: boolean } | undefined;
+        pushed.push({ texts: value.messages.map((message) => message.text), userHadTab: Boolean(handoff && !handoff.done) });
+      },
       chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
       requireOwnedMetadata: async (id: number) => {
         if (!owned[String(id)]) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_OWNED" });
         return owned[String(id)];
       },
       readOwnedTabs: async () => owned,
+      releasePersonalTaskDebugger: async () => undefined,
       delay: async () => { await onTick?.(); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
@@ -3153,6 +3227,26 @@ describe("personal browser extension assets", () => {
     await expect(waitForUser({ tabId: "personal:7", forUser: "Aprove no celular", timeoutMs: 1 }))
       .resolves.toEqual({ tabId: "personal:7", completed: true });
     expect(session.size).toBe(0);
+
+    // "Enviar e devolver" sends the note while the user still has the tab, then hands it back.
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Login feito", resume: true }))
+      .rejects.toThrow("not-waiting");
+    expect(pushed).toEqual([]);
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Login feito, 2FA pelo SMS", resume: true }))
+      .resolves.not.toHaveProperty("waiting");
+    expect(pushed).toEqual([{ texts: ["Login feito, 2FA pelo SMS"], userHadTab: true }]);
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login", timeoutMs: 1 }))
+      .resolves.toEqual({ tabId: "personal:7", completed: true });
+
+    // A plain message leaves the tab with the user.
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Escolha o plano", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Vou escolher o anual" }))
+      .resolves.toMatchObject({ waiting: "Escolha o plano" });
+    await dispatch({ type: "mcp-tab-resume", tabId: 7 });
+    await waitForUser({ tabId: "personal:7", forUser: "Escolha o plano", timeoutMs: 1 });
 
     // If the user stops sharing instead of handing the tab back, the wait reports it.
     onTick = async () => { delete owned["7"]; session.clear(); };
@@ -3278,6 +3372,7 @@ describe("personal browser extension assets", () => {
         return owned[String(id)];
       },
       readOwnedTabs: async () => owned,
+      releasePersonalTaskDebugger: async () => undefined,
       delay: async () => { await onTick?.(); },
       chrome: {
         runtime: { getURL: (file: string) => "chrome-extension://ext/" + file },
@@ -4345,16 +4440,22 @@ function extractConst(source: string, name: string): string {
   return line;
 }
 
+const TASK_MESSAGE_CONSTANTS = ["PERSONAL_TASK_MESSAGES_KEY", "PERSONAL_TASK_QUESTIONS_KEY",
+  "PERSONAL_TASK_MESSAGE_LIMIT", "PERSONAL_TASK_QUESTION_TTL_MS", "personalTaskMessageQueue"];
+const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMessages", "writePersonalTaskMessages",
+  "readPersonalTaskQuestions", "pushPersonalTaskMessages", "markPersonalTaskMessagesDelivered",
+  "recordPersonalTaskQuestion", "clearPersonalTaskQuestion", "personalTaskMessageTarget", "sendPersonalTaskMessage",
+  "personalTaskInboxStatus"];
 const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
-  "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs"];
+  "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
 const GROUP_SUPPORT_FUNCTIONS = ["readSessionMap", "changeSessionMap", "rememberMcpGroup", "mcpGroupTask",
   "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup", "isPopupShareGroup",
   "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask",
   "readPendingPersonalShare", "answerPersonalShare", "refusePersonalGroupShare", "notifyPersonalShare", "personalDragShareNeedsConfirmation",
   "mcpGroupTitle", "preparePersonalTaskGroup", "takePersonalTaskHome", "closePersonalTaskHomes",
   "personalTaskHomeDispatch", "pausePersonalTask", "resumePersonalTask", "stylePersonalTaskGroups",
-  "refusePausedPersonalTab", "sweepPausedPersonalTasks"];
+  "refusePausedPersonalTab", "sweepPausedPersonalTasks", ...TASK_MESSAGE_FUNCTIONS];
 
 // The task group helpers (sharing by group, the task's first tab, pausing) for a
 // test that runs only part of the service worker.
@@ -4446,6 +4547,7 @@ function groupHarness(serviceWorker: string) {
     clearPersonalTaskApprovals: async () => undefined,
     clearPersonalConsoleHistory: async () => undefined,
     stopPersonalNetworkCapture: async () => undefined,
+    releasePersonalTaskDebugger: async () => undefined,
     clearPersonalPlans: async (taskId?: string) => { clearedPlans.push(taskId); },
     readPersonalPlans: async () => ({}),
     finishTask: async (input: Record<string, unknown>) => { finished.push(input); },
@@ -4482,3 +4584,100 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     regroup: run<(tabId: number, previousGroupId: number, windowId: number) => Promise<void>>("regroupMovedPersonalTab"),
   };
 }
+
+describe("popup messages to a running task", () => {
+  function inboxHarness(owned: Record<string, Record<string, unknown>>) {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>([["mcpV3OwnedTabs", owned]]);
+    const sent: Array<Record<string, unknown>> = [];
+    const notifications: Array<[string, Record<string, unknown>]> = [];
+    const badges: string[] = [];
+    const area = (store: Map<string, unknown>) => ({
+      get: async (key: string) => ({ [key]: structuredClone(store.get(key)) }),
+      set: async (entries: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(entries)) store.set(key, structuredClone(value));
+      },
+    });
+    let ids = 0;
+    const context = vm.createContext({
+      Object, Number, Date, Array, Promise, String, Set,
+      crypto: { randomUUID: () => `0000000${++ids}-0000-4000-8000-000000000000` },
+      chrome: {
+        storage: { session: area(session), local: area(local) },
+        notifications: { create: async (id: string, options: Record<string, unknown>) => { notifications.push([id, options]); } },
+        action: {
+          setBadgeBackgroundColor: async () => undefined,
+          setBadgeText: async ({ text }: { text: string }) => { badges.push(text); },
+        },
+      },
+      send: (value: Record<string, unknown>) => { sent.push(structuredClone(value)); },
+    });
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,";', context);
+    vm.runInContext(extractFunction(serviceWorker, "readOwnedTabs"), context);
+    for (const name of TASK_MESSAGE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
+    for (const name of TASK_MESSAGE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const run = <T>(name: string) => vm.runInContext(name, context) as T;
+    return {
+      sent, notifications, badges, local,
+      send: run<(tabId: number, text: unknown) => Promise<void>>("sendPersonalTaskMessage"),
+      status: run<(tabId: number) => Promise<Record<string, unknown>>>("personalTaskInboxStatus"),
+      delivered: run<(ids: unknown) => Promise<void>>("markPersonalTaskMessagesDelivered"),
+      ask: run<(message: Record<string, unknown>) => Promise<void>>("recordPersonalTaskQuestion"),
+      push: run<() => Promise<void>>("pushPersonalTaskMessages"),
+    };
+  }
+  const owned = {
+    "7": { tabId: "personal:7", taskId: "task-1", ownership: "mcp", purpose: "Testar a barra", lastUsedAt: "2026-10-28T15:00:00.000Z" },
+    "8": { tabId: "personal:8", taskId: "task-1", ownership: "user", lastUsedAt: "2026-10-28T15:00:00.000Z" },
+    "9": { tabId: "personal:9", taskId: "task-2", ownership: "mcp", purpose: "Outra tarefa", lastUsedAt: "2026-10-28T14:00:00.000Z" },
+  };
+
+  it("sends a message for the current tab's task to the bridge and keeps it until it is delivered", async () => {
+    const harness = inboxHarness(owned);
+    await harness.send(9, "  Na outra aba deu erro 500.  ");
+    expect(harness.sent).toEqual([{ type: "task-messages", messages: [{
+      id: "msg_00000001-0000-4000-8000-000000000000", text: "Na outra aba deu erro 500.",
+      sentAt: expect.any(String), taskId: "task-2", tabIds: ["personal:9"],
+    }] }]);
+    await expect(harness.status(9)).resolves.toEqual({ task: "Outra tarefa",
+      recent: [{ text: "Na outra aba deu erro 500.", sentAt: expect.any(String), delivered: false }] });
+
+    // Undelivered messages go out again (after a reconnect) until the bridge acknowledges them.
+    await harness.push();
+    expect(harness.sent).toHaveLength(2);
+    await harness.delivered(["msg_00000001-0000-4000-8000-000000000000"]);
+    await harness.push();
+    expect(harness.sent).toHaveLength(2);
+    await expect(harness.status(9)).resolves.toMatchObject({ recent: [{ delivered: true }] });
+    await expect(harness.send(9, "   ")).rejects.toThrow("empty");
+  });
+
+  it("answers the latest question when the current tab has no task, and clears it", async () => {
+    const harness = inboxHarness(owned);
+    await harness.ask({ taskId: "task-1", question: "A barra piscou?" });
+    expect(harness.notifications).toEqual([[expect.stringMatching(/^mcp-question:/u), expect.objectContaining({
+      title: "O MCP tem uma pergunta", message: expect.stringContaining("A barra piscou?"),
+    })]]);
+    expect(harness.badges).toEqual(["?"]);
+    await expect(harness.status(42)).resolves.toMatchObject({ task: "Testar a barra", question: "A barra piscou?" });
+
+    await harness.send(42, "Não piscou.");
+    expect(harness.sent.at(-1)).toMatchObject({ messages: [{ text: "Não piscou.", taskId: "task-1",
+      tabIds: ["personal:7", "personal:8"] }] });
+    await expect(harness.status(42)).resolves.not.toHaveProperty("question");
+    expect(harness.badges).toEqual(["?", ""]);
+  });
+
+  it("sends to the task MCP used last, or to no task when none is open", async () => {
+    const harness = inboxHarness(owned);
+    await harness.send(42, "Pode seguir.");
+    expect(harness.sent.at(-1)).toMatchObject({ messages: [{ taskId: "task-1" }] });
+    const empty = inboxHarness({});
+    await empty.send(42, "Pode seguir.");
+    expect(empty.sent.at(-1)).toEqual({ type: "task-messages", messages: [{
+      id: expect.any(String), text: "Pode seguir.", sentAt: expect.any(String), tabIds: [],
+    }] });
+    await expect(empty.status(42)).resolves.not.toHaveProperty("task");
+  });
+});

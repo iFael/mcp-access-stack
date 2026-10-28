@@ -423,6 +423,84 @@ describe("CompanionConnector end-to-end", () => {
     ]));
   }, 10_000);
 
+  it.each([
+    ["offers", ["userMessagesV1"], [2, 0]],
+    ["does not offer", undefined, []],
+  ] as const)("announces waiting popup messages only when the Edge %s them", async (_label, features, expected) => {
+    const temporaryRoot = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-messages-")),
+    );
+    temporaryRoots.push(temporaryRoot);
+    const repositories = await LocalRepositoryManager.create({
+      stateDirectory: path.join(temporaryRoot, "state"),
+      managedRoot: path.join(temporaryRoot, "managed"),
+      homeDirectory: temporaryRoot,
+    });
+    let storedCredential: DesktopOAuthRefreshCredential | null = {
+      clientId: "client-messages",
+      scope: "workspaces:read",
+      refreshToken: "refresh-messages",
+    };
+    const oauth = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: {
+        read: async () => storedCredential ? { ...storedCredential } : null,
+        write: async (value) => { storedCredential = { ...value }; },
+        clear: async () => { storedCredential = null; },
+      },
+      fetchImpl: async () => Response.json({
+        access_token: "access-token-messages",
+        refresh_token: "refresh-messages",
+        expires_in: 3600,
+        token_type: "Bearer",
+        scope: "workspaces:read",
+      }),
+      now: () => 1_000,
+    });
+
+    const edgeHttp = createServer();
+    const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/companion" });
+    const edgePort = await listen(edgeHttp);
+    servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
+
+    const announced: number[] = [];
+    let connector!: CompanionConnector;
+    edgeWss.on("connection", (socket) => {
+      socket.send(JSON.stringify({ type: "companion-hello", protocolVersion: COMPANION_PROTOCOL_VERSION }));
+      socket.on("message", (data) => {
+        const message = JSON.parse(data.toString("utf8")) as Record<string, unknown>;
+        if (message.type === "companion-user-messages") announced.push(message.pending as number);
+        if (message.type !== "companion-ready") return;
+        socket.send(JSON.stringify({
+          type: "companion-registered",
+          protocolVersion: COMPANION_PROTOCOL_VERSION,
+          deviceId: DEVICE_ID,
+          ...(features === undefined ? {} : { features }),
+        }));
+        setTimeout(() => {
+          connector.announceUserMessages(0);
+          setTimeout(() => socket.close(4000, "device reconnected"), 20);
+        }, 20);
+      });
+    });
+
+    connector = new CompanionConnector({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      oauth,
+      internalAssertion: INTERNAL_ASSERTION,
+      localBaseUrl: new URL("http://127.0.0.1:1/"),
+      repositories,
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+      webSocketFactory: (_url, options) =>
+        new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options),
+      pendingUserMessages: () => 2,
+    });
+
+    await withTimeout(connector.run(), "messages connector shutdown");
+    expect(announced).toEqual(expected);
+  }, 10_000);
+
   it("reconnects when a registered companion socket stops acknowledging heartbeats", async () => {
     const temporaryRoot = await realpath(
       await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-heartbeat-")),

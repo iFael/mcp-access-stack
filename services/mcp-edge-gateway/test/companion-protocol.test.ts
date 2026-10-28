@@ -69,6 +69,29 @@ describe("MCP V3 companion protocol", () => {
     }))).toBeNull();
   });
 
+  it("negotiates popup message counts only with an Edge that offers them", () => {
+    const registered = (extra: Record<string, unknown>) => parseEdgeToCompanionMessage(JSON.stringify({
+      type: "companion-registered",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      deviceId: "dev_00000000-0000-4000-8000-000000000000",
+      ...extra,
+    }));
+    expect(registered({ features: ["userMessagesV1", "future"] })).toMatchObject({ features: ["userMessagesV1"] });
+    expect(registered({})).not.toHaveProperty("features");
+    expect(parseCompanionToEdgeMessage(JSON.stringify({
+      type: "companion-user-messages",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      pending: 2,
+    }))).toEqual({ type: "companion-user-messages", protocolVersion: COMPANION_PROTOCOL_VERSION, pending: 2 });
+    for (const pending of [-1, 1.5, "2", 1_001]) {
+      expect(parseCompanionToEdgeMessage(JSON.stringify({
+        type: "companion-user-messages",
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+        pending,
+      }))).toBeNull();
+    }
+  });
+
   it("keeps authenticated principals strict on companion execution requests", () => {
     const base = {
       type: "http-request",

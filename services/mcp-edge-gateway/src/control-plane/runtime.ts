@@ -5,6 +5,7 @@ import {
   type EdgeLocalMcpToolHandler,
   type EdgeMcpCatalog,
   type EdgeMcpControlPlane,
+  type EdgeToolCallFinisher,
 } from "./mcp-control-plane.js";
 import {
   createMcpSessionRouter,
@@ -57,6 +58,7 @@ export function createEdgeControlPlaneRuntime(
   execution: EdgeExecutionTransport,
   catalog: EdgeMcpCatalog = EDGE_BUILD_MCP_CATALOG,
   localTools?: EdgeLocalMcpToolHandler,
+  finishToolCall?: EdgeToolCallFinisher,
 ): EdgeControlPlaneRuntime {
   const publicBaseUrl = parsePublicBaseUrl(requireValue(env.MCP_PUBLIC_BASE_URL, "MCP_PUBLIC_BASE_URL"));
 
@@ -80,6 +82,7 @@ export function createEdgeControlPlaneRuntime(
     catalogMetadata: catalog.catalogMetadata,
     serverIdentity: catalog.serverIdentity,
     ...(localTools === undefined ? {} : { localTools }),
+    ...(finishToolCall === undefined ? {} : { finishToolCall }),
     // The instructions point agents at get_operation_guide, so only a catalog
     // that serves that tool may carry them.
     ...(catalog.manifest.some((tool) => tool.name === "get_operation_guide")

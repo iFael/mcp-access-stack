@@ -87,6 +87,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "finishTask",
   "groupSharingV1",
   "pauseTaskV1",
+  "taskMessagesV1",
 ] as const;
 
 export function buildPersonalBrowserExtensionAssets(
@@ -143,7 +144,9 @@ const personalNetworkEntries = new Map();
 const personalNetworkCaptures = new Map();
 const personalDialogArms = new Map();
 const personalViewportSessions = new Map();
+const personalTaskDebuggers = new Map();
 globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
 globalThis.__mcpV3PersonalDialogArms = personalDialogArms;
 function borrowPersonalDebugger(target) {
   const key = String(target.tabId);
@@ -168,10 +171,23 @@ function borrowPersonalDebugger(target) {
   return recording;
 }
 
+// Like Claude's own browser tool, a task keeps Chrome's debugger (and its
+// "started debugging this browser" bar) on its tab from the first action until
+// the task finishes or pauses, the tab leaves the task, the user takes the turn
+// or the tab sits idle; an action only borrows it. Without that hold, which the
+// worker installs, the action attaches and detaches the debugger itself.
 async function attachGuardedDebugger(target) {
   if (borrowPersonalDebugger(target)) return false;
+  const held = globalThis.__mcpV3PersonalTaskDebuggers;
+  const current = held?.get(String(target.tabId));
+  if (current) {
+    current.arm();
+    return false;
+  }
   await chrome.debugger.attach(target, "1.3");
-  return true;
+  if (!held) return true;
+  holdPersonalTaskDebugger(target.tabId);
+  return false;
 }
 
 async function detachGuardedDebugger(target, attached) {
@@ -180,6 +196,7 @@ async function detachGuardedDebugger(target, attached) {
     return;
   }
   const key = String(target.tabId);
+  globalThis.__mcpV3PersonalTaskDebuggers?.get(key)?.arm();
   const viewport = globalThis.__mcpV3PersonalViewportSessions?.get(key);
   if (viewport && viewport.borrowers > 0) {
     viewport.borrowers -= 1;
@@ -207,7 +224,49 @@ async function detachGuardedDebugger(target, attached) {
   if (recording) recording.borrowers = Math.max(0, recording.borrowers - 1);
 }
 
+const PERSONAL_DEBUGGER_IDLE_MS = 10 * 60 * 1000;
 
+function holdPersonalTaskDebugger(chromeTabId) {
+  const key = String(chromeTabId);
+  const held = { fresh: true, timer: undefined, arm: () => undefined };
+  held.arm = () => {
+    clearTimeout(held.timer);
+    held.timer = setTimeout(() => {
+      if (personalTaskDebuggers.get(key) !== held) return;
+      // A call still running may be using it; look again later.
+      if (inFlightRequests.size > 0) held.arm();
+      else void releasePersonalTaskDebugger(chromeTabId);
+    }, PERSONAL_DEBUGGER_IDLE_MS);
+  };
+  personalTaskDebuggers.set(key, held);
+  held.arm();
+}
+
+// True once, for the action that attached the task's debugger: Chrome's
+// debugging bar has just appeared and resized the page.
+function takeFreshPersonalDebugger(target) {
+  const held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(target.tabId));
+  if (!held?.fresh) return false;
+  held.fresh = false;
+  return true;
+}
+
+async function releasePersonalTaskDebugger(chromeTabId) {
+  const key = String(chromeTabId);
+  const held = personalTaskDebuggers.get(key);
+  if (!held) return;
+  personalTaskDebuggers.delete(key);
+  clearTimeout(held.timer);
+  // A viewport, dialog, network capture or recording still on the tab takes the
+  // debugger over and detaches it when it ends.
+  const heir = personalViewportSessions.get(key) ?? personalDialogArms.get(key) ??
+    personalNetworkCaptures.get(key) ?? personalRecordings.get(key);
+  if (heir) {
+    heir.attached = true;
+    return;
+  }
+  await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+}
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
@@ -222,6 +281,7 @@ function connect() {
       capabilities: CAPABILITIES,
     });
     void pushPersonalSiteApprovals();
+    void pushPersonalTaskMessages();
   };
   socket.onmessage = (event) => {
     void handleMessage(event.data);
@@ -265,6 +325,14 @@ async function handleMessage(raw) {
   }
   if (message?.type === "site-approval-request") {
     void recordPersonalApprovalRequest(message).catch(() => undefined);
+    return;
+  }
+  if (message?.type === "task-messages-delivered") {
+    void markPersonalTaskMessagesDelivered(message.ids).catch(() => undefined);
+    return;
+  }
+  if (message?.type === "task-question") {
+    void recordPersonalTaskQuestion(message).catch(() => undefined);
     return;
   }
   if (message?.type === "recording-cancel") {
@@ -497,6 +565,12 @@ async function personalTabSharingDispatch(message) {
     }
   } else if (message.type === "mcp-tab-resume") {
     if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
+  } else if (message.type === "mcp-tab-message") {
+    // "Enviar e devolver": the note goes first, so it reaches the browser_wait that is waiting for the tab.
+    const handoff = message.resume === true ? await readPersonalHandoff(tab.id) : undefined;
+    if (message.resume === true && (!handoff || handoff.done)) throw Error("not-waiting");
+    await sendPersonalTaskMessage(tab.id, message.text);
+    if (message.resume === true) await resumePersonalHandoff(tab.id);
   } else if (message.type === "mcp-tab-approve") {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {
@@ -529,7 +603,8 @@ async function personalTabSharingDispatch(message) {
     shareable, context: await personalTabContextEnabled(), notify, requirePlan: await personalPlanRequired(),
     confirmDrag: await personalDragShareNeedsConfirmation(),
     ...(await readPendingPersonalShare(tab.id) ? { pendingShare: (await readPendingPersonalShare(tab.id)).title } : {}),
-    ...(waiting ? { waiting } : {}), ...(await personalApprovalStatus(tab)) };
+    ...(waiting ? { waiting } : {}), ...(await personalApprovalStatus(tab)),
+    inbox: await personalTaskInboxStatus(tab.id) };
 }
 
 // What the popup shows about approvals for the site of the current tab.
@@ -751,6 +826,8 @@ async function waitForUser(input, signal) {
     return { tabId: input.tabId, completed: true };
   }
   if (!handoff) {
+    // The user's turn runs without MCP's debugger on the tab.
+    await releasePersonalTaskDebugger(chromeTabId);
     handoff = { reason: String(input.forUser).slice(0, 200), startedAt: Date.now() };
     await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: handoff });
     await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#d97706" }))
@@ -807,6 +884,133 @@ async function notifyPersonalTaskFinished(taskId, closed, released) {
       released + " devolvida(s) a você.",
     priority: 0,
   })).catch(() => undefined);
+}
+
+// Messages the user writes in the popup for a running task. They stay here
+// until the bridge says the agent received them, and go out again after every
+// reconnect, so a message is never lost while MCP V3 restarts.
+const PERSONAL_TASK_MESSAGES_KEY = "mcpV3TaskMessages";
+const PERSONAL_TASK_QUESTIONS_KEY = "mcpV3TaskQuestions";
+const PERSONAL_TASK_MESSAGE_LIMIT = 50;
+const PERSONAL_TASK_QUESTION_TTL_MS = 30 * 60 * 1000;
+const personalTaskMessageQueue = { tail: Promise.resolve() };
+
+function withPersonalTaskMessages(work) {
+  const current = personalTaskMessageQueue.tail.then(work);
+  personalTaskMessageQueue.tail = current.then(() => undefined, () => undefined);
+  return current;
+}
+
+async function readPersonalTaskMessages() {
+  const value = await chrome.storage.local.get(PERSONAL_TASK_MESSAGES_KEY).catch(() => ({}));
+  const messages = value?.[PERSONAL_TASK_MESSAGES_KEY];
+  return Array.isArray(messages) ? messages.filter((entry) => typeof entry?.id === "string" && typeof entry.text === "string") : [];
+}
+
+async function writePersonalTaskMessages(messages) {
+  await chrome.storage.local.set({ [PERSONAL_TASK_MESSAGES_KEY]: messages.slice(-PERSONAL_TASK_MESSAGE_LIMIT) });
+}
+
+async function readPersonalTaskQuestions() {
+  const value = await chrome.storage.session.get(PERSONAL_TASK_QUESTIONS_KEY).catch(() => ({}));
+  const questions = value?.[PERSONAL_TASK_QUESTIONS_KEY];
+  if (!questions || typeof questions !== "object" || Array.isArray(questions)) return {};
+  const now = Date.now();
+  return Object.fromEntries(Object.entries(questions).filter(([, entry]) =>
+    typeof entry?.question === "string" && Number.isFinite(entry.askedAt) && now - entry.askedAt < PERSONAL_TASK_QUESTION_TTL_MS));
+}
+
+async function pushPersonalTaskMessages() {
+  const pending = (await readPersonalTaskMessages()).filter((entry) => !entry.deliveredAt);
+  if (pending.length === 0) return;
+  send({ type: "task-messages", messages: pending.map(({ id, text, sentAt, taskId, tabIds }) =>
+    ({ id, text, sentAt, ...(typeof taskId === "string" ? { taskId } : {}), tabIds: Array.isArray(tabIds) ? tabIds : [] })) });
+}
+
+async function markPersonalTaskMessagesDelivered(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  const delivered = new Set(ids.filter((id) => typeof id === "string"));
+  await withPersonalTaskMessages(async () => {
+    const now = new Date().toISOString();
+    const messages = await readPersonalTaskMessages();
+    await writePersonalTaskMessages(messages.map((entry) =>
+      delivered.has(entry.id) && !entry.deliveredAt ? { ...entry, deliveredAt: now } : entry));
+  });
+}
+
+// The agent asks without ending its turn; the popup shows the question until the user answers.
+async function recordPersonalTaskQuestion(message) {
+  if (typeof message.taskId !== "string" || !message.taskId || message.taskId.length > 128 ||
+      typeof message.question !== "string" || !message.question.trim()) return;
+  const question = message.question.trim().slice(0, 500);
+  const questions = await readPersonalTaskQuestions();
+  questions[message.taskId] = { question, askedAt: Date.now() };
+  await chrome.storage.session.set({ [PERSONAL_TASK_QUESTIONS_KEY]: questions });
+  await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ color: "#2563eb" })).catch(() => undefined);
+  await Promise.resolve(chrome.action?.setBadgeText?.({ text: "?" })).catch(() => undefined);
+  await Promise.resolve(chrome.notifications?.create?.("mcp-question:" + Date.now(), {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP tem uma pergunta",
+    message: question + " Responda pelo ícone da extensão MCP V3.", requireInteraction: true, priority: 2,
+  })).catch(() => undefined);
+}
+
+async function clearPersonalTaskQuestion(taskId) {
+  const questions = await readPersonalTaskQuestions();
+  const remaining = taskId === undefined ? {} : { ...questions };
+  if (taskId !== undefined) delete remaining[taskId];
+  if (Object.keys(remaining).length === Object.keys(questions).length) return;
+  await chrome.storage.session.set({ [PERSONAL_TASK_QUESTIONS_KEY]: remaining });
+  if (Object.keys(remaining).length === 0) {
+    await Promise.resolve(chrome.action?.setBadgeText?.({ text: "" })).catch(() => undefined);
+  }
+}
+
+// A popup message goes to the task of the current tab; otherwise to the task
+// that asked the latest open question, or else the task MCP used last.
+async function personalTaskMessageTarget(chromeTabId) {
+  const owned = await readOwnedTabs().catch(() => ({}));
+  const entries = Object.values(owned).filter((entry) => typeof entry?.taskId === "string" && entry.taskId);
+  let taskId = Number.isSafeInteger(chromeTabId) ? owned[String(chromeTabId)]?.taskId : undefined;
+  const questions = await readPersonalTaskQuestions();
+  if (typeof taskId !== "string" || !taskId) {
+    const asked = Object.entries(questions).sort(([, left], [, right]) => right.askedAt - left.askedAt)[0];
+    taskId = asked?.[0];
+  }
+  if (typeof taskId !== "string" || !taskId) {
+    const latest = entries.filter((entry) => entry.ownership === "mcp")
+      .sort((left, right) => String(right.lastUsedAt).localeCompare(String(left.lastUsedAt)))[0];
+    taskId = latest?.taskId;
+  }
+  if (typeof taskId !== "string" || !taskId) return { tabIds: [] };
+  const tabs = entries.filter((entry) => entry.taskId === taskId);
+  const purpose = tabs.find((entry) => entry.ownership === "mcp" && typeof entry.purpose === "string")?.purpose;
+  return { taskId, tabIds: tabs.map((entry) => entry.tabId).filter((tabId) => typeof tabId === "string"),
+    ...(typeof purpose === "string" ? { label: purpose.slice(0, 80) } : {}),
+    ...(questions[taskId] ? { question: questions[taskId].question } : {}) };
+}
+
+async function sendPersonalTaskMessage(chromeTabId, text) {
+  const value = typeof text === "string" ? text.trim().slice(0, 2000) : "";
+  if (!value) throw Error("empty");
+  const target = await personalTaskMessageTarget(chromeTabId);
+  const message = { id: "msg_" + crypto.randomUUID(), text: value, sentAt: new Date().toISOString(),
+    ...(target.taskId ? { taskId: target.taskId } : {}), tabIds: target.tabIds };
+  await withPersonalTaskMessages(async () => {
+    await writePersonalTaskMessages([...(await readPersonalTaskMessages()), message]);
+  });
+  if (target.taskId) await clearPersonalTaskQuestion(target.taskId);
+  await pushPersonalTaskMessages();
+}
+
+// What the popup shows: where a message goes, an open question, and the latest messages.
+async function personalTaskInboxStatus(chromeTabId) {
+  const target = await personalTaskMessageTarget(chromeTabId);
+  const recent = (await readPersonalTaskMessages())
+    .filter((entry) => !target.taskId || entry.taskId === target.taskId || entry.taskId === undefined)
+    .slice(-5)
+    .map((entry) => ({ text: entry.text, sentAt: entry.sentAt, delivered: typeof entry.deliveredAt === "string" }));
+  return { ...(target.taskId ? { task: target.label ?? target.taskId } : {}),
+    ...(target.question ? { question: target.question } : {}), recent };
 }
 
 const PERSONAL_PLANS_KEY = "mcpV3PersonalPlans";
@@ -1907,7 +2111,7 @@ async function drag(input, signal) {
     // A fresh attach shows Chrome's debugging infobar, which resizes the page
     // and cancels a press already in progress; start once the viewport settles
     // and measure the endpoints again in case the layout moved.
-    if (attached) {
+    if (attached || takeFreshPersonalDebugger(target)) {
       await settlePersonalViewport(target, signal);
       if (!input.from.ref?.startsWith("ax-")) from = await resolve(input.from, input.fromGuard);
       if (!input.to.ref?.startsWith("ax-")) to = await resolve(input.to, input.toGuard);
@@ -1955,7 +2159,8 @@ async function drag(input, signal) {
     if (intercepting) {
       await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined);
     }
-    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId))) {
+    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId)) ||
+        globalThis.__mcpV3PersonalTaskDebuggers?.has(String(target.tabId))) {
       if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
         button: "left", buttons: 0,
@@ -3720,7 +3925,7 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
       // input would land on stale coordinates.
       attached = await attachGuardedDebugger(debuggee);
       holding = true;
-      if (attached) await settlePersonalViewport(debuggee, signal);
+      if (attached || takeFreshPersonalDebugger(debuggee)) await settlePersonalViewport(debuggee, signal);
     } catch (error) {
       if (error?.code) throw error;
       throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
@@ -4265,6 +4470,12 @@ async function collectPersonalConsole(chromeTabId, history, signal) {
     personalConsoleEntries.set(String(chromeTabId), history);
   } finally {
     chrome.debugger.onEvent.removeListener(listener);
+    // A debugger that stays attached replays the page's console on the next
+    // enable only after a disable.
+    if (!attached) {
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Runtime.disable").catch(() => undefined);
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Log.disable").catch(() => undefined);
+    }
     await detachGuardedDebugger({ tabId: chromeTabId }, attached).catch(() => undefined);
   }
 }
@@ -4432,6 +4643,9 @@ async function stopPersonalNetworkCapture(chromeTabId) {
   chrome.debugger.onEvent.removeListener(state.listener);
   await Promise.allSettled([...state.pending]);
   personalNetworkEntries.set(key, { entries: state.entries, truncated: state.truncated });
+  if (state.attached !== true) {
+    await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Network.disable").catch(() => undefined);
+  }
   await detachGuardedDebugger({ tabId: chromeTabId }, state.attached === true).catch(() => undefined);
 }
 
@@ -5326,6 +5540,7 @@ async function finishTask(input) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
     await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
+    await releasePersonalTaskDebugger(target.chromeTabId);
     if (!target.shared) await clearPersonalHandoff(target.chromeTabId);
   }
   if (input.pause === true) return pausePersonalTask(input.taskId, targets);
@@ -5343,6 +5558,7 @@ async function finishTask(input) {
     for (const target of targets) await clearPersonalHandoff(target.chromeTabId);
     for (const target of targets) if (target.shared) await setPersonalSharedBadge(target.chromeTabId, false);
     await notifyPersonalTaskFinished(input.taskId, 0, targets.length);
+    await clearPersonalTaskQuestion(input.taskId).catch(() => undefined);
     await clearPersonalPlans(input.taskId);
     await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
     await withOwnershipLock(async () => {
@@ -5387,6 +5603,7 @@ async function finishTask(input) {
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
   else taskGroups.clear();
   await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
+  await clearPersonalTaskQuestion(input.taskId).catch(() => undefined);
   await clearPersonalPlans(input.taskId);
   await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
   return {
@@ -5852,6 +6069,7 @@ async function removeOwnedTab(chromeTabId) {
   await clearPersonalConsoleHistory(String(chromeTabId));
   await stopPersonalNetworkCapture(chromeTabId);
   personalNetworkEntries.delete(String(chromeTabId));
+  await releasePersonalTaskDebugger(chromeTabId);
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     if (!owned[String(chromeTabId)]) return;
@@ -6423,6 +6641,10 @@ chrome.notifications?.onClicked?.addListener((id) => {
     }).catch(() => undefined);
     return;
   }
+  if (id.startsWith("mcp-question:")) {
+    void Promise.resolve(chrome.action?.openPopup?.()).catch(() => undefined);
+    return;
+  }
   const match = /^mcp-(?:handoff|approval|share):(\\d+)$/u.exec(id);
   if (!match) return;
   void chrome.tabs.update(Number(match[1]), { active: true })
@@ -6431,6 +6653,11 @@ chrome.notifications?.onClicked?.addListener((id) => {
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
+  const held = personalTaskDebuggers.get(key);
+  if (held) {
+    clearTimeout(held.timer);
+    personalTaskDebuggers.delete(key);
+  }
   personalViewportSessions.delete(key);
   const recording = personalRecordings.get(key);
   if (recording) endPersonalRecording(recording, true);
