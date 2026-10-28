@@ -68,6 +68,15 @@ export interface BackgroundTaskManagerOptions {
   now?: () => Date;
   terminalRetentionMs?: number;
   maxRetainedTerminalTasks?: number;
+  /** Called once a task's own process ends (not when it is cancelled). */
+  onTaskFinished?: (event: BackgroundTaskFinishedEvent) => void;
+}
+
+export interface BackgroundTaskFinishedEvent {
+  taskId: string;
+  workspaceId: string;
+  state: "succeeded" | "failed";
+  exitCode?: number;
 }
 
 export interface BackgroundTaskAccessContext {
@@ -472,12 +481,13 @@ export class BackgroundTaskManager {
       };
       await this.persistResult(current.id, result);
       await this.persist(current);
+      this.announceFinished(current);
     } catch (error) {
       await this.sanitizeTaskLogs(current.id);
       const latest = await this.readPersistedRecord(current.id);
       if (latest?.state === "cancelled") return;
       const completedAt = this.now();
-      await this.persist({
+      const failed: PersistedBackgroundTaskRecord = {
         ...current,
         state: "failed",
         completedAt: completedAt.toISOString(),
@@ -497,10 +507,28 @@ export class BackgroundTaskManager {
                 },
                 completedAt.getTime(),
               ),
-      });
+      };
+      await this.persist(failed);
+      this.announceFinished(failed);
     } finally {
       this.controllers.delete(current.id);
       this.stdinControls.delete(current.id);
+    }
+  }
+
+  private announceFinished(record: PersistedBackgroundTaskRecord): void {
+    if (record.state !== "succeeded" && record.state !== "failed") return;
+    try {
+      this.options.onTaskFinished?.({
+        taskId: record.id,
+        workspaceId: record.workspaceId,
+        state: record.state,
+        ...(record.result?.exitCode === undefined || record.result.exitCode === null
+          ? {}
+          : { exitCode: record.result.exitCode }),
+      });
+    } catch {
+      // A listener never changes the task's outcome.
     }
   }
 

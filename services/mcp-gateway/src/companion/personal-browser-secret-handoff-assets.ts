@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.13.1";
+export const HANDOFF_EXTENSION_VERSION = "1.14.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -46,6 +46,10 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <button id="task-send" type="button">Enviar para a tarefa</button>
 <button id="task-send-resume" type="button" hidden>Enviar e devolver a aba</button>
 <ul id="task-recent" hidden></ul>
+<hr>
+<h1>MCP V3 · Acordar o ChatGPT</h1>
+<label><input id="wake-enabled" type="checkbox"> Deixar o MCP acordar o ChatGPT quando a conversa estiver parada</label>
+<p id="wake-status" role="status" aria-live="polite"></p>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>

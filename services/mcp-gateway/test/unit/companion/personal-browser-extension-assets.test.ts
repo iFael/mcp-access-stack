@@ -2921,7 +2921,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.13.1");
+    expect(parsedManifest.version).toBe("1.14.0");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3079,6 +3079,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
       confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], inbox: expect.objectContaining({ recent: [] }),
+      wake: { enabled: true, waiting: 0, recent: [] },
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
@@ -3164,7 +3165,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
         },
       },
     });
-    vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
+    vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; const PERSONAL_PREFIX = "personal:"; ' +
       'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,AA=="; ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const BLOCKED_PRIVATE_ORIGINS = new Set(); ' +
       'const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; ' +
@@ -4440,12 +4441,17 @@ function extractConst(source: string, name: string): string {
   return line;
 }
 
+const WAKE_CONSTANTS = ["PERSONAL_WAKE_KEY", "PERSONAL_WAKE_URLS", "PERSONAL_WAKE_HOSTS", "PERSONAL_WAKE_SPACING_MS",
+  "PERSONAL_WAKE_RETRY_MS", "PERSONAL_WAKE_EVENT_TTL_MS", "PERSONAL_WAKE_ALARM", "personalWakeQueue"];
+const WAKE_FUNCTIONS = ["withPersonalWake", "readPersonalWake", "writePersonalWake", "isPersonalWakeUrl",
+  "personalWakeTargetTab", "setPersonalWakeEnabled", "queuePersonalWake", "schedulePersonalWake",
+  "personalWakeEventsStillOpen", "personalWakeText", "personalWakeInspect", "runPersonalWake", "personalWakeStatus"];
 const TASK_MESSAGE_CONSTANTS = ["PERSONAL_TASK_MESSAGES_KEY", "PERSONAL_TASK_QUESTIONS_KEY",
-  "PERSONAL_TASK_MESSAGE_LIMIT", "PERSONAL_TASK_QUESTION_TTL_MS", "personalTaskMessageQueue"];
+  "PERSONAL_TASK_MESSAGE_LIMIT", "PERSONAL_TASK_QUESTION_TTL_MS", "personalTaskMessageQueue", ...WAKE_CONSTANTS];
 const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMessages", "writePersonalTaskMessages",
   "readPersonalTaskQuestions", "pushPersonalTaskMessages", "markPersonalTaskMessagesDelivered",
   "recordPersonalTaskQuestion", "clearPersonalTaskQuestion", "personalTaskMessageTarget", "sendPersonalTaskMessage",
-  "personalTaskInboxStatus"];
+  "personalTaskInboxStatus", ...WAKE_FUNCTIONS];
 const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
   "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
@@ -4679,5 +4685,135 @@ describe("popup messages to a running task", () => {
       id: expect.any(String), text: "Pode seguir.", sentAt: expect.any(String), tabIds: [],
     }] });
     await expect(empty.status(42)).resolves.not.toHaveProperty("task");
+  });
+});
+
+describe("waking the ChatGPT conversation", () => {
+  function wakeHarness(inspect: (args: unknown[]) => { state: string }) {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>([["mcpV3OwnedTabs", { "4": { tabId: "personal:4", ownership: "user" } }]]);
+    const typed: unknown[][] = [];
+    const alarms: Array<{ name: string; when: number }> = [];
+    const notifications: Array<Record<string, unknown>> = [];
+    const area = (store: Map<string, unknown>) => ({
+      get: async (key: string) => ({ [key]: structuredClone(store.get(key)) }),
+      set: async (entries: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(entries)) store.set(key, structuredClone(value));
+      },
+    });
+    const context = vm.createContext({
+      Object, Number, Date, Array, Promise, String, Set, URL, Boolean, Math,
+      crypto: { randomUUID: () => "00000001-0000-4000-8000-000000000000" },
+      send: () => undefined,
+      chrome: {
+        storage: { session: area(session), local: area(local) },
+        tabs: {
+          // The user used tab 3 last; tab 4 is shared with MCP, tab 5 is another site.
+          query: async ({ url }: { url: string[] }) => [
+            { id: 2, url: "https://chatgpt.com/c/old", lastAccessed: 100 },
+            { id: 3, url: "https://chatgpt.com/c/abc", lastAccessed: 300 },
+            { id: 4, url: "https://chatgpt.com/c/shared", lastAccessed: 400 },
+            { id: 5, url: "https://example.com/", lastAccessed: 500 },
+          ].filter((tab) => url.some((pattern) => tab.url.startsWith(pattern.slice(0, -1)))),
+        },
+        scripting: {
+          executeScript: async ({ target, args }: { target: { tabId: number }; args: unknown[] }) => {
+            typed.push([target.tabId, ...args]);
+            return [{ result: inspect(args) }];
+          },
+        },
+        alarms: { create: (name: string, info: { when: number }) => { alarms.push({ name, when: info.when }); } },
+        notifications: { create: async (_id: string, options: Record<string, unknown>) => { notifications.push(options); } },
+        action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined },
+      },
+    });
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,"; ' +
+      'const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:";', context);
+    for (const name of ["readOwnedTabs", "readPersonalHandoff"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    for (const name of TASK_MESSAGE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
+    for (const name of TASK_MESSAGE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const run = <T>(name: string) => vm.runInContext(name, context) as T;
+    const settle = async () => {
+      for (let i = 0; i < 20; i += 1) await run<() => Promise<void>>("(() => personalWakeQueue.tail)")();
+    };
+    return {
+      typed, alarms, notifications, local, session, settle,
+      queue: run<(event: Record<string, unknown>) => Promise<void>>("queuePersonalWake"),
+      runWake: run<() => Promise<void>>("runPersonalWake"),
+      sendMessage: run<(tabId: number, text: string) => Promise<void>>("sendPersonalTaskMessage"),
+      delivered: run<(ids: string[]) => Promise<void>>("markPersonalTaskMessagesDelivered"),
+      enable: run<(enabled: unknown) => Promise<void>>("setPersonalWakeEnabled"),
+      status: run<() => Promise<Record<string, unknown>>>("personalWakeStatus"),
+      state: () => local.get("mcpV3ChatWake") as Record<string, unknown> & { pending: unknown[] },
+    };
+  }
+
+  it("sends a fixed notice to the ChatGPT tab used last when a popup message arrives and the agent is idle", async () => {
+    const harness = wakeHarness(() => ({ state: "sent" }));
+    await harness.sendMessage(9, "Pode seguir com a versão B");
+    await harness.settle();
+    expect(harness.typed).toHaveLength(1);
+    const [tabId, text] = harness.typed[0] as [number, string];
+    expect(tabId).toBe(3);
+    expect(text).toBe("[MCP V3, aviso automático da extensão, não escrito pelo usuário]\n" +
+      "- O usuário escreveu no popup do MCP V3. Chame browser_user_messages para ler.\n" +
+      "Continue a tarefa de onde parou.");
+    // The user's own words stay in the inbox: the agent reads them through MCP.
+    expect(text).not.toContain("versão B");
+    expect(harness.state().pending).toEqual([]);
+    expect(harness.notifications).toEqual([expect.objectContaining({ title: "O MCP acordou o ChatGPT" })]);
+    await expect(harness.status()).resolves.toEqual({ enabled: true, waiting: 0,
+      recent: [{ at: expect.any(Number), kinds: ["message"] }] });
+  });
+
+  it("waits while ChatGPT answers and drops the notice once the agent took the message itself", async () => {
+    let answer = "busy";
+    const harness = wakeHarness(() => ({ state: answer }));
+    await harness.sendMessage(9, "Achei um erro na tela");
+    await harness.settle();
+    expect(harness.typed).toHaveLength(1);
+    expect(harness.state().pending).toHaveLength(1);
+    expect(harness.alarms).toEqual([{ name: "mcp-chat-wake", when: expect.any(Number) }]);
+
+    // The agent's next tool call delivered the message: nothing is typed afterwards.
+    const id = (harness.local.get("mcpV3TaskMessages") as Array<{ id: string }>)[0]!.id;
+    await harness.delivered([id]);
+    answer = "sent";
+    await harness.runWake();
+    expect(harness.typed).toHaveLength(1);
+    expect(harness.state().pending).toEqual([]);
+  });
+
+  it("tells the agent which background task ended and which tab came back, and waits while the user types", async () => {
+    let answer = "typing";
+    const harness = wakeHarness(() => ({ state: answer }));
+    harness.session.set("mcpV3PersonalHandoff:7", { reason: "Faça login", startedAt: 1, done: true });
+    await harness.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 2 });
+    await harness.queue({ kind: "handback", chromeTabId: 7, tabId: "personal:7", reason: "Faça login" });
+    await harness.settle();
+    expect(harness.state().pending).toHaveLength(2);
+    answer = "sent";
+    await harness.runWake();
+    const text = harness.typed.at(-1)?.[1];
+    expect(text).toContain("- O usuário devolveu a aba personal:7 (Faça login). Chame browser_wait com forUser nessa aba");
+    expect(text).toContain("- A tarefa em segundo plano 0f8fad5b-d9cb-469f-a165-70867728950e terminou: failed, código 2.");
+    expect(harness.state().pending).toEqual([]);
+  });
+
+  it("does nothing when the user turned it off, and keeps the notice when no ChatGPT tab answers", async () => {
+    const off = wakeHarness(() => ({ state: "sent" }));
+    await off.enable(false);
+    await off.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "succeeded", exitCode: 0 });
+    await off.settle();
+    expect(off.typed).toEqual([]);
+    await expect(off.status()).resolves.toMatchObject({ enabled: false, waiting: 0 });
+
+    const broken = wakeHarness(() => ({ state: "no-composer" }));
+    await broken.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "succeeded", exitCode: 0 });
+    await broken.settle();
+    await expect(broken.status()).resolves.toMatchObject({ enabled: true, waiting: 1,
+      lastError: "Não encontrei o campo ou o botão de enviar do ChatGPT." });
+    expect(broken.alarms.at(-1)?.name).toBe("mcp-chat-wake");
   });
 });

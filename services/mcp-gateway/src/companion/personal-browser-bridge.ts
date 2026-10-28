@@ -697,6 +697,26 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return messages;
   }
 
+  /**
+   * A background task of this companion ended. The extension wakes the ChatGPT
+   * conversation with it if the agent is not answering; while the agent works,
+   * nothing is typed. Lost when the extension is not connected.
+   */
+  announceBackgroundTaskFinished(event: {
+    taskId: string;
+    state: "succeeded" | "failed";
+    exitCode?: number;
+  }): void {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV1")) return;
+    try {
+      socket.send(JSON.stringify({ type: "wake-event", kind: "task", taskId: event.taskId, state: event.state,
+        ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }));
+    } catch {
+      // A missed notice only means the agent sees the result on its next look.
+    }
+  }
+
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {

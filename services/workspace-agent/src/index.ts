@@ -11,6 +11,7 @@ export { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchManagerOpti
 export {
   BackgroundTaskManager,
   BACKGROUND_TASK_STATES,
+  type BackgroundTaskFinishedEvent,
   type BackgroundTaskManagerOptions,
   type BackgroundTaskRecord,
   type BackgroundTaskRunner,

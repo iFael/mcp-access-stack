@@ -1611,6 +1611,35 @@ describe("PersonalBrowserBridge popup messages", () => {
       await bridge.close();
     }
   });
+
+  it("tells an extension with chatWakeV1 that a background task ended, and nothing to an older one", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
+    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
+    const older = await connectExtension(port, token,
+      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "chatWakeV1"), "1.13.1");
+    const seen: string[] = [];
+    older.on("message", (raw) => seen.push(JSON.parse(String(raw)).type));
+    bridge.announceBackgroundTaskFinished({ taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seen).not.toContain("wake-event");
+    older.close();
+    await waitUntil(() => !bridge.isConnected());
+
+    const extension = await connectExtension(port, token);
+    try {
+      const wake = nextWireMessage(extension, (wire) => wire.type === "wake-event");
+      bridge.announceBackgroundTaskFinished({ taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
+      await expect(wake).resolves.toEqual({ type: "wake-event", kind: "task",
+        taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
+    } finally {
+      extension.close();
+      await bridge.close();
+    }
+  });
 });
 
 async function waitUntil(condition: () => boolean, timeoutMs = 2_000): Promise<void> {

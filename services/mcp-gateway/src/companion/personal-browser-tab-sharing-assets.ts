@@ -1,7 +1,8 @@
 /**
  * Popup controls for sharing the user's own tabs with MCP V3, handing a tab
  * back after a login or CAPTCHA, task notifications, requiring an approved
- * plan before MCP acts, approvals per site, and messages to a running task.
+ * plan before MCP acts, approvals per site, messages to a running task, and
+ * whether MCP may wake the ChatGPT conversation.
  * Only the user, clicking in the
  * extension popup, can do any of this; neither the bridge nor a page can reach
  * these messages.
@@ -29,7 +30,9 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const send = document.getElementById("task-send");
   const sendResume = document.getElementById("task-send-resume");
   const recent = document.getElementById("task-recent");
-  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto, send, sendResume];
+  const wakeEnabled = document.getElementById("wake-enabled");
+  const wakeStatus = document.getElementById("wake-status");
+  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto, send, sendResume, wakeEnabled];
   const LABELS = {
     "submit-form": "salvar e confirmar formulários",
     "upload-file": "enviar arquivos",
@@ -60,7 +63,18 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
       return item;
     }));
   }
+  function renderWake(state) {
+    wakeEnabled.checked = state?.enabled === true;
+    const last = Array.isArray(state?.recent) ? state.recent.at(-1) : undefined;
+    wakeStatus.textContent = state?.enabled !== true
+      ? "Desligado. O agente só volta a trabalhar quando você escrever no ChatGPT."
+      : (typeof state.lastError === "string" ? state.lastError + " "
+        : state.waiting > 0 ? "Aviso esperando o ChatGPT terminar de responder. " : "") +
+        "Vai para a aba do ChatGPT que você usou por último." +
+        (last ? " Último aviso às " + new Date(last.at).toLocaleTimeString("pt-BR") + "." : "");
+  }
   function render(state) {
+    renderWake(state.wake);
     renderInbox(state.inbox, state.waiting);
     context.checked = state.context === true;
     notify.checked = state.notify === true;
@@ -132,6 +146,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   text.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void sendMessage(false);
   });
+  wakeEnabled.addEventListener("change", () => void act("mcp-tab-wake", { enabled: wakeEnabled.checked }));
   approve.addEventListener("click", () => void act("mcp-tab-approve"));
   revoke.addEventListener("click", () => void act("mcp-tab-revoke"));
   auto.addEventListener("change", () => void act("mcp-tab-auto", { enabled: auto.checked }));
