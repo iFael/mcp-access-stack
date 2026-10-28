@@ -70,8 +70,9 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
       ? "Desligado. O agente só volta a trabalhar quando você escrever no ChatGPT."
       : (typeof state.lastError === "string" ? state.lastError + " "
         : state.waiting > 0 ? "Aviso esperando o ChatGPT terminar de responder. " : "") +
-        "Vai para a aba do ChatGPT que você usou por último." +
-        (last ? " Último aviso às " + new Date(last.at).toLocaleTimeString("pt-BR") + "." : "");
+        "Vai para o app do ChatGPT no Windows ou, sem ele, para a aba do ChatGPT usada por último." +
+        (last ? " Último aviso às " + new Date(last.at).toLocaleTimeString("pt-BR") +
+          (last.target === "app" ? ", no app." : last.target === "chrome" ? ", na aba do Chrome." : ".") : "");
   }
   function render(state) {
     renderWake(state.wake);

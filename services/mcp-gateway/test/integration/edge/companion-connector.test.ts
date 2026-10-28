@@ -479,7 +479,13 @@ describe("CompanionConnector end-to-end", () => {
         }));
         setTimeout(() => {
           connector.announceUserMessages(0);
-          setTimeout(() => socket.close(4000, "device reconnected"), 20);
+          // Close once what is expected has arrived, or soon after when nothing is expected.
+          const closeAt = Date.now() + 500;
+          const closeWhenDone = () => {
+            if (announced.length >= expected.length || Date.now() > closeAt) socket.close(4000, "device reconnected");
+            else setTimeout(closeWhenDone, 10);
+          };
+          setTimeout(closeWhenDone, 20);
         }, 20);
       });
     });

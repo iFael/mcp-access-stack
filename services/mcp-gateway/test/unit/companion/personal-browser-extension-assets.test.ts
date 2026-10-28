@@ -2921,7 +2921,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.15.0");
+    expect(parsedManifest.version).toBe("1.16.0");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3131,6 +3131,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     let onTick: (() => Promise<void>) | undefined;
     // Each popup message pushed to the bridge, and whether the tab was still with the user then.
     const pushed: Array<{ texts: unknown[]; userHadTab: boolean }> = [];
+    const wakes: unknown[] = [];
     const storageArea = (map: Map<string, unknown>) => ({
       get: async (key: string) => ({ [key]: map.get(key) }),
       set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
@@ -3139,9 +3140,13 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     const context = vm.createContext({
       Date, Number, String, Math, Promise, Array, Object, Set,
       crypto: { randomUUID: () => "00000001-0000-4000-8000-000000000000" },
-      send: (value: { messages: Array<{ text: unknown }> }) => {
+      send: (value: { type: string; messages?: Array<{ text: unknown }> }) => {
+        if (value.type === "wake-event") {
+          wakes.push(value);
+          return;
+        }
         const handoff = session.get("mcpV3PersonalHandoff:7") as { done?: boolean } | undefined;
-        pushed.push({ texts: value.messages.map((message) => message.text), userHadTab: Boolean(handoff && !handoff.done) });
+        pushed.push({ texts: value.messages!.map((message) => message.text), userHadTab: Boolean(handoff && !handoff.done) });
       },
       chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
       requireOwnedMetadata: async (id: number) => {
@@ -3212,6 +3217,8 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     expect(notifications.filter(([kind]) => kind === "create")).toHaveLength(1);
     expect(notifications.at(-1)).toEqual(["clear", "mcp-handoff:7"]);
     expect(badges.at(-1)).toBe("");
+    // The companion may wake the conversation with the tab that came back.
+    expect(wakes).toEqual([{ type: "wake-event", kind: "handback", tabId: "personal:7", reason: "Faça login no banco" }]);
     await expect(refuse("snapshot", { tabId: "personal:7" })).resolves.toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-resume", tabId: 7 })).rejects.toThrow("not-waiting");
 
@@ -4441,11 +4448,10 @@ function extractConst(source: string, name: string): string {
   return line;
 }
 
-const WAKE_CONSTANTS = ["PERSONAL_WAKE_KEY", "PERSONAL_WAKE_URLS", "PERSONAL_WAKE_HOSTS", "PERSONAL_WAKE_SPACING_MS",
-  "PERSONAL_WAKE_RETRY_MS", "PERSONAL_WAKE_EVENT_TTL_MS", "PERSONAL_WAKE_ALARM", "personalWakeQueue"];
-const WAKE_FUNCTIONS = ["withPersonalWake", "readPersonalWake", "writePersonalWake", "isPersonalWakeUrl",
-  "personalWakeTargetTab", "setPersonalWakeEnabled", "queuePersonalWake", "schedulePersonalWake",
-  "personalWakeEventsStillOpen", "personalWakeText", "personalWakeInspect", "runPersonalWake", "personalWakeStatus"];
+const WAKE_CONSTANTS = ["PERSONAL_WAKE_KEY", "PERSONAL_WAKE_URLS", "PERSONAL_WAKE_HOSTS"];
+const WAKE_FUNCTIONS = ["readPersonalWake", "isPersonalWakeUrl", "personalWakeTargetTab", "setPersonalWakeEnabled",
+  "sendPersonalWakeSettings", "pushPersonalWakeSettings", "recordPersonalWakeStatus", "personalWakeInspect",
+  "wakePersonalChatTab", "personalWakeStatus"];
 const TASK_MESSAGE_CONSTANTS = ["PERSONAL_TASK_MESSAGES_KEY", "PERSONAL_TASK_QUESTIONS_KEY",
   "PERSONAL_TASK_MESSAGE_LIMIT", "PERSONAL_TASK_QUESTION_TTL_MS", "personalTaskMessageQueue", ...WAKE_CONSTANTS];
 const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMessages", "writePersonalTaskMessages",
@@ -4706,14 +4712,12 @@ describe("popup messages to a running task", () => {
   });
 });
 
-describe("waking the ChatGPT conversation", () => {
+describe("writing the wake notice in a ChatGPT tab", () => {
   function wakeHarness(inspect: (args: unknown[]) => { state: string }) {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const session = new Map<string, unknown>();
     const local = new Map<string, unknown>([["mcpV3OwnedTabs", { "4": { tabId: "personal:4", ownership: "user" } }]]);
     const typed: unknown[][] = [];
-    const alarms: Array<{ name: string; when: number }> = [];
-    const notifications: Array<Record<string, unknown>> = [];
+    const sent: Array<Record<string, unknown>> = [];
     const area = (store: Map<string, unknown>) => ({
       get: async (key: string) => ({ [key]: structuredClone(store.get(key)) }),
       set: async (entries: Record<string, unknown>) => {
@@ -4722,10 +4726,9 @@ describe("waking the ChatGPT conversation", () => {
     });
     const context = vm.createContext({
       Object, Number, Date, Array, Promise, String, Set, URL, Boolean, Math,
-      crypto: { randomUUID: () => "00000001-0000-4000-8000-000000000000" },
-      send: () => undefined,
+      send: (value: Record<string, unknown>) => { sent.push(structuredClone(value)); },
       chrome: {
-        storage: { session: area(session), local: area(local) },
+        storage: { session: area(new Map()), local: area(local) },
         tabs: {
           // The user used tab 3 last; tab 4 is shared with MCP, tab 5 is another site.
           query: async ({ url }: { url: string[] }) => [
@@ -4741,97 +4744,51 @@ describe("waking the ChatGPT conversation", () => {
             return [{ result: inspect(args) }];
           },
         },
-        alarms: { create: (name: string, info: { when: number }) => { alarms.push({ name, when: info.when }); } },
-        notifications: { create: async (_id: string, options: Record<string, unknown>) => { notifications.push(options); } },
-        action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined },
       },
     });
-    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,"; ' +
-      'const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:";', context);
-    for (const name of ["readOwnedTabs", "readPersonalHandoff"]) vm.runInContext(extractFunction(serviceWorker, name), context);
-    for (const name of TASK_MESSAGE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
-    for (const name of TASK_MESSAGE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs";', context);
+    vm.runInContext(extractFunction(serviceWorker, "readOwnedTabs"), context);
+    for (const name of WAKE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
+    for (const name of WAKE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
     const run = <T>(name: string) => vm.runInContext(name, context) as T;
-    const settle = async () => {
-      for (let i = 0; i < 20; i += 1) await run<() => Promise<void>>("(() => personalWakeQueue.tail)")();
-    };
     return {
-      typed, alarms, notifications, local, session, settle,
-      queue: run<(event: Record<string, unknown>) => Promise<void>>("queuePersonalWake"),
-      runWake: run<() => Promise<void>>("runPersonalWake"),
-      sendMessage: run<(tabId: number, text: string) => Promise<void>>("sendPersonalTaskMessage"),
-      delivered: run<(ids: string[]) => Promise<void>>("markPersonalTaskMessagesDelivered"),
+      typed, sent, local,
+      wake: run<(text: unknown) => Promise<string>>("wakePersonalChatTab"),
       enable: run<(enabled: unknown) => Promise<void>>("setPersonalWakeEnabled"),
+      pushSettings: run<() => Promise<void>>("pushPersonalWakeSettings"),
+      record: run<(status: unknown) => Promise<void>>("recordPersonalWakeStatus"),
       status: run<() => Promise<Record<string, unknown>>>("personalWakeStatus"),
-      state: () => local.get("mcpV3ChatWake") as Record<string, unknown> & { pending: unknown[] },
     };
   }
 
-  it("sends a fixed notice to the ChatGPT tab used last when a popup message arrives and the agent is idle", async () => {
+  it("writes the companion's notice in the ChatGPT tab used last, never in a tab shared with MCP", async () => {
     const harness = wakeHarness(() => ({ state: "sent" }));
-    await harness.sendMessage(9, "Pode seguir com a versão B");
-    await harness.settle();
-    expect(harness.typed).toHaveLength(1);
-    const [tabId, text] = harness.typed[0] as [number, string];
-    expect(tabId).toBe(3);
-    expect(text).toBe("[MCP V3, aviso automático da extensão, não escrito pelo usuário]\n" +
-      "- O usuário escreveu no popup do MCP V3. Chame browser_user_messages para ler.\n" +
-      "Continue a tarefa de onde parou.");
-    // The user's own words stay in the inbox: the agent reads them through MCP.
-    expect(text).not.toContain("versão B");
-    expect(harness.state().pending).toEqual([]);
-    expect(harness.notifications).toEqual([expect.objectContaining({ title: "O MCP acordou o ChatGPT" })]);
-    await expect(harness.status()).resolves.toEqual({ enabled: true, waiting: 0,
-      recent: [{ at: expect.any(Number), kinds: ["message"] }] });
+    await expect(harness.wake("[MCP V3, aviso automático do companion]")).resolves.toBe("sent");
+    expect(harness.typed).toEqual([[3, "[MCP V3, aviso automático do companion]"]]);
   });
 
-  it("waits while ChatGPT answers and drops the notice once the agent took the message itself", async () => {
-    let answer = "busy";
-    const harness = wakeHarness(() => ({ state: answer }));
-    await harness.sendMessage(9, "Achei um erro na tela");
-    await harness.settle();
-    expect(harness.typed).toHaveLength(1);
-    expect(harness.state().pending).toHaveLength(1);
-    expect(harness.alarms).toEqual([{ name: "mcp-chat-wake", when: expect.any(Number) }]);
-
-    // The agent's next tool call delivered the message: nothing is typed afterwards.
-    const id = (harness.local.get("mcpV3TaskMessages") as Array<{ id: string }>)[0]!.id;
-    await harness.delivered([id]);
-    answer = "sent";
-    await harness.runWake();
-    expect(harness.typed).toHaveLength(1);
-    expect(harness.state().pending).toEqual([]);
+  it("reports a busy conversation, a user typing and a page it cannot use", async () => {
+    for (const [state, outcome] of [["busy", "busy"], ["typing", "typing"], ["no-composer", "failed"], ["no-send-button", "failed"]]) {
+      await expect(wakeHarness(() => ({ state: state! })).wake("aviso")).resolves.toBe(outcome);
+    }
+    await expect(wakeHarness(() => ({ state: "sent" })).wake("")).resolves.toBe("failed");
   });
 
-  it("tells the agent which background task ended and which tab came back, and waits while the user types", async () => {
-    let answer = "typing";
-    const harness = wakeHarness(() => ({ state: answer }));
-    harness.session.set("mcpV3PersonalHandoff:7", { reason: "Faça login", startedAt: 1, done: true });
-    await harness.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 2 });
-    await harness.queue({ kind: "handback", chromeTabId: 7, tabId: "personal:7", reason: "Faça login" });
-    await harness.settle();
-    expect(harness.state().pending).toHaveLength(2);
-    answer = "sent";
-    await harness.runWake();
-    const text = harness.typed.at(-1)?.[1];
-    expect(text).toContain("- O usuário devolveu a aba personal:7 (Faça login). Chame browser_wait com forUser nessa aba");
-    expect(text).toContain("- A tarefa em segundo plano 0f8fad5b-d9cb-469f-a165-70867728950e terminou: failed, código 2.");
-    expect(harness.state().pending).toEqual([]);
-  });
-
-  it("does nothing when the user turned it off, and keeps the notice when no ChatGPT tab answers", async () => {
-    const off = wakeHarness(() => ({ state: "sent" }));
-    await off.enable(false);
-    await off.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "succeeded", exitCode: 0 });
-    await off.settle();
-    expect(off.typed).toEqual([]);
-    await expect(off.status()).resolves.toMatchObject({ enabled: false, waiting: 0 });
-
-    const broken = wakeHarness(() => ({ state: "no-composer" }));
-    await broken.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "succeeded", exitCode: 0 });
-    await broken.settle();
-    await expect(broken.status()).resolves.toMatchObject({ enabled: true, waiting: 1,
-      lastError: "Não encontrei o campo ou o botão de enviar do ChatGPT." });
-    expect(broken.alarms.at(-1)?.name).toBe("mcp-chat-wake");
+  it("keeps the switch here, tells the companion on every connect and shows what the companion did", async () => {
+    const harness = wakeHarness(() => ({ state: "sent" }));
+    await harness.pushSettings();
+    await harness.enable(false);
+    await harness.pushSettings();
+    expect(harness.sent).toEqual([
+      { type: "wake-settings", enabled: true },
+      { type: "wake-settings", enabled: false },
+      { type: "wake-settings", enabled: false },
+    ]);
+    await expect(harness.enable("yes")).rejects.toThrow("invalid");
+    await harness.enable(true);
+    await harness.record({ enabled: true, waiting: 1, lastError: "O ChatGPT não está aberto.",
+      recent: [{ at: 1000, kinds: ["task"], target: "app" }] });
+    await expect(harness.status()).resolves.toEqual({ enabled: true, waiting: 1, lastError: "O ChatGPT não está aberto.",
+      recent: [{ at: 1000, kinds: ["task"], target: "app" }] });
   });
 });

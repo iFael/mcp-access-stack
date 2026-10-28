@@ -1633,29 +1633,55 @@ describe("PersonalBrowserBridge popup messages", () => {
     }
   });
 
-  it("tells an extension with chatWakeV1 that a background task ended, and nothing to an older one", async () => {
+  it("hands the wake what reaches the agent's inbox and the tabs the user hands back, and writes in Chrome on request", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
     const port = await reservePort();
-    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const queued: unknown[] = [];
+    const switches: boolean[] = [];
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port, chatWake: {
+      queue: (event) => { queued.push(event); },
+      resolveHandback: () => undefined,
+      setEnabled: (enabled) => { switches.push(enabled); },
+    } });
     const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
     const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
     const older = await connectExtension(port, token,
-      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "chatWakeV1"), "1.13.1");
-    const seen: string[] = [];
-    older.on("message", (raw) => seen.push(JSON.parse(String(raw)).type));
-    bridge.announceBackgroundTaskFinished({ taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(seen).not.toContain("wake-event");
+      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "chatWakeV2"), "1.15.0");
+    await expect(bridge.wakeChromeTab("aviso")).resolves.toEqual({ outcome: "unavailable", detail: "extension-not-connected" });
     older.close();
     await waitUntil(() => !bridge.isConnected());
 
     const extension = await connectExtension(port, token);
     try {
-      const wake = nextWireMessage(extension, (wire) => wire.type === "wake-event");
-      bridge.announceBackgroundTaskFinished({ taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
-      await expect(wake).resolves.toEqual({ type: "wake-event", kind: "task",
-        taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
+      extension.send(JSON.stringify({ type: "wake-settings", enabled: false }));
+      extension.send(JSON.stringify({ type: "task-messages", messages: [
+        { id: "msg_eeeeeeee-0000", text: "nota", sentAt: "2026-10-28T15:00:00.000Z", taskId: "task-1" },
+      ] }));
+      extension.send(JSON.stringify({ type: "wake-event", kind: "handback", tabId: "personal:7", reason: "Faça login" }));
+      extension.send(JSON.stringify({ type: "wake-event", kind: "handback", tabId: "managed:1" }));
+      const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pelo cartão" });
+      await waitUntil(() => queued.length === 3);
+      expect(switches).toEqual([false]);
+      expect(queued).toEqual(expect.arrayContaining([
+        { kind: "message", messageId: "msg_eeeeeeee-0000" },
+        { kind: "handback", tabId: "personal:7", reason: "Faça login" },
+        { kind: "message", messageId: posted.id },
+      ]));
+      expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(true);
+      bridge.takeUserMessages({});
+      expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(false);
+
+      const asked = nextWireMessage(extension, (wire) => wire.type === "wake-chrome");
+      const written = bridge.wakeChromeTab("[MCP V3, aviso]");
+      const request = await asked as { id: string; text: string };
+      expect(request.text).toBe("[MCP V3, aviso]");
+      extension.send(JSON.stringify({ type: "wake-chrome-result", id: request.id, outcome: "busy" }));
+      await expect(written).resolves.toEqual({ outcome: "busy" });
+
+      const shown = nextWireMessage(extension, (wire) => wire.type === "wake-status");
+      bridge.showChatWakeStatus({ enabled: true, waiting: 2, recent: [] });
+      await expect(shown).resolves.toEqual({ type: "wake-status", status: { enabled: true, waiting: 2, recent: [] } });
     } finally {
       extension.close();
       await bridge.close();
