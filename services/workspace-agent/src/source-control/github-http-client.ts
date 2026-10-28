@@ -47,6 +47,8 @@ export interface GitHubPullRequestRecord {
   base: { sha: string };
   merged: boolean;
   merge_commit_sha?: string | null;
+  draft?: boolean;
+  node_id?: string;
 }
 
 export interface GitHubMergeRecord {
@@ -187,6 +189,11 @@ export interface GitHubApiClient {
     request: GitHubMergePullRequestRequest,
     context?: OperationContext,
   ): Promise<GitHubMergeRecord>;
+  /** GraphQL markPullRequestReadyForReview; REST has no way to leave draft. */
+  markPullRequestReadyForReview?(
+    pullRequestNodeId: string,
+    context?: OperationContext,
+  ): Promise<{ isDraft: boolean }>;
   /** GET /repos/{owner}/{repository}/{resource}; the resource is built from typed input only. */
   readRepositoryResource?(
     owner: string,
@@ -535,6 +542,34 @@ export class GitHubHttpClient implements GitHubApiClient {
       },
       context,
     );
+  }
+
+  async markPullRequestReadyForReview(
+    pullRequestNodeId: string,
+    context?: OperationContext,
+  ): Promise<{ isDraft: boolean }> {
+    if (!/^[A-Za-z0-9_=-]{1,128}$/u.test(pullRequestNodeId)) {
+      throw new AppError("INVALID_ARGUMENT", "GitHub pull-request node id is invalid.");
+    }
+    const raw = await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "POST",
+      path: "/graphql",
+      body: {
+        query: "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
+        variables: { id: pullRequestNodeId },
+      },
+      mutation: true,
+    }, context);
+    // GraphQL reports failures with HTTP 200 and an errors array. Like REST
+    // errors, its text is never read or reflected.
+    const record = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+    const isDraft = (((record.data as Record<string, unknown> | null | undefined)
+      ?.markPullRequestReadyForReview as Record<string, unknown> | null | undefined)
+      ?.pullRequest as Record<string, unknown> | null | undefined)?.isDraft;
+    if (record.errors !== undefined || typeof isDraft !== "boolean") {
+      throw new AppError("INVALID_ARGUMENT", "GitHub refused to mark the pull request ready for review.");
+    }
+    return { isDraft };
   }
 
   async readRepositoryResource(owner: string, repository: string,

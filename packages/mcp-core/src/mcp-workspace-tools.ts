@@ -2623,6 +2623,7 @@ const mcpGitHubPullRequestResult = z.object({
   headSha: mcpSourceControlSha,
   baseSha: mcpSourceControlSha,
   merged: z.boolean(),
+  draft: z.boolean().optional(),
 }).strict();
 const mcpGitHubCheckStatus = z.enum([
   "queued",
@@ -2938,6 +2939,7 @@ const sourceControlMcpSchemas = {
       headSha: mcpSourceControlSha.optional(),
       baseSha: mcpSourceControlSha.optional(),
       merged: z.boolean().optional(),
+      draft: z.boolean().optional(),
     }).strict().refine((value) => githubCreatePullRequestResultSchema.safeParse(value).success, {
       message: "Invalid github_create_pull_request MCP result.",
     }),
@@ -2955,12 +2957,13 @@ const sourceControlMcpSchemas = {
       headSha: mcpSourceControlSha.optional(),
       baseSha: mcpSourceControlSha.optional(),
       merged: z.literal(false).optional(),
+      draft: z.boolean().optional(),
     }).strict().refine((value) => githubClosePullRequestResultSchema.safeParse(value).success, {
       message: "Invalid github_close_pull_request MCP result.",
     }),
   },
   github_merge_pull_request: {
-    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, markReadyForReview: z.literal(true).optional(), confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
     output: z.object({
       status: z.enum(["confirmation_required", "completed"]),
       ...mcpSourceControlConfirmationFields,
@@ -2968,6 +2971,7 @@ const sourceControlMcpSchemas = {
       number: z.number().int().positive().optional(),
       merged: z.boolean().optional(),
       mergeSha: mcpSourceControlSha.optional(),
+      markedReadyForReview: z.literal(true).optional(),
     }).strict().refine((value) => githubMergePullRequestResultSchema.safeParse(value).success, {
       message: "Invalid github_merge_pull_request MCP result.",
     }),
@@ -3699,7 +3703,7 @@ export function registerSourceControlTools(
       "github_merge_pull_request",
       {
         title: "Merge GitHub pull request",
-        description: "Merges an authorized pull request at an exact expected head SHA after typed confirmation.",
+        description: "Merges an authorized pull request at an exact expected head SHA after typed confirmation. A draft pull request is refused unless markReadyForReview is true, which marks it ready for review and then merges it.",
         inputSchema: sourceControlMcpSchemas.github_merge_pull_request.input,
         outputSchema: sourceControlMcpSchemas.github_merge_pull_request.output,
         annotations: sourceControlAnnotations.github_merge_pull_request,
