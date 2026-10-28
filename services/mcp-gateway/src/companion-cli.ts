@@ -13,6 +13,8 @@ import { acquireCompanionInstanceLock } from "./companion/companion-instance-loc
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
 import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
+import { ChatWake, type ChatWakeTarget } from "./companion/chat-wake.js";
+import { createDesktopChatAppTarget } from "./companion/desktop-chat-app.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
 import { loadGatewayConfig } from "./config.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
@@ -61,10 +63,20 @@ async function main(): Promise<void> {
     });
   }
   let personalBrowser: PersonalBrowserBridge | undefined;
+  // Wakes the ChatGPT conversation: the app for Windows first, else the Chrome tab used last.
+  const desktopChatApp = createDesktopChatAppTarget({ scriptDirectory: path.join(runtime.stateRoot, "browser") });
+  const chromeChatTab: ChatWakeTarget = { name: "chrome", deliver: (text) =>
+    personalBrowser?.wakeChromeTab(text) ?? Promise.resolve({ outcome: "unavailable" }) };
+  const chatWake = new ChatWake({
+    targets: () => (desktopChatApp ? [desktopChatApp, chromeChatTab] : [chromeChatTab]),
+    isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false),
+    onStatus: (status) => personalBrowser?.showChatWakeStatus(status),
+    log: writeLog,
+  });
   const reloadable = new ReloadableLocalAgent({
     ...(elevationBroker === undefined ? {} : { elevationBroker }),
-    // A finished background task may wake the ChatGPT conversation through the extension.
-    onBackgroundTaskFinished: (event) => personalBrowser?.announceBackgroundTaskFinished(event),
+    onBackgroundTaskFinished: (event) => chatWake.queue({ kind: "task", taskId: event.taskId, state: event.state,
+      ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
   });
   let connector: CompanionConnector | undefined;
   let repositories!: LocalRepositoryManager;
@@ -107,6 +119,7 @@ async function main(): Promise<void> {
         stateRoot: runtime.stateRoot,
         log: writeLog,
         onUserMessagesPending: (pending) => connector?.announceUserMessages(pending),
+        chatWake,
       });
     } catch (error) {
       const browserError = asAppError(error);
@@ -205,6 +218,7 @@ async function main(): Promise<void> {
     process.removeListener("SIGTERM", onSigterm);
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
+    chatWake.close();
     await personalBrowser?.close();
     await instanceLock.release();
     writeLog({ event: "mcp_v3_local_stopped" });

@@ -1,0 +1,228 @@
+// MCP wakes the ChatGPT conversation by itself: when the agent is not
+// answering and something it waits for happens (a message from the reply card
+// or the popup, a tab handed back, a background task that ended), the
+// companion writes a fixed notice into the conversation and sends it. It goes
+// to the ChatGPT app for Windows when it is open, otherwise to the ChatGPT tab
+// in Chrome the user used last. While the agent is answering, or the user is
+// typing, nothing is written and the notice waits. Only the companion's own
+// words and the agent's own ids go in, nothing from a page. The user can turn
+// it off in the extension popup.
+
+export type ChatWakeEvent =
+  | { kind: "message"; messageId: string }
+  | { kind: "task"; taskId: string; state: "succeeded" | "failed"; exitCode?: number }
+  | { kind: "handback"; tabId: string; reason?: string };
+
+/** What a place that shows the conversation did with the notice. */
+export type ChatWakeOutcome =
+  | "sent"
+  | "busy" // the agent is answering
+  | "typing" // the user has something in the message field
+  | "unavailable" // no app window or tab to write to
+  | "failed";
+
+export interface ChatWakeTarget {
+  readonly name: "app" | "chrome";
+  deliver(text: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }>;
+}
+
+export interface ChatWakeStatus {
+  enabled: boolean;
+  waiting: number;
+  lastError?: string;
+  recent: Array<{ at: number; kinds: ChatWakeEvent["kind"][]; target: ChatWakeTarget["name"] }>;
+}
+
+export interface ChatWakeOptions {
+  /** Where to write, first that works wins. */
+  targets: () => readonly ChatWakeTarget[];
+  /** False once the agent already got the event through its own calls. */
+  isOpen?: (event: ChatWakeEvent) => boolean;
+  onStatus?: (status: ChatWakeStatus) => void;
+  log?: (entry: Record<string, unknown>) => void;
+  now?: () => number;
+  spacingMs?: number;
+  retryMs?: number;
+  ttlMs?: number;
+}
+
+type Queued = ChatWakeEvent & { at: number };
+
+const MAX_EVENTS = 20;
+
+export class ChatWake {
+  private enabled = true;
+  private pending: Queued[] = [];
+  private recent: ChatWakeStatus["recent"] = [];
+  private lastError: string | undefined;
+  private lastSentAt: number | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private running: Promise<void> | undefined;
+  private rerun = false;
+  private closed = false;
+  private readonly now: () => number;
+  private readonly spacingMs: number;
+  private readonly retryMs: number;
+  private readonly ttlMs: number;
+
+  constructor(private readonly options: ChatWakeOptions) {
+    this.now = options.now ?? Date.now;
+    this.spacingMs = options.spacingMs ?? 30_000;
+    this.retryMs = options.retryMs ?? 60_000;
+    this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+  }
+
+  /** Something the agent may be waiting for happened. */
+  queue(event: ChatWakeEvent): void {
+    if (!this.enabled || this.closed) return;
+    this.pending = [...this.pending, { ...event, at: this.now() }].slice(-MAX_EVENTS);
+    this.publish();
+    this.schedule(0);
+  }
+
+  /** The agent took the handed-back tab with browser_wait. */
+  resolveHandback(tabId: string): void {
+    const before = this.pending.length;
+    this.pending = this.pending.filter((event) => event.kind !== "handback" || event.tabId !== tabId);
+    if (this.pending.length !== before) this.publish();
+  }
+
+  // The extension sends its switch on every connect, so this also refreshes the popup.
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.pending = [];
+      this.lastError = undefined;
+      this.clearTimer();
+    }
+    this.publish();
+  }
+
+  status(): ChatWakeStatus {
+    return {
+      enabled: this.enabled,
+      waiting: this.pending.length,
+      ...(this.lastError === undefined ? {} : { lastError: this.lastError }),
+      recent: this.recent.slice(-3),
+    };
+  }
+
+  /** Resolves when the attempt in progress, if any, ends. For tests and shutdown. */
+  async settled(): Promise<void> {
+    while (this.running) await this.running;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.clearTimer();
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.closed || !this.enabled || this.pending.length === 0) return;
+    const spacing = this.lastSentAt === undefined ? 0 : this.lastSentAt + this.spacingMs - this.now();
+    const wait = Math.max(delayMs, spacing, 0);
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.start();
+    }, wait);
+    this.timer.unref?.();
+  }
+
+  private start(): void {
+    if (this.running) {
+      this.rerun = true;
+      return;
+    }
+    this.running = this.run().catch((error: unknown) => {
+      this.options.log?.({ event: "mcp_v3_chat_wake_error", message: error instanceof Error ? error.message : String(error) });
+    }).finally(() => {
+      this.running = undefined;
+      if (this.rerun) {
+        this.rerun = false;
+        this.schedule(0);
+      }
+    });
+  }
+
+  private async run(): Promise<void> {
+    if (!this.enabled || this.pending.length === 0) return;
+    const now = this.now();
+    const snapshot = new Set(this.pending);
+    const events = this.pending.filter((event) =>
+      now - event.at < this.ttlMs && (this.options.isOpen?.(event) ?? true));
+    if (events.length === 0) {
+      this.pending = [];
+      this.publish();
+      return;
+    }
+    const text = chatWakeText(events);
+    let lastError = "O ChatGPT não está aberto: nem o app do Windows nem uma aba no Chrome.";
+    for (const target of this.options.targets()) {
+      let result: Awaited<ReturnType<ChatWakeTarget["deliver"]>>;
+      try {
+        result = await target.deliver(text);
+      } catch (error) {
+        result = { outcome: "failed", detail: error instanceof Error ? error.message : String(error) };
+      }
+      this.options.log?.({ event: "mcp_v3_chat_wake_attempt", target: target.name, outcome: result.outcome,
+        ...(result.detail === undefined ? {} : { detail: result.detail.slice(0, 200) }) });
+      if (result.outcome === "sent") {
+        const sentAt = this.now();
+        // Events that arrived while writing wait for the next notice.
+        this.pending = this.pending.filter((event) => !snapshot.has(event));
+        this.lastSentAt = sentAt;
+        this.lastError = undefined;
+        this.recent = [...this.recent, { at: sentAt, kinds: [...new Set(events.map((event) => event.kind))], target: target.name }].slice(-5);
+        this.publish();
+        this.schedule(0);
+        return;
+      }
+      if (result.outcome === "busy" || result.outcome === "typing") {
+        // The conversation is there; it is just not the moment.
+        this.pending = [...events, ...this.pending.filter((event) => !snapshot.has(event))];
+        this.lastError = undefined;
+        this.publish();
+        this.schedule(this.retryMs);
+        return;
+      }
+      if (result.outcome === "failed") {
+        lastError = target.name === "app"
+          ? "Não consegui escrever no app do ChatGPT."
+          : "Não consegui escrever na aba do ChatGPT.";
+      }
+    }
+    this.lastError = lastError;
+    this.publish();
+    this.schedule(this.retryMs);
+  }
+
+  private publish(): void {
+    try {
+      this.options.onStatus?.(this.status());
+    } catch {
+      // The popup only misses a refresh.
+    }
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
+
+export function chatWakeText(events: readonly ChatWakeEvent[]): string {
+  const lines: string[] = [];
+  if (events.some((event) => event.kind === "message")) {
+    lines.push("- O usuário escreveu para a tarefa (no cartão do chat ou no popup do MCP V3). Chame browser_user_messages para ler.");
+  }
+  for (const event of events.filter((entry) => entry.kind === "handback").slice(0, 3)) {
+    lines.push(`- O usuário devolveu a aba ${event.tabId}${event.reason ? ` (${event.reason.slice(0, 120)})` : ""}. ` +
+      "Chame browser_wait com forUser nessa aba para receber a aba e a observação dele.");
+  }
+  for (const event of events.filter((entry) => entry.kind === "task").slice(0, 5)) {
+    lines.push(`- A tarefa em segundo plano ${event.taskId} terminou: ${event.state}` +
+      `${event.exitCode === undefined ? "" : `, código ${event.exitCode}`}. Veja com get_background_task.`);
+  }
+  return ["[MCP V3, aviso automático do companion, não escrito pelo usuário]", ...lines, "Continue a tarefa de onde parou."].join("\n");
+}

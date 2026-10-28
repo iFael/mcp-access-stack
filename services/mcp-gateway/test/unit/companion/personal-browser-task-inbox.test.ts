@@ -13,7 +13,7 @@ describe("PersonalBrowserTaskInbox", () => {
       message("bad"),
       { ...message("bbbbbbbb"), text: "" },
       "nope",
-    ] })).toEqual({ added: 1, alreadyDelivered: [] });
+    ] })).toEqual({ added: 1, addedIds: ["msg_aaaaaaaa"], alreadyDelivered: [] });
     expect(inbox.size).toBe(1);
     expect(inbox.take({ tabId: "managed:1" })).toEqual([]);
     expect(inbox.take({ tabId: "personal:7" })).toHaveLength(1);

@@ -88,7 +88,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "groupSharingV1",
   "pauseTaskV1",
   "taskMessagesV1",
-  "chatWakeV1",
+  "chatWakeV2",
 ] as const;
 
 export function buildPersonalBrowserExtensionAssets(
@@ -283,6 +283,7 @@ function connect() {
     });
     void pushPersonalSiteApprovals();
     void pushPersonalTaskMessages();
+    void pushPersonalWakeSettings();
   };
   socket.onmessage = (event) => {
     void handleMessage(event.data);
@@ -332,10 +333,13 @@ async function handleMessage(raw) {
     void markPersonalTaskMessagesDelivered(message.ids).catch(() => undefined);
     return;
   }
-  if (message?.type === "wake-event" && message.kind === "task" && typeof message.taskId === "string" &&
-      /^[0-9a-f-]{36}$/iu.test(message.taskId) && ["succeeded", "failed", "cancelled"].includes(message.state)) {
-    void queuePersonalWake({ kind: "task", taskId: message.taskId, state: message.state,
-      ...(Number.isInteger(message.exitCode) ? { exitCode: message.exitCode } : {}) }).catch(() => undefined);
+  if (message?.type === "wake-chrome" && typeof message.id === "string") {
+    void wakePersonalChatTab(message.text).catch(() => "failed")
+      .then((outcome) => send({ type: "wake-chrome-result", id: message.id, outcome }));
+    return;
+  }
+  if (message?.type === "wake-status") {
+    void recordPersonalWakeStatus(message.status).catch(() => undefined);
     return;
   }
   if (message?.type === "task-question") {
@@ -873,8 +877,8 @@ async function resumePersonalHandoff(chromeTabId) {
   if (!handoff || handoff.done) return false;
   await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: { ...handoff, done: true } });
   await settlePersonalHandoffSignals(chromeTabId);
-  await queuePersonalWake({ kind: "handback", chromeTabId, tabId: PERSONAL_PREFIX + chromeTabId,
-    reason: handoff.reason }).catch(() => undefined);
+  send({ type: "wake-event", kind: "handback", tabId: PERSONAL_PREFIX + chromeTabId,
+    ...(typeof handoff.reason === "string" ? { reason: handoff.reason } : {}) });
   return true;
 }
 
@@ -1015,7 +1019,6 @@ async function sendPersonalTaskMessage(chromeTabId, text) {
   });
   if (target.taskId) await clearPersonalTaskQuestion(target.taskId);
   await pushPersonalTaskMessages();
-  await queuePersonalWake({ kind: "message", messageId: message.id });
 }
 
 // A message the user wrote in the reply card in the ChatGPT conversation. The
@@ -1035,7 +1038,6 @@ async function recordPersonalExternalTaskMessage(raw) {
   });
   if (!added) return;
   await clearPersonalTaskQuestion(taskId);
-  await queuePersonalWake({ kind: "message", messageId: message.id });
 }
 
 // What the popup shows: where a message goes, an open question, and the latest messages.
@@ -1049,37 +1051,18 @@ async function personalTaskInboxStatus(chromeTabId) {
     ...(target.question ? { question: target.question } : {}), recent };
 }
 
-// MCP wakes the ChatGPT conversation by itself: when the agent is not
-// answering and something it waits for happens (a popup message, a tab handed
-// back, a background task that ended), the extension types a fixed notice into
-// the ChatGPT tab the user used last and sends it. While the agent is working,
-// nothing is typed: the notice reaches it with its next call. Only the
-// extension's own words and the agent's own ids go in, nothing from a page.
-// The user can turn this off in the popup.
+// The companion wakes the ChatGPT conversation by itself (see chat-wake.ts):
+// the ChatGPT app for Windows first and, without it, the ChatGPT tab the user
+// used last, which only the extension can reach. The popup switch lives here
+// and goes to the companion on every connect; the companion sends back what it
+// did. Only the companion's own words go into the tab, nothing from a page.
 const PERSONAL_WAKE_KEY = "mcpV3ChatWake";
 const PERSONAL_WAKE_URLS = ["https://chatgpt.com/*", "https://chat.openai.com/*"];
 const PERSONAL_WAKE_HOSTS = ["chatgpt.com", "chat.openai.com"];
-const PERSONAL_WAKE_SPACING_MS = 30 * 1000;
-const PERSONAL_WAKE_RETRY_MS = 60 * 1000;
-const PERSONAL_WAKE_EVENT_TTL_MS = 24 * 60 * 60 * 1000;
-const PERSONAL_WAKE_ALARM = "mcp-chat-wake";
-const personalWakeQueue = { tail: Promise.resolve() };
-
-function withPersonalWake(change) {
-  const run = personalWakeQueue.tail.then(change, change);
-  personalWakeQueue.tail = run.catch(() => undefined);
-  return run;
-}
 
 async function readPersonalWake() {
   const value = (await chrome.storage.local.get(PERSONAL_WAKE_KEY).catch(() => ({})))?.[PERSONAL_WAKE_KEY];
-  const state = value && typeof value === "object" ? value : {};
-  return { ...state, pending: Array.isArray(state.pending) ? state.pending : [],
-    recent: Array.isArray(state.recent) ? state.recent : [] };
-}
-
-async function writePersonalWake(state) {
-  await chrome.storage.local.set({ [PERSONAL_WAKE_KEY]: state });
+  return value && typeof value === "object" ? value : {};
 }
 
 function isPersonalWakeUrl(url) {
@@ -1101,69 +1084,27 @@ async function personalWakeTargetTab() {
 
 async function setPersonalWakeEnabled(enabled) {
   if (typeof enabled !== "boolean") throw Error("invalid");
-  await withPersonalWake(async () => {
-    const state = await readPersonalWake();
-    await writePersonalWake({ ...state, disabled: !enabled, ...(enabled ? {} : { pending: [], lastError: undefined }) });
-  });
-}
-
-// Something the agent may be waiting for happened.
-async function queuePersonalWake(event) {
-  await withPersonalWake(async () => {
-    const state = await readPersonalWake();
-    if (state.disabled === true) return;
-    const now = Date.now();
-    const pending = [...state.pending.filter((entry) => now - entry.at < PERSONAL_WAKE_EVENT_TTL_MS),
-      { ...event, at: now }].slice(-20);
-    await writePersonalWake({ ...state, pending });
-  });
-  await schedulePersonalWake(0);
-}
-
-async function schedulePersonalWake(delayMs) {
   const state = await readPersonalWake();
-  if (state.disabled === true || state.pending.length === 0) return;
-  const spacing = Number.isFinite(state.lastSentAt) ? state.lastSentAt + PERSONAL_WAKE_SPACING_MS - Date.now() : 0;
-  const wait = Math.max(delayMs, spacing, 0);
-  if (wait <= 1000) {
-    void runPersonalWake().catch(() => undefined);
-    return;
-  }
-  await Promise.resolve(chrome.alarms?.create?.(PERSONAL_WAKE_ALARM, { when: Date.now() + wait })).catch(() => undefined);
+  await chrome.storage.local.set({ [PERSONAL_WAKE_KEY]: { ...state, disabled: !enabled,
+    status: { ...(state.status ?? {}), enabled, ...(enabled ? {} : { waiting: 0, lastError: undefined }) } } });
+  sendPersonalWakeSettings(enabled);
 }
 
-// Drops events the agent already got through its own calls.
-async function personalWakeEventsStillOpen(pending) {
-  const now = Date.now();
-  const events = pending.filter((event) => now - event.at < PERSONAL_WAKE_EVENT_TTL_MS);
-  const messages = await readPersonalTaskMessages();
-  const handoffs = await Promise.all(events.map((event) =>
-    event.kind === "handback" ? readPersonalHandoff(event.chromeTabId) : undefined));
-  return events.filter((event, index) => {
-    if (event.kind === "message") {
-      return messages.some((entry) => entry.id === event.messageId && typeof entry.deliveredAt !== "string");
-    }
-    // The agent's browser_wait clears the handed-back record when it takes the tab.
-    if (event.kind === "handback") return Boolean(handoffs[index]?.done);
-    return true;
-  });
+function sendPersonalWakeSettings(enabled) {
+  send({ type: "wake-settings", enabled });
 }
 
-function personalWakeText(events) {
-  const lines = [];
-  if (events.some((event) => event.kind === "message")) {
-    lines.push("- O usuário escreveu no popup do MCP V3. Chame browser_user_messages para ler.");
-  }
-  for (const event of events.filter((entry) => entry.kind === "handback").slice(0, 3)) {
-    lines.push("- O usuário devolveu a aba " + event.tabId + (event.reason ? " (" + String(event.reason).slice(0, 120) + ")" : "") +
-      ". Chame browser_wait com forUser nessa aba para receber a aba e a observação dele.");
-  }
-  for (const event of events.filter((entry) => entry.kind === "task").slice(0, 5)) {
-    lines.push("- A tarefa em segundo plano " + event.taskId + " terminou: " + event.state +
-      (Number.isInteger(event.exitCode) ? ", código " + event.exitCode : "") + ". Veja com get_background_task.");
-  }
-  return "[MCP V3, aviso automático da extensão, não escrito pelo usuário]\\n" + lines.join("\\n") +
-    "\\nContinue a tarefa de onde parou.";
+async function pushPersonalWakeSettings() {
+  sendPersonalWakeSettings((await readPersonalWake()).disabled !== true);
+}
+
+async function recordPersonalWakeStatus(status) {
+  if (!status || typeof status !== "object") return;
+  const state = await readPersonalWake();
+  await chrome.storage.local.set({ [PERSONAL_WAKE_KEY]: { ...state, status: {
+    waiting: Number.isSafeInteger(status.waiting) ? status.waiting : 0,
+    ...(typeof status.lastError === "string" ? { lastError: status.lastError.slice(0, 200) } : {}),
+    recent: Array.isArray(status.recent) ? status.recent.slice(-3) : [] } } });
 }
 
 // Runs in the ChatGPT tab: is the conversation idle, and can the notice go in?
@@ -1200,46 +1141,24 @@ function personalWakeInspect(text) {
   });
 }
 
-async function runPersonalWake() {
-  await withPersonalWake(async () => {
-    const state = await readPersonalWake();
-    if (state.disabled === true || state.pending.length === 0) return;
-    const events = await personalWakeEventsStillOpen(state.pending);
-    if (events.length === 0) {
-      await writePersonalWake({ ...state, pending: [] });
-      return;
-    }
-    const retry = async (lastError) => {
-      await writePersonalWake({ ...state, pending: events, ...(lastError ? { lastError } : {}) });
-      await Promise.resolve(chrome.alarms?.create?.(PERSONAL_WAKE_ALARM, { when: Date.now() + PERSONAL_WAKE_RETRY_MS }))
-        .catch(() => undefined);
-    };
-    const tab = await personalWakeTargetTab();
-    if (!tab) return retry("Nenhuma aba do ChatGPT aberta.");
-    const text = personalWakeText(events);
-    const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
-      func: personalWakeInspect, args: [text] }).catch(() => []);
-    const outcome = injected?.result?.state;
-    if (outcome === "busy" || outcome === "typing") return retry();
-    if (outcome !== "sent") {
-      return retry(outcome === "no-composer" || outcome === "no-send-button"
-        ? "Não encontrei o campo ou o botão de enviar do ChatGPT." : "Não consegui escrever na conversa do ChatGPT.");
-    }
-    const now = Date.now();
-    await writePersonalWake({ ...state, pending: [], lastError: undefined, lastSentAt: now,
-      recent: [...state.recent, { at: now, kinds: [...new Set(events.map((event) => event.kind))] }].slice(-5) });
-    await Promise.resolve(chrome.notifications?.create?.("mcp-wake:" + now, {
-      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP acordou o ChatGPT",
-      message: "A extensão enviou um aviso na conversa ligada.", priority: 0,
-    })).catch(() => undefined);
-  });
+// The companion asks to write the notice in the ChatGPT tab used last.
+async function wakePersonalChatTab(text) {
+  if (typeof text !== "string" || !text.trim() || text.length > 4000) return "failed";
+  const tab = await personalWakeTargetTab();
+  if (!tab) return "unavailable";
+  const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
+    func: personalWakeInspect, args: [text] }).catch(() => []);
+  const outcome = injected?.result?.state;
+  return ["sent", "busy", "typing"].includes(outcome) ? outcome : "failed";
 }
 
 // What the popup shows about waking ChatGPT.
 async function personalWakeStatus() {
   const state = await readPersonalWake();
-  return { enabled: state.disabled !== true, waiting: state.pending.length,
-    ...(state.lastError ? { lastError: state.lastError } : {}), recent: state.recent.slice(-3) };
+  const status = state.status ?? {};
+  return { enabled: state.disabled !== true, waiting: Number.isSafeInteger(status.waiting) ? status.waiting : 0,
+    ...(typeof status.lastError === "string" ? { lastError: status.lastError } : {}),
+    recent: Array.isArray(status.recent) ? status.recent : [] };
 }
 
 const PERSONAL_PLANS_KEY = "mcpV3PersonalPlans";
@@ -6920,7 +6839,6 @@ void syncPersonalPlanNavigationRules();
 chrome.alarms?.create?.("mcp-paused-sweep", { periodInMinutes: 30 });
 chrome.alarms?.onAlarm?.addListener((alarm) => {
   if (alarm?.name === "mcp-paused-sweep") void sweepPausedPersonalTasks();
-  if (alarm?.name === PERSONAL_WAKE_ALARM) void runPersonalWake().catch(() => undefined);
 });
 void sweepPausedPersonalTasks();
 connect();

@@ -45,6 +45,7 @@ import {
   personalRecordingTransportSchema,
 } from "./personal-browser-recording.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
+import type { ChatWake, ChatWakeOutcome, ChatWakeStatus } from "./chat-wake.js";
 import { PersonalBrowserTaskInbox } from "./personal-browser-task-inbox.js";
 
 const DEFAULT_PORT = 3361;
@@ -74,6 +75,8 @@ export interface PersonalBrowserBridgeOptions {
   log?: (entry: Record<string, unknown>) => void;
   /** Called whenever the number of popup messages waiting for the agent changes. */
   onUserMessagesPending?: (pending: number) => void;
+  /** Wakes the ChatGPT conversation when a message or a handed-back tab waits for the agent. */
+  chatWake?: Pick<ChatWake, "queue" | "resolveHandback" | "setEnabled">;
 }
 
 export class PersonalBrowserBridge implements PersonalBrowserExecutor {
@@ -84,6 +87,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
   private readonly inbox = new PersonalBrowserTaskInbox();
+  private readonly chromeWakes = new Map<string, (outcome: ChatWakeOutcome) => void>();
   private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
@@ -430,6 +434,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async wait(...args: Parameters<BrowserExecutor["wait"]>): ReturnType<BrowserExecutor["wait"]> {
     const result = await this.call("wait", args[0], args[1]);
+    if (args[0].forUser !== undefined && result.completed === true) this.options.chatWake?.resolveHandback(args[0].tabId);
     if (args[0].forUser !== undefined) {
       // The user may have navigated or changed the page while they had the turn.
       const tabId = args[0].tabId;
@@ -684,6 +689,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     };
     const { added } = this.inbox.accept({ messages: [message] });
     if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
+    if (added > 0) this.options.chatWake?.queue({ kind: "message", messageId: message.id });
     const socket = this.socket;
     if (added > 0 && socket?.readyState === WebSocket.OPEN) {
       try {
@@ -722,23 +728,45 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return messages;
   }
 
-  /**
-   * A background task of this companion ended. The extension wakes the ChatGPT
-   * conversation with it if the agent is not answering; while the agent works,
-   * nothing is typed. Lost when the extension is not connected.
-   */
-  announceBackgroundTaskFinished(event: {
-    taskId: string;
-    state: "succeeded" | "failed";
-    exitCode?: number;
-  }): void {
+  /** Whether the agent has yet to take this message. */
+  hasUserMessage(id: string): boolean {
+    return this.inbox.holds(id);
+  }
+
+  /** The extension writes the wake notice in the ChatGPT tab used last. */
+  wakeChromeTab(text: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }> {
     const socket = this.socket;
-    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV1")) return;
+    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV2")) {
+      return Promise.resolve({ outcome: "unavailable", detail: "extension-not-connected" });
+    }
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.chromeWakes.delete(id);
+        resolve({ outcome: "failed", detail: "timeout" });
+      }, 20_000);
+      timeout.unref?.();
+      this.chromeWakes.set(id, (outcome) => {
+        clearTimeout(timeout);
+        this.chromeWakes.delete(id);
+        resolve({ outcome });
+      });
+      try {
+        socket.send(JSON.stringify({ type: "wake-chrome", id, text }));
+      } catch {
+        this.chromeWakes.get(id)?.("failed");
+      }
+    });
+  }
+
+  /** Shows in the popup whether waking is on and what it did last. */
+  showChatWakeStatus(status: ChatWakeStatus): void {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV2")) return;
     try {
-      socket.send(JSON.stringify({ type: "wake-event", kind: "task", taskId: event.taskId, state: event.state,
-        ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }));
+      socket.send(JSON.stringify({ type: "wake-status", status }));
     } catch {
-      // A missed notice only means the agent sees the result on its next look.
+      // The popup shows the next one.
     }
   }
 
@@ -1244,10 +1272,28 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       if (approvals) this.actions.setSiteApprovals(approvals);
       return;
     }
+    if (message.type === "wake-settings" && typeof message.enabled === "boolean") {
+      this.options.chatWake?.setEnabled(message.enabled);
+      return;
+    }
+    if (message.type === "wake-event" && message.kind === "handback" && typeof message.tabId === "string" &&
+        /^personal:\d{1,12}$/u.test(message.tabId)) {
+      this.options.chatWake?.queue({ kind: "handback", tabId: message.tabId,
+        ...(typeof message.reason === "string" && message.reason ? { reason: message.reason.slice(0, 200) } : {}) });
+      return;
+    }
+    if (message.type === "wake-chrome-result" && typeof message.id === "string") {
+      const outcome = typeof message.outcome === "string" &&
+        ["sent", "busy", "typing", "unavailable", "failed"].includes(message.outcome)
+        ? message.outcome as ChatWakeOutcome : "failed";
+      this.chromeWakes.get(message.id)?.(outcome);
+      return;
+    }
     if (message.type === "task-messages") {
-      const { added, alreadyDelivered } = this.inbox.accept(message);
+      const { added, addedIds, alreadyDelivered } = this.inbox.accept(message);
       this.deliverUserMessages(alreadyDelivered.map((id) => ({ id })));
       if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
+      for (const messageId of addedIds) this.options.chatWake?.queue({ kind: "message", messageId });
       return;
     }
     if (message.type === "recording-frame") {

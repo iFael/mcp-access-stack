@@ -27,13 +27,18 @@ export class PersonalBrowserTaskInbox {
     return this.queued.size;
   }
 
+  holds(id: string): boolean {
+    return this.queued.has(id);
+  }
+
   /**
    * Adds the messages of a "task-messages" push. Returns how many were new and
    * the ids already delivered, whose delivery the extension never heard of.
    */
-  accept(raw: unknown): { added: number; alreadyDelivered: string[] } {
+  accept(raw: unknown): { added: number; addedIds: string[]; alreadyDelivered: string[] } {
     const alreadyDelivered: string[] = [];
-    if (!isRecord(raw) || !Array.isArray(raw.messages)) return { added: 0, alreadyDelivered };
+    const addedIds: string[] = [];
+    if (!isRecord(raw) || !Array.isArray(raw.messages)) return { added: 0, addedIds, alreadyDelivered };
     let added = 0;
     for (const entry of raw.messages.slice(0, MAX_QUEUED)) {
       if (!isRecord(entry)) continue;
@@ -52,6 +57,7 @@ export class PersonalBrowserTaskInbox {
           typeof tabId === "string" && /^personal:\d{1,12}$/u.test(tabId)).slice(0, MAX_TAB_IDS)
         : [];
       this.queued.set(id, { message: parsed.data, tabIds });
+      addedIds.push(id);
       added += 1;
     }
     while (this.queued.size > MAX_QUEUED) {
@@ -60,7 +66,7 @@ export class PersonalBrowserTaskInbox {
       this.queued.delete(oldest);
     }
     if (added > 0) for (const wake of [...this.waiters]) wake();
-    return { added, alreadyDelivered };
+    return { added, addedIds, alreadyDelivered };
   }
 
   /**
