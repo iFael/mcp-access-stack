@@ -1,9 +1,9 @@
 {
   "worker": "mcp-access-stack",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "41e271dc8033da8ad608a29aea51a71db18849ebabc4927de4b5299f57614e6f",
+  "previousRevision": "3ef2a789e390ef34aafd83d18731746a82c71682c102d73028b2edc6c020c17e",
   "previousToolCount": 114,
-  "targetRevision": "3ef2a789e390ef34aafd83d18731746a82c71682c102d73028b2edc6c020c17e",
+  "targetRevision": "421e6c416b1def945c4124467c381e2f300979651e09999b98d54ac744c8e87f",
   "targetToolCount": 114,
   "requiredTools": ["get_operation_guide", "release_orchestrator", "github_workflow_operation", "browser_plan", "github_read", "github_issue_write", "http_get"]
 }

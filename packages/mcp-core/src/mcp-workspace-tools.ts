@@ -2833,6 +2833,7 @@ const sourceControlMcpSchemas = {
       expectedMainSha: mcpSourceControlSha, operationId: z.uuid(),
       bootstrapOperationId: z.uuid().optional(),
       stageRunId: z.number().int().positive().optional(),
+      ciRunId: z.number().int().positive().optional(),
     }).strict(),
     // The MCP SDK publishes object schemas, not a discriminated union root.
     // Runtime results still use the strict branch-specific contract.
@@ -3448,7 +3449,7 @@ export function registerSourceControlTools(
       "github_workflow_operation",
       {
         title: "Run or reconcile guarded release workflow",
-        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Edge catalog rollouts use edge-cas-candidate-stage.yml, then edge-catalog-activate.yml with the stage runId as stageRunId, and edge-catalog-recover-prepare.yml with the activation operationId when only its candidate preparation failed. Run it in the Linux execution-node workspace; get_operation_guide topic=release or topic=edge_catalog has the full order.",
+        description: "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Edge catalog rollouts use edge-cas-candidate-stage.yml, then edge-catalog-activate.yml with the stage runId as stageRunId, and edge-catalog-recover-prepare.yml with the activation operationId when only its candidate preparation failed. The Windows companion is published with companion-only-distribution.yml and ciRunId = the successful main CI run that built it. Run it in the Linux execution-node workspace; get_operation_guide topic=release, topic=edge_catalog or topic=companion has the full order.",
         inputSchema: sourceControlMcpSchemas.github_workflow_operation.input,
         outputSchema: sourceControlMcpSchemas.github_workflow_operation.output,
         annotations: sourceControlAnnotations.github_workflow_operation,

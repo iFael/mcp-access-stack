@@ -34,6 +34,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "index",
             "release",
             "edge_catalog",
+            "companion",
             "workspaces",
             "refusals",
             "source_control",
@@ -56,6 +57,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "index",
               "release",
               "edge_catalog",
+              "companion",
               "workspaces",
               "refusals",
               "source_control",
@@ -100,6 +102,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "index",
             "release",
             "edge_catalog",
+            "companion",
             "workspaces",
             "refusals",
             "source_control",
@@ -12226,7 +12229,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Edge catalog rollouts use edge-cas-candidate-stage.yml, then edge-catalog-activate.yml with the stage runId as stageRunId, and edge-catalog-recover-prepare.yml with the activation operationId when only its candidate preparation failed. Run it in the Linux execution-node workspace; get_operation_guide topic=release or topic=edge_catalog has the full order.",
+    "description": "Unified guarded workflow dispatch/reconciliation. Public release dispatch requires bootstrapOperationId from the completed tag-bootstrap step, distinct from its own operationId, plus pinned tag/SHA and no competing run. Reconciliation of a dispatched public release must preserve both IDs. A 204 never proves completion. Edge catalog rollouts use edge-cas-candidate-stage.yml, then edge-catalog-activate.yml with the stage runId as stageRunId, and edge-catalog-recover-prepare.yml with the activation operationId when only its candidate preparation failed. The Windows companion is published with companion-only-distribution.yml and ciRunId = the successful main CI run that built it. Run it in the Linux execution-node workspace; get_operation_guide topic=release, topic=edge_catalog or topic=companion has the full order.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12238,6 +12241,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
           "type": "string"
+        },
+        "ciRunId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
         },
         "expectedMainSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
@@ -12286,7 +12294,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "release.yml",
             "edge-cas-candidate-stage.yml",
             "edge-catalog-activate.yml",
-            "edge-catalog-recover-prepare.yml"
+            "edge-catalog-recover-prepare.yml",
+            "companion-only-distribution.yml"
           ],
           "type": "string"
         },
@@ -25909,15 +25918,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "3ef2a789e390ef34aafd83d18731746a82c71682c102d73028b2edc6c020c17e",
-  "serverVersion": "0.4.0-catalog.c3ef2a789e390.s1ef01eda5639",
+  "contractRevision": "421e6c416b1def945c4124467c381e2f300979651e09999b98d54ac744c8e87f",
+  "serverVersion": "0.4.0-catalog.c421e6c416b1d.s1ef01eda5639",
   "toolCount": 114,
   "toolSetRevision": "1ef01eda5639a67d461508c341751e265c796d77100c081fb51fb3e0b1b352c5"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c3ef2a789e390.s1ef01eda5639"
+  "version": "0.4.0-catalog.c421e6c416b1d.s1ef01eda5639"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

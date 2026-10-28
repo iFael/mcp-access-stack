@@ -1,6 +1,7 @@
 name: Windows companion-only checksummed distribution
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('publish companion CI-{0} @ {1}', inputs.ci_run_id, inputs.expected_sha) || format('companion CI-{0} @ {1}', github.event.workflow_run.id, github.event.workflow_run.head_sha) }}
+# github_workflow_operation finds its own dispatch only by mcp-companion-publish-<operation_id>.
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation_id != '' && format('mcp-companion-publish-{0}', inputs.operation_id) || format('publish companion CI-{0} @ {1}', inputs.ci_run_id, inputs.expected_sha)) || format('companion CI-{0} @ {1}', github.event.workflow_run.id, github.event.workflow_run.head_sha) }}
 
 on:
   workflow_run:
@@ -16,6 +17,11 @@ on:
       ci_run_id:
         description: Exact successful main CI run that produced the checksummed companion artifact
         required: true
+        type: string
+      operation_id:
+        description: Optional MCP operation UUID; empty for a manual run
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -264,10 +270,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
+          OPERATION_ID: ${{ inputs.operation_id }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ -z "$OPERATION_ID" || "$OPERATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
           [[ "$GITHUB_SHA" == "$EXPECTED_SHA" ]]
           [[ "$GITHUB_REF" == 'refs/heads/main' ]]
           [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
