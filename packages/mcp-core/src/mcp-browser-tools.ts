@@ -26,11 +26,29 @@ export const BROWSER_TOOL_NAMES = [
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
-  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_download",
+  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_download",
   "browser_upload", "browser_console", "browser_network", "browser_trace", "browser_video",
   "browser_pdf", "browser_diagnostics",
 ] as const;
 export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
+
+// The card ChatGPT shows with browser_user_messages, where the user answers the
+// task without leaving the conversation. The Edge serves it.
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v1.html";
+const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
+  browser_user_messages: {
+    ui: { resourceUri: USER_MESSAGES_CARD_URI },
+    "openai/outputTemplate": USER_MESSAGES_CARD_URI,
+    "openai/widgetAccessible": true,
+    "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
+    "openai/toolInvocation/invoked": "Conversa com a tarefa",
+  },
+  browser_user_reply: {
+    ui: { visibility: ["app"] },
+    "openai/widgetAccessible": true,
+    "openai/visibility": "private",
+  },
+};
 
 export interface BrowserToolSecurityScheme {
   type: "oauth2" | "noauth";
@@ -246,7 +264,7 @@ export function registerBrowserTools(
           openWorldHint: true,
           idempotentHint: definition.readOnly,
         },
-        _meta: { securitySchemes },
+        _meta: { securitySchemes, ...TOOL_UI_META[definition.name] },
       },
       async (input, extra) => {
         const authError = validateAuthentication(options, extra.authInfo);
@@ -532,7 +550,7 @@ function definitions(
       () => e.plan(assumeParsed(v)),
       (activeContext) => e.plan(assumeParsed(v), activeContext),
     )),
-    d("browser_user_messages", "Reads the messages the user wrote in the MCP V3 Chrome extension popup while you work: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. To ask the user something without ending your turn, pass question with the taskId: the popup shows it, and waitMs (up to 50000) waits for the answer; with no answer yet, messages is empty and you may keep working and read again later. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
+    d("browser_user_messages", "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. Call it once at the start of a long task, with its taskId, so the user has the card to write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
       if (typeof e.userMessages !== "function") {
         return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "browser_user_messages requires the MCP V3 personal Chrome extension."));
       }
@@ -541,6 +559,17 @@ function definitions(
         context,
         () => userMessages(assumeParsed(v)),
         (activeContext) => userMessages(assumeParsed(v), activeContext),
+      );
+    }),
+    d("browser_user_reply", "Only the reply card of browser_user_messages calls this, to send what the user typed there; never call it yourself.", c.browserUserReplyInputSchema, c.browserUserReplyResultSchema, true, (v, context) => {
+      if (typeof e.postUserMessage !== "function") {
+        return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "browser_user_reply requires the MCP V3 personal Chrome extension."));
+      }
+      const postUserMessage = e.postUserMessage.bind(e);
+      return callWithOptionalContext(
+        context,
+        () => postUserMessage(assumeParsed(v)),
+        (activeContext) => postUserMessage(assumeParsed(v), activeContext),
       );
     }),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(
@@ -818,6 +847,7 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
       ? asked + userMessagesNotice(messages)
       : `${asked}No new message from the user yet; keep working and read again later.`;
   }
+  if (name === "browser_user_reply") return result.accepted === true ? "Sent to the agent." : "Not sent.";
   if (name === "browser_tabs") return `${Array.isArray(result.tabs) ? result.tabs.length : 0} MCP browser tab(s).`;
   if (name === "browser_console" || name === "browser_network") {
     return `tabId=${String(result.tabId)}; characters=${typeof result.text === "string" ? result.text.length : 0}; truncated=${String(result.truncated)}`;

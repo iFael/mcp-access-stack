@@ -5,7 +5,9 @@ import type { BrowserUserMessage } from "./browser-contracts.js";
 /** Takes the user's undelivered messages for a call's task or tab; an unscoped call takes them all. */
 export type TakeUserMessages = (scope: { taskId?: string; tabId?: string }) => BrowserUserMessage[];
 
-const USER_MESSAGES_TOOL = "browser_user_messages";
+// The user's reply card calls browser_user_reply; its result goes back to the
+// card, never to the agent, so it must not take the agent's messages.
+const SKIPPED_TOOLS: ReadonlySet<unknown> = new Set(["browser_user_messages", "browser_user_reply"]);
 // Edge-to-companion operations never reach the agent, so they carry no messages.
 const INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_";
 
@@ -26,7 +28,7 @@ export function installUserMessageDelivery(server: McpServer, take: TakeUserMess
   const original = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
   (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool =
     (name: unknown, config: unknown, handler: unknown) => {
-      if (typeof handler !== "function" || name === USER_MESSAGES_TOOL ||
+      if (typeof handler !== "function" || SKIPPED_TOOLS.has(name) ||
           (typeof name === "string" && name.startsWith(INTERNAL_TOOL_PREFIX))) {
         return original(name, config, handler);
       }

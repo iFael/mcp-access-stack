@@ -5,6 +5,7 @@ import {
   getMcpResponseDiagnostic,
   type EdgeExecutionTransport,
 } from "../src/control-plane/mcp-control-plane.js";
+import { MCP_APP_MIME_TYPE, USER_MESSAGES_CARD_URI } from "../src/control-plane/user-messages-card.js";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 
 const principal: AuthenticatedEdgePrincipal = {
@@ -374,5 +375,72 @@ describe("Edge MCP control plane instructions", () => {
     const without = await createMcpControlPlane(base).handle(initialize);
     const body = await without.json() as { result: Record<string, unknown> };
     expect(body.result).not.toHaveProperty("instructions");
+  });
+});
+
+describe("Edge MCP control plane reply card", () => {
+  const initialize = () => mcpRequest(jsonRpc(1, "initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "card-client", version: "1.0.0" },
+  }));
+  const withCard = [
+    ...manifest,
+    {
+      name: "browser_user_messages",
+      inputSchema: { type: "object" },
+      _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI }, "openai/outputTemplate": USER_MESSAGES_CARD_URI },
+    },
+  ];
+
+  it("serves the card the catalog points at, without asking the companion", async () => {
+    const execution = new FakeExecutionTransport();
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest: withCard,
+      catalogMetadata,
+      serverIdentity,
+    });
+
+    expect(await (await controlPlane.handle(initialize())).json()).toMatchObject({
+      result: { capabilities: { tools: { listChanged: true }, resources: {} } },
+    });
+    const listed = await (await controlPlane.handle(mcpRequest(jsonRpc(2, "resources/list", {})))).json() as {
+      result: { resources: Array<Record<string, unknown>> };
+    };
+    expect(listed.result.resources).toEqual([expect.objectContaining({ uri: USER_MESSAGES_CARD_URI, mimeType: MCP_APP_MIME_TYPE })]);
+    expect(listed.result.resources[0]).not.toHaveProperty("text");
+    expect(await (await controlPlane.handle(mcpRequest(jsonRpc(3, "resources/templates/list", {})))).json())
+      .toMatchObject({ result: { resourceTemplates: [] } });
+
+    const read = await (await controlPlane.handle(mcpRequest(jsonRpc(4, "resources/read", { uri: USER_MESSAGES_CARD_URI })))).json() as {
+      result: { contents: Array<Record<string, unknown>> };
+    };
+    expect(read.result.contents).toEqual([expect.objectContaining({
+      uri: USER_MESSAGES_CARD_URI,
+      mimeType: MCP_APP_MIME_TYPE,
+      text: expect.stringContaining("browser_user_reply"),
+      _meta: expect.objectContaining({ ui: expect.objectContaining({ prefersBorder: true }) }),
+    })]);
+    expect(await (await controlPlane.handle(mcpRequest(jsonRpc(5, "resources/read", { uri: "ui://other.html" })))).json())
+      .toMatchObject({ error: { code: -32002 } });
+    expect(execution.forwardedCalls).toHaveLength(0);
+  });
+
+  it("leaves a catalog without cards exactly as before", async () => {
+    const execution = new FakeExecutionTransport();
+    execution.ready = true;
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest,
+      catalogMetadata,
+      serverIdentity,
+    });
+    const body = await (await controlPlane.handle(initialize())).json() as { result: { capabilities: Record<string, unknown> } };
+    expect(body.result.capabilities).not.toHaveProperty("resources");
+    await controlPlane.handle(mcpRequest(jsonRpc(2, "resources/list", {})));
+    expect(execution.forwardedCalls).toHaveLength(1);
   });
 });

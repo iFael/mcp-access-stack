@@ -45,6 +45,7 @@ export const BROWSER_LATENCY_OPERATIONS = [
   "browser_finish_task",
   "browser_plan",
   "browser_user_messages",
+  "browser_user_reply",
   "browser_download",
   "browser_upload",
   "browser_console",

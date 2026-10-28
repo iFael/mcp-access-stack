@@ -4,7 +4,7 @@ import { describe, expect, it } from "@jest/globals";
 import { z } from "zod";
 import type { BrowserUserMessage } from "../src/browser-contracts.js";
 import type { BrowserExecutor } from "../src/browser-executor.js";
-import { registerBrowserTools } from "../src/mcp-browser-tools.js";
+import { registerBrowserTools, USER_MESSAGES_CARD_URI } from "../src/mcp-browser-tools.js";
 import { installUserMessageDelivery } from "../src/mcp-user-messages.js";
 
 type Handler = (...args: unknown[]) => Promise<CallToolResult>;
@@ -48,7 +48,7 @@ describe("installUserMessageDelivery", () => {
     expect(scopes).toEqual([{}, {}, { taskId: "task-1", tabId: "personal:7" }]);
   });
 
-  it("leaves the message tool itself and Edge-to-companion operations alone", async () => {
+  it("leaves the message tools themselves and Edge-to-companion operations alone", async () => {
     let takes = 0;
     const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
     installUserMessageDelivery(server, () => {
@@ -56,8 +56,11 @@ describe("installUserMessageDelivery", () => {
       return [note];
     });
     register(server, "browser_user_messages", {});
+    register(server, "browser_user_reply", {});
     register(server, "__mcp_v3_internal_take_user_messages", {});
     expect((await call(server, "browser_user_messages", {})).content).toHaveLength(1);
+    // The reply card's own call returns to the card, never to the agent.
+    expect((await call(server, "browser_user_reply", {})).content).toHaveLength(1);
     expect((await call(server, "__mcp_v3_internal_take_user_messages", {})).content).toHaveLength(1);
     expect(takes).toBe(0);
   });
@@ -98,5 +101,43 @@ describe("browser_user_messages", () => {
       isError: true,
       content: [{ type: "text", text: expect.stringContaining("BROWSER_CAPABILITY_UNSUPPORTED") }],
     });
+  });
+});
+
+describe("the reply card in the chat", () => {
+  function registered(server: McpServer, name: string): { _meta?: Record<string, unknown> } {
+    return (server as unknown as { _registeredTools: Record<string, { _meta?: Record<string, unknown> }> })._registeredTools[name]!;
+  }
+
+  it("shows the card with browser_user_messages and keeps the reply tool for the card alone", () => {
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, {} as BrowserExecutor, { includeTools: ["browser_user_messages", "browser_user_reply", "browser_open"] });
+    expect(registered(server, "browser_user_messages")._meta).toMatchObject({
+      securitySchemes: [{ type: "noauth" }],
+      ui: { resourceUri: USER_MESSAGES_CARD_URI },
+      "openai/outputTemplate": USER_MESSAGES_CARD_URI,
+      "openai/widgetAccessible": true,
+    });
+    expect(registered(server, "browser_user_reply")._meta).toMatchObject({
+      ui: { visibility: ["app"] },
+      "openai/visibility": "private",
+      "openai/widgetAccessible": true,
+    });
+    expect(registered(server, "browser_open")._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
+  });
+
+  it("hands what the user typed in the card to the executor", async () => {
+    const inputs: unknown[] = [];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, {
+      postUserMessage: async (input: unknown) => {
+        inputs.push(input);
+        return { id: "msg_cccccccc", accepted: true };
+      },
+    } as unknown as BrowserExecutor, { includeTools: ["browser_user_reply"] });
+    const result = await call(server, "browser_user_reply", { taskId: "task-1", text: "  Pode seguir.  " });
+    expect(inputs).toEqual([{ taskId: "task-1", text: "Pode seguir." }]);
+    expect(result).toMatchObject({ structuredContent: { id: "msg_cccccccc", accepted: true }, content: [{ text: "Sent to the agent." }] });
+    await expect(call(server, "browser_user_reply", { text: "" })).resolves.toMatchObject({ isError: true });
   });
 });

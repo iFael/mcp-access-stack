@@ -670,6 +670,31 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return { messages, ...(asked ? { asked: true } : {}) };
   }
 
+  // What the user writes in the reply card in the ChatGPT conversation joins
+  // the popup's messages, and the extension shows it in the popup as sent.
+  async postUserMessage(
+    ...args: Parameters<NonNullable<BrowserExecutor["postUserMessage"]>>
+  ): ReturnType<NonNullable<BrowserExecutor["postUserMessage"]>> {
+    const [input] = args;
+    const message = {
+      id: `msg_${randomUUID()}`,
+      text: input.text,
+      sentAt: new Date().toISOString(),
+      ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+    };
+    const { added } = this.inbox.accept({ messages: [message] });
+    if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
+    const socket = this.socket;
+    if (added > 0 && socket?.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({ type: "task-messages-external", message }));
+      } catch {
+        // The message is already waiting here; the popup only misses its copy.
+      }
+    }
+    return { id: message.id, accepted: added > 0 };
+  }
+
   takeUserMessages(
     ...args: Parameters<NonNullable<BrowserExecutor["takeUserMessages"]>>
   ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {

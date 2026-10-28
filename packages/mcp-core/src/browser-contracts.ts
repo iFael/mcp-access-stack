@@ -1117,6 +1117,22 @@ export const browserUserMessagesResultSchema = z
   })
   .strict();
 export type BrowserUserMessagesResult = z.infer<typeof browserUserMessagesResultSchema>;
+// What the user writes in the card browser_user_messages shows in the ChatGPT
+// conversation. Only that card calls it; the model never does.
+export const browserUserReplyInputSchema = z
+  .object({
+    taskId: taskIdSchema.optional(),
+    text: z.string().trim().min(1).max(2_000),
+  })
+  .strict();
+export type BrowserUserReplyInput = z.infer<typeof browserUserReplyInputSchema>;
+export const browserUserReplyResultSchema = z
+  .object({
+    id: z.string().regex(/^msg_[a-z0-9-]{8,64}$/),
+    accepted: z.boolean(),
+  })
+  .strict();
+export type BrowserUserReplyResult = z.infer<typeof browserUserReplyResultSchema>;
 
 export const browserDownloadInputSchema = z
   .object({

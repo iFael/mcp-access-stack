@@ -1595,6 +1595,27 @@ describe("PersonalBrowserBridge popup messages", () => {
     }
   });
 
+  it("takes the user's reply from the chat card into the same inbox and shows it in the popup", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      const shown = nextWireMessage(extension, (wire) => wire.type === "task-messages-external");
+      const answer = bridge.userMessages({ taskId: "task-1", question: "Posso apagar?", waitMs: 5_000 });
+      const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pode apagar." });
+      expect(posted).toEqual({ id: expect.stringMatching(/^msg_[0-9a-f-]{36}$/u), accepted: true });
+      await expect(shown).resolves.toMatchObject({ message: { id: posted.id, text: "Pode apagar.", taskId: "task-1" } });
+      await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: posted.id, text: "Pode apagar." }] });
+      // The extension sends it back with its own copies after a reconnect: it is only acknowledged.
+      const again = nextWireMessage(extension, (wire) => wire.type === "task-messages-delivered");
+      extension.send(JSON.stringify({ type: "task-messages", messages: [
+        { id: posted.id, text: "Pode apagar.", sentAt: "2026-10-28T15:00:00.000Z", taskId: "task-1" },
+      ] }));
+      await expect(again).resolves.toMatchObject({ ids: [posted.id] });
+      expect(bridge.pendingUserMessages()).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
   it("refuses popup messages until the extension offers taskMessagesV1", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);

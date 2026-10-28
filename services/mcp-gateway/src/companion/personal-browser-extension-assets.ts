@@ -342,6 +342,10 @@ async function handleMessage(raw) {
     void recordPersonalTaskQuestion(message).catch(() => undefined);
     return;
   }
+  if (message?.type === "task-messages-external") {
+    void recordPersonalExternalTaskMessage(message.message).catch(() => undefined);
+    return;
+  }
   if (message?.type === "recording-cancel") {
     cancelPersonalRecording(message.recordingId);
     return;
@@ -961,7 +965,7 @@ async function recordPersonalTaskQuestion(message) {
   await Promise.resolve(chrome.action?.setBadgeText?.({ text: "?" })).catch(() => undefined);
   await Promise.resolve(chrome.notifications?.create?.("mcp-question:" + Date.now(), {
     type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP tem uma pergunta",
-    message: question + " Responda pelo ícone da extensão MCP V3.", requireInteraction: true, priority: 2,
+    message: question + " Responda no ChatGPT ou pelo ícone da extensão MCP V3.", requireInteraction: true, priority: 2,
   })).catch(() => undefined);
 }
 
@@ -1011,6 +1015,26 @@ async function sendPersonalTaskMessage(chromeTabId, text) {
   });
   if (target.taskId) await clearPersonalTaskQuestion(target.taskId);
   await pushPersonalTaskMessages();
+  await queuePersonalWake({ kind: "message", messageId: message.id });
+}
+
+// A message the user wrote in the reply card in the ChatGPT conversation. The
+// bridge already holds it; the popup shows it like its own, and it answers
+// the task's open question.
+async function recordPersonalExternalTaskMessage(raw) {
+  if (typeof raw?.id !== "string" || !/^msg_[a-z0-9-]{8,64}$/u.test(raw.id) ||
+      typeof raw.text !== "string" || !raw.text.trim() || typeof raw.sentAt !== "string") return;
+  const taskId = typeof raw.taskId === "string" && raw.taskId && raw.taskId.length <= 128 ? raw.taskId : undefined;
+  const message = { id: raw.id, text: raw.text.slice(0, 2000), sentAt: raw.sentAt,
+    ...(taskId ? { taskId } : {}), tabIds: [], source: "chat" };
+  const added = await withPersonalTaskMessages(async () => {
+    const messages = await readPersonalTaskMessages();
+    if (messages.some((entry) => entry.id === message.id)) return false;
+    await writePersonalTaskMessages([...messages, message]);
+    return true;
+  });
+  if (!added) return;
+  await clearPersonalTaskQuestion(taskId);
   await queuePersonalWake({ kind: "message", messageId: message.id });
 }
 
