@@ -278,6 +278,33 @@ describe("Edge catalog workflows",()=>{
     }
   });
 
+  it("forwards the CI run id to the companion publication and finds its run by title",async()=>{
+    const f=edgeSetup();
+    const publish:GitHubReleaseWorkflowInput={...edge,workflow:"companion-only-distribution.yml",ciRunId:40612230756};
+    expect(await f.coordinator.dispatch(publish,context)).toEqual({status:"submitted",operationId});
+    expect(f.calls).toEqual([{workflow:"companion-only-distribution.yml",
+      details:{operation_id:operationId,ci_run_id:"40612230756"}}]);
+    // The same operation never dispatches twice.
+    expect(await f.coordinator.dispatch(publish,context)).toEqual({status:"submitted",operationId});
+    expect(f.calls).toHaveLength(1);
+    // A manual run's title is not this operation's run.
+    f.addRun("companion-only-distribution.yml","publish companion CI-40612230756 @ "+sha);
+    expect((await f.coordinator.reconcile(publish,context)).status).toBe("outcome_unknown");
+    const g=edgeSetup();
+    g.addRun("companion-only-distribution.yml","mcp-companion-publish-"+operationId);
+    expect(await g.coordinator.reconcile(publish,context)).toEqual({
+      status:"observed",operationId,runId:4242001,state:"completed",conclusion:"success"});
+  });
+
+  it("refuses a companion publication without CI run id and a CI run id elsewhere",async()=>{
+    const f=edgeSetup();
+    await expect(f.coordinator.dispatch({...edge,workflow:"companion-only-distribution.yml"},context))
+      .rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    await expect(f.coordinator.dispatch({...edge,workflow:"edge-cas-candidate-stage.yml",ciRunId:1},context))
+      .rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    expect(f.calls).toHaveLength(0);
+  });
+
   it("refuses an activation without stage run id and a stage run id elsewhere",async()=>{
     const f=edgeSetup();
     await expect(f.coordinator.dispatch({...edge,workflow:"edge-catalog-activate.yml"},context))

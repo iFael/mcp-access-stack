@@ -12,7 +12,8 @@ const PUBLIC_RELEASE = "release.yml" as const;
 const EDGE_STAGE = "edge-cas-candidate-stage.yml" as const;
 const EDGE_ACTIVATE = "edge-catalog-activate.yml" as const;
 const EDGE_RECOVER = "edge-catalog-recover-prepare.yml" as const;
-const WORKFLOWS = [F09_WORKFLOW, TAG_BOOTSTRAP, PUBLIC_RELEASE, EDGE_STAGE, EDGE_ACTIVATE, EDGE_RECOVER] as const;
+const COMPANION = "companion-only-distribution.yml" as const;
+const WORKFLOWS = [F09_WORKFLOW, TAG_BOOTSTRAP, PUBLIC_RELEASE, EDGE_STAGE, EDGE_ACTIVATE, EDGE_RECOVER, COMPANION] as const;
 // Each workflow's run-name; the operation finds its own run only by this title.
 const RUN_TITLE_PREFIX: Record<(typeof WORKFLOWS)[number], string> = {
   [F09_WORKFLOW]: "mcp-release-",
@@ -21,6 +22,7 @@ const RUN_TITLE_PREFIX: Record<(typeof WORKFLOWS)[number], string> = {
   [EDGE_STAGE]: "mcp-edge-stage-",
   [EDGE_ACTIVATE]: "mcp-edge-catalog-",
   [EDGE_RECOVER]: "mcp-edge-catalog-recovery-",
+  [COMPANION]: "mcp-companion-publish-",
 };
 const PUBLIC_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u;
 
@@ -34,6 +36,7 @@ export interface GitHubReleaseWorkflowInput {
   operationId: string;
   bootstrapOperationId?: string | undefined;
   stageRunId?: number | undefined;
+  ciRunId?: number | undefined;
 }
 export type GitHubReleaseWorkflowObservation =
   | { status: "submitted" | "outcome_unknown"; operationId: string }
@@ -61,6 +64,9 @@ export class GitHubReleaseWorkflowOperation {
     }
     if (input.workflow === EDGE_ACTIVATE && input.stageRunId === undefined) {
       throw new AppError("INVALID_ARGUMENT", "Edge catalog activation dispatch requires the stage run id.");
+    }
+    if (input.workflow === COMPANION && input.ciRunId === undefined) {
+      throw new AppError("INVALID_ARGUMENT", "Companion publication dispatch requires the CI run id.");
     }
     if (!await this.options.authorize(input, context)) {
       throw new AppError("CAPABILITY_UNSUPPORTED", "Workflow dispatch gate not authorized.");
@@ -91,7 +97,8 @@ export class GitHubReleaseWorkflowOperation {
       await this.options.client.dispatchWorkflow(input.owner,input.repository,input.workflow,
         input.expectedMainSha,{operation_id:input.operationId,
           ...(input.tag===undefined?{}:{tag:input.tag}),
-          ...(input.stageRunId===undefined?{}:{stage_run_id:String(input.stageRunId)})},context);
+          ...(input.stageRunId===undefined?{}:{stage_run_id:String(input.stageRunId)}),
+          ...(input.ciRunId===undefined?{}:{ci_run_id:String(input.ciRunId)})},context);
       await this.options.receipts.markCompleted(identity,{status:"submitted",operationId:input.operationId});
       return {status:"submitted",operationId:input.operationId};
     } catch {
@@ -222,6 +229,9 @@ export class GitHubReleaseWorkflowOperation {
       (input.workflow === EDGE_ACTIVATE
         ? input.stageRunId!==undefined && (!Number.isSafeInteger(input.stageRunId) || input.stageRunId<1)
         : input.stageRunId!==undefined) ||
+      (input.workflow === COMPANION
+        ? input.ciRunId!==undefined && (!Number.isSafeInteger(input.ciRunId) || input.ciRunId<1)
+        : input.ciRunId!==undefined) ||
       !SHA.test(input.expectedMainSha) ||
       !UUID.test(input.operationId) || !context.ownerScope) {
       throw new AppError("INVALID_ARGUMENT","Invalid pinned release workflow operation identity.");
@@ -232,6 +242,7 @@ export class GitHubReleaseWorkflowOperation {
       workflow:input.workflow,tag:input.tag??null,expectedMainSha:input.expectedMainSha,
       operationId:input.operationId,bootstrapOperationId:input.bootstrapOperationId??null,
       ...(input.stageRunId===undefined?{}:{stageRunId:input.stageRunId}),
+      ...(input.ciRunId===undefined?{}:{ciRunId:input.ciRunId}),
       ownerScopeDigest:createHash("sha256").update(context.ownerScope).digest("hex"),
     })).digest("hex");
     return {workspaceId:input.workspaceId,operation:"github_workflow_operation",
@@ -241,7 +252,8 @@ export class GitHubReleaseWorkflowOperation {
       // the SAME immutable tag again, even while GitHub runs are eventually consistent.
       idempotencyKey: input.workflow === F09_WORKFLOW
         ? `release-workflow:${input.workspaceId}:${input.operationId}`
-        : input.workflow === EDGE_STAGE || input.workflow === EDGE_ACTIVATE || input.workflow === EDGE_RECOVER
+        : input.workflow === EDGE_STAGE || input.workflow === EDGE_ACTIVATE || input.workflow === EDGE_RECOVER ||
+            input.workflow === COMPANION
           ? `release-workflow:${input.workspaceId}:${input.workflow}:${input.operationId}`
         : input.workflow === TAG_BOOTSTRAP
           ? `release-workflow:${input.workspaceId}:tag-bootstrap:${input.operationId}`

@@ -10,6 +10,7 @@ export const OPERATION_GUIDE_TOPICS = [
   "index",
   "release",
   "edge_catalog",
+  "companion",
   "workspaces",
   "refusals",
   "source_control",
@@ -49,7 +50,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "every recurring flow already has typed tools, so a shell command is never the first choice.",
     steps: [
       "Call list_workspaces once and choose the workspace by what the job needs (topic workspaces).",
-      "Call get_operation_guide with the matching topic: release, edge_catalog, source_control, background_tasks or browser.",
+      "Call get_operation_guide with the matching topic: release, edge_catalog, companion, source_control, background_tasks or browser.",
       "Follow that topic's steps in order and stop at the first refusal; read topic refusals before trying anything else.",
       "Something failed (a CI check, a workflow run, a service, an endpoint): topic refusals has the diagnosis steps.",
     ],
@@ -112,6 +113,35 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Each step is a separate authorization unless the user approved the whole rollout.",
     ],
     tools: ["github_get_commit_checks", "github_workflow_operation", "get_release_state", "prepare_release", "promote_release"],
+  },
+  companion: {
+    title: "Publish and install the Windows companion",
+    summary:
+      "Every green main CI builds a checksummed Windows companion artifact. Publishing it as a GitHub release is one " +
+      "guarded workflow; installing it is prepare_release and promote_release in the Windows workspace. The " +
+      "MCP V3 local updater Scheduled Task applies the request on its own within a few minutes.",
+    steps: [
+      "Check: github_get_commit_checks on the exact main SHA must be green, and github_read kind=workflow_runs with that headSha gives the successful CI runId (its companion release id is <base version>-companion.<runId>).",
+      "Publish: github_workflow_operation workflow=companion-only-distribution.yml mode=dispatch with expectedMainSha, ciRunId = that CI runId and a new operationId, in the Linux execution-node workspace; reconcile with the same identifiers until completed and success.",
+      "Prepare: prepare_release with the companion tag in the Windows workspace; follow the task with wait_background_task until it exits 0, then get_release_state must list the candidate.",
+      "Promote (only with the user's go-ahead): promote_release with the candidate releaseId. It returns handover_started after writing the update request.",
+      "Wait: the updater task checks for a request every 5 minutes. The companion restarts during the swap, so AGENT_UNAVAILABLE for a few minutes is expected; then get_release_state must show the new release active and no candidate.",
+    ],
+    rules: [
+      "Never start, enable, change or register a Scheduled Task, not even the updater: the task starts itself, and endpoint protection kills the companion when it starts one.",
+      "If nothing changed after 15 minutes, report it to the user; an updater task installed before the 5-minute check only runs daily until the user re-runs Install-McpV3LocalUpdateTask.ps1 -Force from the Windows console.",
+      "The publication runs once per CI run: a second dispatch for the same ciRunId is refused, and a failed one is diagnosed with github_read before anything else.",
+      "main must not move between the check and the publication; if it did, start again from the new main CI.",
+    ],
+    tools: [
+      "github_get_commit_checks",
+      "github_read",
+      "github_workflow_operation",
+      "prepare_release",
+      "wait_background_task",
+      "get_release_state",
+      "promote_release",
+    ],
   },
   workspaces: {
     title: "Choose the right workspace",

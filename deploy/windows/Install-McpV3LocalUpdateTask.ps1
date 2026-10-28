@@ -13,6 +13,10 @@ param(
     [ValidateRange(0, 23)]
     [int]$Hour = 3,
 
+    # How often Task Scheduler itself looks for a promote_release request.
+    [ValidateRange(1, 60)]
+    [int]$PollMinutes = 5,
+
     [switch]$Execute,
     [switch]$Force,
     [switch]$Activate,
@@ -80,6 +84,7 @@ if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) {
 }
 
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$pollInterval = 'PT{0}M' -f $PollMinutes
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $alreadyInstalled = $false
 if ($existing) {
@@ -89,7 +94,10 @@ if ($existing) {
         [string]$actions[0].Arguments -eq $arguments -and
         (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$existing.Principal.UserId) -Right $userId) -and
         [string]$existing.Principal.LogonType -in @('Interactive', 'InteractiveToken') -and
-        [string]$existing.Principal.RunLevel -eq 'Limited'
+        [string]$existing.Principal.RunLevel -eq 'Limited' -and
+        @(@($existing.Triggers) | Where-Object {
+            $null -ne $_.Repetition -and [string]$_.Repetition.Interval -eq $pollInterval
+        }).Count -eq 1
     if ($matches) {
         $alreadyInstalled = $true
     }
@@ -105,8 +113,12 @@ if (-not $alreadyInstalled) {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
     $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments -WorkingDirectory $state
-    $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour))
-    $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Applies MCP V3 local release requests from promote_release and, when auto-update is on, checks for new releases daily. Run it to apply a pending request.'
+    # The repeating trigger lets Task Scheduler, not the companion, start the
+    # updater soon after promote_release writes a request; without a request
+    # the run exits at once, and the release check still happens once a day.
+    $daily = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour))
+    $poll = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes $PollMinutes)
+    $task = New-ScheduledTask -Action $action -Trigger @($daily, $poll) -Principal $principal -Settings $settings -Description "Applies MCP V3 local release requests from promote_release within $PollMinutes minutes and, when auto-update is on, checks for new releases daily."
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 }
 
@@ -127,4 +139,5 @@ Enable-ScheduledTask -TaskName $TaskName | Out-Null
     companionTaskName = $CompanionTaskName
     repository = $Repository
     hour = $Hour
+    pollMinutes = $PollMinutes
 } | ConvertTo-Json -Compress

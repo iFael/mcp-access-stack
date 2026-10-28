@@ -58,8 +58,8 @@ if (Test-Path -LiteralPath $requestPath) {
 # The companion runs this script as its own child. Bitdefender's Advanced
 # Threat Control kills a node process whose child registers, enables or starts
 # a Scheduled Task, so this handoff only reads the updater task and writes the
-# request. The person runs the updater task from Task Scheduler, or its daily
-# trigger picks the request up.
+# request. Task Scheduler starts the updater task every few minutes and it
+# picks the request up; the person can also run it from Task Scheduler.
 $existingTask = Get-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction SilentlyContinue
 $reinstall = "Install it once from the Windows console: Install-McpV3LocalUpdateTask.ps1 -InstallationRoot '$installation' -StateRoot '$state' -Execute -Force"
 if (-not $existingTask) {

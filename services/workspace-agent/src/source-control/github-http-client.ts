@@ -385,7 +385,8 @@ export class GitHubHttpClient implements GitHubApiClient {
   async dispatchWorkflow(owner: string, repository: string, workflow: string,
     expectedSha: string, inputs: Record<string, string>, context?: OperationContext): Promise<void> {
     if (!["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml",
-      "edge-cas-candidate-stage.yml","edge-catalog-activate.yml","edge-catalog-recover-prepare.yml"].includes(workflow)) {
+      "edge-cas-candidate-stage.yml","edge-catalog-activate.yml","edge-catalog-recover-prepare.yml",
+      "companion-only-distribution.yml"].includes(workflow)) {
       throw new AppError("INVALID_ARGUMENT", "Workflow dispatch is not allowlisted.");
     }
     const requestInputs = workflow === "release-tag-bootstrap.yml"
@@ -395,7 +396,9 @@ export class GitHubHttpClient implements GitHubApiClient {
         : workflow === "edge-catalog-activate.yml"
           // The Cloudflare pins are left empty: the workflow takes them from the stage run.
           ? {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha,stage_run_id: inputs.stage_run_id ?? ""}
-          : {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha};
+          : workflow === "companion-only-distribution.yml"
+            ? {operation_id: inputs.operation_id ?? "",expected_sha: expectedSha,ci_run_id: inputs.ci_run_id ?? ""}
+            : {operation_id: inputs.operation_id ?? "",expected_main_sha: expectedSha};
     await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
       method: "POST",
       path: `/repos/${segment(owner)}/${segment(repository)}/actions/workflows/${segment(workflow)}/dispatches`,

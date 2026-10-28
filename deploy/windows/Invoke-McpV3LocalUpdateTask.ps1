@@ -94,6 +94,30 @@ try {
             [pscustomobject]@{ status = 'idle'; reason = 'no-request-and-auto-update-off' } | ConvertTo-Json -Compress
             return
         }
+        # The task also runs every few minutes to pick up requests; the release
+        # check itself stays daily. The time is recorded before the check so a
+        # failing check is not retried on every run.
+        $lastCheckPath = Join-Path $state 'updater\last-auto-check.json'
+        $lastCheck = $null
+        if (Test-Path -LiteralPath $lastCheckPath -PathType Leaf) {
+            try {
+                $lastCheck = [DateTimeOffset](Get-Content -LiteralPath $lastCheckPath -Raw | ConvertFrom-Json).checkedAt
+            }
+            catch {
+                $lastCheck = $null
+            }
+        }
+        $now = [DateTimeOffset]::UtcNow
+        if ($null -ne $lastCheck -and $lastCheck -le $now -and ($now - $lastCheck) -lt [TimeSpan]::FromHours(20)) {
+            [pscustomobject]@{ status = 'idle'; reason = 'auto-update-checked-recently' } | ConvertTo-Json -Compress
+            return
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lastCheckPath) | Out-Null
+        [IO.File]::WriteAllText(
+            $lastCheckPath,
+            (([ordered]@{ version = 1; checkedAt = $now.ToString('O') } | ConvertTo-Json -Compress) + [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false)
+        )
     }
 
     $updater = Join-Path $PSScriptRoot 'Update-McpV3Local.ps1'

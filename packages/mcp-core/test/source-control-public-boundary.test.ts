@@ -117,6 +117,18 @@ describe("unified workflow bootstrap provenance",()=>{
     expect(githubWorkflowOperationInputSchema.safeParse({...activation,stageRunId:0}).success).toBe(false);
     expect(githubWorkflowOperationInputSchema.safeParse({...activation,workflow:"deploy.yml",stageRunId:1}).success).toBe(false);
   });
+  it("accepts the companion publication with ciRunId only, and ciRunId nowhere else",()=>{
+    const companion={workspaceId:"repo",owner:"octo",repository:"app",mode:"dispatch" as const,
+      workflow:"companion-only-distribution.yml" as const,
+      expectedMainSha:shaA,operationId:"11111111-2222-4333-8444-555555555558"};
+    expect(githubWorkflowOperationInputSchema.safeParse(companion).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,ciRunId:40612230756}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,mode:"reconcile"}).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,ciRunId:0}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,ciRunId:1,tag:"v1.1.0-companion.1"}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,ciRunId:1,stageRunId:1}).success).toBe(false);
+    expect(githubWorkflowOperationInputSchema.safeParse({...companion,workflow:"edge-cas-candidate-stage.yml",ciRunId:1}).success).toBe(false);
+  });
 });
 
 const forbiddenEscapeHatchValues = {

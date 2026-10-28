@@ -156,7 +156,9 @@ Assert-ContainsAll -Label 'MCP V3 local auto-update task' -Source $updateTask -T
     '-ExecutionPolicy RemoteSigned -File',
     'updater\settings.json',
     'autoUpdate = [bool]$Activate',
-    'Enable-ScheduledTask -TaskName $TaskName'
+    'Enable-ScheduledTask -TaskName $TaskName',
+    '-RepetitionInterval (New-TimeSpan -Minutes $PollMinutes)',
+    'Repetition.Interval -eq $pollInterval'
 )
 # Endpoint protection treats hidden tasks and encoded PowerShell as malware signals.
 Assert-ContainsNone -Label 'MCP V3 local auto-update task' -Source $updateTask -Tokens @('-EncodedCommand', '-Hidden')
@@ -207,6 +209,8 @@ Assert-ContainsAll -Label 'MCP V3 local update task runner' -Source $updateRunne
     "status = 'failed'",
     'updater\settings.json',
     'no-request-and-auto-update-off',
+    'auto-update-checked-recently',
+    'updater\last-auto-check.json',
     'result-$operationId.json'
 )
 Assert-ContainsNone -Label 'MCP V3 local update task runner' -Source $updateRunner -Tokens @('Disable-ScheduledTask')

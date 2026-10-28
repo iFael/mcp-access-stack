@@ -1504,7 +1504,8 @@ export class LocalAgent {
           ? "github.repository.read" as const
           : parsed.workflow === "release-tag-bootstrap.yml"
             ? "github.workflow.bootstrap" as const
-            : parsed.workflow === "release.yml"
+            // The companion publication creates a public GitHub release too.
+            : parsed.workflow === "release.yml" || parsed.workflow === "companion-only-distribution.yml"
               ? "github.workflow.public_release" as const
               : "github.workflow.dispatch" as const;
         metadata.sourceControlCapability = capability;
@@ -1520,7 +1521,7 @@ export class LocalAgent {
             await this.assertGitHubRepositoryCapability(workspace,
               parsed.workflow === "release-tag-bootstrap.yml"
                 ? "github.workflow.bootstrap"
-                : parsed.workflow === "release.yml"
+                : parsed.workflow === "release.yml" || parsed.workflow === "companion-only-distribution.yml"
                   ? "github.workflow.public_release" : "github.workflow.dispatch",
               repository, parsed.root ?? ".", true, activeContext.signal);
             return true;

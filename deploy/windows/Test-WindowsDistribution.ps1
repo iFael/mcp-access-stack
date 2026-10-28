@@ -107,6 +107,8 @@ Assert-ContainsAll -Label 'Companion-only workflow' -Source $companionWorkflow -
     'workflow_dispatch:',
     'inputs.expected_sha',
     'inputs.ci_run_id',
+    'inputs.operation_id',
+    'mcp-companion-publish-',
     'bootstrap-release-tag.mjs',
     'gh release create',
     '--verify-tag --prerelease',

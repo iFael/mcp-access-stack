@@ -115,6 +115,18 @@ describe("GitHubHttpClient fixed transport", () => {
       operation_id:op,expected_main_sha:"a".repeat(40)});
   });
 
+  it("dispatches the companion publication with only the operation, main SHA and CI run inputs", async () => {
+    const fetchImpl=jest.fn(async()=>new Response(null,{status:204}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    const op="11111111-2222-4333-8444-555555555555";
+    await client.dispatchWorkflow("octo","app","companion-only-distribution.yml","a".repeat(40),
+      {operation_id:op,ci_run_id:"40612230756",tag:"must-not-forward"});
+    expect(requestOf(fetchImpl,0).url).toBe(
+      "https://api.github.com/repos/octo/app/actions/workflows/companion-only-distribution.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl,0).init.body)).inputs).toEqual({
+      operation_id:op,expected_sha:"a".repeat(40),ci_run_id:"40612230756"});
+  });
+
   it("builds only the fixed GitHub API endpoints, methods and headers", async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ ok: true }));
     const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });

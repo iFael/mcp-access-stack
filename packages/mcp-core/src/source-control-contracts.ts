@@ -789,6 +789,7 @@ export const GITHUB_OPERATION_WORKFLOWS = [
   "edge-cas-candidate-stage.yml",
   "edge-catalog-activate.yml",
   "edge-catalog-recover-prepare.yml",
+  "companion-only-distribution.yml",
 ] as const;
 export type GitHubOperationWorkflow = (typeof GITHUB_OPERATION_WORKFLOWS)[number];
 
@@ -804,6 +805,7 @@ export const githubWorkflowOperationInputSchema = z.object({
   operationId: z.uuid(),
   bootstrapOperationId: z.uuid().optional(),
   stageRunId: z.number().int().positive().optional(),
+  ciRunId: z.number().int().positive().optional(),
 }).strict().superRefine((input,ctx)=>{
   const isPublic=input.workflow==="release.yml";
   const needsTag=isPublic || input.workflow==="release-tag-bootstrap.yml";
@@ -817,6 +819,11 @@ export const githubWorkflowOperationInputSchema = z.object({
   if((isActivation && input.mode==="dispatch" && input.stageRunId===undefined) ||
       (!isActivation && input.stageRunId!==undefined)){
     ctx.addIssue({code:"custom",message:"Edge catalog activation dispatch needs stageRunId; other workflows forbid that field."});
+  }
+  const isCompanion=input.workflow==="companion-only-distribution.yml";
+  if((isCompanion && input.mode==="dispatch" && input.ciRunId===undefined) ||
+      (!isCompanion && input.ciRunId!==undefined)){
+    ctx.addIssue({code:"custom",message:"Companion publication dispatch needs ciRunId; other workflows forbid that field."});
   }
 });
 export type GitHubWorkflowOperationInput = z.infer<typeof githubWorkflowOperationInputSchema>;
