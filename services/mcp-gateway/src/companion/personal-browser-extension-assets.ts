@@ -459,9 +459,10 @@ async function personalTabSharingDispatch(message) {
   if (pendingShare && (message.type === "mcp-tab-share" || message.type === "mcp-tab-unshare")) {
     await answerPersonalShare(tab.id, message.type === "mcp-tab-share");
   } else if (message.type === "mcp-tab-share") {
-    // A tab shared from the popup gets an MCP group of its own, as if dragged
-    // into one: tabs dragged into that group are shared too.
-    const taskId = "shared-" + crypto.randomUUID();
+    // A tab shared from the popup gets an MCP group of its own: tabs dragged
+    // into that group are shared too. The group is not a task, so its tabs keep
+    // their approvals while they stay shared, as before.
+    const groupKey = PERSONAL_POPUP_SHARE_PREFIX + crypto.randomUUID();
     const url = await withOwnershipLock(async () => {
       const owned = await readOwnedTabs();
       if (owned[String(tab.id)]) throw Error("already-owned");
@@ -469,7 +470,7 @@ async function personalTabSharingDispatch(message) {
       const sharedUrl = assertPersonalNavigationTarget(current.url);
       const now = new Date().toISOString();
       owned[String(tab.id)] = {
-        tabId: PERSONAL_PREFIX + tab.id, taskId, lifecycle: "external", ownership: "user",
+        tabId: PERSONAL_PREFIX + tab.id, lifecycle: "external", ownership: "user",
         purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
         createdAt: now, lastUsedAt: now, requestedUrl: sharedUrl,
       };
@@ -479,8 +480,8 @@ async function personalTabSharingDispatch(message) {
     await setPersonalSharedBadge(tab.id, true);
     pendingMcpTabs.add(tab.id);
     try {
-      const groupId = await assignMcpTaskGroup(tab.id, taskId, {}, url);
-      if (Number.isInteger(groupId)) await attachSharedTabToTask(tab.id, taskId, groupId);
+      const groupId = await assignMcpTaskGroup(tab.id, groupKey, {}, url);
+      if (Number.isInteger(groupId)) await attachSharedTabToTask(tab.id, groupKey, groupId);
     } finally {
       pendingMcpTabs.delete(tab.id);
     }
@@ -1294,10 +1295,18 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     const current = await chrome.windows.get(tab.windowId, { populate: true });
     let windowId = tab.windowId;
     if (current.type !== "normal" || (current.tabs || []).length !== 1) {
-      const created = await chrome.windows.create({
-        tabId: chromeTabId, focused: false, state: "normal", width, height,
-      });
-      windowId = created.id;
+      // Moving the tab takes it out of its task's group; that move is MCP's, not
+      // the user dragging the tab out, so the tab stays owned and is regrouped.
+      pendingMcpTabs.add(chromeTabId);
+      try {
+        const created = await chrome.windows.create({
+          tabId: chromeTabId, focused: false, state: "normal", width, height,
+        });
+        windowId = created.id;
+        await regroupMovedPersonalTab(chromeTabId, tab.groupId, windowId);
+      } finally {
+        pendingMcpTabs.delete(chromeTabId);
+      }
     }
     throwIfAborted(signal, "viewport", true);
     const resized = await chrome.windows.update(windowId, { state: "normal", width, height });
@@ -1323,6 +1332,28 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome cannot resize the owned tab's window.");
   }
+}
+
+// A tab MCP moved into a window of its own gets a group there styled like its
+// task's group, so it still shows as the task's tab and leaves the task only
+// when the user drags it out of that group.
+async function regroupMovedPersonalTab(chromeTabId, previousGroupId, windowId) {
+  await withOwnershipLock(async () => {
+    const owned = await readOwnedTabs();
+    const metadata = owned[String(chromeTabId)];
+    if (!metadata || !Number.isInteger(metadata.mcpGroupId) || typeof metadata.taskId !== "string") return;
+    let groupId;
+    try {
+      const style = await chrome.tabGroups.get(previousGroupId).catch(() => undefined);
+      groupId = await chrome.tabs.group({ tabIds: chromeTabId, createProperties: { windowId } });
+      if (style) await chrome.tabGroups.update(groupId, { title: style.title, color: style.color }).catch(() => undefined);
+      await rememberMcpGroup(groupId, metadata.taskId);
+    } catch {
+      groupId = undefined;
+    }
+    owned[String(chromeTabId)] = { ...metadata, mcpGroupId: groupId };
+    await writeOwnedTabs(owned);
+  });
 }
 
 async function configurePersonalViewport(input, signal) {
@@ -5435,6 +5466,8 @@ const PERSONAL_CONFIRM_DRAG_KEY = "mcpV3ConfirmDragShare";
 const MAX_PERSONAL_TASK_TABS = 20;
 const PERSONAL_PAUSE_LIMIT_MS = 24 * 60 * 60 * 1000;
 const PERSONAL_PAUSED_SUFFIX = " (em espera)";
+// The group a popup share starts is keyed by this prefix and is no task.
+const PERSONAL_POPUP_SHARE_PREFIX = "shared-";
 // Tabs the extension itself is opening or regrouping: their group change is not the user's.
 const pendingMcpTabs = new Set();
 
@@ -5491,17 +5524,24 @@ function followPersonalTabGroup(chromeTabId, groupId) {
   return enqueueMutation("group:" + chromeTabId, async () => {
     if (pendingMcpTabs.has(chromeTabId)) return;
     if (Object.values(await readSessionMap(PERSONAL_TASK_HOMES_KEY)).includes(chromeTabId)) return;
+    // Events can arrive late, after MCP regrouped the tab: act on its group now.
+    const live = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (!live) return;
+    if (Number.isInteger(live.groupId)) groupId = live.groupId;
     const groupTask = await mcpGroupTask(groupId);
     const metadata = (await readOwnedTabs())[String(chromeTabId)];
-    if (metadata && metadata.taskId === groupTask) return;
-    if (metadata?.ownership === "user" && metadata.taskId === undefined) {
-      // A tab shared from the popup joins the task whose group it is dragged into.
-      if (groupTask) await attachSharedTabToTask(chromeTabId, groupTask, groupId);
-      return;
-    }
     if (metadata) {
+      if (Number.isInteger(metadata.mcpGroupId) && metadata.mcpGroupId === groupId) return;
+      if (typeof metadata.taskId === "string" && metadata.taskId === groupTask) return;
+      if (!Number.isInteger(metadata.mcpGroupId)) {
+        // A tab shared from the popup outside any group joins the group it is
+        // dragged into; any other tab that sat in no group stays as it is.
+        if (metadata.ownership === "user" && metadata.taskId === undefined && groupTask) {
+          await attachSharedTabToTask(chromeTabId, groupTask, groupId);
+        }
+        return;
+      }
       // Only a tab that sat in its task's group can leave it.
-      if (!Number.isInteger(metadata.mcpGroupId)) return;
       await releasePersonalGroupTab(chromeTabId, metadata);
     }
     await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(chromeTabId)]; })
@@ -5510,12 +5550,17 @@ function followPersonalTabGroup(chromeTabId, groupId) {
   }).catch(() => undefined);
 }
 
+function isPopupShareGroup(taskId) {
+  return typeof taskId === "string" && taskId.startsWith(PERSONAL_POPUP_SHARE_PREFIX);
+}
+
 async function attachSharedTabToTask(chromeTabId, taskId, groupId) {
   await withOwnershipLock(async () => {
     const owned = await readOwnedTabs();
     const metadata = owned[String(chromeTabId)];
     if (!metadata) return;
-    owned[String(chromeTabId)] = { ...metadata, taskId, mcpGroupId: groupId };
+    owned[String(chromeTabId)] = { ...metadata,
+      ...(isPopupShareGroup(taskId) ? {} : { taskId }), mcpGroupId: groupId };
     await writeOwnedTabs(owned);
   });
 }
@@ -5594,7 +5639,8 @@ async function sharePersonalTabWithTask(chromeTabId, taskId, groupId) {
     if (owned[String(chromeTabId)] || countPersonalTaskTabs(owned, taskId) >= MAX_PERSONAL_TASK_TABS) return false;
     const now = new Date().toISOString();
     owned[String(chromeTabId)] = {
-      tabId: PERSONAL_PREFIX + chromeTabId, taskId, lifecycle: "external", ownership: "user",
+      tabId: PERSONAL_PREFIX + chromeTabId, ...(isPopupShareGroup(taskId) ? {} : { taskId }),
+      lifecycle: "external", ownership: "user",
       purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
       mcpGroupId: groupId, createdAt: now, lastUsedAt: now, requestedUrl: url,
     };

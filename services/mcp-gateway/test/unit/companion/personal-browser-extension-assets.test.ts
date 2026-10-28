@@ -2492,8 +2492,14 @@ describe("personal browser extension assets", () => {
     let tabCount = 3;
     let pageWidth = 1280;
     const resets: number[] = [];
+    const regrouped: unknown[][] = [];
+    const pendingMcpTabs = new Set<number>();
     const ctx = vm.createContext({
       Map, Promise,
+      pendingMcpTabs,
+      regroupMovedPersonalTab: async (...args: unknown[]) => {
+        regrouped.push([...args, pendingMcpTabs.has(7)]);
+      },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -2504,7 +2510,7 @@ describe("personal browser extension assets", () => {
       },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ id: 7, windowId, url: "https://example.com/" }) },
+        tabs: { get: async () => ({ id: 7, windowId, groupId: windowId === 1 ? 40 : 41, url: "https://example.com/" }) },
         windows: {
           get: async (id: number, options: unknown) => {
             calls.push(["get", { id, options }]);
@@ -2549,6 +2555,9 @@ describe("personal browser extension assets", () => {
       ["create", { tabId: 7, focused: false, state: "normal", width: 900, height: 700 }],
       ["update", { id: 2, state: "normal", width: 900, height: 700 }],
     ]);
+    // The move is MCP's own: the tab is regrouped in its new window, not released.
+    expect(regrouped).toEqual([[7, 40, 2, true]]);
+    expect(pendingMcpTabs.size).toBe(0);
 
     calls.length = 0;
     await expect(setViewport({ tabId: "personal:7", preset: "window", width: 1024, height: 768 }))
@@ -3012,7 +3021,9 @@ describe("personal browser extension assets", () => {
     await expect(dispatch({ type: "mcp-tab-share", tabId: 5 })).resolves.toMatchObject({ shared: true, shareable: false });
     // The shared tab starts an MCP group of its own.
     expect(sharedGroups).toEqual([[5, "shared-uuid-1"]]);
-    expect(owned["5"]).toMatchObject({ taskId: "shared-uuid-1", ownership: "user", mcpGroupId: 40 });
+    // The group is no task: the tab keeps its approvals while it stays shared.
+    expect(owned["5"]).toMatchObject({ ownership: "user", mcpGroupId: 40 });
+    expect(owned["5"]).not.toHaveProperty("taskId");
     expect(owned["5"]).toMatchObject({ tabId: "personal:5", ownership: "user", lifecycle: "external",
       protected: true, requestedUrl: "https://mail.example/inbox?token=abc#msg" });
     expect(badges).toEqual([[5, "MCP"]]);
@@ -4004,6 +4015,59 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     expect(harness.ungrouped).toContain(9);
   });
 
+  it("shares tabs dragged into a popup share's group without a task and gives them back when dragged out", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const harness = groupHarness(serviceWorker);
+    const { chromeTabs, owned, follow } = harness;
+    chromeTabs.set(5, { id: 5, url: "https://mail.example/inbox", groupId: 40 });
+    harness.setOwned({ "5": { tabId: "personal:5", ownership: "user", protected: true, mcpGroupId: 40 } });
+    harness.groups.set(40, { title: "MCP · mail.example" });
+    await harness.remember(40, "shared-uuid-1");
+
+    await follow(5, 40);
+    chromeTabs.set(6, { id: 6, url: "https://mail.example/sent", groupId: 40, title: "Enviados" });
+    await follow(6, 40);
+    expect(owned()["6"]).toMatchObject({ ownership: "user", mcpGroupId: 40 });
+    expect(owned()["6"]).not.toHaveProperty("taskId");
+    expect(owned()["5"]).not.toHaveProperty("taskId");
+
+    chromeTabs.get(5)!.groupId = -1;
+    await follow(5, -1);
+    expect(owned()["5"]).toBeUndefined();
+    expect(owned()["6"]).toBeDefined();
+    expect(harness.removed).toEqual([]);
+  });
+
+  it("keeps a tab MCP moved into a window of its own, even when Chrome reports the move late", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const harness = groupHarness(serviceWorker);
+    const { chromeTabs, owned, follow } = harness;
+    chromeTabs.set(1, { id: 1, url: "https://shop.example/a", groupId: 5 });
+    harness.setOwned({ "1": { tabId: "personal:1", taskId: "t1", ownership: "mcp", mcpGroupId: 5 } });
+    harness.groups.set(5, { title: "MCP · shop.example", color: "green" });
+    await harness.remember(5, "t1");
+
+    // The resize moved the tab out of its group: it gets a look-alike group in its window.
+    chromeTabs.get(1)!.groupId = -1;
+    await harness.regroup(1, 5, 2);
+    const moved = owned()["1"]!;
+    expect(moved).toMatchObject({ taskId: "t1", ownership: "mcp" });
+    expect(moved.mcpGroupId).not.toBe(5);
+    expect(harness.groups.get(moved.mcpGroupId as number)).toEqual({
+      windowId: 2, title: "MCP · shop.example", color: "green" });
+
+    // Chrome's events for the move arrive afterwards and do not release the tab.
+    await follow(1, -1);
+    await follow(1, moved.mcpGroupId as number);
+    expect(owned()["1"]).toMatchObject({ taskId: "t1", mcpGroupId: moved.mcpGroupId });
+
+    // The user dragging it out of the new group still gives it back.
+    chromeTabs.get(1)!.groupId = -1;
+    await follow(1, -1);
+    expect(owned()["1"]).toBeUndefined();
+    expect(harness.removed).toEqual([]);
+  });
+
   it("pauses a task in its collapsed group, refuses work there and resumes it, closing it after a day", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const harness = groupHarness(serviceWorker);
@@ -4283,9 +4347,9 @@ function extractConst(source: string, name: string): string {
 
 const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
-  "pendingMcpTabs"];
+  "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs"];
 const GROUP_SUPPORT_FUNCTIONS = ["readSessionMap", "changeSessionMap", "rememberMcpGroup", "mcpGroupTask",
-  "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup",
+  "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup", "isPopupShareGroup",
   "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask",
   "readPendingPersonalShare", "answerPersonalShare", "refusePersonalGroupShare", "notifyPersonalShare", "personalDragShareNeedsConfirmation",
   "mcpGroupTitle", "preparePersonalTaskGroup", "takePersonalTaskHome", "closePersonalTaskHomes",
@@ -4347,6 +4411,12 @@ function groupHarness(serviceWorker: string) {
           return { ...chromeTabs.get(id)! };
         },
         ungroup: async (id: number) => { ungrouped.push(id); },
+        group: async (options: { tabIds: number; createProperties?: Record<string, unknown> }) => {
+          const groupId = 100 + groups.size;
+          groups.set(groupId, { windowId: options.createProperties?.windowId });
+          chromeTabs.get(options.tabIds)!.groupId = groupId;
+          return groupId;
+        },
         remove: async (id: number) => { removed.push(id); chromeTabs.delete(id); },
       },
       tabGroups: {
@@ -4386,7 +4456,7 @@ const axTargetsByTab = new Map(); const personalNetworkEntries = new Map(); cons
 let ownershipTail = Promise.resolve();`, context);
   for (const name of ["withOwnershipLock", "enqueueMutation", "readOwnedTabs", "writeOwnedTabs", "removeOwnedTab",
     "coded", "chromeTabIdFrom", "isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget",
-    "releasePersonalSharedTab", "setPersonalSharedBadge", "mcpTaskGroupStyle"]) {
+    "releasePersonalSharedTab", "setPersonalSharedBadge", "mcpTaskGroupStyle", "regroupMovedPersonalTab"]) {
     vm.runInContext(extractFunction(serviceWorker, name), context);
   }
   vm.runInContext(`${extractConst(serviceWorker, "MCP_TASK_GROUP_COLORS")}
@@ -4409,5 +4479,6 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     prepare: run<(plan: Record<string, unknown>) => Promise<void>>("preparePersonalTaskGroup"),
     takeHome: run<(taskId: string, url: string) => Promise<FakeTab | undefined>>("takePersonalTaskHome"),
     limit: run<(owned: Record<string, unknown>, taskId: string) => void>("enforcePersonalTaskTabLimit"),
+    regroup: run<(tabId: number, previousGroupId: number, windowId: number) => Promise<void>>("regroupMovedPersonalTab"),
   };
 }
