@@ -2921,7 +2921,7 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.13.0");
+    expect(parsedManifest.version).toBe("1.13.1");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3128,13 +3128,20 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     const notifications: Array<[string, string, Record<string, unknown>?]> = [];
     const owned: Record<string, Record<string, unknown>> = { "7": { tabId: "personal:7", ownership: "mcp" } };
     let onTick: (() => Promise<void>) | undefined;
+    // Each popup message pushed to the bridge, and whether the tab was still with the user then.
+    const pushed: Array<{ texts: unknown[]; userHadTab: boolean }> = [];
     const storageArea = (map: Map<string, unknown>) => ({
       get: async (key: string) => ({ [key]: map.get(key) }),
       set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
       remove: async (key: string) => { map.delete(key); },
     });
     const context = vm.createContext({
-      Date, Number, String, Math, Promise, Array, Object,
+      Date, Number, String, Math, Promise, Array, Object, Set,
+      crypto: { randomUUID: () => "00000001-0000-4000-8000-000000000000" },
+      send: (value: { messages: Array<{ text: unknown }> }) => {
+        const handoff = session.get("mcpV3PersonalHandoff:7") as { done?: boolean } | undefined;
+        pushed.push({ texts: value.messages.map((message) => message.text), userHadTab: Boolean(handoff && !handoff.done) });
+      },
       chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
       requireOwnedMetadata: async (id: number) => {
         if (!owned[String(id)]) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_OWNED" });
@@ -3220,6 +3227,26 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     await expect(waitForUser({ tabId: "personal:7", forUser: "Aprove no celular", timeoutMs: 1 }))
       .resolves.toEqual({ tabId: "personal:7", completed: true });
     expect(session.size).toBe(0);
+
+    // "Enviar e devolver" sends the note while the user still has the tab, then hands it back.
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Login feito", resume: true }))
+      .rejects.toThrow("not-waiting");
+    expect(pushed).toEqual([]);
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Login feito, 2FA pelo SMS", resume: true }))
+      .resolves.not.toHaveProperty("waiting");
+    expect(pushed).toEqual([{ texts: ["Login feito, 2FA pelo SMS"], userHadTab: true }]);
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login", timeoutMs: 1 }))
+      .resolves.toEqual({ tabId: "personal:7", completed: true });
+
+    // A plain message leaves the tab with the user.
+    await expect(waitForUser({ tabId: "personal:7", forUser: "Escolha o plano", timeoutMs: 1 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(dispatch({ type: "mcp-tab-message", tabId: 7, text: "Vou escolher o anual" }))
+      .resolves.toMatchObject({ waiting: "Escolha o plano" });
+    await dispatch({ type: "mcp-tab-resume", tabId: 7 });
+    await waitForUser({ tabId: "personal:7", forUser: "Escolha o plano", timeoutMs: 1 });
 
     // If the user stops sharing instead of handing the tab back, the wait reports it.
     onTick = async () => { delete owned["7"]; session.clear(); };

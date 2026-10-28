@@ -27,8 +27,9 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   const target = document.getElementById("task-target");
   const text = document.getElementById("task-text");
   const send = document.getElementById("task-send");
+  const sendResume = document.getElementById("task-send-resume");
   const recent = document.getElementById("task-recent");
-  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto, send];
+  const controls = [share, unshare, context, resume, notify, requirePlan, confirmDrag, approve, revoke, auto, send, sendResume];
   const LABELS = {
     "submit-form": "salvar e confirmar formulários",
     "upload-file": "enviar arquivos",
@@ -40,10 +41,15 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     if (!response || response.ok !== true) throw Error(response?.code || "unavailable");
     return response;
   }
-  function renderInbox(inbox) {
-    question.hidden = typeof inbox?.question !== "string";
-    question.textContent = inbox?.question ? "O MCP perguntou: " + inbox.question : "";
-    target.textContent = typeof inbox?.task === "string"
+  function renderInbox(inbox, waiting) {
+    const asked = typeof inbox?.question === "string" ? "O MCP perguntou: " + inbox.question
+      : typeof waiting === "string" ? "O MCP pediu sua verificação: " + waiting : "";
+    question.hidden = !asked;
+    question.textContent = asked;
+    sendResume.hidden = typeof waiting !== "string";
+    target.textContent = typeof waiting === "string"
+      ? "Escreva o que encontrou e clique em Enviar e devolver. O agente recebe sua observação junto com a aba."
+      : typeof inbox?.task === "string"
       ? "Vai para a tarefa " + inbox.task + ". O agente recebe na próxima ação, sem parar o que está fazendo."
       : "Nenhuma tarefa do MCP aberta agora. A mensagem vai para a próxima ação do agente.";
     const messages = Array.isArray(inbox?.recent) ? inbox.recent : [];
@@ -55,7 +61,7 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
     }));
   }
   function render(state) {
-    renderInbox(state.inbox);
+    renderInbox(state.inbox, state.waiting);
     context.checked = state.context === true;
     notify.checked = state.notify === true;
     requirePlan.checked = state.requirePlan === true;
@@ -116,13 +122,15 @@ export const TAB_SHARING_POPUP_SCRIPT = `"use strict";
   requirePlan.addEventListener("change", () => void act("mcp-tab-require-plan", { enabled: requirePlan.checked }));
   confirmDrag.addEventListener("change", () => void act("mcp-tab-confirm-drag", { enabled: confirmDrag.checked }));
   resume.addEventListener("click", () => void act("mcp-tab-resume"));
-  async function sendMessage() {
+  async function sendMessage(resume) {
     if (!text.value.trim()) return;
-    if (await act("mcp-tab-message", { text: text.value })) text.value = "";
+    if (await act("mcp-tab-message", { text: text.value, resume })) text.value = "";
   }
-  send.addEventListener("click", () => void sendMessage());
+  send.addEventListener("click", () => void sendMessage(false));
+  // Sending a note and handing the tab back stay separate buttons; this one does both, note first.
+  sendResume.addEventListener("click", () => void sendMessage(true));
   text.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void sendMessage();
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void sendMessage(false);
   });
   approve.addEventListener("click", () => void act("mcp-tab-approve"));
   revoke.addEventListener("click", () => void act("mcp-tab-revoke"));
