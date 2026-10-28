@@ -17,6 +17,7 @@ import {
   QUICK_OPERATION_TIMEOUT_MS,
   sanitizeOperationDiagnostic,
 } from "./timeout-policy.js";
+import { userMessagesNotice } from "./mcp-user-messages.js";
 
 export const BROWSER_TOOL_NAMES = [
   "browser_status", "browser_connect", "browser_tabs", "browser_select_tab", "browser_dialog", "browser_viewport", "browser_open",
@@ -25,7 +26,7 @@ export const BROWSER_TOOL_NAMES = [
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
-  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_download",
+  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_download",
   "browser_upload", "browser_console", "browser_network", "browser_trace", "browser_video",
   "browser_pdf", "browser_diagnostics",
 ] as const;
@@ -531,6 +532,17 @@ function definitions(
       () => e.plan(assumeParsed(v)),
       (activeContext) => e.plan(assumeParsed(v), activeContext),
     )),
+    d("browser_user_messages", "Reads the messages the user wrote in the MCP V3 Chrome extension popup while you work: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. To ask the user something without ending your turn, pass question with the taskId: the popup shows it, and waitMs (up to 50000) waits for the answer; with no answer yet, messages is empty and you may keep working and read again later. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
+      if (typeof e.userMessages !== "function") {
+        return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "browser_user_messages requires the MCP V3 personal Chrome extension."));
+      }
+      const userMessages = e.userMessages.bind(e);
+      return callWithOptionalContext(
+        context,
+        () => userMessages(assumeParsed(v)),
+        (activeContext) => userMessages(assumeParsed(v), activeContext),
+      );
+    }),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.download(assumeParsed(v)),
@@ -798,6 +810,13 @@ function validateAuthentication(
 function summarize(name: BrowserToolName, result: Record<string, unknown>): string {
   if (name === "browser_status" || name === "browser_connect") {
     return `state=${String(result.state)}; ready=${String(result.ready)}; tabs=${String(result.tabCount)}; engine=${String(result.engine ?? "legacy")}`;
+  }
+  if (name === "browser_user_messages") {
+    const messages = Array.isArray(result.messages) ? result.messages as c.BrowserUserMessage[] : [];
+    const asked = result.asked === true ? "Question shown in the MCP V3 popup. " : "";
+    return messages.length > 0
+      ? asked + userMessagesNotice(messages)
+      : `${asked}No new message from the user yet; keep working and read again later.`;
   }
   if (name === "browser_tabs") return `${Array.isArray(result.tabs) ? result.tabs.length : 0} MCP browser tab(s).`;
   if (name === "browser_console" || name === "browser_network") {

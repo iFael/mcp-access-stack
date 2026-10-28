@@ -1082,6 +1082,42 @@ export const browserPlanResultSchema = z
   .strict();
 export type BrowserPlanResult = z.infer<typeof browserPlanResultSchema>;
 
+// Notes the user writes in the personal Chrome extension popup for a running
+// task: answers, test confirmations, errors they saw. Each one is delivered once.
+export const browserUserMessageSchema = z
+  .object({
+    id: z.string().regex(/^msg_[a-z0-9-]{8,64}$/),
+    text: z.string().min(1).max(2_000),
+    sentAt: z.iso.datetime(),
+    taskId: taskIdSchema.optional(),
+  })
+  .strict();
+export type BrowserUserMessage = z.infer<typeof browserUserMessageSchema>;
+export const browserUserMessagesInputSchema = z
+  .object({
+    taskId: taskIdSchema.optional(),
+    question: z.string().trim().min(1).max(500).optional(),
+    waitMs: z.number().int().min(0).max(50_000).optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (input.question !== undefined && input.taskId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskId"],
+        message: "browser_user_messages question requires the taskId it is asked for.",
+      });
+    }
+  });
+export type BrowserUserMessagesInput = z.infer<typeof browserUserMessagesInputSchema>;
+export const browserUserMessagesResultSchema = z
+  .object({
+    messages: z.array(browserUserMessageSchema).max(50),
+    asked: z.boolean().optional(),
+  })
+  .strict();
+export type BrowserUserMessagesResult = z.infer<typeof browserUserMessagesResultSchema>;
+
 export const browserDownloadInputSchema = z
   .object({
     tabId: tabIdSchema,

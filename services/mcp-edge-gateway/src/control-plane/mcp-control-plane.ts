@@ -56,10 +56,20 @@ export interface EdgeLocalMcpToolHandler {
   ): Promise<Response | null>;
 }
 
+// Runs on every tools/call response, wherever the call was answered, before it
+// returns to the agent.
+export type EdgeToolCallFinisher = (
+  body: unknown,
+  principal: AuthenticatedEdgePrincipal,
+  response: Response,
+  request?: Request,
+) => Promise<Response>;
+
 export interface EdgeMcpControlPlaneOptions extends EdgeMcpCatalog {
   authenticator: EdgeAuthenticator;
   execution: EdgeExecutionTransport;
   localTools?: EdgeLocalMcpToolHandler;
+  finishToolCall?: EdgeToolCallFinisher;
   instructions?: string;
 }
 
@@ -116,16 +126,21 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
         return response;
       }
 
+      const finish = (response: Response): Promise<Response> =>
+        parsed.method === "tools/call" && options.finishToolCall
+          ? options.finishToolCall(parsed.raw, principal, response, request)
+          : Promise.resolve(response);
+
       if (parsed.method === "tools/call" && options.localTools) {
         const localResponse = await options.localTools.handle(parsed.raw, principal, request);
-        if (localResponse) return localResponse;
+        if (localResponse) return finish(localResponse);
       }
 
       if (!options.execution.isReady()) {
         const recovered = await options.execution.waitUntilReady?.() ?? false;
-        if (!recovered) return createAgentUnavailableMcpResponse(parsed.raw);
+        if (!recovered) return finish(createAgentUnavailableMcpResponse(parsed.raw));
       }
-      return options.execution.execute(parsed.raw, principal, request);
+      return finish(await options.execution.execute(parsed.raw, principal, request));
     },
   };
 }

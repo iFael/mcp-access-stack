@@ -4,7 +4,7 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.12.1";
+export const HANDOFF_EXTENSION_VERSION = "1.13.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -16,6 +16,8 @@ h1 { font-size: 16px; margin: 0 0 8px; } p { color: #bdbdbd; }
 button { width: 100%; padding: 10px 12px; margin: 5px 0; border: 1px solid #555; border-radius: 8px; background: #27282d; color: white; cursor: pointer; }
 button:disabled { opacity: .55; } #status { min-height: 24px; padding-top: 8px; }
 .warning { color: #f2ce81; } code { user-select: all; }
+textarea { box-sizing: border-box; width: 100%; min-height: 64px; padding: 8px; border: 1px solid #555; border-radius: 8px; background: #1b1c20; color: #f5f5f5; font: inherit; resize: vertical; }
+#task-recent { margin: 4px 0 0; padding-left: 18px; color: #bdbdbd; } #task-recent li { margin: 2px 0; }
 label { display: flex; gap: 8px; align-items: flex-start; color: #bdbdbd; margin: 6px 0; }
 hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 [hidden] { display: none !important; }
@@ -36,6 +38,13 @@ hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
 <label><input id="tab-confirm-drag" type="checkbox"> Perguntar antes de compartilhar uma aba que eu arrastar para um grupo do MCP</label>
 <label id="tab-auto-row" hidden><input id="tab-auto" type="checkbox"> Aprovar automaticamente neste site. Excluir, pagar, enviar, publicar, senhas e contratos continuam pedindo confirmação.</label>
 <p id="tab-auto-sites" hidden></p>
+<hr>
+<h1>MCP V3 · Mensagem para a tarefa</h1>
+<p id="task-question" class="warning" role="status" aria-live="polite" hidden></p>
+<p id="task-target">Carregando…</p>
+<textarea id="task-text" maxlength="2000" aria-label="Mensagem para a tarefa" placeholder="Ex.: a barra ficou visível durante todas as ações, sem piscar."></textarea>
+<button id="task-send" type="button">Enviar para a tarefa</button>
+<ul id="task-recent" hidden></ul>
 <hr>
 <h1>MCP V3 · Canal seguro</h1>
 <p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>

@@ -1529,6 +1529,98 @@ describe("PersonalBrowserBridge", () => {
   });
 });
 
+describe("PersonalBrowserBridge popup messages", () => {
+  const message = (id: string, extra: Record<string, unknown> = {}) => ({
+    id: `msg_${id}-0000`, text: `nota ${id}`, sentAt: "2026-10-28T15:00:00.000Z", ...extra,
+  });
+
+  it("hands popup messages to the call on their task once and tells the extension they were delivered", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const pending: number[] = [];
+    const bridge = await PersonalBrowserBridge.start({
+      stateRoot: root, port, onUserMessagesPending: (count) => pending.push(count),
+    });
+    const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
+    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
+    const extension = await connectExtension(port, token);
+    try {
+      const delivered = nextWireMessage(extension, (wire) => wire.type === "task-messages-delivered");
+      extension.send(JSON.stringify({ type: "task-messages", messages: [
+        message("aaaaaaaa", { taskId: "task-1", tabIds: ["personal:7"] }),
+        message("bbbbbbbb", { taskId: "task-2", tabIds: ["personal:9"] }),
+        message("cccccccc"),
+      ] }));
+      await waitUntil(() => bridge.pendingUserMessages() === 3);
+      expect(pending).toEqual([3]);
+
+      // A call on task-1's tab takes task-1's message and the one written outside any task.
+      expect(bridge.takeUserMessages({ tabId: "personal:7" }).map((entry) => entry.text)).toEqual(["nota aaaaaaaa", "nota cccccccc"]);
+      await expect(delivered).resolves.toMatchObject({ ids: ["msg_aaaaaaaa-0000", "msg_cccccccc-0000"] });
+      expect(bridge.takeUserMessages({ taskId: "task-1" })).toEqual([]);
+      // A call that names no task (files, commands) takes the rest.
+      const rest = nextWireMessage(extension, (wire) => wire.type === "task-messages-delivered");
+      expect(bridge.takeUserMessages({}).map((entry) => entry.taskId)).toEqual(["task-2"]);
+      await expect(rest).resolves.toMatchObject({ ids: ["msg_bbbbbbbb-0000"] });
+      expect(pending).toEqual([3, 1, 0]);
+
+      // Sent again after a reconnect, delivered messages are only acknowledged again.
+      const again = nextWireMessage(extension, (wire) => wire.type === "task-messages-delivered");
+      extension.send(JSON.stringify({ type: "task-messages", messages: [message("aaaaaaaa", { taskId: "task-1" })] }));
+      await expect(again).resolves.toMatchObject({ ids: ["msg_aaaaaaaa-0000"] });
+      expect(bridge.pendingUserMessages()).toBe(0);
+    } finally {
+      extension.close();
+      await bridge.close();
+    }
+  });
+
+  it("shows the agent's question in the popup and waits for the answer", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      const asked = nextWireMessage(extension, (wire) => wire.type === "task-question");
+      const answer = bridge.userMessages({ taskId: "task-1", question: "A barra piscou?", waitMs: 5_000 });
+      await expect(asked).resolves.toMatchObject({ taskId: "task-1", question: "A barra piscou?" });
+      extension.send(JSON.stringify({ type: "task-messages", messages: [
+        message("dddddddd", { taskId: "task-1", tabIds: ["personal:7"] }),
+      ] }));
+      await expect(answer).resolves.toEqual({ asked: true, messages: [{
+        id: "msg_dddddddd-0000", text: "nota dddddddd", sentAt: "2026-10-28T15:00:00.000Z", taskId: "task-1",
+      }] });
+      // Nothing new: the call returns at once without waiting.
+      await expect(bridge.userMessages({ taskId: "task-1" })).resolves.toEqual({ messages: [] });
+    } finally {
+      await close();
+    }
+  });
+
+  it("refuses popup messages until the extension offers taskMessagesV1", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
+    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
+    const extension = await connectExtension(port, token,
+      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "taskMessagesV1"), "1.12.1");
+    try {
+      await expect(bridge.userMessages({})).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+    } finally {
+      extension.close();
+      await bridge.close();
+    }
+  });
+});
+
+async function waitUntil(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("Condition not reached.");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function primeReference(
   bridge: PersonalBrowserBridge,
   extension: WebSocket,

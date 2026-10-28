@@ -76,6 +76,8 @@ export interface CompanionConnectorOptions {
   heartbeatTimeoutMs?: number;
   webSocketFactory?: (url: URL, options: ClientOptions) => WebSocket;
   log?: (entry: Record<string, unknown>) => void;
+  /** How many popup messages wait for the agent, announced to an Edge that offers userMessagesV1. */
+  pendingUserMessages?: () => number;
 }
 
 export class CompanionConnector {
@@ -90,6 +92,7 @@ export class CompanionConnector {
   private readonly recordLatency = createBrowserLatencyRecorder(e => this.log(e), "companion_connector");
   private readonly activeRequests = new Map<string, AbortController>();
   private socket: WebSocket | undefined;
+  private edgeTakesUserMessages = false;
   private stopped = false;
 
   constructor(private readonly options: CompanionConnectorOptions) {
@@ -132,6 +135,22 @@ export class CompanionConnector {
     await this.sendReady(socket);
   }
 
+  // An older Edge closes the connection on a message it does not know, so this
+  // is sent only after the Edge offered userMessagesV1 on registration.
+  announceUserMessages(pending: number): void {
+    const socket = this.socket;
+    if (!this.edgeTakesUserMessages || !socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify({
+        type: "companion-user-messages",
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+        pending: Math.min(1_000, Math.max(0, Math.floor(pending))),
+      }));
+    } catch {
+      // The next registration announces the count again.
+    }
+  }
+
   stop(): void {
     this.stopped = true;
     for (const controller of this.activeRequests.values()) controller.abort("companion_stopped");
@@ -167,6 +186,7 @@ export class CompanionConnector {
         ? this.options.webSocketFactory(this.edgeUrl, socketOptions)
         : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
+      this.edgeTakesUserMessages = false;
       const clearHeartbeat = () => {
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
@@ -266,6 +286,8 @@ export class CompanionConnector {
     if (message.type === "companion-registered") {
       await this.options.repositories.setDeviceId(message.deviceId);
       this.log({ event: "local_runtime_registered", deviceId: message.deviceId });
+      this.edgeTakesUserMessages = socket === this.socket && message.features?.includes("userMessagesV1") === true;
+      if (this.options.pendingUserMessages) this.announceUserMessages(this.options.pendingUserMessages());
       return { protocolReady: true, registered: true };
     }
     if (message.type === "companion-heartbeat-ack") {

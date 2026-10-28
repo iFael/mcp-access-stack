@@ -87,6 +87,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "finishTask",
   "groupSharingV1",
   "pauseTaskV1",
+  "taskMessagesV1",
 ] as const;
 
 export function buildPersonalBrowserExtensionAssets(
@@ -280,6 +281,7 @@ function connect() {
       capabilities: CAPABILITIES,
     });
     void pushPersonalSiteApprovals();
+    void pushPersonalTaskMessages();
   };
   socket.onmessage = (event) => {
     void handleMessage(event.data);
@@ -323,6 +325,14 @@ async function handleMessage(raw) {
   }
   if (message?.type === "site-approval-request") {
     void recordPersonalApprovalRequest(message).catch(() => undefined);
+    return;
+  }
+  if (message?.type === "task-messages-delivered") {
+    void markPersonalTaskMessagesDelivered(message.ids).catch(() => undefined);
+    return;
+  }
+  if (message?.type === "task-question") {
+    void recordPersonalTaskQuestion(message).catch(() => undefined);
     return;
   }
   if (message?.type === "recording-cancel") {
@@ -555,6 +565,8 @@ async function personalTabSharingDispatch(message) {
     }
   } else if (message.type === "mcp-tab-resume") {
     if (!(await resumePersonalHandoff(tab.id))) throw Error("not-waiting");
+  } else if (message.type === "mcp-tab-message") {
+    await sendPersonalTaskMessage(tab.id, message.text);
   } else if (message.type === "mcp-tab-approve") {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {
@@ -587,7 +599,8 @@ async function personalTabSharingDispatch(message) {
     shareable, context: await personalTabContextEnabled(), notify, requirePlan: await personalPlanRequired(),
     confirmDrag: await personalDragShareNeedsConfirmation(),
     ...(await readPendingPersonalShare(tab.id) ? { pendingShare: (await readPendingPersonalShare(tab.id)).title } : {}),
-    ...(waiting ? { waiting } : {}), ...(await personalApprovalStatus(tab)) };
+    ...(waiting ? { waiting } : {}), ...(await personalApprovalStatus(tab)),
+    inbox: await personalTaskInboxStatus(tab.id) };
 }
 
 // What the popup shows about approvals for the site of the current tab.
@@ -867,6 +880,133 @@ async function notifyPersonalTaskFinished(taskId, closed, released) {
       released + " devolvida(s) a você.",
     priority: 0,
   })).catch(() => undefined);
+}
+
+// Messages the user writes in the popup for a running task. They stay here
+// until the bridge says the agent received them, and go out again after every
+// reconnect, so a message is never lost while MCP V3 restarts.
+const PERSONAL_TASK_MESSAGES_KEY = "mcpV3TaskMessages";
+const PERSONAL_TASK_QUESTIONS_KEY = "mcpV3TaskQuestions";
+const PERSONAL_TASK_MESSAGE_LIMIT = 50;
+const PERSONAL_TASK_QUESTION_TTL_MS = 30 * 60 * 1000;
+const personalTaskMessageQueue = { tail: Promise.resolve() };
+
+function withPersonalTaskMessages(work) {
+  const current = personalTaskMessageQueue.tail.then(work);
+  personalTaskMessageQueue.tail = current.then(() => undefined, () => undefined);
+  return current;
+}
+
+async function readPersonalTaskMessages() {
+  const value = await chrome.storage.local.get(PERSONAL_TASK_MESSAGES_KEY).catch(() => ({}));
+  const messages = value?.[PERSONAL_TASK_MESSAGES_KEY];
+  return Array.isArray(messages) ? messages.filter((entry) => typeof entry?.id === "string" && typeof entry.text === "string") : [];
+}
+
+async function writePersonalTaskMessages(messages) {
+  await chrome.storage.local.set({ [PERSONAL_TASK_MESSAGES_KEY]: messages.slice(-PERSONAL_TASK_MESSAGE_LIMIT) });
+}
+
+async function readPersonalTaskQuestions() {
+  const value = await chrome.storage.session.get(PERSONAL_TASK_QUESTIONS_KEY).catch(() => ({}));
+  const questions = value?.[PERSONAL_TASK_QUESTIONS_KEY];
+  if (!questions || typeof questions !== "object" || Array.isArray(questions)) return {};
+  const now = Date.now();
+  return Object.fromEntries(Object.entries(questions).filter(([, entry]) =>
+    typeof entry?.question === "string" && Number.isFinite(entry.askedAt) && now - entry.askedAt < PERSONAL_TASK_QUESTION_TTL_MS));
+}
+
+async function pushPersonalTaskMessages() {
+  const pending = (await readPersonalTaskMessages()).filter((entry) => !entry.deliveredAt);
+  if (pending.length === 0) return;
+  send({ type: "task-messages", messages: pending.map(({ id, text, sentAt, taskId, tabIds }) =>
+    ({ id, text, sentAt, ...(typeof taskId === "string" ? { taskId } : {}), tabIds: Array.isArray(tabIds) ? tabIds : [] })) });
+}
+
+async function markPersonalTaskMessagesDelivered(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  const delivered = new Set(ids.filter((id) => typeof id === "string"));
+  await withPersonalTaskMessages(async () => {
+    const now = new Date().toISOString();
+    const messages = await readPersonalTaskMessages();
+    await writePersonalTaskMessages(messages.map((entry) =>
+      delivered.has(entry.id) && !entry.deliveredAt ? { ...entry, deliveredAt: now } : entry));
+  });
+}
+
+// The agent asks without ending its turn; the popup shows the question until the user answers.
+async function recordPersonalTaskQuestion(message) {
+  if (typeof message.taskId !== "string" || !message.taskId || message.taskId.length > 128 ||
+      typeof message.question !== "string" || !message.question.trim()) return;
+  const question = message.question.trim().slice(0, 500);
+  const questions = await readPersonalTaskQuestions();
+  questions[message.taskId] = { question, askedAt: Date.now() };
+  await chrome.storage.session.set({ [PERSONAL_TASK_QUESTIONS_KEY]: questions });
+  await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ color: "#2563eb" })).catch(() => undefined);
+  await Promise.resolve(chrome.action?.setBadgeText?.({ text: "?" })).catch(() => undefined);
+  await Promise.resolve(chrome.notifications?.create?.("mcp-question:" + Date.now(), {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP tem uma pergunta",
+    message: question + " Responda pelo ícone da extensão MCP V3.", requireInteraction: true, priority: 2,
+  })).catch(() => undefined);
+}
+
+async function clearPersonalTaskQuestion(taskId) {
+  const questions = await readPersonalTaskQuestions();
+  const remaining = taskId === undefined ? {} : { ...questions };
+  if (taskId !== undefined) delete remaining[taskId];
+  if (Object.keys(remaining).length === Object.keys(questions).length) return;
+  await chrome.storage.session.set({ [PERSONAL_TASK_QUESTIONS_KEY]: remaining });
+  if (Object.keys(remaining).length === 0) {
+    await Promise.resolve(chrome.action?.setBadgeText?.({ text: "" })).catch(() => undefined);
+  }
+}
+
+// A popup message goes to the task of the current tab; otherwise to the task
+// that asked the latest open question, or else the task MCP used last.
+async function personalTaskMessageTarget(chromeTabId) {
+  const owned = await readOwnedTabs().catch(() => ({}));
+  const entries = Object.values(owned).filter((entry) => typeof entry?.taskId === "string" && entry.taskId);
+  let taskId = Number.isSafeInteger(chromeTabId) ? owned[String(chromeTabId)]?.taskId : undefined;
+  const questions = await readPersonalTaskQuestions();
+  if (typeof taskId !== "string" || !taskId) {
+    const asked = Object.entries(questions).sort(([, left], [, right]) => right.askedAt - left.askedAt)[0];
+    taskId = asked?.[0];
+  }
+  if (typeof taskId !== "string" || !taskId) {
+    const latest = entries.filter((entry) => entry.ownership === "mcp")
+      .sort((left, right) => String(right.lastUsedAt).localeCompare(String(left.lastUsedAt)))[0];
+    taskId = latest?.taskId;
+  }
+  if (typeof taskId !== "string" || !taskId) return { tabIds: [] };
+  const tabs = entries.filter((entry) => entry.taskId === taskId);
+  const purpose = tabs.find((entry) => entry.ownership === "mcp" && typeof entry.purpose === "string")?.purpose;
+  return { taskId, tabIds: tabs.map((entry) => entry.tabId).filter((tabId) => typeof tabId === "string"),
+    ...(typeof purpose === "string" ? { label: purpose.slice(0, 80) } : {}),
+    ...(questions[taskId] ? { question: questions[taskId].question } : {}) };
+}
+
+async function sendPersonalTaskMessage(chromeTabId, text) {
+  const value = typeof text === "string" ? text.trim().slice(0, 2000) : "";
+  if (!value) throw Error("empty");
+  const target = await personalTaskMessageTarget(chromeTabId);
+  const message = { id: "msg_" + crypto.randomUUID(), text: value, sentAt: new Date().toISOString(),
+    ...(target.taskId ? { taskId: target.taskId } : {}), tabIds: target.tabIds };
+  await withPersonalTaskMessages(async () => {
+    await writePersonalTaskMessages([...(await readPersonalTaskMessages()), message]);
+  });
+  if (target.taskId) await clearPersonalTaskQuestion(target.taskId);
+  await pushPersonalTaskMessages();
+}
+
+// What the popup shows: where a message goes, an open question, and the latest messages.
+async function personalTaskInboxStatus(chromeTabId) {
+  const target = await personalTaskMessageTarget(chromeTabId);
+  const recent = (await readPersonalTaskMessages())
+    .filter((entry) => !target.taskId || entry.taskId === target.taskId || entry.taskId === undefined)
+    .slice(-5)
+    .map((entry) => ({ text: entry.text, sentAt: entry.sentAt, delivered: typeof entry.deliveredAt === "string" }));
+  return { ...(target.taskId ? { task: target.label ?? target.taskId } : {}),
+    ...(target.question ? { question: target.question } : {}), recent };
 }
 
 const PERSONAL_PLANS_KEY = "mcpV3PersonalPlans";
@@ -5414,6 +5554,7 @@ async function finishTask(input) {
     for (const target of targets) await clearPersonalHandoff(target.chromeTabId);
     for (const target of targets) if (target.shared) await setPersonalSharedBadge(target.chromeTabId, false);
     await notifyPersonalTaskFinished(input.taskId, 0, targets.length);
+    await clearPersonalTaskQuestion(input.taskId).catch(() => undefined);
     await clearPersonalPlans(input.taskId);
     await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
     await withOwnershipLock(async () => {
@@ -5458,6 +5599,7 @@ async function finishTask(input) {
   if (typeof input.taskId === "string") taskGroups.delete(input.taskId);
   else taskGroups.clear();
   await notifyPersonalTaskFinished(input.taskId, closing.length, released.length);
+  await clearPersonalTaskQuestion(input.taskId).catch(() => undefined);
   await clearPersonalPlans(input.taskId);
   await clearPersonalTaskApprovals(input.taskId, targets.map((target) => target.chromeTabId));
   return {
@@ -6493,6 +6635,10 @@ chrome.notifications?.onClicked?.addListener((id) => {
       const windowId = plans[id.slice("mcp-plan:".length)]?.windowId;
       return Number.isInteger(windowId) ? chrome.windows.update(windowId, { focused: true }) : undefined;
     }).catch(() => undefined);
+    return;
+  }
+  if (id.startsWith("mcp-question:")) {
+    void Promise.resolve(chrome.action?.openPopup?.()).catch(() => undefined);
     return;
   }
   const match = /^mcp-(?:handoff|approval|share):(\\d+)$/u.exec(id);

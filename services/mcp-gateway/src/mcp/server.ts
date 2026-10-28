@@ -5,6 +5,7 @@ import {
   MCP_SERVER_BASE_VERSION,
   MCP_SERVER_NAME,
   MCP_TOOL_CATALOG_META_KEY,
+  installUserMessageDelivery,
   registerBrowserTools,
   registerRepositoryTools,
   registerSourceControlTools,
@@ -18,6 +19,7 @@ import {
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
+import { registerCompanionInternalUserMessageTools } from "../companion/internal-user-message-tools.js";
 import {
   registerCompanionInternalRepositoryTools,
   type CompanionRepositoryBinder,
@@ -60,6 +62,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       instructions: MCP_AGENT_INSTRUCTIONS,
     },
   );
+  const browserForMessages = options.browser;
+  if (typeof browserForMessages?.takeUserMessages === "function") {
+    installUserMessageDelivery(server, (scope) => browserForMessages.takeUserMessages?.(scope) ?? []);
+  }
   const securitySchemes = options.auth
     ? [{ type: "oauth2" as const, scopes: [options.auth.requiredScope] }]
     : [{ type: "noauth" as const }];
@@ -99,6 +105,9 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 
   if (options.companionRepositoryBinder) {
     registerCompanionInternalRepositoryTools(server, options.companionRepositoryBinder);
+  }
+  if (typeof browserForMessages?.takeUserMessages === "function") {
+    registerCompanionInternalUserMessageTools(server, (scope) => browserForMessages.takeUserMessages?.(scope) ?? []);
   }
 
   const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);

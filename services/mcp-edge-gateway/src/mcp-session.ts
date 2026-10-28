@@ -3,6 +3,8 @@ import {
   BROWSER_LATENCY_ID_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL,
   COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+  COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL,
+  COMPANION_INTERNAL_TOOL_PREFIX,
   COMPANION_PROTOCOL_VERSION,
   parseCompanionToEdgeMessage,
   type AuthenticatedEdgePrincipal,
@@ -115,6 +117,9 @@ type ConnectorAttachment = {
   runtime?: ConnectorRuntimeIdentity;
 };
 
+// A take is a quick local read; a slow companion must not hold up the answer.
+const USER_MESSAGES_TAKE_TIMEOUT_MS = 2_000;
+
 type CompanionAttachment = {
   role: "companion";
   ready: boolean;
@@ -125,6 +130,8 @@ type CompanionAttachment = {
   platform?: CompanionPlatform;
   capabilities?: string[];
   workspaces?: CompanionWorkspace[];
+  // Popup messages the companion holds for the agent (userMessagesV1).
+  pendingUserMessages?: number;
 };
 
 type PendingRelay = {
@@ -1095,6 +1102,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           return this.tryRelayCompanionMcpRequest(request, body, principal);
         },
       },
+      (body, principal, response, request) => this.attachPendingUserMessages(body, principal, response, request),
     );
     return this.controlRuntime;
   }
@@ -1486,6 +1494,65 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       });
     }
     return response;
+  }
+
+  // The user's popup messages wait on their companion. Whatever answered this
+  // call (the companion, the Oracle runtime or the Edge itself), they reach the
+  // agent with its result. A call the companion answered already took its own,
+  // so the Edge asks only while a companion still reports some waiting.
+  private async attachPendingUserMessages(
+    body: unknown,
+    principal: AuthenticatedEdgePrincipal,
+    response: Response,
+    request?: Request,
+  ): Promise<Response> {
+    if (!principal.userId || !request) return response;
+    const invocation = readMcpToolInvocation(body);
+    if (!invocation || invocation.name === "browser_user_messages" ||
+        invocation.name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX)) return response;
+    const holders = this.getReadyCompanionsForUser(principal.userId)
+      .filter(({ attachment }) => (attachment.pendingUserMessages ?? 0) > 0);
+    if (holders.length === 0) return response;
+    // Take only when the notes can be added: a taken message counts as delivered.
+    let result: unknown;
+    try { result = await response.clone().json(); } catch { return response; }
+    if (!isRecord(result) || !isRecord(result.result)) return response;
+    const scope: Record<string, string> = {};
+    for (const key of ["taskId", "tabId"] as const) {
+      const value = invocation.arguments[key];
+      if (typeof value === "string" && value.length > 0 && value.length <= 128) scope[key] = value;
+    }
+    const notices: string[] = [];
+    for (const { webSocket } of holders) {
+      try {
+        const reply = await this.relayAuthenticatedRequestTo(
+          request,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: `edge-user-messages-${crypto.randomUUID()}`,
+            method: "tools/call",
+            params: { name: COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL, arguments: scope },
+          }),
+          principal,
+          webSocket,
+          COMPANION_PROTOCOL_VERSION,
+          undefined,
+          USER_MESSAGES_TAKE_TIMEOUT_MS,
+        );
+        const structured = await readMcpStructuredContent(reply);
+        if (typeof structured?.notice === "string" && structured.notice) notices.push(structured.notice);
+      } catch {
+        // The messages stay on the companion for the next call.
+      }
+    }
+    if (notices.length === 0) return response;
+    const content = Array.isArray(result.result.content) ? result.result.content : [];
+    result.result.content = [...content, ...notices.map((text) => ({ type: "text", text }))];
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.set("cache-control", "no-store");
+    headers.set("content-type", "application/json; charset=utf-8");
+    return new Response(JSON.stringify(result), { status: response.status, headers });
   }
 
   private async attachBrowserViewerLinks(
@@ -2635,6 +2702,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-user-messages") {
+      if (!attachment.ready || !attachment.deviceId) return;
+      webSocket.serializeAttachment({
+        ...attachment,
+        pendingUserMessages: parsed.pending,
+      } satisfies CompanionAttachment);
+      return;
+    }
+
     if (parsed.type === "companion-ready") {
       let device;
       try {
@@ -2684,6 +2760,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         type: "companion-registered",
         protocolVersion: COMPANION_PROTOCOL_VERSION,
         deviceId: device.id,
+        features: ["userMessagesV1"],
       }));
       return;
     }
@@ -2723,6 +2800,8 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if ("capabilities" in attachment && attachment.capabilities !== undefined &&
         (!Array.isArray(attachment.capabilities) || !attachment.capabilities.every((entry: unknown) => typeof entry === "string"))) return null;
     if ("workspaces" in attachment && attachment.workspaces !== undefined && !Array.isArray(attachment.workspaces)) return null;
+    if ("pendingUserMessages" in attachment && attachment.pendingUserMessages !== undefined &&
+        (typeof attachment.pendingUserMessages !== "number" || !Number.isInteger(attachment.pendingUserMessages))) return null;
     return attachment as CompanionAttachment;
   }
 
