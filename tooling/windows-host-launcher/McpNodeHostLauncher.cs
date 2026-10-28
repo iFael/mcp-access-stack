@@ -74,6 +74,7 @@ internal static class Program
         public string StandardErrorPath = string.Empty;
         public int RunnerRestartCount = 0;
         public int RunnerRestartIntervalSeconds = 60;
+        public bool RestartOnFailure = true;
         public readonly List<string> NodeArguments = new List<string>();
         public readonly Dictionary<string, string> EnvironmentValues = new Dictionary<string, string>(StringComparer.Ordinal);
         public readonly Dictionary<string, string> EnvironmentFileValues = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -119,6 +120,11 @@ internal static class Program
                 if (exitCode == 0)
                 {
                     return 0;
+                }
+
+                if (!options.RestartOnFailure)
+                {
+                    return NormalizeExitCode(exitCode);
                 }
 
                 if (
@@ -379,6 +385,14 @@ internal static class Program
                     value,
                     1,
                     3600);
+            }
+            else if (current == "--restart-on-failure")
+            {
+                if (value != "true" && value != "false")
+                {
+                    throw new ArgumentException("--restart-on-failure must be true or false.");
+                }
+                options.RestartOnFailure = value == "true";
             }
             else if (current == "--env")
             {
