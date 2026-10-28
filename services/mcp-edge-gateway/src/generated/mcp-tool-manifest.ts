@@ -15309,6 +15309,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 ],
                 "type": "string"
               },
+              "paused": {
+                "type": "boolean"
+              },
               "protected": {
                 "type": "boolean"
               },
@@ -15553,6 +15556,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "mcp"
               ],
               "type": "string"
+            },
+            "paused": {
+              "type": "boolean"
             },
             "protected": {
               "type": "boolean"
@@ -15947,7 +15953,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site.",
+    "description": "Opens or safely reuses an MCP-owned browser tab. On the local companion, browserMode defaults to personal and operates in the existing authenticated Chrome profile through the MCP V3 extension; managed mode is unavailable without a managed provider. The selected mode stays bound to the returned tab/task; about:blank is rejected and private sites require browser_open_authorized_site. In personal Chrome every tab belongs to a task and its tab group: without a taskId it starts a task, returned as tab.taskId; a task holds at most 20 tabs.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -16137,6 +16143,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "mcp"
               ],
               "type": "string"
+            },
+            "paused": {
+              "type": "boolean"
             },
             "protected": {
               "type": "boolean"
@@ -16738,6 +16747,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "mcp"
               ],
               "type": "string"
+            },
+            "paused": {
+              "type": "boolean"
             },
             "protected": {
               "type": "boolean"
@@ -24119,6 +24131,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               ],
               "type": "string"
             },
+            "paused": {
+              "type": "boolean"
+            },
             "protected": {
               "type": "boolean"
             },
@@ -24387,6 +24402,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "mcp"
               ],
               "type": "string"
+            },
+            "paused": {
+              "type": "boolean"
             },
             "protected": {
               "type": "boolean"
@@ -24686,7 +24704,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user; managed mode rejects keepOpen. protected/sticky affect browser_close_tab, not default task finalization.",
+    "description": "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user, and pause=true keeps them open in the task's collapsed tab group to come back to: nothing acts there until a new plan for the task is approved (or, when no plan is required, browser_open with its taskId), and a pause left for 24 hours ends like a finished task. Managed mode rejects keepOpen and pause. protected/sticky affect browser_close_tab, not default task finalization.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -24699,6 +24717,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "string"
         },
         "keepOpen": {
+          "type": "boolean"
+        },
+        "pause": {
           "type": "boolean"
         },
         "runtimeId": {
@@ -24738,6 +24759,20 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "pausedTabIds": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "pausedTabs": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
         "releasedTabIds": {
           "items": {
@@ -24785,7 +24820,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Personal Chrome only. Before acting for a task, show the user its plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first.",
+    "description": "Personal Chrome only. Before acting for a task, show the user its plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, tabs the user drags into the task's Chrome tab group, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first. Approval starts the task's tab group with a first tab that the task's first browser_open uses, and resumes a paused task.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25874,15 +25909,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "41e271dc8033da8ad608a29aea51a71db18849ebabc4927de4b5299f57614e6f",
-  "serverVersion": "0.4.0-catalog.c41e271dc8033.s1ef01eda5639",
+  "contractRevision": "3ef2a789e390ef34aafd83d18731746a82c71682c102d73028b2edc6c020c17e",
+  "serverVersion": "0.4.0-catalog.c3ef2a789e390.s1ef01eda5639",
   "toolCount": 114,
   "toolSetRevision": "1ef01eda5639a67d461508c341751e265c796d77100c081fb51fb3e0b1b352c5"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c41e271dc8033.s1ef01eda5639"
+  "version": "0.4.0-catalog.c3ef2a789e390.s1ef01eda5639"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";

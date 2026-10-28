@@ -638,6 +638,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async finishTask(
     ...args: Parameters<BrowserExecutor["finishTask"]>
   ): ReturnType<BrowserExecutor["finishTask"]> {
+    // An older extension would ignore pause and close the task's tabs.
+    if (args[0].pause === true && !this.peerInfo?.capabilities.includes("pauseTaskV1")) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
+        "Personal Chrome extension must support pauseTaskV1 to pause a task. Reload the updated extension.");
+    }
     const result = await this.call("finishTask", args[0], args[1]);
     await this.releaseStagedUploads(result.closedTabIds ?? []);
     this.actions.finish(args[0].taskId);
@@ -945,6 +950,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       writeFile(
         path.join(this.extensionDirectory, "plan-review.js"),
         assets.planReviewScript,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "task-home.html"),
+        assets.taskHomeHtml,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "task-home.js"),
+        assets.taskHomeScript,
         { encoding: "utf8", mode: 0o600 },
       ),
     ]);
