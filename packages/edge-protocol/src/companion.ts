@@ -4,6 +4,9 @@ export const COMPANION_PROTOCOL_VERSION = 1 as const;
 export const COMPANION_INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_" as const;
 export const COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}bind_repositories` as const;
 export const COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}materialize_repository` as const;
+// The Edge takes the user's popup messages from the companion for a call it
+// relayed elsewhere (Oracle), so they reach the agent whatever tool it called.
+export const COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}take_user_messages` as const;
 
 export type CompanionPlatform = "windows" | "linux" | "macos" | "unknown";
 
@@ -37,10 +40,23 @@ export type CompanionHelloMessage = {
   protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
 };
 
+// Optional protocol features the Edge offers; an older peer ignores them.
+export const COMPANION_EDGE_FEATURES = ["userMessagesV1"] as const;
+export type CompanionEdgeFeature = (typeof COMPANION_EDGE_FEATURES)[number];
+
 export type CompanionRegisteredMessage = {
   type: "companion-registered";
   protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
   deviceId: string;
+  features?: CompanionEdgeFeature[];
+};
+
+// How many popup messages the companion holds for the agent. Sent only to an
+// Edge that offers userMessagesV1, so the Edge asks for them only when needed.
+export type CompanionUserMessagesMessage = {
+  type: "companion-user-messages";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  pending: number;
 };
 
 export type CompanionHeartbeatMessage = {
@@ -100,6 +116,7 @@ export type EdgeToCompanionMessage =
 export type CompanionToEdgeMessage =
   | CompanionReadyMessage
   | CompanionHeartbeatMessage
+  | CompanionUserMessagesMessage
   | CompanionHttpResponseMessage;
 
 export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessage | null {
@@ -126,6 +143,15 @@ export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessa
       heartbeatId: parsed.heartbeatId,
     };
   }
+  if (parsed.type === "companion-user-messages") {
+    if (typeof parsed.pending !== "number" || !Number.isInteger(parsed.pending) ||
+        parsed.pending < 0 || parsed.pending > 1_000) return null;
+    return {
+      type: "companion-user-messages",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      pending: parsed.pending,
+    };
+  }
   if (parsed.type !== "http-response") return null;
   if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0 || parsed.requestId.length > 128) return null;
   if (typeof parsed.status !== "number" || !Number.isInteger(parsed.status) || parsed.status < 100 || parsed.status > 599) return null;
@@ -147,7 +173,15 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
   if (parsed.type === "companion-hello") return { type: "companion-hello", protocolVersion: COMPANION_PROTOCOL_VERSION };
   if (parsed.type === "companion-registered") {
     if (!isPrefixedUuid(parsed.deviceId, "dev")) return null;
-    return { type: "companion-registered", protocolVersion: COMPANION_PROTOCOL_VERSION, deviceId: parsed.deviceId };
+    const features = Array.isArray(parsed.features)
+      ? COMPANION_EDGE_FEATURES.filter((feature) => (parsed.features as unknown[]).includes(feature))
+      : [];
+    return {
+      type: "companion-registered",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      deviceId: parsed.deviceId,
+      ...(features.length === 0 ? {} : { features }),
+    };
   }
   if (parsed.type === "companion-heartbeat-ack") {
     if (!isHeartbeatId(parsed.heartbeatId)) return null;
