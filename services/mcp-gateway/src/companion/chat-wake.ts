@@ -11,9 +11,16 @@
 // typing, nothing is written and it waits. Only the user's own words, the
 // companion's notes and the agent's own ids go in, nothing from a page. The
 // user can turn it off in the extension popup.
+//
+// Each notice goes to the conversation it belongs to (see
+// conversation-book.ts), never to whichever one is open: the app only when it
+// shows that conversation, else a Chrome tab of it, opened in the background
+// when none is. Until that conversation is known, nothing is written.
+
+import type { OpenConversation } from "./conversation-book.js";
 
 export type ChatWakeEvent =
-  | { kind: "message"; messageId: string; text: string; passedAlong?: boolean }
+  | { kind: "message"; messageId: string; text: string; taskId?: string; passedAlong?: boolean }
   | { kind: "task"; taskId: string; workspaceId?: string; state: "succeeded" | "failed"; exitCode?: number }
   | {
     kind: "checks";
@@ -32,11 +39,15 @@ export type ChatWakeOutcome =
   | "busy" // the agent is answering
   | "typing" // the user has something in the message field
   | "unavailable" // no app window or tab to write to
+  | "elsewhere" // the app shows another conversation
   | "failed";
 
 export interface ChatWakeTarget {
   readonly name: "app" | "chrome";
-  deliver(text: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }>;
+  /** Writes the notice in this conversation (chatgpt.com/c/<id>); without one, in the conversation open. */
+  deliver(text: string, conversationId?: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }>;
+  /** The conversations this place shows and whether each is answering, without writing. */
+  openConversations?(): Promise<OpenConversation[]>;
 }
 
 export interface ChatWakeStatus {
@@ -49,6 +60,11 @@ export interface ChatWakeStatus {
 export interface ChatWakeOptions {
   /** Where to write, first that works wins. */
   targets: () => readonly ChatWakeTarget[];
+  /**
+   * The conversation an event belongs to. With it, events go only to their
+   * own conversation, and one whose conversation is unknown is not written.
+   */
+  conversationOf?: (event: ChatWakeEvent) => string | undefined;
   /** False once the agent already got the event through its own calls. */
   isOpen?: (event: ChatWakeEvent) => boolean;
   /** A message that only went along with the result of another call, which the agent may have read past. */
@@ -166,29 +182,49 @@ export class ChatWake {
     if (!this.enabled || this.pending.length === 0) return;
     const now = this.now();
     const snapshot = new Set(this.pending);
-    const events = this.pending.filter((event) =>
-      now - event.at < this.ttlMs && (this.options.isOpen?.(event) ?? true)).map((event) =>
-      event.kind === "message" && this.options.passedAlong?.(event) === true ? { ...event, passedAlong: true } : event);
-    if (events.length === 0) {
+    const open = this.pending.filter((event) =>
+      now - event.at < this.ttlMs && (this.options.isOpen?.(event) ?? true));
+    if (open.length === 0) {
       this.pending = [];
       this.publish();
       return;
     }
+    const prepare = (event: Queued): Queued =>
+      event.kind === "message" && this.options.passedAlong?.(event) === true ? { ...event, passedAlong: true } : event;
+    let batch = open;
+    let conversationId: string | undefined;
+    if (this.options.conversationOf) {
+      const owners = new Map(open.map((event) => [event, this.options.conversationOf!(event)] as const));
+      conversationId = open.map((event) => owners.get(event)).find((owner) => owner !== undefined);
+      if (conversationId === undefined) {
+        // Never in a conversation that is not theirs: they wait until theirs is known.
+        this.pending = [...open, ...this.pending.filter((event) => !snapshot.has(event))];
+        this.lastError = "Ainda não sei de qual conversa do ChatGPT veio o aviso; ele espera e não vai para outra conversa.";
+        this.publish();
+        this.schedule(this.retryMs);
+        return;
+      }
+      batch = open.filter((event) => owners.get(event) === conversationId);
+    }
+    const events = batch.map(prepare);
     const text = chatWakeText(events);
     let lastError = "O ChatGPT não está aberto: nem o app do Windows nem uma aba no Chrome.";
     for (const target of this.options.targets()) {
       let result: Awaited<ReturnType<ChatWakeTarget["deliver"]>>;
       try {
-        result = await target.deliver(text);
+        result = await target.deliver(text, conversationId);
       } catch (error) {
         result = { outcome: "failed", detail: error instanceof Error ? error.message : String(error) };
       }
       this.options.log?.({ event: "mcp_v3_chat_wake_attempt", target: target.name, outcome: result.outcome,
+        ...(conversationId === undefined ? {} : { conversationId }),
         ...(result.detail === undefined ? {} : { detail: result.detail.slice(0, 200) }) });
       if (result.outcome === "sent") {
         const sentAt = this.now();
-        // Events that arrived while writing wait for the next notice.
-        this.pending = this.pending.filter((event) => !snapshot.has(event));
+        // Events that arrived while writing, or belong to another conversation, wait for the next notice.
+        const written = new Set(batch);
+        this.pending = this.pending.filter((event) =>
+          !snapshot.has(event) || (!written.has(event) && open.includes(event)));
         this.lastSentAt = sentAt;
         this.lastError = undefined;
         this.recent = [...this.recent, { at: sentAt, kinds: [...new Set(events.map((event) => event.kind))], target: target.name }].slice(-5);
@@ -203,7 +239,7 @@ export class ChatWake {
       }
       if (result.outcome === "busy" || result.outcome === "typing") {
         // The conversation is there; it is just not the moment.
-        this.pending = [...events, ...this.pending.filter((event) => !snapshot.has(event))];
+        this.pending = [...open, ...this.pending.filter((event) => !snapshot.has(event))];
         this.lastError = undefined;
         this.publish();
         this.schedule(this.retryMs);
@@ -213,6 +249,9 @@ export class ChatWake {
         lastError = target.name === "app"
           ? "Não consegui escrever no app do ChatGPT."
           : "Não consegui escrever na aba do ChatGPT.";
+      }
+      if (result.outcome === "elsewhere") {
+        lastError = "O app mostra outra conversa e não consegui abrir a do aviso numa aba do Chrome.";
       }
     }
     this.lastError = lastError;

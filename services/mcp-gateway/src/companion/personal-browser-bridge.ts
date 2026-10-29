@@ -46,6 +46,7 @@ import {
 } from "./personal-browser-recording.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
 import type { ChatWake, ChatWakeOutcome, ChatWakeStatus } from "./chat-wake.js";
+import type { OpenConversation } from "./conversation-book.js";
 import { PersonalBrowserTaskInbox } from "./personal-browser-task-inbox.js";
 
 const DEFAULT_PORT = 3361;
@@ -91,6 +92,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   // read past them, so the wake still writes them in once its turn ends.
   private readonly passedAlong = new Set<string>();
   private readonly chromeWakes = new Map<string, (outcome: ChatWakeOutcome) => void>();
+  private readonly chromeInspections = new Map<string, (conversations: OpenConversation[]) => void>();
   private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
@@ -688,7 +690,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     };
     const { added } = this.inbox.accept({ messages: [message] });
     if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
-    if (added > 0) this.options.chatWake?.queue({ kind: "message", messageId: message.id, text: message.text });
+    if (added > 0) {
+      this.options.chatWake?.queue({ kind: "message", messageId: message.id, text: message.text,
+        ...(input.taskId === undefined ? {} : { taskId: input.taskId }) });
+    }
     const socket = this.socket;
     if (added > 0 && socket?.readyState === WebSocket.OPEN) {
       try {
@@ -746,11 +751,19 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.passedAlong.has(id);
   }
 
-  /** The extension writes the wake notice in the ChatGPT tab used last. */
-  wakeChromeTab(text: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }> {
+  /**
+   * The extension writes the wake notice in a Chrome tab of this conversation,
+   * opening one in the background when none is; without a conversation, in
+   * the ChatGPT tab used last.
+   */
+  wakeChromeTab(text: string, conversationId?: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }> {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV2")) {
       return Promise.resolve({ outcome: "unavailable", detail: "extension-not-connected" });
+    }
+    if (conversationId !== undefined && !this.peerInfo.capabilities.includes("chatWakeConversationV1")) {
+      // An older extension only knows the tab used last, which may be another conversation.
+      return Promise.resolve({ outcome: "unavailable", detail: "extension-needs-reload" });
     }
     const id = randomUUID();
     return new Promise((resolve) => {
@@ -765,9 +778,36 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         resolve({ outcome });
       });
       try {
-        socket.send(JSON.stringify({ type: "wake-chrome", id, text }));
+        socket.send(JSON.stringify({ type: "wake-chrome", id, text,
+          ...(conversationId === undefined ? {} : { conversationId }) }));
       } catch {
         this.chromeWakes.get(id)?.("failed");
+      }
+    });
+  }
+
+  /** The ChatGPT conversations open in Chrome and which of them is answering. */
+  openChromeConversations(): Promise<OpenConversation[]> {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeConversationV1")) {
+      return Promise.resolve([]);
+    }
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.chromeInspections.delete(id);
+        resolve([]);
+      }, 10_000);
+      timeout.unref?.();
+      this.chromeInspections.set(id, (conversations) => {
+        clearTimeout(timeout);
+        this.chromeInspections.delete(id);
+        resolve(conversations);
+      });
+      try {
+        socket.send(JSON.stringify({ type: "wake-inspect", id }));
+      } catch {
+        this.chromeInspections.get(id)?.([]);
       }
     });
   }
@@ -1297,9 +1337,21 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
     if (message.type === "wake-chrome-result" && typeof message.id === "string") {
       const outcome = typeof message.outcome === "string" &&
-        ["sent", "busy", "typing", "unavailable", "failed"].includes(message.outcome)
+        ["sent", "busy", "typing", "unavailable", "elsewhere", "failed"].includes(message.outcome)
         ? message.outcome as ChatWakeOutcome : "failed";
       this.chromeWakes.get(message.id)?.(outcome);
+      return;
+    }
+    if (message.type === "wake-inspect-result" && typeof message.id === "string") {
+      const conversations = Array.isArray(message.conversations)
+        ? message.conversations.flatMap((entry: unknown) => {
+          const record = entry as { conversationId?: unknown; answering?: unknown } | null;
+          return typeof record?.conversationId === "string" && /^[A-Za-z0-9-]{8,80}$/u.test(record.conversationId)
+            ? [{ conversationId: record.conversationId, answering: record.answering === true }]
+            : [];
+        }).slice(0, 20)
+        : [];
+      this.chromeInspections.get(message.id)?.(conversations);
       return;
     }
     if (message.type === "task-messages") {
@@ -1308,7 +1360,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
       for (const messageId of addedIds) {
         const text = this.inbox.textOf(messageId);
-        if (text !== undefined) this.options.chatWake?.queue({ kind: "message", messageId, text });
+        const taskId = this.inbox.taskIdOf(messageId);
+        if (text !== undefined) {
+          this.options.chatWake?.queue({ kind: "message", messageId, text, ...(taskId === undefined ? {} : { taskId }) });
+        }
       }
       return;
     }

@@ -89,6 +89,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "pauseTaskV1",
   "taskMessagesV1",
   "chatWakeV2",
+  "chatWakeConversationV1",
 ] as const;
 
 export function buildPersonalBrowserExtensionAssets(
@@ -334,8 +335,15 @@ async function handleMessage(raw) {
     return;
   }
   if (message?.type === "wake-chrome" && typeof message.id === "string") {
-    void wakePersonalChatTab(message.text).catch(() => "failed")
+    void (typeof message.conversationId === "string"
+      ? wakePersonalConversationTab(message.text, message.conversationId)
+      : wakePersonalChatTab(message.text)).catch(() => "failed")
       .then((outcome) => send({ type: "wake-chrome-result", id: message.id, outcome }));
+    return;
+  }
+  if (message?.type === "wake-inspect" && typeof message.id === "string") {
+    void personalOpenConversations().catch(() => [])
+      .then((conversations) => send({ type: "wake-inspect-result", id: message.id, conversations }));
     return;
   }
   if (message?.type === "wake-status") {
@@ -1108,7 +1116,12 @@ async function recordPersonalWakeStatus(status) {
 }
 
 // Runs in the ChatGPT tab: is the conversation idle, and can the notice go in?
-function personalWakeInspect(text) {
+// With a conversation id, only when the tab still shows that conversation.
+function personalWakeInspect(text, conversationId) {
+  if (typeof conversationId === "string") {
+    const match = /\\/c\\/([A-Za-z0-9-]{8,80})(?:\\/|$)/.exec(location.pathname);
+    if (!match || match[1] !== conversationId) return { state: "elsewhere" };
+  }
   const busy = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Parar"]'));
   const composer = document.querySelector("#prompt-textarea") ||
     document.querySelector('form [contenteditable="true"]') || document.querySelector("form textarea");
@@ -1150,6 +1163,64 @@ async function wakePersonalChatTab(text) {
     func: personalWakeInspect, args: [text] }).catch(() => []);
   const outcome = injected?.result?.state;
   return ["sent", "busy", "typing"].includes(outcome) ? outcome : "failed";
+}
+
+const PERSONAL_CONVERSATION_ID = /^[A-Za-z0-9-]{8,80}$/;
+
+function personalConversationIdOf(url) {
+  if (!isPersonalWakeUrl(url)) return undefined;
+  const match = /\\/c\\/([A-Za-z0-9-]{8,80})(?:\\/|$)/.exec(new URL(String(url)).pathname);
+  return match ? match[1] : undefined;
+}
+
+// Runs in a ChatGPT tab: is this conversation answering right now?
+function personalConversationAnswering() {
+  return Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Parar"]'));
+}
+
+// The ChatGPT conversations open in Chrome, and which of them is answering.
+async function personalOpenConversations() {
+  const tabs = await chrome.tabs.query({ url: PERSONAL_WAKE_URLS }).catch(() => []);
+  const owned = await readOwnedTabs().catch(() => ({}));
+  const conversations = [];
+  for (const tab of tabs) {
+    const conversationId = personalConversationIdOf(tab.url);
+    if (!Number.isSafeInteger(tab.id) || owned[String(tab.id)] || !conversationId) continue;
+    const [probe] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
+      func: personalConversationAnswering }).catch(() => []);
+    conversations.push({ conversationId, answering: probe?.result === true });
+  }
+  return conversations.slice(0, 20);
+}
+
+// The companion asks to write the notice in one conversation: a tab that
+// shows it, or a new one opened in the background, never the tab in front.
+async function wakePersonalConversationTab(text, conversationId) {
+  if (typeof text !== "string" || !text.trim() || text.length > 4000 ||
+      typeof conversationId !== "string" || !PERSONAL_CONVERSATION_ID.test(conversationId)) return "failed";
+  const tabs = await chrome.tabs.query({ url: PERSONAL_WAKE_URLS }).catch(() => []);
+  const owned = await readOwnedTabs().catch(() => ({}));
+  let tab = tabs.filter((candidate) => Number.isSafeInteger(candidate.id) && !owned[String(candidate.id)] &&
+    personalConversationIdOf(candidate.url) === conversationId)
+    .sort((left, right) => (right.lastAccessed ?? 0) - (left.lastAccessed ?? 0))[0];
+  let opened = false;
+  if (!tab) {
+    const window = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
+    tab = await chrome.tabs.create({ url: "https://chatgpt.com/c/" + conversationId, active: false,
+      ...(Number.isInteger(window?.id) ? { windowId: window.id } : {}) }).catch(() => undefined);
+    if (!Number.isSafeInteger(tab?.id)) return "unavailable";
+    opened = true;
+  }
+  // A tab just opened needs its page and message field first.
+  for (let attempt = 0; attempt < (opened ? 60 : 1); attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
+      func: personalWakeInspect, args: [text, conversationId] }).catch(() => []);
+    const outcome = injected?.result?.state;
+    if (["sent", "busy", "typing", "elsewhere"].includes(outcome)) return outcome;
+    if (!opened) return "failed";
+  }
+  return "failed";
 }
 
 // What the popup shows about waking ChatGPT.

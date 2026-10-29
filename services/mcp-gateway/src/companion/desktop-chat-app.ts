@@ -2,11 +2,16 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ChatWakeOutcome, ChatWakeTarget } from "./chat-wake.js";
+import type { OpenConversation } from "./conversation-book.js";
 
 // Writes the wake notice into the ChatGPT app for Windows through UI
 // Automation: it fills the message field and invokes the Send button, without
 // keystrokes, clipboard or taking focus. It only reads the window when the
-// agent is answering (a Stop button) or the user has something in the field.
+// agent is answering (a Stop button) or the user has something in the field,
+// and when the app shows another conversation than the notice's (the page
+// address, chatgpt.com/c/<id>, read before filling and again before sending).
+// With MCP_V3_WAKE_INSPECT it writes nothing and tells which conversation is
+// open and whether it is answering.
 // The text goes in through an environment variable, never the command line.
 export const DESKTOP_CHAT_APP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -23,11 +28,14 @@ try {
     Select-Object -First 1
   if (-not $window) { Done @{ outcome = 'unavailable'; detail = 'no-window' } }
   function Read-State {
-    $state = @{ composer = $null; stop = $null; send = $null; title = '' }
+    $state = @{ composer = $null; stop = $null; send = $null; title = ''; url = '' }
     foreach ($e in $window.FindAll($T::Descendants, $All)) {
       $c = $e.Current
       $type = $c.ControlType.ProgrammaticName
-      if ($type -eq 'ControlType.Document' -and $c.AutomationId -eq 'RootWebArea' -and -not $state.title) { $state.title = $c.Name }
+      if ($type -eq 'ControlType.Document' -and $c.AutomationId -eq 'RootWebArea' -and -not $state.title) {
+        $state.title = $c.Name
+        try { $state.url = [string]$e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch {}
+      }
       elseif ($type -eq 'ControlType.Edit' -and $c.ClassName -like '*ProseMirror*') { $state.composer = $e }
       elseif ($type -eq 'ControlType.Button') {
         if ($c.Name -match '^(?i)(parar|stop)') { $state.stop = $e }
@@ -36,7 +44,18 @@ try {
     }
     $state
   }
+  function Conversation-Of($url) { ([regex]::Match([string]$url, '/c/([A-Za-z0-9-]{8,80})(?:[/?#]|$)')).Groups[1].Value }
+  $want = [string]$env:MCP_V3_WAKE_CONVERSATION
+  function Assert-Conversation($state) {
+    if (-not $want) { return }
+    if (-not $state.url) { Done @{ outcome = 'elsewhere'; detail = 'no-address' } }
+    if ((Conversation-Of $state.url) -ne $want) { Done @{ outcome = 'elsewhere'; detail = 'other-conversation' } }
+  }
   $s = Read-State
+  if ($env:MCP_V3_WAKE_INSPECT -eq '1') {
+    Done @{ outcome = 'inspect'; conversationId = (Conversation-Of $s.url); answering = [bool]$s.stop; address = [bool]$s.url }
+  }
+  Assert-Conversation $s
   if (-not $s.composer) { Done @{ outcome = 'failed'; detail = 'no-message-field' } }
   if ($s.stop) { Done @{ outcome = 'busy' } }
   $field = $s.composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
@@ -55,6 +74,11 @@ try {
     try { $field.SetValue('') } catch {}
     Done @{ outcome = 'failed'; detail = 'no-send-button' }
   }
+  if ($want -and (-not $s.url -or (Conversation-Of $s.url) -ne $want)) {
+    # The user switched conversation while the text went in: take it back out.
+    try { $field.SetValue('') } catch {}
+    Done @{ outcome = 'elsewhere'; detail = 'switched' }
+  }
   $s.send.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
   for ($i = 0; $i -lt 16; $i++) {
     Start-Sleep -Milliseconds 250
@@ -69,7 +93,7 @@ try {
 }
 `;
 
-const OUTCOMES = new Set<ChatWakeOutcome>(["sent", "busy", "typing", "unavailable", "failed"]);
+const OUTCOMES = new Set<ChatWakeOutcome>(["sent", "busy", "typing", "unavailable", "elsewhere", "failed"]);
 
 export interface DesktopChatAppOptions {
   /** Where the script is written before each run, under the companion's state. */
@@ -89,24 +113,26 @@ export function createDesktopChatAppTarget(options: DesktopChatAppOptions): Chat
   const timeoutMs = options.timeoutMs ?? 30_000;
   return {
     name: "app",
-    deliver: async (text) => {
-      await mkdir(options.scriptDirectory, { recursive: true });
-      // Written each time, so an update never runs an old copy. UTF-8 with BOM for Windows PowerShell.
-      await writeFile(scriptPath, "\uFEFF" + DESKTOP_CHAT_APP_SCRIPT, "utf8");
-      return runScript(text);
-    },
+    deliver: async (text, conversationId) => parseDesktopChatAppResult(await runScript({
+      MCP_V3_WAKE_TEXT: text,
+      ...(conversationId === undefined ? {} : { MCP_V3_WAKE_CONVERSATION: conversationId }),
+    })),
+    openConversations: async () => parseDesktopChatAppInspect(await runScript({ MCP_V3_WAKE_INSPECT: "1" })),
   };
 
-  function runScript(text: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }> {
+  async function runScript(env: Record<string, string>): Promise<string> {
+    await mkdir(options.scriptDirectory, { recursive: true });
+    // Written each time, so an update never runs an old copy. UTF-8 with BOM for Windows PowerShell.
+    await writeFile(scriptPath, "\uFEFF" + DESKTOP_CHAT_APP_SCRIPT, "utf8");
     return new Promise((resolve) => {
       const child = run(powershell, ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
         windowsHide: true,
         stdio: ["ignore", "pipe", "ignore"],
-        env: { ...process.env, MCP_V3_WAKE_TEXT: text },
+        env: { ...process.env, ...env },
       });
       let output = "";
       let settled = false;
-      const finish = (result: { outcome: ChatWakeOutcome; detail?: string }) => {
+      const finish = (result: string) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -114,14 +140,14 @@ export function createDesktopChatAppTarget(options: DesktopChatAppOptions): Chat
       };
       const timer = setTimeout(() => {
         child.kill();
-        finish({ outcome: "failed", detail: "timeout" });
+        finish(JSON.stringify({ outcome: "failed", detail: "timeout" }));
       }, timeoutMs);
       child.stdout?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
         if (output.length < 8_192) output += chunk;
       });
-      child.on("error", (error) => finish({ outcome: "failed", detail: error.message }));
-      child.on("close", () => finish(parseDesktopChatAppResult(output)));
+      child.on("error", (error) => finish(JSON.stringify({ outcome: "failed", detail: error.message })));
+      child.on("close", () => finish(output));
     });
   }
 }
@@ -140,4 +166,19 @@ export function parseDesktopChatAppResult(output: string): { outcome: ChatWakeOu
     // Falls through to a failure that names what came back.
   }
   return { outcome: "failed", detail: `unexpected output: ${line.slice(0, 120)}` };
+}
+
+/** The conversation the app shows, when its address can be read. */
+export function parseDesktopChatAppInspect(output: string): OpenConversation[] {
+  const line = output.trim().split(/\r?\n/u).at(-1) ?? "";
+  try {
+    const parsed = JSON.parse(line) as { outcome?: unknown; conversationId?: unknown; answering?: unknown };
+    if (parsed.outcome === "inspect" && typeof parsed.conversationId === "string" &&
+        /^[A-Za-z0-9-]{8,80}$/u.test(parsed.conversationId)) {
+      return [{ conversationId: parsed.conversationId, answering: parsed.answering === true }];
+    }
+  } catch {
+    // Nothing readable: no conversation known.
+  }
+  return [];
 }

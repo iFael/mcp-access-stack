@@ -4,6 +4,7 @@ import type {
   SourceControlExecutor,
   WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
+import { conversationSession, namedIds, type OnConversationCall } from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import compression from "compression";
@@ -66,6 +67,8 @@ export interface GatewayApplicationDependencies {
   companionRepositoryBinder?: CompanionRepositoryBinder;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
+  /** Each tool call with the ChatGPT conversation that made it (the companion's chat wake). */
+  onConversationCall?: OnConversationCall;
 }
 
 export function createGatewayApplication(
@@ -222,6 +225,8 @@ export function createGatewayApplication(
       requestSignal: requestAbort.signal,
       ...(request.mcpLatency ? { latency: request.mcpLatency } : {}),
     });
+    // Browser calls on the fast path never reach the MCP server's tool hook.
+    noteConversationCall(request.body, dependencies.onConversationCall);
     try {
       const handledByFastPath = await tryHandleLegacyBrowserFastPath({
         request,
@@ -249,6 +254,7 @@ export function createGatewayApplication(
       ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
       ...(browser === undefined ? {} : { browser }),
       operationContextFactory,
+      ...(dependencies.onConversationCall === undefined ? {} : { onConversationCall: dependencies.onConversationCall }),
     });
     const transport = new StreamableHTTPServerTransport({
       enableJsonResponse: true,
@@ -318,4 +324,17 @@ function bindMcpHttpRequestAbort(
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : "UnknownError";
+}
+
+function noteConversationCall(body: unknown, onCall: OnConversationCall | undefined): void {
+  if (!onCall || typeof body !== "object" || body === null || Array.isArray(body)) return;
+  const message = body as { method?: unknown; params?: { name?: unknown; arguments?: unknown; _meta?: unknown } };
+  if (message.method !== "tools/call" || typeof message.params?.name !== "string") return;
+  const session = conversationSession(message.params._meta);
+  if (session === undefined) return;
+  try {
+    onCall({ session, tool: message.params.name, ids: namedIds(message.params.arguments, undefined) });
+  } catch {
+    // Only the conversation of this call is not remembered.
+  }
 }

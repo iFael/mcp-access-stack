@@ -1660,6 +1660,13 @@ describe("PersonalBrowserBridge popup messages", () => {
     await expect(bridge.wakeChromeTab("aviso")).resolves.toEqual({ outcome: "unavailable", detail: "extension-not-connected" });
     older.close();
     await waitUntil(() => !bridge.isConnected());
+    // Without the conversation capability it could only write in the tab used last: it does not.
+    const beforeConversations = await connectExtension(port, token,
+      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "chatWakeConversationV1"));
+    await expect(bridge.wakeChromeTab("aviso", "abcd1234-ef56")).resolves.toEqual({ outcome: "unavailable", detail: "extension-needs-reload" });
+    await expect(bridge.openChromeConversations()).resolves.toEqual([]);
+    beforeConversations.close();
+    await waitUntil(() => !bridge.isConnected());
 
     const extension = await connectExtension(port, token);
     try {
@@ -1673,9 +1680,9 @@ describe("PersonalBrowserBridge popup messages", () => {
       await waitUntil(() => queued.length === 3);
       expect(switches).toEqual([false]);
       expect(queued).toEqual(expect.arrayContaining([
-        { kind: "message", messageId: "msg_eeeeeeee-0000", text: "nota" },
+        { kind: "message", messageId: "msg_eeeeeeee-0000", text: "nota", taskId: "task-1" },
         { kind: "handback", tabId: "personal:7", reason: "Faça login" },
-        { kind: "message", messageId: posted.id, text: "Pelo cartão" },
+        { kind: "message", messageId: posted.id, text: "Pelo cartão", taskId: "task-1" },
       ]));
       expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(true);
       // Written into the conversation, the message reached the agent; the popup hears it was delivered.
@@ -1696,6 +1703,22 @@ describe("PersonalBrowserBridge popup messages", () => {
       expect(request.text).toBe("[MCP V3, aviso]");
       extension.send(JSON.stringify({ type: "wake-chrome-result", id: request.id, outcome: "busy" }));
       await expect(written).resolves.toEqual({ outcome: "busy" });
+
+      // A notice for one conversation goes to that conversation's tab, never the tab used last.
+      const conversationAsked = nextWireMessage(extension, (wire) => wire.type === "wake-chrome");
+      const conversationWritten = bridge.wakeChromeTab("[MCP V3, aviso]", "abcd1234-ef56");
+      const conversationRequest = await conversationAsked as { id: string; conversationId?: string };
+      expect(conversationRequest.conversationId).toBe("abcd1234-ef56");
+      extension.send(JSON.stringify({ type: "wake-chrome-result", id: conversationRequest.id, outcome: "elsewhere" }));
+      await expect(conversationWritten).resolves.toEqual({ outcome: "elsewhere" });
+
+      const inspected = nextWireMessage(extension, (wire) => wire.type === "wake-inspect");
+      const open = bridge.openChromeConversations();
+      const inspection = await inspected as { id: string };
+      extension.send(JSON.stringify({ type: "wake-inspect-result", id: inspection.id, conversations: [
+        { conversationId: "abcd1234-ef56", answering: true }, { conversationId: "../bad", answering: true },
+      ] }));
+      await expect(open).resolves.toEqual([{ conversationId: "abcd1234-ef56", answering: true }]);
 
       const shown = nextWireMessage(extension, (wire) => wire.type === "wake-status");
       bridge.showChatWakeStatus({ enabled: true, waiting: 2, recent: [] });

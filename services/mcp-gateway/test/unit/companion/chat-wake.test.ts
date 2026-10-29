@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "@jest/globals";
 import { ChatWake, chatWakeText, type ChatWakeOutcome, type ChatWakeStatus, type ChatWakeTarget } from "../../../src/companion/chat-wake.js";
-import { createDesktopChatAppTarget, DESKTOP_CHAT_APP_SCRIPT, parseDesktopChatAppResult } from "../../../src/companion/desktop-chat-app.js";
+import { ConversationBook, conversationIdOf, type OpenConversation } from "../../../src/companion/conversation-book.js";
+import {
+  createDesktopChatAppTarget,
+  DESKTOP_CHAT_APP_SCRIPT,
+  parseDesktopChatAppInspect,
+  parseDesktopChatAppResult,
+} from "../../../src/companion/desktop-chat-app.js";
 
 function target(name: ChatWakeTarget["name"], outcomes: ChatWakeOutcome[]): ChatWakeTarget & { texts: string[] } {
   const texts: string[] = [];
@@ -26,6 +32,86 @@ async function until(condition: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+describe("ChatWake per conversation", () => {
+  it("writes each notice only in its own conversation and holds the ones whose conversation is unknown", async () => {
+    const delivered: Array<{ text: string; conversationId?: string }> = [];
+    const app: ChatWakeTarget = { name: "app", deliver: async (text, conversationId) => {
+      delivered.push({ text, ...(conversationId === undefined ? {} : { conversationId }) });
+      // The app shows conversation B; A goes through Chrome.
+      return { outcome: conversationId === "conversation-b" ? "sent" : "elsewhere" };
+    } };
+    const chromeTexts: Array<{ text: string; conversationId?: string }> = [];
+    const chrome: ChatWakeTarget = { name: "chrome", deliver: async (text, conversationId) => {
+      chromeTexts.push({ text, ...(conversationId === undefined ? {} : { conversationId }) });
+      return { outcome: "sent" };
+    } };
+    const owners: Record<string, string> = { "task-a": "conversation-a", "task-b": "conversation-b" };
+    const wake = new ChatWake({ targets: () => [app, chrome], spacingMs: 1, retryMs: 10,
+      conversationOf: (event) => (event.kind === "task" ? owners[event.taskId] : undefined) });
+    wake.queue({ kind: "task", taskId: "task-a", state: "succeeded" });
+    wake.queue({ kind: "task", taskId: "task-b", state: "failed" });
+    wake.queue({ kind: "message", messageId: "msg_cccccccc", text: "de onde?" });
+    await until(() => wake.status().recent.length === 2);
+    expect(chromeTexts).toEqual([{ text: expect.stringContaining("task-a"), conversationId: "conversation-a" }]);
+    expect(delivered.at(-1)).toEqual({ text: expect.stringContaining("task-b"), conversationId: "conversation-b" });
+    expect(delivered.some((entry) => entry.text.includes("task-a") && entry.text.includes("task-b"))).toBe(false);
+    // Nobody knows the message's conversation: it is never written anywhere.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect([...delivered, ...chromeTexts].some((entry) => entry.text.includes("de onde?"))).toBe(false);
+    expect(wake.status()).toMatchObject({ waiting: 1, lastError: expect.stringContaining("não vai para outra conversa") });
+    wake.close();
+  });
+});
+
+describe("ConversationBook", () => {
+  it("learns a conversation from the one answering when its call arrives and files the call's ids under it", async () => {
+    let open: OpenConversation[] = [
+      { conversationId: "conversation-a", answering: true },
+      { conversationId: "conversation-b", answering: false },
+    ];
+    let now = 1_000;
+    const book = new ConversationBook({ openConversations: async () => open, now: () => now });
+    book.noteCall({ session: "session-a", ids: ["task-a"] });
+    await until(() => book.conversationOf({ kind: "task", taskId: "task-a", state: "succeeded" }) !== undefined);
+    expect(book.conversationOf({ kind: "task", taskId: "task-a", state: "succeeded" })).toBe("conversation-a");
+    // Alone in the last hours, the conversation also owns what no call named.
+    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBe("conversation-a");
+
+    // Two conversations answering: nothing is learned for the second session.
+    open = [{ conversationId: "conversation-a", answering: true }, { conversationId: "conversation-b", answering: true }];
+    now += 10_000;
+    book.noteCall({ session: "session-b", ids: ["task-b"] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" })).toBeUndefined();
+    // With two conversations at work, an id no call named belongs to neither.
+    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBeUndefined();
+    expect(book.conversationOf({ kind: "message", messageId: "msg_1", text: "x", taskId: "task-a" })).toBe("conversation-a");
+
+    open = [{ conversationId: "conversation-b", answering: true }];
+    now += 10_000;
+    book.noteCall({ session: "session-b", ids: [] });
+    await until(() => book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" }) !== undefined);
+    expect(book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" })).toBe("conversation-b");
+  });
+
+  it("reads the conversation id from ChatGPT addresses only", () => {
+    expect(conversationIdOf("https://chatgpt.com/c/6720f1c2-0a1b-8000-9c2d-3e4f5a6b7c8d")).toBe("6720f1c2-0a1b-8000-9c2d-3e4f5a6b7c8d");
+    expect(conversationIdOf("https://chatgpt.com/g/g-p-abc-projeto/c/6720f1c2-0a1b")).toBe("6720f1c2-0a1b");
+    expect(conversationIdOf("https://chatgpt.com/")).toBeUndefined();
+    expect(conversationIdOf("https://example.com/c/6720f1c2-0a1b")).toBeUndefined();
+  });
+
+  it("parses what the app shows without writing", () => {
+    expect(parseDesktopChatAppInspect('{"outcome":"inspect","conversationId":"6720f1c2-0a1b","answering":true,"address":true}'))
+      .toEqual([{ conversationId: "6720f1c2-0a1b", answering: true }]);
+    expect(parseDesktopChatAppInspect('{"outcome":"inspect","conversationId":"","answering":true,"address":false}')).toEqual([]);
+    expect(parseDesktopChatAppResult('{"outcome":"elsewhere","detail":"other-conversation"}'))
+      .toEqual({ outcome: "elsewhere", detail: "other-conversation" });
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("MCP_V3_WAKE_CONVERSATION");
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("'switched'");
+  });
+});
 
 describe("ChatWake", () => {
   it("writes what the user wrote in the ChatGPT app as they wrote it, with short notes for the rest", async () => {

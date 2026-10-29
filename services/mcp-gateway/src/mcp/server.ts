@@ -5,6 +5,7 @@ import {
   MCP_SERVER_BASE_VERSION,
   MCP_SERVER_NAME,
   MCP_TOOL_CATALOG_META_KEY,
+  installConversationTracking,
   installUserMessageDelivery,
   registerBrowserTools,
   registerRepositoryTools,
@@ -13,6 +14,7 @@ import {
   unavailableRepositoryExecutor,
   type BrowserExecutor,
   type McpToolCatalogMetadata,
+  type OnConversationCall,
   type RepositoryExecutor,
   type SourceControlExecutor,
   type WorkspaceExecutor,
@@ -40,6 +42,8 @@ export interface McpServerOptions {
   browser?: BrowserExecutor | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
+  /** Each tool call with the ChatGPT conversation that made it (the companion's chat wake). */
+  onConversationCall?: OnConversationCall | undefined;
 }
 
 export function createMcpServer(options: McpServerOptions): McpServer {
@@ -66,6 +70,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   if (typeof browserForMessages?.takeUserMessages === "function") {
     installUserMessageDelivery(server, (scope) => browserForMessages.takeUserMessages?.(scope) ?? []);
   }
+  if (options.onConversationCall) installConversationTracking(server, options.onConversationCall);
   const securitySchemes = options.auth
     ? [{ type: "oauth2" as const, scopes: [options.auth.requiredScope] }]
     : [{ type: "noauth" as const }];

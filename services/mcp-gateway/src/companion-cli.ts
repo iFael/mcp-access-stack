@@ -16,6 +16,7 @@ import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { ChatWake, type ChatWakeTarget } from "./companion/chat-wake.js";
 import { createDesktopChatAppTarget } from "./companion/desktop-chat-app.js";
+import { ConversationBook } from "./companion/conversation-book.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
 import { loadGatewayConfig } from "./config.js";
 import { assertLoopbackMcpCompatibility } from "./edge/loopback-health.js";
@@ -64,12 +65,21 @@ async function main(): Promise<void> {
     });
   }
   let personalBrowser: PersonalBrowserBridge | undefined;
-  // Wakes the ChatGPT conversation: the app for Windows first, else the Chrome tab used last.
+  // Wakes the ChatGPT conversation each notice belongs to: in the app for
+  // Windows when it shows that conversation, else in a Chrome tab of it.
   const desktopChatApp = createDesktopChatAppTarget({ scriptDirectory: path.join(runtime.stateRoot, "browser") });
-  const chromeChatTab: ChatWakeTarget = { name: "chrome", deliver: (text) =>
-    personalBrowser?.wakeChromeTab(text) ?? Promise.resolve({ outcome: "unavailable" }) };
+  const chromeChatTab: ChatWakeTarget = { name: "chrome", deliver: (text, conversationId) =>
+    personalBrowser?.wakeChromeTab(text, conversationId) ?? Promise.resolve({ outcome: "unavailable" }) };
+  const conversations = new ConversationBook({
+    openConversations: async () => (await Promise.all([
+      desktopChatApp?.openConversations?.() ?? Promise.resolve([]),
+      personalBrowser?.openChromeConversations() ?? Promise.resolve([]),
+    ])).flat(),
+    log: writeLog,
+  });
   const chatWake = new ChatWake({
     targets: () => (desktopChatApp ? [desktopChatApp, chromeChatTab] : [chromeChatTab]),
+    conversationOf: (event) => conversations.conversationOf(event),
     isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false) ||
       (personalBrowser?.wasPassedAlong(event.messageId) ?? false),
     passedAlong: (event) => personalBrowser?.wasPassedAlong(event.messageId) ?? false,
@@ -165,6 +175,7 @@ async function main(): Promise<void> {
         }),
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
+    onConversationCall: (call) => conversations.noteCall(call),
   });
   const loopback = await startLoopbackGateway(gateway.app);
 
