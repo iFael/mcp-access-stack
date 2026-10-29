@@ -6,6 +6,7 @@ import {
   selectAvailableRuntimeWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
+  isOfflineDeviceWorkspace,
 } from "../src/control-plane/companion-routing.js";
 
 const candidates = [
@@ -204,5 +205,17 @@ describe("companion routing", () => {
       "missing",
       new Set(["primary-only"]),
     )).toEqual({ kind: "none" });
+  });
+
+  it("calls a workspace only an offline device holds unavailable instead of sending it to the primary", () => {
+    const materializations = [
+      { deviceId: "dev-a", workspaceId: "mcp-access-stack-local-e3b4a051" },
+      { runtimeId: "rt-1", workspaceId: "remote-repo" },
+    ];
+    expect(isOfflineDeviceWorkspace(materializations, "mcp-access-stack-local-e3b4a051", null)).toBe(true);
+    expect(isOfflineDeviceWorkspace(materializations, "remote-repo", null)).toBe(false);
+    expect(isOfflineDeviceWorkspace(materializations, "mcp-access-stack-local-e3b4a051",
+      new Set(["mcp-access-stack-local-e3b4a051"]))).toBe(false);
+    expect(isOfflineDeviceWorkspace(materializations, "unknown", new Set())).toBe(false);
   });
 });
