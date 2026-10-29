@@ -64,6 +64,17 @@ if ((Test-McpPathContains -Parent $distributionRoot -Child $installationRoot) -o
     (Test-McpPathContains -Parent $installationRoot -Child $distributionRoot)) {
     throw 'Execution-node distribution and installation roots must not overlap.'
 }
+# Every file is hashed once against the distribution manifest here and once
+# more after the copy. The other checks reuse those hashes: hashing the whole
+# release at every step took longer than the prepare timeout on Windows.
+$timingsMs = [ordered]@{}
+$phaseClock = [Diagnostics.Stopwatch]::StartNew()
+function Complete-McpStagePhase {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $timingsMs[$Name] = [long]$phaseClock.ElapsedMilliseconds
+    $phaseClock.Restart()
+}
+
 Assert-McpWindowsExecutionNodeNoReparsePoints -Root $distributionRoot
 
 $distribution = Assert-McpPublicDistribution `
@@ -87,11 +98,18 @@ if (-not (Test-Path -LiteralPath $sourceRelease -PathType Container)) {
     throw "Signed distribution is missing execution-node release: $releaseId"
 }
 
+Complete-McpStagePhase -Name 'distributionHashes'
+
+$releaseHashes = Get-McpWindowsExecutionNodeReleaseHashes `
+    -DistributionManifest $distribution `
+    -ReleaseId $releaseId
 $sourceVerification = Assert-McpWindowsExecutionNodeRelease `
     -ReleaseRoot $sourceRelease `
     -ExpectedReleaseId $releaseId `
     -ExpectedCommit $distributionCommit `
-    -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
+    -VerifiedFileHashes $releaseHashes
+Complete-McpStagePhase -Name 'sourceRelease'
 
 function Assert-McpManagedDirectoryBoundary {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -183,55 +201,61 @@ try {
         if (-not (Test-Path -LiteralPath $targetRelease -PathType Container)) {
             throw "Execution-node release target exists but is not a directory: $releaseId"
         }
-        $targetVerification = Assert-McpWindowsExecutionNodeRelease `
-            -ReleaseRoot $targetRelease `
-            -ExpectedReleaseId $releaseId `
-            -ExpectedCommit ([string]$sourceVerification.commit) `
-            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-        if ([string]$targetVerification.executionManifestSha256 -ne
-            [string]$sourceVerification.executionManifestSha256) {
-            throw 'Existing execution-node release does not match the signed candidate.'
-        }
         Assert-McpWindowsExecutionNodeMaterializedRelease `
             -DistributionManifest $distribution `
             -ReleaseId $releaseId `
             -ReleaseRoot $targetRelease
+        $targetVerification = Assert-McpWindowsExecutionNodeRelease `
+            -ReleaseRoot $targetRelease `
+            -ExpectedReleaseId $releaseId `
+            -ExpectedCommit ([string]$sourceVerification.commit) `
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
+            -VerifiedFileHashes $releaseHashes
+        if ([string]$targetVerification.executionManifestSha256 -ne
+            [string]$sourceVerification.executionManifestSha256) {
+            throw 'Existing execution-node release does not match the signed candidate.'
+        }
+        Complete-McpStagePhase -Name 'existingTarget'
     }
     else {
         $stagingPath = Join-Path $releasesRoot (
             '.staging-{0}-{1}' -f $releaseId, [guid]::NewGuid().ToString('N')
         )
         Copy-Item -LiteralPath $sourceRelease -Destination $stagingPath -Recurse
-        $stagedVerification = Assert-McpWindowsExecutionNodeRelease `
-            -ReleaseRoot $stagingPath `
-            -ExpectedReleaseId $releaseId `
-            -ExpectedCommit ([string]$sourceVerification.commit) `
-            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-        if ([string]$stagedVerification.executionManifestSha256 -ne
-            [string]$sourceVerification.executionManifestSha256) {
-            throw 'Materialized execution-node candidate changed during staging.'
-        }
+        Complete-McpStagePhase -Name 'copy'
         Assert-McpWindowsExecutionNodeMaterializedRelease `
             -DistributionManifest $distribution `
             -ReleaseId $releaseId `
             -ReleaseRoot $stagingPath
+        Complete-McpStagePhase -Name 'copiedHashes'
+        $stagedVerification = Assert-McpWindowsExecutionNodeRelease `
+            -ReleaseRoot $stagingPath `
+            -ExpectedReleaseId $releaseId `
+            -ExpectedCommit ([string]$sourceVerification.commit) `
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
+            -VerifiedFileHashes $releaseHashes
+        if ([string]$stagedVerification.executionManifestSha256 -ne
+            [string]$sourceVerification.executionManifestSha256) {
+            throw 'Materialized execution-node candidate changed during staging.'
+        }
         Move-McpWindowsExecutionNodeDirectoryWithRetry `
             -Source $stagingPath `
             -Destination $targetRelease
         $stagingPath = $null
+        Complete-McpStagePhase -Name 'move'
+        # The move is a rename inside the releases folder: the bytes hashed
+        # above are the ones now in place, so only the structure is rechecked.
         $finalVerification = Assert-McpWindowsExecutionNodeRelease `
             -ReleaseRoot $targetRelease `
             -ExpectedReleaseId $releaseId `
             -ExpectedCommit ([string]$sourceVerification.commit) `
-            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+            -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
+            -VerifiedFileHashes $releaseHashes
         if ([string]$finalVerification.executionManifestSha256 -ne
             [string]$sourceVerification.executionManifestSha256) {
             throw 'Final execution-node candidate verification failed after materialization.'
         }
-        Assert-McpWindowsExecutionNodeMaterializedRelease `
-            -DistributionManifest $distribution `
-            -ReleaseId $releaseId `
-            -ReleaseRoot $targetRelease
+        Complete-McpStagePhase -Name 'finalCheck'
         $materialized = $true
     }
 
@@ -246,6 +270,7 @@ try {
             alreadyPrepared = $true
             materialized = $materialized
             activeChanged = $false
+            timingsMs = $timingsMs
         } | ConvertTo-Json -Compress
         return
     }
@@ -273,6 +298,7 @@ try {
         alreadyPrepared = $false
         materialized = $materialized
         activeChanged = $false
+        timingsMs = $timingsMs
     } | ConvertTo-Json -Compress
 }
 finally {

@@ -399,6 +399,27 @@ function Assert-McpWindowsExecutionNodeMaterializedRelease {
         }
     }
 }
+# Release-relative path -> SHA-256 for every file of one release in the
+# distribution manifest. Assert-McpWindowsExecutionNodeMaterializedRelease
+# hashes those files once; passing this map to the other checks of the same
+# folder keeps them from hashing every file again.
+function Get-McpWindowsExecutionNodeReleaseHashes {
+    param(
+        [Parameter(Mandatory = $true)][object]$DistributionManifest,
+        [Parameter(Mandatory = $true)][string]$ReleaseId
+    )
+
+    $prefix = "releases/$ReleaseId/"
+    $hashes = [hashtable]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($DistributionManifest.files)) {
+        $signedPath = ([string]$entry.path).Replace('\', '/')
+        if ($signedPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $hashes[$signedPath.Substring($prefix.Length)] = ([string]$entry.sha256).ToLowerInvariant()
+        }
+    }
+    return $hashes
+}
+
 function Assert-McpWindowsExecutionNodeRelease {
     param(
         [Parameter(Mandatory = $true)][string]$ReleaseRoot,
@@ -406,13 +427,26 @@ function Assert-McpWindowsExecutionNodeRelease {
         [string]$ExpectedCommit,
         [switch]$AllowUnsignedDevelopment,
         [switch]$RuntimeSmoke,
-        [switch]$AllowLegacyInstalledFormat
+        [switch]$AllowLegacyInstalledFormat,
+        # Hashes of files the caller already verified in this folder
+        # (Get-McpWindowsExecutionNodeReleaseHashes); other files are hashed.
+        [hashtable]$VerifiedFileHashes
     )
 
     $release = [System.IO.Path]::GetFullPath($ReleaseRoot)
     Assert-McpWindowsExecutionNodeNoReparsePoints -Root $release
 
-    $releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $release
+    function Get-McpReleaseFileHash {
+        param([Parameter(Mandatory = $true)][string]$RelativePath)
+        $key = $RelativePath.Replace('\', '/')
+        if ($null -ne $VerifiedFileHashes -and $VerifiedFileHashes.ContainsKey($key)) {
+            return [string]$VerifiedFileHashes[$key]
+        }
+        $path = Resolve-McpPublicChildPath -Root $release -RelativePath $RelativePath
+        return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $release -VerifiedFileHashes $VerifiedFileHashes
     $releaseAttestation = Assert-McpPublicReleaseAttestation `
         -ReleaseRoot $release `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
@@ -459,7 +493,7 @@ function Assert-McpWindowsExecutionNodeRelease {
         throw 'Release manifest is missing or mismatches execution-node identity.'
     }
     $expectedExecutionHash = ([string]$executionIdentity.manifestSha256).ToLowerInvariant()
-    $actualExecutionHash = (Get-FileHash -LiteralPath $executionManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualExecutionHash = Get-McpReleaseFileHash -RelativePath 'execution-node-manifest.json'
     if ($expectedExecutionHash -notmatch '^[a-f0-9]{64}$' -or $actualExecutionHash -ne $expectedExecutionHash) {
         throw 'Execution-node manifest hash is not bound to the release manifest.'
     }
@@ -474,7 +508,7 @@ function Assert-McpWindowsExecutionNodeRelease {
         if ([long]$Record.sizeBytes -ne [long]$item.Length) {
             throw "Execution-node artifact size mismatch: $($Record.path)"
         }
-        $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = Get-McpReleaseFileHash -RelativePath ([string]$Record.path)
         $expectedHash = ([string]$Record.sha256).ToLowerInvariant()
         if ($expectedHash -notmatch '^[a-f0-9]{64}$' -or $actualHash -ne $expectedHash) {
             throw "Execution-node artifact hash mismatch: $($Record.path)"

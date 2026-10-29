@@ -80,17 +80,17 @@ try {
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
     . $packageCommonPath
 
-    $distribution = Assert-McpPublicDistribution `
-        -Root $packageRoot `
-        -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-    if ([int]$distribution.schemaVersion -ne 2) {
+    # Only the release contract is read here: the stager below hashes every
+    # file of the package, and hashing them here too doubled the prepare time.
+    $distribution = & $manifestFiles[0].FullName
+    if ($null -eq $distribution -or [int]$distribution.schemaVersion -ne 2) {
         throw 'Current updater accepts only Docker-free distribution manifest v2.'
     }
     $releaseId = [string]$distribution.releaseId
     $sourceRelease = Resolve-McpPublicChildPath `
         -Root $packageRoot `
         -RelativePath ("releases/{0}" -f $releaseId)
-    $releaseManifest = Assert-McpPublicReleaseFiles -ReleaseRoot $sourceRelease
+    $releaseManifest = Read-McpPublicJson -Path (Join-Path $sourceRelease 'manifest.json')
     $releaseAttestation = Assert-McpPublicReleaseAttestation `
         -ReleaseRoot $sourceRelease `
         -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
@@ -119,6 +119,7 @@ try {
         releaseId = $releaseId
         candidatePrepared = $true
         alreadyPrepared = [bool]$stageResult.alreadyPrepared
+        timingsMs = $stageResult.timingsMs
         promoted = $false
         nextAction = 'Run Install-McpAccessStack.ps1 with the environment token/configuration files. It starts the detached Edge cutover broker and returns the resultPath used to observe completion.'
     } | ConvertTo-Json -Compress
