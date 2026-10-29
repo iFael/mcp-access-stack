@@ -70,7 +70,9 @@ async function main(): Promise<void> {
     personalBrowser?.wakeChromeTab(text) ?? Promise.resolve({ outcome: "unavailable" }) };
   const chatWake = new ChatWake({
     targets: () => (desktopChatApp ? [desktopChatApp, chromeChatTab] : [chromeChatTab]),
-    isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false),
+    isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false) ||
+      (personalBrowser?.wasPassedAlong(event.messageId) ?? false),
+    passedAlong: (event) => personalBrowser?.wasPassedAlong(event.messageId) ?? false,
     onStatus: (status) => personalBrowser?.showChatWakeStatus(status),
     onSent: (events) => personalBrowser?.deliverWokenMessages(
       events.flatMap((event) => (event.kind === "message" ? [event.messageId] : []))),

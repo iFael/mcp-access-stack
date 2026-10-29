@@ -90,6 +90,21 @@ describe("ChatWake", () => {
     wake.close();
   });
 
+  it("still writes a message that only rode on a call's result, once the agent's turn ends", async () => {
+    const app = target("app", ["busy", "sent"]);
+    let passed = false;
+    const wake = new ChatWake({ targets: () => [app], isOpen: () => true, passedAlong: () => passed, spacingMs: 1, retryMs: 10 });
+    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Atualize a .codex" });
+    // The agent is answering; meanwhile its next call carries the message.
+    await until(() => app.texts.length === 1);
+    passed = true;
+    await until(() => wake.status().recent.length === 1);
+    expect(app.texts[0]).toBe("Atualize a .codex");
+    expect(app.texts[1]).toBe("[MCP V3] Escrevi isto enquanto você trabalhava e veio junto com o resultado de uma chamada sua. " +
+      "Se ainda não fez o que peço, faça agora; se já fez, só confirme.\n\nAtualize a .codex");
+    wake.close();
+  });
+
   it("does nothing while off, and says why it could not write", async () => {
     const app = target("app", ["unavailable"]);
     const chrome = target("chrome", ["failed"]);
