@@ -1,9 +1,10 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import {
   prepareOnce,
   promoteOnce,
   releaseIdOf,
+  saveRecord,
   StopUpdate,
   type ReleaseInstallData,
   type ReleaseInstallPort,
@@ -189,11 +190,7 @@ export class CompanionUpdateRunner {
   }
 
   private async save(record: CompanionUpdateRecord): Promise<void> {
-    await mkdir(this.options.stateDirectory, { recursive: true });
-    const target = this.file(record.updateId);
-    const temporary = `${target}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ ...record, updatedAt: this.now().toISOString() }, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, target);
+    await saveRecord(this.file(record.updateId), `${JSON.stringify({ ...record, updatedAt: this.now().toISOString() }, null, 2)}\n`);
   }
 
   private async list(): Promise<CompanionUpdateRecord[]> {

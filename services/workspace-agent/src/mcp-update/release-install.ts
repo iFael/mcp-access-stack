@@ -4,6 +4,35 @@
 // that the promote itself replaces, never asks again: its successor only
 // waits for the outcome.
 
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+/**
+ * Replaces an update's record in one step. Each save has its own temporary
+ * file, and on Windows the rename is retried while a concurrent read of the
+ * record still holds it open.
+ */
+export async function saveRecord(target: string, text: string): Promise<void> {
+  await mkdir(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, text, { mode: 0o600 });
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await rename(temporary, target);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") || attempt >= 20) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+      }
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
 export class StopUpdate extends Error {
   constructor(
     readonly code: string,
