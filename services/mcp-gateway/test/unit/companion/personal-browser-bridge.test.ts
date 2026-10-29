@@ -1616,19 +1616,28 @@ describe("PersonalBrowserBridge popup messages", () => {
     }
   });
 
-  it("refuses popup messages until the extension offers taskMessagesV1", async () => {
+  it("keeps the chat card's messages working with Chrome closed or an older extension", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
     const port = await reservePort();
     const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
-    const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
-    const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
-    const extension = await connectExtension(port, token,
-      PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "taskMessagesV1"), "1.12.1");
     try {
-      await expect(bridge.userMessages({})).rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+      // No extension at all: the card writes and the agent reads, in the companion.
+      const answer = bridge.userMessages({ taskId: "task-1", question: "Posso seguir?", waitMs: 5_000 });
+      const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pode." });
+      await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: posted.id, text: "Pode." }] });
+
+      const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
+      const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;
+      const extension = await connectExtension(port, token,
+        PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "taskMessagesV1"), "1.12.1");
+      try {
+        await bridge.postUserMessage({ text: "Outra." });
+        await expect(bridge.userMessages({})).resolves.toMatchObject({ messages: [{ text: "Outra." }] });
+      } finally {
+        extension.close();
+      }
     } finally {
-      extension.close();
       await bridge.close();
     }
   });
@@ -1664,13 +1673,17 @@ describe("PersonalBrowserBridge popup messages", () => {
       await waitUntil(() => queued.length === 3);
       expect(switches).toEqual([false]);
       expect(queued).toEqual(expect.arrayContaining([
-        { kind: "message", messageId: "msg_eeeeeeee-0000" },
+        { kind: "message", messageId: "msg_eeeeeeee-0000", text: "nota" },
         { kind: "handback", tabId: "personal:7", reason: "Faça login" },
-        { kind: "message", messageId: posted.id },
+        { kind: "message", messageId: posted.id, text: "Pelo cartão" },
       ]));
       expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(true);
-      bridge.takeUserMessages({});
+      // Written into the conversation, the message reached the agent; the popup hears it was delivered.
+      const delivered = nextWireMessage(extension, (wire) => wire.type === "task-messages-delivered");
+      bridge.deliverWokenMessages(["msg_eeeeeeee-0000"]);
+      await expect(delivered).resolves.toEqual({ type: "task-messages-delivered", ids: ["msg_eeeeeeee-0000"] });
       expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(false);
+      expect(bridge.takeUserMessages({ taskId: "task-1" }).map((message) => message.text)).toEqual(["Pelo cartão"]);
 
       const asked = nextWireMessage(extension, (wire) => wire.type === "wake-chrome");
       const written = bridge.wakeChromeTab("[MCP V3, aviso]");

@@ -313,7 +313,8 @@ export class BrowserModeRouter implements BrowserExecutor {
         `Browser task ${input.taskId} runs in managed mode; the user writes to tasks only from personal Chrome.`,
       );
     }
-    const personal = this.requirePersonal();
+    // The inbox is in the companion, so this works with Chrome closed.
+    const personal = this.personal ?? this.requirePersonal();
     if (typeof personal.userMessages !== "function") throw unsupported("browser_user_messages");
     return personal.userMessages(...args);
   }
@@ -328,7 +329,7 @@ export class BrowserModeRouter implements BrowserExecutor {
         `Browser task ${input.taskId} runs in managed mode; the user writes to tasks only from personal Chrome.`,
       );
     }
-    const personal = this.requirePersonal();
+    const personal = this.personal ?? this.requirePersonal();
     if (typeof personal.postUserMessage !== "function") throw unsupported("browser_user_reply");
     return personal.postUserMessage(...args);
   }
@@ -337,7 +338,7 @@ export class BrowserModeRouter implements BrowserExecutor {
     ...args: Parameters<NonNullable<BrowserExecutor["takeUserMessages"]>>
   ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {
     const [scope] = args;
-    if (!this.personal?.isConnected()) return [];
+    if (!this.personal) return [];
     // A managed tab or task is not one the popup knows; such a call is unscoped.
     const taskId = scope.taskId && this.taskModes.get(scope.taskId) !== "managed" ? scope.taskId : undefined;
     const tabId = scope.tabId && isPersonalTabId(scope.tabId) ? scope.tabId : undefined;

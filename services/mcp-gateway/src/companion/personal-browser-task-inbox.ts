@@ -31,6 +31,24 @@ export class PersonalBrowserTaskInbox {
     return this.queued.has(id);
   }
 
+  /** The text of a message still waiting for the agent. */
+  textOf(id: string): string | undefined {
+    return this.queued.get(id)?.message.text;
+  }
+
+  /** Takes these messages, which reached the agent another way (written into the conversation). */
+  takeIds(ids: readonly string[]): BrowserUserMessage[] {
+    const taken: BrowserUserMessage[] = [];
+    for (const id of ids) {
+      const queued = this.queued.get(id);
+      if (!queued) continue;
+      this.queued.delete(id);
+      this.remember(id);
+      taken.push(queued.message);
+    }
+    return taken;
+  }
+
   /**
    * Adds the messages of a "task-messages" push. Returns how many were new and
    * the ids already delivered, whose delivery the extension never heard of.
