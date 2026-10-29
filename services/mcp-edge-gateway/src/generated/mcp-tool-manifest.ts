@@ -2340,7 +2340,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",
+    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2398,6 +2398,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                   "minLength": 1,
                   "type": "string"
                 },
+                "companionTag": {
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "confirmation": {
                   "additionalProperties": false,
                   "properties": {
@@ -2420,7 +2424,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "step": {
                       "enum": [
                         "oracle_prepare",
-                        "oracle_promote"
+                        "oracle_promote",
+                        "windows_prepare",
+                        "windows_promote"
                       ],
                       "type": "string"
                     }
@@ -2473,7 +2479,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                       "connector_release",
                       "oracle_prepare",
                       "oracle_promote",
-                      "oracle_verify"
+                      "oracle_verify",
+                      "companion_release",
+                      "windows_prepare",
+                      "windows_promote"
                     ],
                     "type": "string"
                   },
@@ -2497,7 +2506,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                     "connector_release",
                     "oracle_prepare",
                     "oracle_promote",
-                    "oracle_verify"
+                    "oracle_verify",
+                    "companion_release",
+                    "windows_prepare",
+                    "windows_promote"
                   ],
                   "type": "string"
                 },
@@ -2536,6 +2548,25 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                       "type": "object"
                     },
                     "bootstrap": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "companion": {
                       "additionalProperties": false,
                       "properties": {
                         "operationId": {
@@ -2619,7 +2650,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ],
       "type": "object"
     },
-    "title": "Update MCP V3 on the execution node"
+    "title": "Update MCP V3 on the execution node and Windows"
   },
   {
     "_meta": {
@@ -26917,15 +26948,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "7614a067b1b4e9ebfaac2080c58e14e7ede1decbcbb36b6e612c34573affe60c",
-  "serverVersion": "0.4.0-catalog.c7614a067b1b4.s6c1db2a31b7f",
+  "contractRevision": "a91c6958eb484b313129eb21be1dc2b38d5316959cbb102e73c0bac2eb349675",
+  "serverVersion": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c7614a067b1b4.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

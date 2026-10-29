@@ -4,6 +4,9 @@ import {
   WAKE_EVENTS_FEATURE,
   PROGRESS_FEATURE,
   UPDATE_WAKE_FEATURE,
+  COMPANION_UPDATE_FEATURE,
+  type CompanionUpdateRequest,
+  type CompanionUpdateStatus,
   type ProgressUpdate,
   type WakeEvent,
   MAX_EDGE_REQUEST_BODY_BYTES,
@@ -65,6 +68,8 @@ export interface EdgeConnectorOptions {
   now?: () => number;
   random?: () => number;
   log?: (entry: EdgeConnectorLog) => void;
+  /** A companion's answer to requestCompanionUpdate. */
+  onCompanionUpdateStatus?: (status: CompanionUpdateStatus) => void;
 }
 
 export type EdgeConnectorCloseClassification = "normal" | "service_restart" | "abnormal";
@@ -139,6 +144,7 @@ export class EdgeConnector {
   private pendingWakeEvents: WakeEvent[] = [];
   private edgeTakesProgress = false;
   private edgeTakesUpdateWake = false;
+  private edgeTakesCompanionUpdates = false;
   // Only the latest steps of each plan matter.
   private pendingProgress = new Map<string, ProgressUpdate>();
 
@@ -247,6 +253,21 @@ export class EdgeConnector {
     this.pendingProgress.set(update.planId, update);
     while (this.pendingProgress.size > 20) this.pendingProgress.delete(this.pendingProgress.keys().next().value!);
     this.flushProgress();
+  }
+
+  /**
+   * Asks the user's companions to install an update's Windows release. Not
+   * held: the caller repeats it while it waits, and an Edge without
+   * companionUpdateV1 never answers, which the caller reports.
+   */
+  requestCompanionUpdate(request: CompanionUpdateRequest): void {
+    const socket = this.socket;
+    if (!this.edgeTakesCompanionUpdates || !socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(JSON.stringify({ type: "connector-companion-update", protocolVersion: EDGE_PROTOCOL_VERSION, request }));
+    } catch {
+      // Asked again on the next poll.
+    }
   }
 
   private flushProgress(): void {
@@ -460,6 +481,7 @@ export class EdgeConnector {
       this.edgeTakesWakeEvents = message.features?.includes(WAKE_EVENTS_FEATURE) ?? false;
       this.edgeTakesProgress = message.features?.includes(PROGRESS_FEATURE) ?? false;
       this.edgeTakesUpdateWake = message.features?.includes(UPDATE_WAKE_FEATURE) ?? false;
+      this.edgeTakesCompanionUpdates = message.features?.includes(COMPANION_UPDATE_FEATURE) ?? false;
       const offlineDurationMs = this.currentOfflineDurationMs(connectionState.readyAtMs);
       this.offlineSinceMs = null;
       this.consecutiveFailures = 0;
@@ -496,6 +518,11 @@ export class EdgeConnector {
 
     if (message.type === "http-cancel") {
       this.activeRequests.get(message.requestId)?.abort(message.reason);
+      return;
+    }
+
+    if (message.type === "edge-companion-update-status") {
+      this.options.onCompanionUpdateStatus?.(message.status);
       return;
     }
 

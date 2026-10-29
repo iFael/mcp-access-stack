@@ -1369,9 +1369,10 @@ export function registerWorkspaceTools(
 
   if (shouldInclude("mcp_update", include)) {
     server.registerTool("mcp_update", {
-      title: "Update MCP V3 on the execution node",
+      title: "Update MCP V3 on the execution node and Windows",
       description:
         "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. " +
+        "Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. " +
         "Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. " +
         "action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. " +
         "It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-// mcp_update: the execution node publishes MAIN to itself, step by step, and
-// moves the plan card the agent opened. The agent starts it, ends its answer
+// mcp_update: the execution node publishes MAIN to itself and to the user's
+// Windows companion, step by step, and moves the plan card the agent opened. The agent starts it, ends its answer
 // and is woken when the update succeeds, fails or needs a confirmation.
 
 const SHA = z.string().regex(/^[a-f0-9]{40}$/u);
@@ -12,6 +12,7 @@ const CONFIRMATION_ID = z.string().trim().min(1).max(128);
 export const MCP_UPDATE_STEP_IDS = [
   "precheck", "edge_stage", "edge_activate", "connector_tag", "connector_release",
   "oracle_prepare", "oracle_promote", "oracle_verify",
+  "companion_release", "windows_prepare", "windows_promote",
 ] as const;
 
 export const mcpUpdateInputSchema = z.discriminatedUnion("action", [
@@ -59,18 +60,20 @@ export const mcpUpdateRecordSchema = z.object({
   skipped: z.array(z.enum(MCP_UPDATE_STEP_IDS)),
   error: z.object({ code: z.string().min(1), message: z.string().min(1) }).strict().optional(),
   confirmation: z.object({
-    step: z.enum(["oracle_prepare", "oracle_promote"]),
+    step: z.enum(["oracle_prepare", "oracle_promote", "windows_prepare", "windows_promote"]),
     confirmationId: CONFIRMATION_ID,
     reasons: z.array(z.string().min(1)),
     expiresAt: z.string().min(1),
   }).strict().optional(),
   tag: z.string().min(1).optional(),
   activeBefore: z.string().min(1).optional(),
+  companionTag: z.string().min(1).optional(),
   workflows: z.object({
     stage: workflowRunSchema.optional(),
     activate: workflowRunSchema.optional(),
     bootstrap: workflowRunSchema.optional(),
     release: workflowRunSchema.optional(),
+    companion: workflowRunSchema.optional(),
   }).strict(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),

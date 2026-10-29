@@ -1,6 +1,7 @@
 import { AppError } from "@vs-code-gpt/shared";
 import type { LocalAgent } from "../local-agent.js";
 import type { McpUpdatePort, McpUpdateRecord, McpUpdateWorkflowCall } from "./mcp-update-runner.js";
+import type { ReleaseInstallPort } from "./release-install.js";
 
 const WORKSPACE_ID = "mcp-access-stack";
 const REPOSITORY = { owner: "iFael", repository: "mcp-access-stack" } as const;
@@ -8,6 +9,7 @@ const REPOSITORY = { owner: "iFael", repository: "mcp-access-stack" } as const;
 export interface LocalAgentMcpUpdateCallbacks {
   progress?: McpUpdatePort["progress"];
   finished?: (record: McpUpdateRecord) => void;
+  requestCompanionUpdate: McpUpdatePort["requestCompanionUpdate"];
 }
 
 /**
@@ -15,12 +17,8 @@ export interface LocalAgentMcpUpdateCallbacks {
  * execution node, through whichever LocalAgent the current policy built:
  * never a stale one, so a policy reload does not keep an old generation alive.
  */
-export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks: LocalAgentMcpUpdateCallbacks = {}): McpUpdatePort {
+export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks: LocalAgentMcpUpdateCallbacks): McpUpdatePort {
   const workspaceId = WORKSPACE_ID;
-  const confirmation = (value: { confirmationId?: string | undefined; reasons?: string[] | undefined; expiresAt?: string | undefined }) => {
-    if (value.confirmationId === undefined) throw new AppError("INTERNAL_ERROR", "A confirmation without a confirmationId.");
-    return { status: "confirmation_required" as const, confirmationId: value.confirmationId, reasons: value.reasons ?? [], expiresAt: value.expiresAt ?? "" };
-  };
   const workflow = (mode: "dispatch" | "reconcile") => async (call: McpUpdateWorkflowCall) => {
     const result = await agent().githubWorkflowOperation({ workspaceId, ...REPOSITORY, mode, ...call });
     return result.status === "observed"
@@ -53,12 +51,32 @@ export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks
         connectorInstanceId: typeof body.runtime?.connectorInstanceId === "string" ? body.runtime.connectorInstanceId : null,
       };
     },
+    ...createLocalAgentReleasePort(agent, workspaceId),
+    dispatch: workflow("dispatch"),
+    reconcile: workflow("reconcile"),
+    ciRun: async (headSha) => {
+      const runs = await agent().githubRead({ workspaceId, ...REPOSITORY, kind: "workflow_runs", workflow: "ci.yml",
+        headSha, branch: "main", event: "push", status: "success", page: 1, perPage: 10 });
+      const ids = runs.items.map((run) => run.id).filter((id): id is number => typeof id === "number");
+      return ids.length === 0 ? null : Math.max(...ids);
+    },
+    requestCompanionUpdate: callbacks.requestCompanionUpdate,
+    ...(callbacks.progress === undefined ? {} : { progress: callbacks.progress }),
+    ...(callbacks.finished === undefined ? {} : { finished: callbacks.finished }),
+  };
+}
+
+/** prepare_release and promote_release in one workspace of the current LocalAgent, as an agent would call them. */
+export function createLocalAgentReleasePort(agent: () => LocalAgent, workspaceId: string): ReleaseInstallPort {
+  const confirmation = (value: { confirmationId?: string | undefined; reasons?: string[] | undefined; expiresAt?: string | undefined }) => {
+    if (value.confirmationId === undefined) throw new AppError("INTERNAL_ERROR", "A confirmation without a confirmationId.");
+    return { status: "confirmation_required" as const, confirmationId: value.confirmationId, reasons: value.reasons ?? [], expiresAt: value.expiresAt ?? "" };
+  };
+  return {
     releaseState: async () => {
       const { state } = await agent().getReleaseState({ workspaceId });
       return { active: state.active?.releaseId ?? null, candidate: state.candidate?.releaseId ?? null };
     },
-    dispatch: workflow("dispatch"),
-    reconcile: workflow("reconcile"),
     prepare: async (tag, confirmationId) => {
       const result = await agent().prepareRelease({ workspaceId, tag, ...(confirmationId === undefined ? {} : { confirmationId }) });
       if (result.status === "confirmation_required") return confirmation(result);
@@ -74,7 +92,5 @@ export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks
       const result = await agent().promoteRelease({ workspaceId, releaseId, ...(confirmationId === undefined ? {} : { confirmationId }) });
       return result.status === "confirmation_required" ? confirmation(result) : { status: "handover_started" };
     },
-    ...(callbacks.progress === undefined ? {} : { progress: callbacks.progress }),
-    ...(callbacks.finished === undefined ? {} : { finished: callbacks.finished }),
   };
 }

@@ -26,4 +26,10 @@ export {
 } from "./policy-deployment.js";
 export { SubprocessWorkspaceExecutor } from "./subprocess-workspace-executor.js";
 export { McpUpdateRunner, MCP_UPDATE_STEPS, nextConnectorRelease, type McpUpdatePort, type McpUpdateRecord, type McpUpdateRunnerOptions } from "./mcp-update/mcp-update-runner.js";
-export { createLocalAgentMcpUpdatePort, type LocalAgentMcpUpdateCallbacks } from "./mcp-update/local-agent-port.js";
+export { createLocalAgentMcpUpdatePort, createLocalAgentReleasePort, type LocalAgentMcpUpdateCallbacks } from "./mcp-update/local-agent-port.js";
+export {
+  CompanionUpdateRunner,
+  type CompanionUpdateRecord,
+  type CompanionUpdateRequest,
+  type CompanionUpdateStatus,
+} from "./mcp-update/companion-update-runner.js";

@@ -2482,7 +2482,7 @@ const MCP_UPDATE_OWNER = "iFael";
 const MCP_UPDATE_REPOSITORY = "mcp-access-stack";
 
 function publicMcpUpdate(record: McpUpdateRecord) {
-  const { stage, activate, bootstrap, release } = record.data;
+  const { stage, activate, bootstrap, release, companion } = record.data;
   return {
     updateId: record.updateId,
     mainSha: record.mainSha,
@@ -2494,11 +2494,13 @@ function publicMcpUpdate(record: McpUpdateRecord) {
     ...(record.confirmation === undefined ? {} : { confirmation: record.confirmation }),
     ...(record.data.tag === undefined ? {} : { tag: record.data.tag }),
     ...(record.data.activeBefore === undefined ? {} : { activeBefore: record.data.activeBefore }),
+    ...(record.data.companionTag === undefined ? {} : { companionTag: record.data.companionTag }),
     workflows: {
       ...(stage === undefined ? {} : { stage }),
       ...(activate === undefined ? {} : { activate }),
       ...(bootstrap === undefined ? {} : { bootstrap }),
       ...(release === undefined ? {} : { release }),
+      ...(companion === undefined ? {} : { companion }),
     },
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
