@@ -69,6 +69,8 @@ export interface McpUpdateRecord {
   workspaceId: string;
   mainSha: string;
   planId?: string;
+  /** Who started it: the workflows it dispatches are theirs, as if they had called them. */
+  ownerScope?: string;
   createdAt: string;
   updatedAt: string;
   status: McpUpdateStatus;
@@ -111,6 +113,7 @@ export interface McpUpdateWorkflowCall {
   bootstrapOperationId?: string;
   stageRunId?: number;
   ciRunId?: number;
+  ownerScope?: string;
 }
 
 export type McpUpdateWorkflowObservation =
@@ -193,7 +196,7 @@ export class McpUpdateRunner {
     }
   }
 
-  async start(input: { mainSha: string; planId?: string }): Promise<McpUpdateRecord> {
+  async start(input: { mainSha: string; planId?: string; ownerScope?: string }): Promise<McpUpdateRecord> {
     if (!SHA.test(input.mainSha)) throw new StopUpdate("INVALID_ARGUMENT", "expectedMainSha must be a full commit SHA.");
     if (input.planId !== undefined && !PLAN_ID.test(input.planId)) throw new StopUpdate("INVALID_ARGUMENT", "planId must come from browser_progress.");
     const open = (await this.list()).find((record) => record.status === "running" || record.status === "needs_confirmation");
@@ -207,6 +210,7 @@ export class McpUpdateRunner {
       workspaceId: this.options.workspaceId,
       mainSha: input.mainSha,
       ...(input.planId === undefined ? {} : { planId: input.planId }),
+      ...(input.ownerScope === undefined ? {} : { ownerScope: input.ownerScope }),
       createdAt: at,
       updatedAt: at,
       status: "running",
@@ -450,7 +454,8 @@ export class McpUpdateRunner {
   ): Promise<McpUpdateWorkflowRun> {
     const port = this.options.port;
     let run = record.data[key];
-    const full = (operationId: string): McpUpdateWorkflowCall => ({ ...call, expectedMainSha: record.mainSha, operationId });
+    const full = (operationId: string): McpUpdateWorkflowCall => ({ ...call, expectedMainSha: record.mainSha, operationId,
+      ...(record.ownerScope === undefined ? {} : { ownerScope: record.ownerScope }) });
     if (run === undefined) {
       run = { operationId: this.newId() };
       await this.save({ ...record, data: { ...record.data, [key]: run } });

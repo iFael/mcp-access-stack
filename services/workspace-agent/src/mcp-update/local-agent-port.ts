@@ -19,8 +19,9 @@ export interface LocalAgentMcpUpdateCallbacks {
  */
 export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks: LocalAgentMcpUpdateCallbacks): McpUpdatePort {
   const workspaceId = WORKSPACE_ID;
-  const workflow = (mode: "dispatch" | "reconcile") => async (call: McpUpdateWorkflowCall) => {
-    const result = await agent().githubWorkflowOperation({ workspaceId, ...REPOSITORY, mode, ...call });
+  const workflow = (mode: "dispatch" | "reconcile") => async ({ ownerScope, ...call }: McpUpdateWorkflowCall) => {
+    const result = await agent().githubWorkflowOperation({ workspaceId, ...REPOSITORY, mode, ...call },
+      ownerScope === undefined ? {} : { ownerScope });
     return result.status === "observed"
       ? { status: "observed" as const, runId: result.runId, state: result.state, conclusion: result.conclusion }
       : { status: result.status };
