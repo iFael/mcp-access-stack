@@ -6,6 +6,9 @@ import {
   COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL,
   COMPANION_INTERNAL_TOOL_PREFIX,
   COMPANION_PROTOCOL_VERSION,
+  WAKE_EVENTS_CAPABILITY,
+  WAKE_EVENTS_FEATURE,
+  type WakeEvent,
   parseCompanionToEdgeMessage,
   type AuthenticatedEdgePrincipal,
   type CompanionHttpRequestMessage,
@@ -969,6 +972,11 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "connector-wake-event") {
+      this.relayWakeEvent(parsed.event);
+      return;
+    }
+
     const pending = this.pending.get(parsed.requestId);
     if (!pending || pending.connector !== webSocket) return;
 
@@ -1138,6 +1146,23 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       }
     }
     return disconnected;
+  }
+
+  // The execution node finished something the agent may be waiting for; the
+  // companions that can wake the ChatGPT conversation hear about it. MCP V3
+  // serves one owner, so every ready companion is theirs.
+  private relayWakeEvent(event: WakeEvent): void {
+    const message = JSON.stringify({ type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event });
+    for (const webSocket of this.ctx.getWebSockets("companion")) {
+      const attachment = this.readCompanionAttachment(webSocket);
+      if (!attachment?.ready || webSocket.readyState !== WebSocket.OPEN ||
+          !attachment.capabilities?.includes(WAKE_EVENTS_CAPABILITY)) continue;
+      try {
+        webSocket.send(message);
+      } catch {
+        // That companion reconnects; the agent can still read the result itself.
+      }
+    }
   }
 
   private getReadyCompanionsForUser(
@@ -2825,7 +2850,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       disconnectRecorded: false,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
-    server.send(JSON.stringify({ type: "edge-hello", protocolVersion }));
+    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE] }));
 
     return new Response(null, { status: 101, webSocket: client });
   }

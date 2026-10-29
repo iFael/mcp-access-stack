@@ -6,6 +6,7 @@ import {
   MAX_EDGE_RESPONSE_BODY_BYTES,
   isAllowedEdgeRequest,
   parseEdgeToCompanionMessage,
+  type WakeEvent,
   utf8ByteLength,
   type CompanionHttpResponseMessage,
   type CompanionPlatform,
@@ -78,6 +79,8 @@ export interface CompanionConnectorOptions {
   log?: (entry: Record<string, unknown>) => void;
   /** How many popup messages wait for the agent, announced to an Edge that offers userMessagesV1. */
   pendingUserMessages?: () => number;
+  /** The execution node finished something the agent may wait for (needs the wake-events-v1 capability). */
+  onWakeEvent?: (event: WakeEvent) => void;
 }
 
 export class CompanionConnector {
@@ -292,6 +295,10 @@ export class CompanionConnector {
     }
     if (message.type === "companion-heartbeat-ack") {
       return { protocolReady: true, heartbeatAckId: message.heartbeatId };
+    }
+    if (message.type === "companion-wake-event") {
+      this.options.onWakeEvent?.(message.event);
+      return { protocolReady: true };
     }
     if (message.type === "http-cancel") {
       this.activeRequests.get(message.requestId)?.abort(message.reason);

@@ -198,7 +198,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Branch: git_create_branch from the current main, then edit files with write_file or patch_files.",
       "Commit: inspect_workspace_git to check the diff, git_stage_paths and git_commit (or git_commit_paths), then git_push_branch.",
       "Pull request: github_create_pull_request with a title and a body that says what changed and how it was checked.",
-      "Checks: github_start_commit_checks_watch on the pushed head SHA, then github_wait_commit_checks_watch in bounded waits until every check finished.",
+      "Checks: github_start_commit_checks_watch on the pushed head SHA. If CI takes long, end your answer and wait: when the watch ends (passed, failed, time out), MCP V3 writes it into this chat and you continue from there with github_wait_commit_checks_watch. Otherwise follow it with github_wait_commit_checks_watch in bounded waits.",
       "A failed check: diagnose it as topic refusals says (run_jobs, job_logs), fix it on the same branch, push, and watch the new head SHA.",
       "Reviews: github_read kind=pull_request_reviews and kind=pull_request_review_comments; fix what is asked on the same branch, or answer with github_issue_write action=comment saying why not.",
       "Merge only with the user's go-ahead: github_get_pull_request for the current head SHA, then github_merge_pull_request with expectedPullRequestHeadSha = that SHA.",
@@ -232,6 +232,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
     steps: [
       "Start: start_background_task for a project command, or the typed tool that starts one (prepare_release).",
       "Follow: wait_background_task with the task id, in bounded waits; get_background_task for a quick look.",
+      "Waiting long: once a task or a GitHub checks watch is running, you may end your answer instead of polling. When it ends, on this PC or on the execution node, MCP V3 writes that into this chat (the Windows ChatGPT app, or its Chrome tab) and you continue from where you stopped.",
       "Result: read_background_task_output (or read_background_task_logs) once the task finished.",
     ],
     rules: [

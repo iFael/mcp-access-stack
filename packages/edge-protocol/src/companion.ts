@@ -1,4 +1,5 @@
 import type { AuthenticatedEdgePrincipal, EdgeHttpMethod } from "./index.js";
+import { parseWakeEvent, type WakeEvent } from "./wake-events.js";
 
 export const COMPANION_PROTOCOL_VERSION = 1 as const;
 export const COMPANION_INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_" as const;
@@ -106,7 +107,15 @@ export type CompanionHttpCancelMessage = {
   reason: "timeout" | "client_disconnected" | "connector_replaced";
 };
 
+// Sent only to a companion whose registration names wake-events-v1.
+export type CompanionWakeEventMessage = {
+  type: "companion-wake-event";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  event: WakeEvent;
+};
+
 export type EdgeToCompanionMessage =
+  | CompanionWakeEventMessage
   | CompanionHelloMessage
   | CompanionRegisteredMessage
   | CompanionHeartbeatAckMessage
@@ -182,6 +191,10 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
       deviceId: parsed.deviceId,
       ...(features.length === 0 ? {} : { features }),
     };
+  }
+  if (parsed.type === "companion-wake-event") {
+    const event = parseWakeEvent(parsed.event);
+    return event ? { type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event } : null;
   }
   if (parsed.type === "companion-heartbeat-ack") {
     if (!isHeartbeatId(parsed.heartbeatId)) return null;

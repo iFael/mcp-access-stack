@@ -45,6 +45,10 @@ describe("ChatWake", () => {
       "[MCP V3] A tarefa em segundo plano 0f8fad5b-d9cb-469f-a165-70867728950e terminou: failed, código 1. Veja com get_background_task.");
     expect(sent).toEqual([expect.objectContaining({ messageId: "msg_aaaaaaaa" }), expect.objectContaining({ kind: "task" })]);
     expect(chatWakeText([{ kind: "message", messageId: "msg_bbbbbbbb", text: "  só isso  " }])).toBe("só isso");
+    expect(chatWakeText([{ kind: "checks", watchId: "w-1", workspaceId: "mcp-access-stack", repository: "iFael/mcp-access-stack",
+      commitSha: "abcdef1234567890abcdef1234567890abcdef12", state: "failed" }])).toBe(
+      "[MCP V3] O CI de iFael/mcp-access-stack em abcdef1 terminou: falhou (acompanhamento w-1, workspace mcp-access-stack). " +
+      "Veja com github_wait_commit_checks_watch.");
     expect(wake.status()).toEqual({ enabled: true, waiting: 0,
       recent: [{ at: expect.any(Number), kinds: ["message", "task"], target: "app" }] });
     expect(statuses.at(-1)).toEqual(wake.status());

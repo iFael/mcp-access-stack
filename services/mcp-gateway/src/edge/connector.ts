@@ -1,6 +1,8 @@
 import {
   BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   EDGE_PROTOCOL_VERSION,
+  WAKE_EVENTS_FEATURE,
+  type WakeEvent,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
   isAllowedEdgeRequest,
@@ -130,6 +132,8 @@ export class EdgeConnector {
   private connectionFailures = 0;
   private consecutiveFailures = 0;
   private offlineSinceMs: number | null = null;
+  private edgeTakesWakeEvents = false;
+  private pendingWakeEvents: WakeEvent[] = [];
 
   constructor(private readonly options: EdgeConnectorOptions) {
     this.edgeUrl = validateEdgeUrl(options.edgeUrl);
@@ -192,6 +196,30 @@ export class EdgeConnector {
     } finally {
       signal?.removeEventListener("abort", abort);
       this.stop();
+    }
+  }
+
+  /**
+   * Something the agent may be waiting for ended here (a background task, a
+   * GitHub checks watch). The Edge passes it to the user's companions, which
+   * wake the ChatGPT conversation. Held while the Edge is unreachable.
+   */
+  sendWakeEvent(event: WakeEvent): void {
+    this.pendingWakeEvents = [...this.pendingWakeEvents, event].slice(-20);
+    this.flushWakeEvents();
+  }
+
+  private flushWakeEvents(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesWakeEvents || !socket || socket.readyState !== WebSocket.OPEN) return;
+    while (this.pendingWakeEvents.length > 0) {
+      const event = this.pendingWakeEvents[0]!;
+      try {
+        socket.send(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event }));
+      } catch {
+        return;
+      }
+      this.pendingWakeEvents.shift();
     }
   }
 
@@ -390,6 +418,7 @@ export class EdgeConnector {
       }
       connectionState.protocolReady = true;
       connectionState.readyAtMs = this.now();
+      this.edgeTakesWakeEvents = message.features?.includes(WAKE_EVENTS_FEATURE) ?? false;
       const offlineDurationMs = this.currentOfflineDurationMs(connectionState.readyAtMs);
       this.offlineSinceMs = null;
       this.consecutiveFailures = 0;
@@ -401,6 +430,7 @@ export class EdgeConnector {
         protocolVersion: EDGE_PROTOCOL_VERSION,
         ...(runtime === undefined ? {} : { runtime }),
       }));
+      this.flushWakeEvents();
       this.log({
         event: "edge_connector_ready",
         generation,

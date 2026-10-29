@@ -8,6 +8,7 @@ import { WindowsElevationBroker } from "@vs-code-gpt/local-agent";
 import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
+import { WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
@@ -77,8 +78,11 @@ async function main(): Promise<void> {
   });
   const reloadable = new ReloadableLocalAgent({
     ...(elevationBroker === undefined ? {} : { elevationBroker }),
-    onBackgroundTaskFinished: (event) => chatWake.queue({ kind: "task", taskId: event.taskId, state: event.state,
-      ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
+    onBackgroundTaskFinished: (event) => chatWake.queue({ kind: "task", taskId: event.taskId, workspaceId: event.workspaceId,
+      state: event.state, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
+    onCommitChecksWatchFinished: (event) => chatWake.queue({ kind: "checks", watchId: event.watchId,
+      workspaceId: event.workspaceId, repository: `${event.owner}/${event.repository}`, commitSha: event.commitSha,
+      state: event.state }),
   });
   let connector: CompanionConnector | undefined;
   let repositories!: LocalRepositoryManager;
@@ -175,6 +179,8 @@ async function main(): Promise<void> {
   const capabilities: string[] = [...DEFAULT_COMPANION_CAPABILITIES];
   if (personalBrowser) capabilities.push("browser");
   if (elevationBroker) capabilities.push("elevation");
+  // Tasks and CI watches that end on the execution node wake this chat too.
+  capabilities.push(WAKE_EVENTS_CAPABILITY);
 
   connector = new CompanionConnector({
     edgeBaseUrl: runtime.edgeBaseUrl,
@@ -188,6 +194,7 @@ async function main(): Promise<void> {
     ...(personalBrowser === undefined ? {} : {
       pendingUserMessages: () => personalBrowser?.pendingUserMessages() ?? 0,
     }),
+    onWakeEvent: (event) => chatWake.queue(event),
   });
 
   const controller = new AbortController();

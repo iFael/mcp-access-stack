@@ -117,6 +117,25 @@ describe("GitHubCommitChecksWatchManager", () => {
     expect(poll).toHaveBeenCalledTimes(2);
   });
 
+  it("tells whoever listens when a watch ends, so the chat can be woken", async () => {
+    const finished: unknown[] = [];
+    const responses = [checks(), passedChecks()];
+    const manager = new GitHubCommitChecksWatchManager({
+      stateDirectory,
+      poll: jest.fn(async () => responses.shift() ?? passedChecks()),
+      pollIntervalMs: 10,
+      onFinished: (event) => finished.push(event),
+    });
+    managers.push(manager);
+    const started = await manager.start(
+      { workspaceId: "ws", owner: "octo", repository: "repo", commitSha: SHA, timeoutMs: 30_000 },
+      { ownerScope: "owner-a" },
+    );
+    await manager.wait({ workspaceId: "ws", id: started.watch.id, timeoutMs: 1_000 }, { ownerScope: "owner-a" });
+    expect(finished).toEqual([{ watchId: started.watch.id, workspaceId: "ws", owner: "octo", repository: "repo",
+      commitSha: SHA, state: "passed" }]);
+  });
+
   it("deduplicates an active watch for the same owner scope and immutable target", async () => {
     const poll = jest.fn(async () => checks());
     const manager = new GitHubCommitChecksWatchManager({

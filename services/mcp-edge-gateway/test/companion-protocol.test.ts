@@ -1,9 +1,37 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   COMPANION_PROTOCOL_VERSION,
+  EDGE_PROTOCOL_VERSION,
   parseCompanionToEdgeMessage,
+  parseConnectorToEdgeMessage,
   parseEdgeToCompanionMessage,
+  parseEdgeToConnectorMessage,
 } from "@mcp-access-stack/edge-protocol";
+
+describe("wake events from the execution node", () => {
+  const event = { kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", workspaceId: "mcp-access-stack",
+    state: "failed", exitCode: 1 };
+
+  it("travel from the connector to the Edge and from the Edge to a companion", () => {
+    expect(parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event })))
+      .toEqual({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event });
+    expect(parseEdgeToCompanionMessage(JSON.stringify({ type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event })))
+      .toEqual({ type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event });
+    expect(parseEdgeToConnectorMessage(JSON.stringify({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, features: ["wakeEventsV1", "x"] })))
+      .toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, features: ["wakeEventsV1"] });
+    expect(parseEdgeToConnectorMessage(JSON.stringify({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION })))
+      .toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION });
+  });
+
+  it("carry only ids, names and states", () => {
+    const bad = (value: Record<string, unknown>) =>
+      parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event: value }));
+    expect(bad({ ...event, state: "running" })).toBeNull();
+    expect(bad({ ...event, taskId: "a b" })).toBeNull();
+    expect(bad({ kind: "checks", watchId: "w1", workspaceId: "ws", repository: "o/r", commitSha: "short", state: "passed" })).toBeNull();
+    expect(bad({ kind: "shell", workspaceId: "ws" })).toBeNull();
+  });
+});
 
 describe("MCP V3 companion protocol", () => {
   it("accepts a valid companion registration and rejects duplicate workspace ids", () => {

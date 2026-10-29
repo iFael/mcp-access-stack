@@ -17,6 +17,7 @@ import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepos
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import {loadOracleControlBindingFromEnvironment} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
+import type { WakeEvent } from "@mcp-access-stack/edge-protocol";
 import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
 import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-provider-host.js";
 import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
@@ -57,7 +58,16 @@ async function main(): Promise<void> {
   const basePolicy = await readPrimaryPolicy(runtime.policyPath);
   const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
-  const reloadable = new ReloadableLocalAgent(oracleControl ? {oracleControl} : {});
+  // What ends here and the agent may be waiting for reaches the user's companions through the Edge.
+  let sendWakeEvent: (event: WakeEvent) => void = () => undefined;
+  const reloadable = new ReloadableLocalAgent({
+    ...(oracleControl ? { oracleControl } : {}),
+    onBackgroundTaskFinished: (event) => sendWakeEvent({ kind: "task", taskId: event.taskId,
+      workspaceId: event.workspaceId, state: event.state, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
+    onCommitChecksWatchFinished: (event) => sendWakeEvent({ kind: "checks", watchId: event.watchId,
+      workspaceId: event.workspaceId, repository: `${event.owner}/${event.repository}`, commitSha: event.commitSha,
+      state: event.state }),
+  });
   let repositories!: LocalRepositoryManager;
   const reloadPrimaryRuntime = async (): Promise<void> => {
     const managedPolicy = await repositories.buildPolicy();
@@ -149,6 +159,7 @@ async function main(): Promise<void> {
     ...(runtime.maxConcurrentRequests === undefined ? {} : { maxConcurrentRequests: runtime.maxConcurrentRequests }),
     log: writeLog,
   });
+  sendWakeEvent = (event) => connector.sendWakeEvent(event);
 
   const controller = new AbortController();
   const stop = (signal: NodeJS.Signals) => {

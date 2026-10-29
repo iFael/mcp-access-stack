@@ -57,6 +57,17 @@ export interface GitHubCommitChecksWatchManagerOptions {
   pollIntervalMs?: number;
   maxActiveWatches?: number;
   now?: () => Date;
+  /** A watch ended: the checks passed or failed, the time ran out or it could not read them. */
+  onFinished?: (event: GitHubCommitChecksWatchFinishedEvent) => void;
+}
+
+export interface GitHubCommitChecksWatchFinishedEvent {
+  watchId: string;
+  workspaceId: string;
+  owner: string;
+  repository: string;
+  commitSha: string;
+  state: "passed" | "failed" | "timed_out" | "error";
 }
 
 export class GitHubCommitChecksWatchManager {
@@ -441,6 +452,7 @@ export class GitHubCommitChecksWatchManager {
       lastError: undefined,
     });
     this.notifyTerminal(record.id);
+    this.announceFinished(record, state);
   }
 
   private async completeTimedOut(
@@ -461,6 +473,7 @@ export class GitHubCommitChecksWatchManager {
       ...(update?.checks === undefined ? {} : { lastChecks: update.checks }),
     });
     this.notifyTerminal(record.id);
+    this.announceFinished(record, "timed_out");
   }
 
   private async completeError(
@@ -483,6 +496,7 @@ export class GitHubCommitChecksWatchManager {
       lastError: { code, message },
     });
     this.notifyTerminal(record.id);
+    this.announceFinished(record, "error");
   }
 
   private requireVisibleRecord(
@@ -531,6 +545,24 @@ export class GitHubCommitChecksWatchManager {
     ).catch(async () => {
       await rm(filePath, { force: true });
     });
+  }
+
+  private announceFinished(
+    record: PersistedGitHubCommitChecksWatchRecord,
+    state: GitHubCommitChecksWatchFinishedEvent["state"],
+  ): void {
+    try {
+      this.options.onFinished?.({
+        watchId: record.id,
+        workspaceId: record.workspaceId,
+        owner: record.owner,
+        repository: record.repository,
+        commitSha: record.commitSha,
+        state,
+      });
+    } catch {
+      // Whoever listens only misses this one.
+    }
   }
 
   private notifyTerminal(id: string): void {

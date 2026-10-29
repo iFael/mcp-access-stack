@@ -114,6 +114,39 @@ describe("EdgeConnector", () => {
     await runPromise;
   });
 
+  it("holds wake events until an Edge that offers wakeEventsV1 is there, then sends them", async () => {
+    const edgeHttp = createServer();
+    const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/connector" });
+    const edgePort = await listen(edgeHttp);
+    servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
+    const connectionPromise = waitForConnection(edgeWss);
+    const controller = new AbortController();
+    const connector = new EdgeConnector({
+      edgeUrl: `ws://127.0.0.1:${edgePort}/connector`,
+      localBaseUrl: "http://127.0.0.1:9/",
+      token: "t".repeat(48),
+      internalAssertion: TEST_INTERNAL_ASSERTION,
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+      heartbeatIntervalMs: 5_000,
+    });
+    const event = { kind: "checks", watchId: "0f8fad5b-d9cb-469f-a165-70867728950e", workspaceId: "mcp-access-stack",
+      repository: "iFael/mcp-access-stack", commitSha: "a".repeat(40), state: "passed" } as const;
+    connector.sendWakeEvent(event);
+    const runPromise = connector.run(controller.signal);
+    const edgeSocket = await connectionPromise;
+    // Both arrive back to back, so one listener collects them.
+    const received: Array<Record<string, unknown>> = [];
+    edgeSocket.on("message", (data) => received.push(JSON.parse(data.toString()) as Record<string, unknown>));
+    edgeSocket.send(JSON.stringify({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, features: ["wakeEventsV1"] }));
+    const deadline = Date.now() + 5_000;
+    while (received.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(received[0]).toMatchObject({ type: "connector-ready" });
+    expect(received[1]).toEqual({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event });
+    controller.abort();
+    await runPromise;
+  });
+
   it("authenticates outbound, completes protocol handshake and relays allowlisted HTTP", async () => {
     let observedAuthorization: string | undefined;
     let observedSecretHeader: string | undefined;
