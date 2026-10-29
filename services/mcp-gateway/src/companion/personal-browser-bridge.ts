@@ -87,6 +87,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
   private readonly inbox = new PersonalBrowserTaskInbox();
+  // Messages that only rode on the result of another call: the agent may have
+  // read past them, so the wake still writes them in once its turn ends.
+  private readonly passedAlong = new Set<string>();
   private readonly chromeWakes = new Map<string, (outcome: ChatWakeOutcome) => void>();
   private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
@@ -702,7 +705,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<NonNullable<BrowserExecutor["takeUserMessages"]>> {
     // Only the extension that announced taskMessagesV1 sends messages, so an older one simply has none.
     const [scope] = args;
-    return this.deliverUserMessages(this.inbox.take(scope, scope.taskId === undefined && scope.tabId === undefined), true);
+    const messages = this.deliverUserMessages(this.inbox.take(scope, scope.taskId === undefined && scope.tabId === undefined), true);
+    for (const message of messages) this.passedAlong.add(message.id);
+    while (this.passedAlong.size > 50) this.passedAlong.delete(this.passedAlong.values().next().value!);
+    return messages;
   }
 
   // Tells the extension which messages reached the agent, so the popup shows
@@ -726,12 +732,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   /** The wake wrote these messages into the conversation: they reached the agent. */
   deliverWokenMessages(ids: readonly string[]): void {
+    for (const id of ids) this.passedAlong.delete(id);
     this.deliverUserMessages(this.inbox.takeIds(ids), true);
   }
 
   /** Whether the agent has yet to take this message. */
   hasUserMessage(id: string): boolean {
     return this.inbox.holds(id);
+  }
+
+  /** Whether this message only went along with the result of another call. */
+  wasPassedAlong(id: string): boolean {
+    return this.passedAlong.has(id);
   }
 
   /** The extension writes the wake notice in the ChatGPT tab used last. */

@@ -3,7 +3,9 @@
 // or the popup, a tab handed back, a background task that ended), the
 // companion writes it into the conversation and sends it. What the user wrote
 // goes in as they wrote it, as if typed in the chat, and then counts as
-// delivered; the rest is a short MCP V3 note. It goes
+// delivered; a message that only rode on the result of one of the agent's
+// calls still goes in once its turn ends, since the agent may have read past
+// it. The rest is a short MCP V3 note. It goes
 // to the ChatGPT app for Windows when it is open, otherwise to the ChatGPT tab
 // in Chrome the user used last. While the agent is answering, or the user is
 // typing, nothing is written and it waits. Only the user's own words, the
@@ -11,7 +13,7 @@
 // user can turn it off in the extension popup.
 
 export type ChatWakeEvent =
-  | { kind: "message"; messageId: string; text: string }
+  | { kind: "message"; messageId: string; text: string; passedAlong?: boolean }
   | { kind: "task"; taskId: string; workspaceId?: string; state: "succeeded" | "failed"; exitCode?: number }
   | {
     kind: "checks";
@@ -49,6 +51,8 @@ export interface ChatWakeOptions {
   targets: () => readonly ChatWakeTarget[];
   /** False once the agent already got the event through its own calls. */
   isOpen?: (event: ChatWakeEvent) => boolean;
+  /** A message that only went along with the result of another call, which the agent may have read past. */
+  passedAlong?: (event: ChatWakeEvent & { kind: "message" }) => boolean;
   onStatus?: (status: ChatWakeStatus) => void;
   /** What went into the conversation; the user's messages there need no other delivery. */
   onSent?: (events: readonly ChatWakeEvent[]) => void;
@@ -163,7 +167,8 @@ export class ChatWake {
     const now = this.now();
     const snapshot = new Set(this.pending);
     const events = this.pending.filter((event) =>
-      now - event.at < this.ttlMs && (this.options.isOpen?.(event) ?? true));
+      now - event.at < this.ttlMs && (this.options.isOpen?.(event) ?? true)).map((event) =>
+      event.kind === "message" && this.options.passedAlong?.(event) === true ? { ...event, passedAlong: true } : event);
     if (events.length === 0) {
       this.pending = [];
       this.publish();
@@ -235,6 +240,10 @@ const UPDATE_STATE = { succeeded: "terminou", failed: "parou com um erro", needs
 export function chatWakeText(events: readonly ChatWakeEvent[]): string {
   // The user's own words, as they wrote them.
   const parts = events.flatMap((event) => (event.kind === "message" ? [event.text.trim()] : [])).filter(Boolean);
+  if (events.some((event) => event.kind === "message" && event.passedAlong === true)) {
+    parts.unshift("[MCP V3] Escrevi isto enquanto você trabalhava e veio junto com o resultado de uma chamada sua. " +
+      "Se ainda não fez o que peço, faça agora; se já fez, só confirme.");
+  }
   const notes: string[] = [];
   for (const event of events.filter((entry) => entry.kind === "handback").slice(0, 3)) {
     notes.push(`[MCP V3] A aba ${event.tabId} foi devolvida${event.reason ? ` (${event.reason.slice(0, 120)})` : ""}. ` +

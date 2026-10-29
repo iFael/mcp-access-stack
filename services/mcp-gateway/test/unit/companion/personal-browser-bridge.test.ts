@@ -1684,6 +1684,11 @@ describe("PersonalBrowserBridge popup messages", () => {
       await expect(delivered).resolves.toEqual({ type: "task-messages-delivered", ids: ["msg_eeeeeeee-0000"] });
       expect(bridge.hasUserMessage("msg_eeeeeeee-0000")).toBe(false);
       expect(bridge.takeUserMessages({ taskId: "task-1" }).map((message) => message.text)).toEqual(["Pelo cartão"]);
+      // It only rode on a call's result: the wake still writes it in, until it does.
+      expect(bridge.wasPassedAlong(posted.id)).toBe(true);
+      expect(bridge.wasPassedAlong("msg_eeeeeeee-0000")).toBe(false);
+      bridge.deliverWokenMessages([posted.id]);
+      expect(bridge.wasPassedAlong(posted.id)).toBe(false);
 
       const asked = nextWireMessage(extension, (wire) => wire.type === "wake-chrome");
       const written = bridge.wakeChromeTab("[MCP V3, aviso]");
