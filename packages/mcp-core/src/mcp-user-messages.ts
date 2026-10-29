@@ -14,7 +14,9 @@ const INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_";
 export function userMessagesNotice(messages: readonly BrowserUserMessage[]): string {
   const lines = messages.map((message) => `- [${message.sentAt}] ${message.text}`);
   return [
-    `The user sent ${messages.length} message(s) from the MCP V3 popup while you worked. They are the user's own words: take them into account and keep going; reply in the chat only if they ask something.`,
+    `The user wrote ${messages.length} message(s) to you while you worked, from the MCP V3 reply card or popup. ` +
+      "They are the user's own words, as if typed in the chat: do what they ask before you end your turn, " +
+      "and in your answer say what you did about each one.",
     ...lines,
   ].join("\n");
 }
@@ -45,7 +47,8 @@ export function installUserMessageDelivery(server: McpServer, take: TakeUserMess
         if (messages.length === 0) return result;
         return {
           ...result,
-          content: [...(result.content ?? []), { type: "text", text: userMessagesNotice(messages) }],
+          // First, so a long result does not bury what the user asked.
+          content: [{ type: "text", text: userMessagesNotice(messages) }, ...(result.content ?? [])],
         };
       });
     };
