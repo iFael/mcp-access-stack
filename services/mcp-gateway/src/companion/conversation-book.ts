@@ -5,18 +5,21 @@ import type { ChatWakeEvent } from "./chat-wake.js";
 // chat wake writes about it there and in no other conversation, whatever the
 // user has open. Every call carries ChatGPT's id for its conversation; the
 // ids the call names or gets back (a task, a tab, an update, a CI watch) are
-// filed under it. The conversation's address (chatgpt.com/c/<id>) is learned
-// the first time a call arrives while exactly one conversation is answering:
-// that is the one making the call.
+// filed under it. Which conversation that is in the app (its title there) is
+// learned from what the app shows when a call arrives: the one conversation
+// answering then is most likely the one making the call. Another conversation
+// may be answering in the background, so it counts only once two such looks,
+// apart in time, agree, and a look that disagrees unlearns it. It is looked at
+// again now and then, since a title can change.
 
-/** A ChatGPT conversation that is open in the app or in a Chrome tab. */
+/** The ChatGPT conversation the app shows ("title:<title>"). */
 export interface OpenConversation {
   conversationId: string;
   answering: boolean;
 }
 
 export interface ConversationBookOptions {
-  /** The conversations open right now, in the app and in Chrome. */
+  /** The conversations open right now in the app. */
   openConversations: () => Promise<readonly OpenConversation[]>;
   log?: (entry: Record<string, unknown>) => void;
   now?: () => number;
@@ -25,12 +28,15 @@ export interface ConversationBookOptions {
 const MAX_IDS = 500;
 const MAX_SESSIONS = 50;
 const LEARN_SPACING_MS = 5_000;
+// Once two looks agree, a look now and then is enough.
+const RELEARN_SPACING_MS = 60_000;
 // Alone in this window, a conversation also owns what no call named.
 const SOLE_SESSION_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 export class ConversationBook {
   private readonly sessionOfId = new Map<string, string>();
   private readonly conversationOfSession = new Map<string, string>();
+  private readonly lastSeen = new Map<string, string>();
   private readonly lastCallAt = new Map<string, number>();
   private readonly lastLearnAt = new Map<string, number>();
   private readonly now: () => number;
@@ -43,14 +49,14 @@ export class ConversationBook {
     const now = this.now();
     touch(this.lastCallAt, call.session, now, MAX_SESSIONS);
     for (const id of call.ids) touch(this.sessionOfId, id, call.session, MAX_IDS);
-    if (this.conversationOfSession.has(call.session)) return;
+    const spacing = this.conversationOfSession.has(call.session) ? RELEARN_SPACING_MS : LEARN_SPACING_MS;
     const last = this.lastLearnAt.get(call.session);
-    if (last !== undefined && now - last < LEARN_SPACING_MS) return;
+    if (last !== undefined && now - last < spacing) return;
     touch(this.lastLearnAt, call.session, now, MAX_SESSIONS);
     void this.learn(call.session);
   }
 
-  /** The conversation (its chatgpt.com/c/<id>) this event belongs to, when known. */
+  /** The conversation this event belongs to, when known. */
   conversationOf(event: ChatWakeEvent): string | undefined {
     const session = this.sessionOf(event);
     return session === undefined ? undefined : this.conversationOfSession.get(session);
@@ -76,24 +82,17 @@ export class ConversationBook {
     this.options.log?.({ event: "mcp_v3_conversation_learn", answering: answering.length, open: open.length });
     if (answering.length !== 1) return;
     const conversationId = answering[0]!;
+    const before = this.lastSeen.get(session);
+    touch(this.lastSeen, session, conversationId, MAX_SESSIONS);
+    if (before !== conversationId) {
+      this.conversationOfSession.delete(session);
+      return;
+    }
     // A conversation has one session; an older session that pointed to it is stale.
     for (const [other, id] of this.conversationOfSession) {
       if (id === conversationId && other !== session) this.conversationOfSession.delete(other);
     }
     touch(this.conversationOfSession, session, conversationId, MAX_SESSIONS);
-  }
-}
-
-/** The conversation id in a ChatGPT address: chatgpt.com/c/<id>, also inside a project (/g/<project>/c/<id>). */
-export function conversationIdOf(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || !["chatgpt.com", "chat.openai.com"].includes(parsed.hostname)) return undefined;
-    const match = /\/c\/([A-Za-z0-9-]{8,80})(?:\/|$)/.exec(parsed.pathname);
-    return match?.[1];
-  } catch {
-    return undefined;
   }
 }
 

@@ -8,8 +8,10 @@ import type { OpenConversation } from "./conversation-book.js";
 // Automation: it fills the message field and invokes the Send button, without
 // keystrokes, clipboard or taking focus. It only reads the window when the
 // agent is answering (a Stop button) or the user has something in the field,
-// and when the app shows another conversation than the notice's (the page
-// address, chatgpt.com/c/<id>, read before filling and again before sending).
+// and when the app shows another conversation than the notice's, read before
+// filling and again before sending. The app's page address is its own
+// (app://-/index.html), so a conversation is known by its title, the name of
+// the page; a generic title ("ChatGPT", "Nova conversa") names none.
 // With MCP_V3_WAKE_INSPECT it writes nothing and tells which conversation is
 // open and whether it is answering.
 // The text goes in through an environment variable, never the command line.
@@ -44,16 +46,21 @@ try {
     }
     $state
   }
-  function Conversation-Of($url) { ([regex]::Match([string]$url, '/c/([A-Za-z0-9-]{8,80})(?:[/?#]|$)')).Groups[1].Value }
+  function Conversation-Of($state) {
+    $id = ([regex]::Match([string]$state.url, '/c/([A-Za-z0-9-]{8,80})(?:[/?#]|$)')).Groups[1].Value
+    if ($id) { return "id:$id" }
+    $title = ([string]$state.title).Trim()
+    if (-not $title -or $title -match '^(?i)(chatgpt|nova conversa|novo chat|new chat)$') { return '' }
+    "title:$title"
+  }
   $want = [string]$env:MCP_V3_WAKE_CONVERSATION
   function Assert-Conversation($state) {
     if (-not $want) { return }
-    if (-not $state.url) { Done @{ outcome = 'elsewhere'; detail = 'no-address' } }
-    if ((Conversation-Of $state.url) -ne $want) { Done @{ outcome = 'elsewhere'; detail = 'other-conversation' } }
+    if ((Conversation-Of $state) -cne $want) { Done @{ outcome = 'elsewhere'; detail = 'other-conversation' } }
   }
   $s = Read-State
   if ($env:MCP_V3_WAKE_INSPECT -eq '1') {
-    Done @{ outcome = 'inspect'; conversationId = (Conversation-Of $s.url); answering = [bool]$s.stop; address = [bool]$s.url }
+    Done @{ outcome = 'inspect'; conversationId = (Conversation-Of $s); answering = [bool]$s.stop }
   }
   Assert-Conversation $s
   if (-not $s.composer) { Done @{ outcome = 'failed'; detail = 'no-message-field' } }
@@ -74,7 +81,7 @@ try {
     try { $field.SetValue('') } catch {}
     Done @{ outcome = 'failed'; detail = 'no-send-button' }
   }
-  if ($want -and (-not $s.url -or (Conversation-Of $s.url) -ne $want)) {
+  if ($want -and (Conversation-Of $s) -cne $want) {
     # The user switched conversation while the text went in: take it back out.
     try { $field.SetValue('') } catch {}
     Done @{ outcome = 'elsewhere'; detail = 'switched' }
@@ -174,7 +181,7 @@ export function parseDesktopChatAppInspect(output: string): OpenConversation[] {
   try {
     const parsed = JSON.parse(line) as { outcome?: unknown; conversationId?: unknown; answering?: unknown };
     if (parsed.outcome === "inspect" && typeof parsed.conversationId === "string" &&
-        /^[A-Za-z0-9-]{8,80}$/u.test(parsed.conversationId)) {
+        /^(id|title):\S/u.test(parsed.conversationId) && parsed.conversationId.length <= 300) {
       return [{ conversationId: parsed.conversationId, answering: parsed.answering === true }];
     }
   } catch {
