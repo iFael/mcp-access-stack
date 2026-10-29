@@ -229,7 +229,7 @@ import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control
 import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
 import {inspectGitHubPublicReleaseAssets,
   type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
-import { GitHubCommitChecksWatchManager } from "./source-control/github-checks-watch-manager.js";
+import { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchFinishedEvent } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
 import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
 import { GitRepositoryService } from "./source-control/git-repository-service.js";
@@ -251,6 +251,8 @@ interface GitOriginResolver {
 export interface LocalAgentOptions {
   /** Called when a background task's process ends, for example to wake the agent. */
   onBackgroundTaskFinished?: (event: BackgroundTaskFinishedEvent) => void;
+  /** Called when a GitHub checks watch ends, for example to wake the agent. */
+  onCommitChecksWatchFinished?: (event: GitHubCommitChecksWatchFinishedEvent) => void;
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
@@ -347,6 +349,9 @@ export class LocalAgent {
     this.githubChecksWatchManager = new GitHubCommitChecksWatchManager({
       stateDirectory: path.join(resolveBackgroundTaskStateDirectory(), "github-check-watches"),
       poll: (input, context) => this.githubGetCommitChecks(input, context),
+      ...(options.onCommitChecksWatchFinished === undefined
+        ? {}
+        : { onFinished: options.onCommitChecksWatchFinished }),
     });
   }
 

@@ -7,7 +7,7 @@ export type {OracleReleaseGitHubWorkflowPolicy} from "./release/oracle-github-wo
 export type {OracleReleaseGitHubReadConfig} from "./release/oracle-github-read-port.js";
 export { CommandConfirmationRegistry, type CommandConfirmationBinding } from "./shell/confirmation.js";
 export { WindowsElevationBroker, type ElevationBroker, type ElevatedCommandRequest, type WindowsElevationBrokerOptions } from "./shell/elevation-broker.js";
-export { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchManagerOptions } from "./source-control/github-checks-watch-manager.js";
+export { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchManagerOptions, type GitHubCommitChecksWatchFinishedEvent } from "./source-control/github-checks-watch-manager.js";
 export {
   BackgroundTaskManager,
   BACKGROUND_TASK_STATES,

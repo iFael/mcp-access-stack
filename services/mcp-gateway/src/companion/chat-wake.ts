@@ -12,7 +12,15 @@
 
 export type ChatWakeEvent =
   | { kind: "message"; messageId: string; text: string }
-  | { kind: "task"; taskId: string; state: "succeeded" | "failed"; exitCode?: number }
+  | { kind: "task"; taskId: string; workspaceId?: string; state: "succeeded" | "failed"; exitCode?: number }
+  | {
+    kind: "checks";
+    watchId: string;
+    workspaceId: string;
+    repository: string;
+    commitSha: string;
+    state: "passed" | "failed" | "timed_out" | "error";
+  }
   | { kind: "handback"; tabId: string; reason?: string };
 
 /** What a place that shows the conversation did with the notice. */
@@ -220,6 +228,8 @@ export class ChatWake {
   }
 }
 
+const CHECKS_STATE = { passed: "passou", failed: "falhou", timed_out: "o tempo acabou", error: "não deu para ler" } as const;
+
 export function chatWakeText(events: readonly ChatWakeEvent[]): string {
   // The user's own words, as they wrote them.
   const parts = events.flatMap((event) => (event.kind === "message" ? [event.text.trim()] : [])).filter(Boolean);
@@ -229,8 +239,13 @@ export function chatWakeText(events: readonly ChatWakeEvent[]): string {
       "Chame browser_wait com forUser nessa aba para recebê-la.");
   }
   for (const event of events.filter((entry) => entry.kind === "task").slice(0, 5)) {
-    notes.push(`[MCP V3] A tarefa em segundo plano ${event.taskId} terminou: ${event.state}` +
+    notes.push(`[MCP V3] A tarefa em segundo plano ${event.taskId}` +
+      `${event.workspaceId === undefined ? "" : ` (workspace ${event.workspaceId})`} terminou: ${event.state}` +
       `${event.exitCode === undefined ? "" : `, código ${event.exitCode}`}. Veja com get_background_task.`);
+  }
+  for (const event of events.filter((entry) => entry.kind === "checks").slice(0, 5)) {
+    notes.push(`[MCP V3] O CI de ${event.repository} em ${event.commitSha.slice(0, 7)} terminou: ${CHECKS_STATE[event.state]} ` +
+      `(acompanhamento ${event.watchId}, workspace ${event.workspaceId}). Veja com github_wait_commit_checks_watch.`);
   }
   if (notes.length > 0) parts.push(notes.join("\n"));
   return parts.join("\n\n");

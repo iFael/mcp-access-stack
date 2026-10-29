@@ -1,5 +1,7 @@
 export * from "./companion.js";
 export * from "./browser-latency.js";
+export * from "./wake-events.js";
+import { parseWakeEvent, WAKE_EVENTS_FEATURE, type WakeEvent } from "./wake-events.js";
 
 export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";
@@ -19,6 +21,8 @@ export type AuthenticatedEdgePrincipal = {
 export type EdgeHelloMessage = {
   type: "edge-hello";
   protocolVersion: typeof EDGE_PROTOCOL_VERSION;
+  /** Optional features the Edge offers; an older connector ignores them. */
+  features?: (typeof WAKE_EVENTS_FEATURE)[];
 };
 
 export type ConnectorRuntimeIdentity = {
@@ -73,7 +77,14 @@ export type EdgeToConnectorMessage =
   | EdgeHttpRequestMessage
   | EdgeHttpCancelMessage;
 
-export type ConnectorToEdgeMessage = ConnectorReadyMessage | EdgeHttpResponseMessage;
+// Sent only to an Edge whose hello offers wakeEventsV1.
+export type ConnectorWakeEventMessage = {
+  type: "connector-wake-event";
+  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
+  event: WakeEvent;
+};
+
+export type ConnectorToEdgeMessage = ConnectorReadyMessage | EdgeHttpResponseMessage | ConnectorWakeEventMessage;
 
 const MCP_PATH = "/mcp";
 const OAUTH_POST_PATHS = new Set(["/token", "/register", "/revoke"]);
@@ -112,7 +123,8 @@ export function parseEdgeToConnectorMessage(value: string): EdgeToConnectorMessa
   if (!parsed || parsed.protocolVersion !== EDGE_PROTOCOL_VERSION || typeof parsed.type !== "string") return null;
 
   if (parsed.type === "edge-hello") {
-    return { type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION };
+    const offersWake = Array.isArray(parsed.features) && parsed.features.includes(WAKE_EVENTS_FEATURE);
+    return { type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, ...(offersWake ? { features: [WAKE_EVENTS_FEATURE] } : {}) };
   }
   if (parsed.type === "http-cancel") {
     if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;
@@ -155,6 +167,10 @@ export function parseConnectorToEdgeMessage(value: string): ConnectorToEdgeMessa
     const runtime = parseConnectorRuntimeIdentity(parsed.runtime);
     if (!runtime) return null;
     return { type: "connector-ready", protocolVersion: EDGE_PROTOCOL_VERSION, runtime };
+  }
+  if (parsed.type === "connector-wake-event") {
+    const event = parseWakeEvent(parsed.event);
+    return event ? { type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event } : null;
   }
   if (parsed.type !== "http-response") return null;
   if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;
