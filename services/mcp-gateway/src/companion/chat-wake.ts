@@ -1,15 +1,17 @@
 // MCP wakes the ChatGPT conversation by itself: when the agent is not
 // answering and something it waits for happens (a message from the reply card
 // or the popup, a tab handed back, a background task that ended), the
-// companion writes a fixed notice into the conversation and sends it. It goes
+// companion writes it into the conversation and sends it. What the user wrote
+// goes in as they wrote it, as if typed in the chat, and then counts as
+// delivered; the rest is a short MCP V3 note. It goes
 // to the ChatGPT app for Windows when it is open, otherwise to the ChatGPT tab
 // in Chrome the user used last. While the agent is answering, or the user is
-// typing, nothing is written and the notice waits. Only the companion's own
-// words and the agent's own ids go in, nothing from a page. The user can turn
-// it off in the extension popup.
+// typing, nothing is written and it waits. Only the user's own words, the
+// companion's notes and the agent's own ids go in, nothing from a page. The
+// user can turn it off in the extension popup.
 
 export type ChatWakeEvent =
-  | { kind: "message"; messageId: string }
+  | { kind: "message"; messageId: string; text: string }
   | { kind: "task"; taskId: string; state: "succeeded" | "failed"; exitCode?: number }
   | { kind: "handback"; tabId: string; reason?: string };
 
@@ -39,6 +41,8 @@ export interface ChatWakeOptions {
   /** False once the agent already got the event through its own calls. */
   isOpen?: (event: ChatWakeEvent) => boolean;
   onStatus?: (status: ChatWakeStatus) => void;
+  /** What went into the conversation; the user's messages there need no other delivery. */
+  onSent?: (events: readonly ChatWakeEvent[]) => void;
   log?: (entry: Record<string, unknown>) => void;
   now?: () => number;
   spacingMs?: number;
@@ -174,6 +178,11 @@ export class ChatWake {
         this.lastSentAt = sentAt;
         this.lastError = undefined;
         this.recent = [...this.recent, { at: sentAt, kinds: [...new Set(events.map((event) => event.kind))], target: target.name }].slice(-5);
+        try {
+          this.options.onSent?.(events);
+        } catch {
+          // At worst the agent also gets the message with its next call.
+        }
         this.publish();
         this.schedule(0);
         return;
@@ -212,17 +221,17 @@ export class ChatWake {
 }
 
 export function chatWakeText(events: readonly ChatWakeEvent[]): string {
-  const lines: string[] = [];
-  if (events.some((event) => event.kind === "message")) {
-    lines.push("- O usuário escreveu para a tarefa (no cartão do chat ou no popup do MCP V3). Chame browser_user_messages para ler.");
-  }
+  // The user's own words, as they wrote them.
+  const parts = events.flatMap((event) => (event.kind === "message" ? [event.text.trim()] : [])).filter(Boolean);
+  const notes: string[] = [];
   for (const event of events.filter((entry) => entry.kind === "handback").slice(0, 3)) {
-    lines.push(`- O usuário devolveu a aba ${event.tabId}${event.reason ? ` (${event.reason.slice(0, 120)})` : ""}. ` +
-      "Chame browser_wait com forUser nessa aba para receber a aba e a observação dele.");
+    notes.push(`[MCP V3] A aba ${event.tabId} foi devolvida${event.reason ? ` (${event.reason.slice(0, 120)})` : ""}. ` +
+      "Chame browser_wait com forUser nessa aba para recebê-la.");
   }
   for (const event of events.filter((entry) => entry.kind === "task").slice(0, 5)) {
-    lines.push(`- A tarefa em segundo plano ${event.taskId} terminou: ${event.state}` +
+    notes.push(`[MCP V3] A tarefa em segundo plano ${event.taskId} terminou: ${event.state}` +
       `${event.exitCode === undefined ? "" : `, código ${event.exitCode}`}. Veja com get_background_task.`);
   }
-  return ["[MCP V3, aviso automático do companion, não escrito pelo usuário]", ...lines, "Continue a tarefa de onde parou."].join("\n");
+  if (notes.length > 0) parts.push(notes.join("\n"));
+  return parts.join("\n\n");
 }
