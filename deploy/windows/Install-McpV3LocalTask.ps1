@@ -22,6 +22,8 @@ param(
     [string]$HandoverFromInstanceId,
 
     [switch]$AllowRunningReplacement,
+    # Set by the release switch, which hashed this release just before.
+    [switch]$ReleaseFilesVerified,
     [switch]$Execute,
     [switch]$Force,
     [switch]$Activate,
@@ -64,7 +66,7 @@ if (-not (Test-Path -LiteralPath $releaseRoot -PathType Container)) {
     throw "MCP V3 local release was not found: $releaseRoot"
 }
 
-$verification = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $ReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+$verification = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $releaseRoot -ExpectedReleaseId $ReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment -FilesVerified:$ReleaseFilesVerified
 $manifest = $verification.executionManifest
 $manifestSha256 = [string]$verification.executionManifestSha256
 

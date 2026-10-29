@@ -430,11 +430,22 @@ function Assert-McpWindowsExecutionNodeRelease {
         [switch]$AllowLegacyInstalledFormat,
         # Hashes of files the caller already verified in this folder
         # (Get-McpWindowsExecutionNodeReleaseHashes); other files are hashed.
-        [hashtable]$VerifiedFileHashes
+        [hashtable]$VerifiedFileHashes,
+        # The caller hashed every file of this release earlier in the same
+        # operation: take the hashes from manifest.json instead of reading
+        # the files again. Identity, bindings and structure are still checked.
+        [switch]$FilesVerified
     )
 
     $release = [System.IO.Path]::GetFullPath($ReleaseRoot)
     Assert-McpWindowsExecutionNodeNoReparsePoints -Root $release
+    if ($FilesVerified -and $null -eq $VerifiedFileHashes) {
+        $VerifiedFileHashes = [hashtable]::new([StringComparer]::OrdinalIgnoreCase)
+        $manifestForHashes = Read-McpPublicJson -Path (Join-Path $release 'manifest.json')
+        foreach ($entry in @($manifestForHashes.fileHashes)) {
+            $VerifiedFileHashes[([string]$entry.path).Replace('\', '/')] = ([string]$entry.sha256).ToLowerInvariant()
+        }
+    }
 
     function Get-McpReleaseFileHash {
         param([Parameter(Mandatory = $true)][string]$RelativePath)

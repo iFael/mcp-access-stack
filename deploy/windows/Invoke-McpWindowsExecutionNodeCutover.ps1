@@ -7,6 +7,8 @@ param(
     [ValidateSet('Promote', 'Rollback')]
     [string]$Operation,
 
+    # Set by the release switch, which hashed the target release just before.
+    [switch]$ReleaseFilesVerified,
     [switch]$Execute,
     [switch]$AllowUnsignedDevelopment
 )
@@ -52,7 +54,8 @@ function Assert-McpCutoverPointerRelease {
         [Parameter(Mandatory = $true)][object]$Pointer,
         [Parameter(Mandatory = $true)][string]$ReleasesRoot,
         [Parameter(Mandatory = $true)][string]$Name,
-        [switch]$AllowLegacyInstalledFormat
+        [switch]$AllowLegacyInstalledFormat,
+        [switch]$FilesVerified
     )
 
     Assert-McpWindowsExecutionNodePointer -Pointer $Pointer -Name $Name
@@ -62,7 +65,8 @@ function Assert-McpCutoverPointerRelease {
         -ReleaseRoot $releaseRoot `
         -ExpectedReleaseId ([string]$Pointer.releaseId) `
         -AllowLegacyInstalledFormat:$AllowLegacyInstalledFormat `
-        -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+        -AllowUnsignedDevelopment:$AllowUnsignedDevelopment `
+        -FilesVerified:$FilesVerified
     if ([string]$verification.executionManifestSha256 -ne [string]$Pointer.manifestSha256) {
         throw "Execution-node $Name pointer does not match its materialized release."
     }
@@ -120,13 +124,15 @@ try {
         -Pointer $targetPointer `
         -ReleasesRoot $releasesRoot `
         -Name 'target' `
-        -AllowLegacyInstalledFormat:($Operation -eq 'Rollback')
+        -AllowLegacyInstalledFormat:($Operation -eq 'Rollback') `
+        -FilesVerified:($ReleaseFilesVerified -and $Operation -eq 'Promote')
     if ($null -ne $sourcePointer) {
         $null = Assert-McpCutoverPointerRelease `
             -Pointer $sourcePointer `
             -ReleasesRoot $releasesRoot `
             -Name 'active' `
-            -AllowLegacyInstalledFormat
+            -AllowLegacyInstalledFormat `
+            -FilesVerified:($ReleaseFilesVerified -and $Operation -eq 'Promote')
     }
 
     $now = [DateTimeOffset]::UtcNow.ToString('O')
