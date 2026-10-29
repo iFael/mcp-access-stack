@@ -52,6 +52,8 @@ if ($null -eq $stateBefore) {
 }
 
 $targetReleaseRoot = Join-Path $installation ("releases\$TargetReleaseId")
+# The one full hash of the target during a switch: the cutover and the task
+# installer below get -ReleaseFilesVerified and only recheck the structure.
 $targetVerification = Assert-McpWindowsExecutionNodeRelease -ReleaseRoot $targetReleaseRoot -ExpectedReleaseId $TargetReleaseId -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 
 $alreadyActive = $null -ne $stateBefore.active -and [string]$stateBefore.active.releaseId -eq $TargetReleaseId
@@ -260,7 +262,7 @@ try {
     if (-not $alreadyActive) {
         $cutoverScript = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
         Assert-McpPublicFile -Path $cutoverScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-        $cutover = & $cutoverScript -InstallationRoot $installation -Operation Promote -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+        $cutover = & $cutoverScript -InstallationRoot $installation -Operation Promote -ReleaseFilesVerified -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
         if ([string]$cutover.status -ne 'cutover-ready' -or [string]$cutover.activeReleaseId -ne $TargetReleaseId) {
             throw 'MCP V3 local release promotion returned unexpected evidence.'
         }
@@ -278,6 +280,7 @@ try {
             -MultipleInstances Parallel `
             -HandoverFromInstanceId ([string]$handoverSource.instanceId) `
             -AllowRunningReplacement `
+            -ReleaseFilesVerified `
             -Execute -Force -Activate `
             -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
         if ([string]$handoverResult.releaseId -ne $TargetReleaseId -or
@@ -298,11 +301,12 @@ try {
             -TaskName $TaskName `
             -MultipleInstances IgnoreNew `
             -AllowRunningReplacement `
+            -ReleaseFilesVerified `
             -Execute -Force -Activate `
             -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
     }
     else {
-        $taskResult = & $taskInstaller -InstallationRoot $installation -ReleaseId $TargetReleaseId -StateRoot $stateRoot -TaskName $TaskName -Execute -Force -Activate -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+        $taskResult = & $taskInstaller -InstallationRoot $installation -ReleaseId $TargetReleaseId -StateRoot $stateRoot -TaskName $TaskName -ReleaseFilesVerified -Execute -Force -Activate -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
         Start-ScheduledTask -TaskName $TaskName
     }
     if ([string]$taskResult.releaseId -ne $TargetReleaseId -or

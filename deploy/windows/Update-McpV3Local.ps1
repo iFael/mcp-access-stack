@@ -82,15 +82,23 @@ if ($currentReleaseId -eq $expectedReleaseId) {
     return
 }
 
-$genericUpdater = Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1'
-Assert-McpPublicFile -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
-
-$prepared = & $genericUpdater -Repository $Repository -InstallationRoot $installation -Tag $resolvedTag -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
-if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $expectedReleaseId) {
-    throw 'MCP V3 local updater did not prepare the expected signed release.'
-}
-
 $targetReleaseRoot = Join-Path $installation ("releases\$expectedReleaseId")
+
+# prepare_release already staged and hashed this candidate: promote goes
+# straight to the switch, which verifies it again, instead of downloading and
+# staging it a second time.
+$alreadyStaged = $null -ne $currentState.candidate -and
+    [string]$currentState.candidate.releaseId -eq $expectedReleaseId -and
+    (Test-Path -LiteralPath $targetReleaseRoot -PathType Container)
+if (-not $alreadyStaged) {
+    $genericUpdater = Join-Path $PSScriptRoot 'Update-McpAccessStack.ps1'
+    Assert-McpPublicFile -Path $genericUpdater -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+
+    $prepared = & $genericUpdater -Repository $Repository -InstallationRoot $installation -Tag $resolvedTag -Execute -AllowUnsignedDevelopment:$AllowUnsignedDevelopment | ConvertFrom-Json
+    if ($prepared.candidatePrepared -ne $true -or [string]$prepared.releaseId -ne $expectedReleaseId) {
+        throw 'MCP V3 local updater did not prepare the expected signed release.'
+    }
+}
 $switchScript = Join-Path $targetReleaseRoot 'deploy\windows\Invoke-McpV3LocalReleaseSwitch.ps1'
 Assert-McpPublicFile -Path $switchScript -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
 

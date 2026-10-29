@@ -371,7 +371,9 @@ try {
         updatedAt = $now
     } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
     $cutover = Join-Path $PSScriptRoot 'Invoke-McpWindowsExecutionNodeCutover.ps1'
-    $promoted = & $cutover -InstallationRoot $crossVersionInstall -Operation Promote -Execute | ConvertFrom-Json
+    # The release switch hashes the target first and then passes
+    # -ReleaseFilesVerified, so the cutover only rechecks the structure.
+    $promoted = & $cutover -InstallationRoot $crossVersionInstall -Operation Promote -ReleaseFilesVerified -Execute | ConvertFrom-Json
     if ($promoted.activeReleaseId -ne $modernId -or $promoted.previousReleaseId -ne $legacyId) {
         throw 'Promotion from legacy active to checksummed candidate failed.'
     }
