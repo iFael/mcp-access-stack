@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "@jest/globals";
 import { ChatWake, chatWakeText, type ChatWakeOutcome, type ChatWakeStatus, type ChatWakeTarget } from "../../../src/companion/chat-wake.js";
-import { createDesktopChatAppTarget, DESKTOP_CHAT_APP_SCRIPT, parseDesktopChatAppResult } from "../../../src/companion/desktop-chat-app.js";
+import { ConversationBook, conversationIdOf, type OpenConversation } from "../../../src/companion/conversation-book.js";
+import {
+  createDesktopChatAppTarget,
+  DESKTOP_CHAT_APP_SCRIPT,
+  parseDesktopChatAppInspect,
+  parseDesktopChatAppResult,
+} from "../../../src/companion/desktop-chat-app.js";
 
 function target(name: ChatWakeTarget["name"], outcomes: ChatWakeOutcome[]): ChatWakeTarget & { texts: string[] } {
   const texts: string[] = [];
@@ -26,6 +32,110 @@ async function until(condition: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+describe("ChatWake per conversation", () => {
+  it("writes each notice only in its own conversation, holds the others and notifies each one once", async () => {
+    const delivered: Array<{ text: string; conversationId?: string }> = [];
+    let shown = "conversation-b";
+    const app: ChatWakeTarget = { name: "app", deliver: async (text, conversationId) => {
+      delivered.push({ text, ...(conversationId === undefined ? {} : { conversationId }) });
+      return { outcome: conversationId === shown ? "sent" : "elsewhere" };
+    } };
+    const notices: Array<{ title: string; body: string }> = [];
+    const owners: Record<string, string> = { "task-a": "conversation-a", "task-b": "conversation-b" };
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 10,
+      notify: (notice) => { notices.push(notice); },
+      conversationOf: (event) => (event.kind === "task" ? owners[event.taskId] : undefined) });
+    wake.queue({ kind: "task", taskId: "task-a", state: "succeeded" });
+    wake.queue({ kind: "task", taskId: "task-b", state: "failed" });
+    wake.queue({ kind: "message", messageId: "msg_cccccccc", text: "de onde?" });
+    await until(() => wake.status().recent.length === 1);
+    expect(delivered.find((entry) => entry.text.includes("task-b"))).toEqual(
+      { text: expect.stringContaining("task-b"), conversationId: "conversation-b" });
+    expect(delivered.some((entry) => entry.text.includes("task-a") && entry.text.includes("task-b"))).toBe(false);
+    // Conversation A is not open: retried, never written elsewhere, notified once.
+    await until(() => delivered.filter((entry) => entry.conversationId === "conversation-a").length >= 3);
+    expect(notices).toEqual([{ title: "O agente tem novidade no ChatGPT", body: expect.stringContaining("task-a") }]);
+    // Nobody knows the message's conversation: it is never written anywhere, and the user is not told about their own words.
+    expect(delivered.some((entry) => entry.text.includes("de onde?"))).toBe(false);
+    expect(wake.status()).toMatchObject({ waiting: 2 });
+    // The user opens conversation A: the notice goes in there.
+    shown = "conversation-a";
+    await until(() => wake.status().recent.length === 2);
+    expect(delivered.at(-1)).toEqual({ text: expect.stringContaining("task-a"), conversationId: "conversation-a" });
+    expect(notices).toHaveLength(1);
+    wake.close();
+  });
+
+  it("notifies an update that waits for confirmation at once, and keeps the user's words with no time limit", async () => {
+    let now = 0;
+    const notices: Array<{ title: string; body: string }> = [];
+    const app = target("app", ["elsewhere"]);
+    const wake = new ChatWake({ targets: () => [app], now: () => now, spacingMs: 1, retryMs: 60_000, ttlMs: 1_000,
+      notify: (notice) => { notices.push(notice); }, conversationOf: () => "conversation-a" });
+    wake.queue({ kind: "update", updateId: "upd-1", workspaceId: "w", state: "needs_confirmation" });
+    expect(notices).toEqual([{ title: "O agente espera sua confirmação", body: expect.stringContaining("upd-1") }]);
+    wake.queue({ kind: "message", messageId: "msg_dddddddd", text: "Escolho A) Manter" });
+    await until(() => app.texts.length === 1);
+    await wake.settled();
+    expect(notices).toHaveLength(1);
+    now = 10_000;
+    (wake as unknown as { start(): void }).start();
+    await until(() => app.texts.length === 2);
+    await wake.settled();
+    expect(app.texts[1]).toBe("Escolho A) Manter");
+    wake.close();
+  });
+});
+
+describe("ConversationBook", () => {
+  it("learns a conversation from the one answering when its call arrives and files the call's ids under it", async () => {
+    let open: OpenConversation[] = [
+      { conversationId: "conversation-a", answering: true },
+      { conversationId: "conversation-b", answering: false },
+    ];
+    let now = 1_000;
+    const book = new ConversationBook({ openConversations: async () => open, now: () => now });
+    book.noteCall({ session: "session-a", ids: ["task-a"] });
+    await until(() => book.conversationOf({ kind: "task", taskId: "task-a", state: "succeeded" }) !== undefined);
+    expect(book.conversationOf({ kind: "task", taskId: "task-a", state: "succeeded" })).toBe("conversation-a");
+    // Alone in the last hours, the conversation also owns what no call named.
+    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBe("conversation-a");
+
+    // Two conversations answering: nothing is learned for the second session.
+    open = [{ conversationId: "conversation-a", answering: true }, { conversationId: "conversation-b", answering: true }];
+    now += 10_000;
+    book.noteCall({ session: "session-b", ids: ["task-b"] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" })).toBeUndefined();
+    // With two conversations at work, an id no call named belongs to neither.
+    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBeUndefined();
+    expect(book.conversationOf({ kind: "message", messageId: "msg_1", text: "x", taskId: "task-a" })).toBe("conversation-a");
+
+    open = [{ conversationId: "conversation-b", answering: true }];
+    now += 10_000;
+    book.noteCall({ session: "session-b", ids: [] });
+    await until(() => book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" }) !== undefined);
+    expect(book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" })).toBe("conversation-b");
+  });
+
+  it("reads the conversation id from ChatGPT addresses only", () => {
+    expect(conversationIdOf("https://chatgpt.com/c/6720f1c2-0a1b-8000-9c2d-3e4f5a6b7c8d")).toBe("6720f1c2-0a1b-8000-9c2d-3e4f5a6b7c8d");
+    expect(conversationIdOf("https://chatgpt.com/g/g-p-abc-projeto/c/6720f1c2-0a1b")).toBe("6720f1c2-0a1b");
+    expect(conversationIdOf("https://chatgpt.com/")).toBeUndefined();
+    expect(conversationIdOf("https://example.com/c/6720f1c2-0a1b")).toBeUndefined();
+  });
+
+  it("parses what the app shows without writing", () => {
+    expect(parseDesktopChatAppInspect('{"outcome":"inspect","conversationId":"6720f1c2-0a1b","answering":true,"address":true}'))
+      .toEqual([{ conversationId: "6720f1c2-0a1b", answering: true }]);
+    expect(parseDesktopChatAppInspect('{"outcome":"inspect","conversationId":"","answering":true,"address":false}')).toEqual([]);
+    expect(parseDesktopChatAppResult('{"outcome":"elsewhere","detail":"other-conversation"}'))
+      .toEqual({ outcome: "elsewhere", detail: "other-conversation" });
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("MCP_V3_WAKE_CONVERSATION");
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("'switched'");
+  });
+});
 
 describe("ChatWake", () => {
   it("writes what the user wrote in the ChatGPT app as they wrote it, with short notes for the rest", async () => {
@@ -58,15 +168,12 @@ describe("ChatWake", () => {
     wake.close();
   });
 
-  it("falls back to the Chrome tab only when the app is not there, and waits while ChatGPT answers", async () => {
+  it("waits while ChatGPT answers and writes once it stops", async () => {
     const app = target("app", ["unavailable", "busy", "sent"]);
-    const chrome = target("chrome", ["typing"]);
-    const wake = new ChatWake({ targets: () => [app, chrome], spacingMs: 1, retryMs: 20 });
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 20 });
     wake.queue({ kind: "handback", tabId: "personal:7", reason: "Faça login" });
     await until(() => wake.status().recent.length === 1);
-    // No app: the tab had the user typing. Then the app answered busy; the third try went through.
     expect(app.texts).toHaveLength(3);
-    expect(chrome.texts).toHaveLength(1);
     expect(wake.status().recent[0]).toMatchObject({ kinds: ["handback"], target: "app" });
     wake.close();
   });
@@ -106,16 +213,15 @@ describe("ChatWake", () => {
   });
 
   it("does nothing while off, and says why it could not write", async () => {
-    const app = target("app", ["unavailable"]);
-    const chrome = target("chrome", ["failed"]);
-    const wake = new ChatWake({ targets: () => [app, chrome], spacingMs: 1, retryMs: 60_000 });
+    const app = target("app", ["failed"]);
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 60_000 });
     wake.setEnabled(false);
     wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     expect(wake.status()).toEqual({ enabled: false, waiting: 0, recent: [] });
     wake.setEnabled(true);
     wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     await until(() => wake.status().lastError !== undefined);
-    expect(wake.status()).toMatchObject({ waiting: 1, lastError: "Não consegui escrever na aba do ChatGPT." });
+    expect(wake.status()).toMatchObject({ waiting: 1, lastError: "Não consegui escrever no app do ChatGPT." });
     wake.close();
   });
 });

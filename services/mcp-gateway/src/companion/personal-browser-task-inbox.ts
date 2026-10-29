@@ -36,6 +36,11 @@ export class PersonalBrowserTaskInbox {
     return this.queued.get(id)?.message.text;
   }
 
+  /** The task a message still waiting for the agent was written for. */
+  taskIdOf(id: string): string | undefined {
+    return this.queued.get(id)?.message.taskId;
+  }
+
   /** Takes these messages, which reached the agent another way (written into the conversation). */
   takeIds(ids: readonly string[]): BrowserUserMessage[] {
     const taken: BrowserUserMessage[] = [];
