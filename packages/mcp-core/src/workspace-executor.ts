@@ -91,6 +91,7 @@ export interface WorkspaceExecutor {
   patchFile(input: PatchFileInput, context?: OperationContext): Promise<PatchFileResult>;
   deleteFile(input: DeleteFileInput, context?: OperationContext): Promise<DeleteFileResult>;
   oracleReleaseAdvance(input:OracleReleaseAdvanceInput,context?:OperationContext):Promise<OracleReleaseAdvanceResult>;
+  mcpUpdate(input:import("./mcp-update-contracts.js").McpUpdateInput,context?:OperationContext):Promise<import("./mcp-update-contracts.js").McpUpdateResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

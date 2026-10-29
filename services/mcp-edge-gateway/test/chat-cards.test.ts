@@ -14,7 +14,12 @@ async function result(response: Response | null) {
 
 function memory() {
   const values = new Map<string, unknown>();
-  return { get: async <T>(key: string) => values.get(key) as T | undefined, put: async <T>(key: string, value: T) => { values.set(key, value); } };
+  return {
+    values,
+    get: async <T>(key: string) => values.get(key) as T | undefined,
+    put: async <T>(key: string, value: T) => { values.set(key, value); },
+    delete: async (key: string) => values.delete(key),
+  };
 }
 
 describe("the plan card", () => {
@@ -39,6 +44,32 @@ describe("the plan card", () => {
     expect(read.structuredContent).toMatchObject({ steps: finished });
     // Another user does not see it.
     expect((await result(await plans.handle(call("browser_progress_read", { planId }), "user_2"))).isError).toBe(true);
+  });
+
+  it("follows a runtime's steps on a plan the agent opened, and nothing else", async () => {
+    let ids = 0;
+    const storage = memory();
+    const plans = new ProgressPlans(storage, () => new Date("2026-10-29T03:00:00.000Z"),
+      () => `plan_00000000-0000-4000-8000-0000000000${String(++ids).padStart(2, "0")}`);
+    const opened = await result(await plans.handle(call("browser_progress", { title: "Atualizar o MCP", steps }), "user_1"));
+    const planId = opened.structuredContent!.planId as string;
+    const moved = [{ text: "Catálogo do Edge", state: "skipped" as const }, { text: "Release do conector", state: "failed" as const }];
+
+    expect(await plans.applyUpdate({ planId, steps: moved })).toBe(true);
+    expect((await result(await plans.handle(call("browser_progress_read", { planId }), "user_1"))).structuredContent)
+      .toEqual({ planId, title: "Atualizar o MCP", steps: moved, updatedAt: "2026-10-29T03:00:00.000Z" });
+
+    // A companion of another user, or a plan nobody opened, changes nothing.
+    expect(await plans.applyUpdate({ planId, steps }, "user_2")).toBe(false);
+    expect(await plans.applyUpdate({ planId: "plan_00000000-0000-4000-8000-000000000099", steps })).toBe(false);
+    expect(await plans.applyUpdate({ planId, title: "Atualizar", steps }, "user_1")).toBe(true);
+
+    // Plans past the last 20 are forgotten, and so is who owned them.
+    for (let index = 0; index < 20; index += 1) {
+      await plans.handle(call("browser_progress", { title: `Plano ${index}`, steps }), "user_1");
+    }
+    expect(storage.values.has(`progress-plan-owner:${planId}`)).toBe(false);
+    expect(await plans.applyUpdate({ planId, steps })).toBe(false);
   });
 
   it("refuses what the contract refuses and leaves other tools alone", async () => {

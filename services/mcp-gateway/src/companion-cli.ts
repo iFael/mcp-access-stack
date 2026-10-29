@@ -4,11 +4,11 @@ import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AppError, asAppError } from "@vs-code-gpt/shared";
-import { WindowsElevationBroker } from "@vs-code-gpt/local-agent";
+import { CompanionUpdateRunner, createLocalAgentReleasePort, WindowsElevationBroker } from "@vs-code-gpt/local-agent";
 import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
-import { WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
+import { COMPANION_UPDATE_CAPABILITY, UPDATE_WAKE_CAPABILITY, WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
@@ -176,11 +176,22 @@ async function main(): Promise<void> {
     edgeBaseUrl: runtime.edgeBaseUrl,
     credentialStore,
   });
+  // The Windows half of an mcp_update: this device's MCP Access Stack
+  // workspace installs the companion release the execution node published.
+  const companionUpdates = new CompanionUpdateRunner({
+    stateDirectory: path.join(runtime.stateRoot, "state", "companion-updates"),
+    port: () => {
+      const workspaceId = repositories.canonicalStackWorkspaceId();
+      return workspaceId === undefined ? null : createLocalAgentReleasePort(() => reloadable.localAgent(), workspaceId);
+    },
+    report: (status) => connector?.sendCompanionUpdateStatus(status),
+  });
   const capabilities: string[] = [...DEFAULT_COMPANION_CAPABILITIES];
   if (personalBrowser) capabilities.push("browser");
   if (elevationBroker) capabilities.push("elevation");
   // Tasks and CI watches that end on the execution node wake this chat too.
-  capabilities.push(WAKE_EVENTS_CAPABILITY);
+  capabilities.push(WAKE_EVENTS_CAPABILITY, UPDATE_WAKE_CAPABILITY);
+  if (process.platform === "win32") capabilities.push(COMPANION_UPDATE_CAPABILITY);
 
   connector = new CompanionConnector({
     edgeBaseUrl: runtime.edgeBaseUrl,
@@ -195,7 +206,12 @@ async function main(): Promise<void> {
       pendingUserMessages: () => personalBrowser?.pendingUserMessages() ?? 0,
     }),
     onWakeEvent: (event) => chatWake.queue(event),
+    onCompanionUpdateRequest: (request) => {
+      void companionUpdates.handle(request).catch((error) =>
+        writeLog({ event: "mcp_v3_companion_update_failed", error: asAppError(error).toJSON() }));
+    },
   });
+  await companionUpdates.recover();
 
   const controller = new AbortController();
   const stop = (signal: NodeJS.Signals): void => {

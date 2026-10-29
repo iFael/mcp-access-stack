@@ -1137,7 +1137,7 @@ export type BrowserUserReplyResult = z.infer<typeof browserUserReplyResultSchema
 export const browserProgressStepSchema = z
   .object({
     text: z.string().trim().min(1).max(200),
-    state: z.enum(["done", "doing", "todo"]),
+    state: z.enum(["done", "doing", "todo", "failed", "skipped"]),
   })
   .strict();
 const progressPlanIdSchema = z.string().regex(/^plan_[0-9a-f-]{36}$/);

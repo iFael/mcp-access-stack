@@ -2,6 +2,11 @@ import os from "node:os";
 import {
   BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_PROTOCOL_VERSION,
+  PROGRESS_FEATURE,
+  COMPANION_UPDATE_FEATURE,
+  type CompanionUpdateRequest,
+  type CompanionUpdateStatus,
+  type ProgressUpdate,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
   isAllowedEdgeRequest,
@@ -81,6 +86,8 @@ export interface CompanionConnectorOptions {
   pendingUserMessages?: () => number;
   /** The execution node finished something the agent may wait for (needs the wake-events-v1 capability). */
   onWakeEvent?: (event: WakeEvent) => void;
+  /** The execution node asks this device to install an update's Windows release (needs companion-update-v1). */
+  onCompanionUpdateRequest?: (request: CompanionUpdateRequest) => void;
 }
 
 export class CompanionConnector {
@@ -96,6 +103,11 @@ export class CompanionConnector {
   private readonly activeRequests = new Map<string, AbortController>();
   private socket: WebSocket | undefined;
   private edgeTakesUserMessages = false;
+  private edgeTakesProgress = false;
+  // Only the latest steps of each plan matter.
+  private pendingProgress = new Map<string, ProgressUpdate>();
+  private edgeTakesCompanionUpdates = false;
+  private pendingUpdateStatus = new Map<string, CompanionUpdateStatus>();
   private stopped = false;
 
   constructor(private readonly options: CompanionConnectorOptions) {
@@ -154,6 +166,52 @@ export class CompanionConnector {
     }
   }
 
+  /**
+   * The latest steps of a long operation on this device, for the plan card
+   * whose planId the agent handed it. Held until an Edge that offers
+   * progressV1 registers this device.
+   */
+  sendProgress(update: ProgressUpdate): void {
+    this.pendingProgress.delete(update.planId);
+    this.pendingProgress.set(update.planId, update);
+    while (this.pendingProgress.size > 20) this.pendingProgress.delete(this.pendingProgress.keys().next().value!);
+    this.flushProgress();
+  }
+
+  private flushProgress(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesProgress || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const [planId, update] of this.pendingProgress) {
+      try {
+        socket.send(JSON.stringify({ type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update }));
+      } catch {
+        return;
+      }
+      this.pendingProgress.delete(planId);
+    }
+  }
+
+  /** Where this device's install of an update stands; the latest is held until an Edge that offers companionUpdateV1 registers it. */
+  sendCompanionUpdateStatus(status: CompanionUpdateStatus): void {
+    this.pendingUpdateStatus.delete(status.updateId);
+    this.pendingUpdateStatus.set(status.updateId, status);
+    while (this.pendingUpdateStatus.size > 5) this.pendingUpdateStatus.delete(this.pendingUpdateStatus.keys().next().value!);
+    this.flushCompanionUpdateStatus();
+  }
+
+  private flushCompanionUpdateStatus(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesCompanionUpdates || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const [updateId, status] of this.pendingUpdateStatus) {
+      try {
+        socket.send(JSON.stringify({ type: "companion-update-status", protocolVersion: COMPANION_PROTOCOL_VERSION, status }));
+      } catch {
+        return;
+      }
+      this.pendingUpdateStatus.delete(updateId);
+    }
+  }
+
   stop(): void {
     this.stopped = true;
     for (const controller of this.activeRequests.values()) controller.abort("companion_stopped");
@@ -190,6 +248,8 @@ export class CompanionConnector {
         : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
       this.edgeTakesUserMessages = false;
+      this.edgeTakesProgress = false;
+      this.edgeTakesCompanionUpdates = false;
       const clearHeartbeat = () => {
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
@@ -290,7 +350,11 @@ export class CompanionConnector {
       await this.options.repositories.setDeviceId(message.deviceId);
       this.log({ event: "local_runtime_registered", deviceId: message.deviceId });
       this.edgeTakesUserMessages = socket === this.socket && message.features?.includes("userMessagesV1") === true;
+      this.edgeTakesProgress = socket === this.socket && message.features?.includes(PROGRESS_FEATURE) === true;
+      this.edgeTakesCompanionUpdates = socket === this.socket && message.features?.includes(COMPANION_UPDATE_FEATURE) === true;
       if (this.options.pendingUserMessages) this.announceUserMessages(this.options.pendingUserMessages());
+      this.flushProgress();
+      this.flushCompanionUpdateStatus();
       return { protocolReady: true, registered: true };
     }
     if (message.type === "companion-heartbeat-ack") {
@@ -298,6 +362,10 @@ export class CompanionConnector {
     }
     if (message.type === "companion-wake-event") {
       this.options.onWakeEvent?.(message.event);
+      return { protocolReady: true };
+    }
+    if (message.type === "companion-update-request") {
+      this.options.onCompanionUpdateRequest?.(message.request);
       return { protocolReady: true };
     }
     if (message.type === "http-cancel") {

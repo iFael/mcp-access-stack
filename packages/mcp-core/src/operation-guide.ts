@@ -76,6 +76,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Cut over (only with the user's explicit go-ahead): promote_release with the candidate releaseId. The connector reconnects during the swap; then call get_release_state until candidate is empty and active is the new release.",
     ],
     rules: [
+      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: open a plan card with browser_progress, pass its planId and expectedMainSha, end your answer and wait to be woken. Do the steps by hand only when the user asks for that.",
       "Use the nextStep returned by get_release_state when unsure which phase comes next.",
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
@@ -84,6 +85,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Each main commit gets at most one public release: if release.yml already ran for that SHA, the dispatch returns outcome_unknown without starting a run. A new release needs a new main commit and a new tag.",
     ],
     tools: [
+      "mcp_update",
       "github_get_commit_checks",
       "github_workflow_operation",
       "github_read",
@@ -131,6 +133,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Never start, enable, change or register a Scheduled Task, not even the updater: the task starts itself, and endpoint protection kills the companion when it starts one.",
       "If nothing changed after 15 minutes, report it to the user; an updater task installed before the 5-minute check only runs daily until the user re-runs Install-McpV3LocalUpdateTask.ps1 -Force from the Windows console.",
       "The publication runs once per CI run: a second dispatch for the same ciRunId is refused, and a failed one is diagnosed with github_read before anything else.",
+      "mcp_update publishes and installs the companion after the execution node; follow these steps by hand only when it stops with COMPANION_NOT_ANSWERING (a companion without companion-update-v1) or the user asks for that.",
       "main must not move between the check and the publication; if it did, start again from the new main CI.",
     ],
     tools: [

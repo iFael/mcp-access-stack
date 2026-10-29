@@ -15,9 +15,9 @@ import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
-import {loadOracleControlBindingFromEnvironment} from "@vs-code-gpt/local-agent";
+import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, type LocalAgent} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
-import type { WakeEvent } from "@mcp-access-stack/edge-protocol";
+import type { CompanionUpdateRequest, ProgressUpdate, WakeEvent } from "@mcp-access-stack/edge-protocol";
 import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
 import {loadOracleSourceProviderFromEnvironment} from "./edge/oracle-source-provider-host.js";
 import {OracleWorkflowProviderConnector} from "./edge/oracle-workflow-provider.js";
@@ -60,7 +60,22 @@ async function main(): Promise<void> {
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
   // What ends here and the agent may be waiting for reaches the user's companions through the Edge.
   let sendWakeEvent: (event: WakeEvent) => void = () => undefined;
-  const reloadable = new ReloadableLocalAgent({
+  let sendProgress: (update: ProgressUpdate) => void = () => undefined;
+  let requestCompanionUpdate: (request: CompanionUpdateRequest) => void = () => undefined;
+  // One runner for the process: every policy generation shares it, and the
+  // process this update's promote starts resumes it from the same records.
+  const mcpUpdates: McpUpdateRunner = new McpUpdateRunner({
+    stateDirectory: path.join(runtime.runtimeRoot, "mcp-updates"),
+    workspaceId: "mcp-access-stack",
+    port: createLocalAgentMcpUpdatePort((): LocalAgent => reloadable.localAgent(), {
+      progress: (planId, title, steps) => sendProgress({ planId, title, steps }),
+      requestCompanionUpdate: (request) => requestCompanionUpdate(request),
+      finished: (record) => sendWakeEvent({ kind: "update", updateId: record.updateId,
+        workspaceId: record.workspaceId, state: record.status === "running" ? "failed" : record.status }),
+    }),
+  });
+  const reloadable: ReloadableLocalAgent = new ReloadableLocalAgent({
+    mcpUpdates,
     ...(oracleControl ? { oracleControl } : {}),
     onBackgroundTaskFinished: (event) => sendWakeEvent({ kind: "task", taskId: event.taskId,
       workspaceId: event.workspaceId, state: event.state, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
@@ -158,8 +173,12 @@ async function main(): Promise<void> {
     },
     ...(runtime.maxConcurrentRequests === undefined ? {} : { maxConcurrentRequests: runtime.maxConcurrentRequests }),
     log: writeLog,
+    onCompanionUpdateStatus: (status) => mcpUpdates.observeCompanionUpdate(status),
   });
   sendWakeEvent = (event) => connector.sendWakeEvent(event);
+  sendProgress = (update) => connector.sendProgress(update);
+  requestCompanionUpdate = (request) => connector.requestCompanionUpdate(request);
+  await mcpUpdates.recover();
 
   const controller = new AbortController();
   const stop = (signal: NodeJS.Signals) => {
