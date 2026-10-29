@@ -28,21 +28,23 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 describe("ChatWake", () => {
-  it("writes one fixed notice in the ChatGPT app and never the user's words", async () => {
+  it("writes what the user wrote in the ChatGPT app as they wrote it, with short notes for the rest", async () => {
     const app = target("app", ["sent"]);
     const statuses: ChatWakeStatus[] = [];
-    const wake = new ChatWake({ targets: () => [app], onStatus: (status) => statuses.push(status), spacingMs: 10, retryMs: 10 });
-    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa" });
+    const sent: unknown[] = [];
+    const wake = new ChatWake({ targets: () => [app], onStatus: (status) => statuses.push(status),
+      onSent: (events) => sent.push(...events), spacingMs: 10, retryMs: 10 });
+    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     wake.queue({ kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 });
     await until(() => wake.status().recent.length === 1);
     expect(app.texts).toEqual([chatWakeText([
-      { kind: "message", messageId: "msg_aaaaaaaa" },
+      { kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" },
       { kind: "task", taskId: "0f8fad5b-d9cb-469f-a165-70867728950e", state: "failed", exitCode: 1 },
     ])]);
-    expect(app.texts[0]).toBe("[MCP V3, aviso automático do companion, não escrito pelo usuário]\n" +
-      "- O usuário escreveu para a tarefa (no cartão do chat ou no popup do MCP V3). Chame browser_user_messages para ler.\n" +
-      "- A tarefa em segundo plano 0f8fad5b-d9cb-469f-a165-70867728950e terminou: failed, código 1. Veja com get_background_task.\n" +
-      "Continue a tarefa de onde parou.");
+    expect(app.texts[0]).toBe("Use o CPF do titular\n\n" +
+      "[MCP V3] A tarefa em segundo plano 0f8fad5b-d9cb-469f-a165-70867728950e terminou: failed, código 1. Veja com get_background_task.");
+    expect(sent).toEqual([expect.objectContaining({ messageId: "msg_aaaaaaaa" }), expect.objectContaining({ kind: "task" })]);
+    expect(chatWakeText([{ kind: "message", messageId: "msg_bbbbbbbb", text: "  só isso  " }])).toBe("só isso");
     expect(wake.status()).toEqual({ enabled: true, waiting: 0,
       recent: [{ at: expect.any(Number), kinds: ["message", "task"], target: "app" }] });
     expect(statuses.at(-1)).toEqual(wake.status());
@@ -67,7 +69,7 @@ describe("ChatWake", () => {
     let open = true;
     const wake = new ChatWake({ targets: () => [app], isOpen: () => open, spacingMs: 1, retryMs: 1 });
     open = false;
-    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa" });
+    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     await wake.settled();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(app.texts).toEqual([]);
@@ -86,10 +88,10 @@ describe("ChatWake", () => {
     const chrome = target("chrome", ["failed"]);
     const wake = new ChatWake({ targets: () => [app, chrome], spacingMs: 1, retryMs: 60_000 });
     wake.setEnabled(false);
-    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa" });
+    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     expect(wake.status()).toEqual({ enabled: false, waiting: 0, recent: [] });
     wake.setEnabled(true);
-    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa" });
+    wake.queue({ kind: "message", messageId: "msg_aaaaaaaa", text: "Use o CPF do titular" });
     await until(() => wake.status().lastError !== undefined);
     expect(wake.status()).toMatchObject({ waiting: 1, lastError: "Não consegui escrever na aba do ChatGPT." });
     wake.close();

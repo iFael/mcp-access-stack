@@ -71,6 +71,8 @@ async function main(): Promise<void> {
     targets: () => (desktopChatApp ? [desktopChatApp, chromeChatTab] : [chromeChatTab]),
     isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false),
     onStatus: (status) => personalBrowser?.showChatWakeStatus(status),
+    onSent: (events) => personalBrowser?.deliverWokenMessages(
+      events.flatMap((event) => (event.kind === "message" ? [event.messageId] : []))),
     log: writeLog,
   });
   const reloadable = new ReloadableLocalAgent({

@@ -648,20 +648,16 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     ...args: Parameters<NonNullable<BrowserExecutor["userMessages"]>>
   ): ReturnType<NonNullable<BrowserExecutor["userMessages"]>> {
     const [input, context] = args;
+    // The messages wait here, in the companion: the reply card in the chat
+    // reaches them with Chrome closed. Only the popup's copy of the question
+    // needs the extension.
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !this.peerInfo) {
-      throw new AppError("BROWSER_WORKER_UNAVAILABLE",
-        "Personal browser mode requires the MCP V3 Chrome extension to be loaded and connected.");
-    }
-    if (!this.peerInfo.capabilities.includes("taskMessagesV1")) {
-      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
-        `Personal Chrome extension ${this.peerInfo.extensionVersion ?? "unknown"} must support taskMessagesV1 for popup messages. Reload the updated extension.`);
-    }
+    const popup = socket?.readyState === WebSocket.OPEN && this.peerInfo?.capabilities.includes("taskMessagesV1") === true;
     const scope = input.taskId === undefined ? {} : { taskId: input.taskId };
     const all = input.taskId === undefined;
     let asked = false;
     if (input.question !== undefined && input.taskId !== undefined) {
-      socket.send(JSON.stringify({ type: "task-question", taskId: input.taskId, question: input.question }));
+      if (popup) socket!.send(JSON.stringify({ type: "task-question", taskId: input.taskId, question: input.question }));
       asked = true;
     }
     let waitMs = input.waitMs ?? 0;
@@ -689,7 +685,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     };
     const { added } = this.inbox.accept({ messages: [message] });
     if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
-    if (added > 0) this.options.chatWake?.queue({ kind: "message", messageId: message.id });
+    if (added > 0) this.options.chatWake?.queue({ kind: "message", messageId: message.id, text: message.text });
     const socket = this.socket;
     if (added > 0 && socket?.readyState === WebSocket.OPEN) {
       try {
@@ -726,6 +722,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       }
     }
     return messages;
+  }
+
+  /** The wake wrote these messages into the conversation: they reached the agent. */
+  deliverWokenMessages(ids: readonly string[]): void {
+    this.deliverUserMessages(this.inbox.takeIds(ids), true);
   }
 
   /** Whether the agent has yet to take this message. */
@@ -1293,7 +1294,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       const { added, addedIds, alreadyDelivered } = this.inbox.accept(message);
       this.deliverUserMessages(alreadyDelivered.map((id) => ({ id })));
       if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
-      for (const messageId of addedIds) this.options.chatWake?.queue({ kind: "message", messageId });
+      for (const messageId of addedIds) {
+        const text = this.inbox.textOf(messageId);
+        if (text !== undefined) this.options.chatWake?.queue({ kind: "message", messageId, text });
+      }
       return;
     }
     if (message.type === "recording-frame") {
