@@ -8,6 +8,13 @@ import {
   COMPANION_PROTOCOL_VERSION,
   WAKE_EVENTS_CAPABILITY,
   WAKE_EVENTS_FEATURE,
+  PROGRESS_FEATURE,
+  UPDATE_WAKE_CAPABILITY,
+  UPDATE_WAKE_FEATURE,
+  COMPANION_UPDATE_CAPABILITY,
+  COMPANION_UPDATE_FEATURE,
+  type CompanionUpdateRequest,
+  type CompanionUpdateStatus,
   type WakeEvent,
   parseCompanionToEdgeMessage,
   type AuthenticatedEdgePrincipal,
@@ -120,6 +127,8 @@ type ConnectorAttachment = {
   contractCompatible?: boolean;
   disconnectRecorded?: boolean;
   runtime?: ConnectorRuntimeIdentity;
+  /** It asked companions to install an update, so it takes their answers. */
+  companionUpdates?: boolean;
 };
 
 // A take is a quick local read; a slow companion must not hold up the answer.
@@ -981,6 +990,20 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "connector-companion-update") {
+      if (attachment.companionUpdates !== true) {
+        webSocket.serializeAttachment({ ...attachment, companionUpdates: true } satisfies ConnectorAttachment);
+      }
+      this.relayCompanionUpdateRequest(parsed.request);
+      return;
+    }
+
+    if (parsed.type === "connector-progress") {
+      // The execution node serves every user; the planId it was handed names the plan.
+      this.ctx.waitUntil(this.progressPlans.applyUpdate(parsed.update).then(() => undefined, () => undefined));
+      return;
+    }
+
     const pending = this.pending.get(parsed.requestId);
     if (!pending || pending.connector !== webSocket) return;
 
@@ -1162,11 +1185,43 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     for (const webSocket of this.ctx.getWebSockets("companion")) {
       const attachment = this.readCompanionAttachment(webSocket);
       if (!attachment?.ready || webSocket.readyState !== WebSocket.OPEN ||
-          !attachment.capabilities?.includes(WAKE_EVENTS_CAPABILITY)) continue;
+          !attachment.capabilities?.includes(WAKE_EVENTS_CAPABILITY) ||
+          // An older companion closes the connection on an event kind it does not know.
+          (event.kind === "update" && !attachment.capabilities.includes(UPDATE_WAKE_CAPABILITY))) continue;
       try {
         webSocket.send(message);
       } catch {
         // That companion reconnects; the agent can still read the result itself.
+      }
+    }
+  }
+
+  // The execution node asks the companions to install its update's Windows
+  // release; each answers with where it stands. MCP V3 serves one owner, so
+  // every ready companion that can install one is theirs.
+  private relayCompanionUpdateRequest(request: CompanionUpdateRequest): void {
+    const message = JSON.stringify({ type: "companion-update-request", protocolVersion: COMPANION_PROTOCOL_VERSION, request });
+    for (const webSocket of this.ctx.getWebSockets("companion")) {
+      const attachment = this.readCompanionAttachment(webSocket);
+      if (!attachment?.ready || webSocket.readyState !== WebSocket.OPEN ||
+          !attachment.capabilities?.includes(COMPANION_UPDATE_CAPABILITY)) continue;
+      try {
+        webSocket.send(message);
+      } catch {
+        // The node asks again while it waits.
+      }
+    }
+  }
+
+  private relayCompanionUpdateStatus(status: CompanionUpdateStatus): void {
+    const message = JSON.stringify({ type: "edge-companion-update-status", protocolVersion: EDGE_PROTOCOL_VERSION, status });
+    for (const webSocket of this.ctx.getWebSockets("connector")) {
+      // An older connector closes the connection on a message it does not know.
+      if (this.readConnectorAttachment(webSocket)?.companionUpdates !== true || webSocket.readyState !== WebSocket.OPEN) continue;
+      try {
+        webSocket.send(message);
+      } catch {
+        // The companion answers the next request again.
       }
     }
   }
@@ -2747,6 +2802,18 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-update-status") {
+      if (!attachment.ready || !attachment.deviceId) return;
+      this.relayCompanionUpdateStatus(parsed.status);
+      return;
+    }
+
+    if (parsed.type === "companion-progress") {
+      if (!attachment.ready || !attachment.deviceId) return;
+      await this.progressPlans.applyUpdate(parsed.update, attachment.userId).catch(() => false);
+      return;
+    }
+
     if (parsed.type === "companion-user-messages") {
       if (!attachment.ready || !attachment.deviceId) return;
       webSocket.serializeAttachment({
@@ -2805,7 +2872,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         type: "companion-registered",
         protocolVersion: COMPANION_PROTOCOL_VERSION,
         deviceId: device.id,
-        features: ["userMessagesV1"],
+        features: ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE],
       }));
       return;
     }
@@ -2870,7 +2937,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       disconnectRecorded: false,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
-    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE] }));
+    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE, UPDATE_WAKE_FEATURE, COMPANION_UPDATE_FEATURE] }));
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -3115,6 +3182,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       ...("disconnectRecorded" in attachment && attachment.disconnectRecorded !== undefined
         ? { disconnectRecorded: attachment.disconnectRecorded as boolean }
         : {}),
+      ...("companionUpdates" in attachment && attachment.companionUpdates === true ? { companionUpdates: true } : {}),
     };
   }
 

@@ -1,4 +1,12 @@
 import type { AuthenticatedEdgePrincipal, EdgeHttpMethod } from "./index.js";
+import {
+  COMPANION_UPDATE_FEATURE,
+  parseCompanionUpdateRequest,
+  parseCompanionUpdateStatus,
+  type CompanionUpdateRequest,
+  type CompanionUpdateStatus,
+} from "./companion-update.js";
+import { parseProgressUpdate, PROGRESS_FEATURE, type ProgressUpdate } from "./progress-events.js";
 import { parseWakeEvent, type WakeEvent } from "./wake-events.js";
 
 export const COMPANION_PROTOCOL_VERSION = 1 as const;
@@ -42,7 +50,7 @@ export type CompanionHelloMessage = {
 };
 
 // Optional protocol features the Edge offers; an older peer ignores them.
-export const COMPANION_EDGE_FEATURES = ["userMessagesV1"] as const;
+export const COMPANION_EDGE_FEATURES = ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE] as const;
 export type CompanionEdgeFeature = (typeof COMPANION_EDGE_FEATURES)[number];
 
 export type CompanionRegisteredMessage = {
@@ -114,8 +122,30 @@ export type CompanionWakeEventMessage = {
   event: WakeEvent;
 };
 
+// A step of a long operation on this device; sent only to an Edge that offers progressV1.
+export type CompanionProgressMessage = {
+  type: "companion-progress";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  update: ProgressUpdate;
+};
+
+// Sent only to a companion whose registration names companion-update-v1.
+export type CompanionUpdateRequestMessage = {
+  type: "companion-update-request";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  request: CompanionUpdateRequest;
+};
+
+// Where this device's install of an update stands; sent only to an Edge that offers companionUpdateV1.
+export type CompanionUpdateStatusMessage = {
+  type: "companion-update-status";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  status: CompanionUpdateStatus;
+};
+
 export type EdgeToCompanionMessage =
   | CompanionWakeEventMessage
+  | CompanionUpdateRequestMessage
   | CompanionHelloMessage
   | CompanionRegisteredMessage
   | CompanionHeartbeatAckMessage
@@ -126,6 +156,8 @@ export type CompanionToEdgeMessage =
   | CompanionReadyMessage
   | CompanionHeartbeatMessage
   | CompanionUserMessagesMessage
+  | CompanionProgressMessage
+  | CompanionUpdateStatusMessage
   | CompanionHttpResponseMessage;
 
 export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessage | null {
@@ -151,6 +183,14 @@ export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessa
       protocolVersion: COMPANION_PROTOCOL_VERSION,
       heartbeatId: parsed.heartbeatId,
     };
+  }
+  if (parsed.type === "companion-progress") {
+    const update = parseProgressUpdate(parsed.update);
+    return update ? { type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update } : null;
+  }
+  if (parsed.type === "companion-update-status") {
+    const status = parseCompanionUpdateStatus(parsed.status);
+    return status ? { type: "companion-update-status", protocolVersion: COMPANION_PROTOCOL_VERSION, status } : null;
   }
   if (parsed.type === "companion-user-messages") {
     if (typeof parsed.pending !== "number" || !Number.isInteger(parsed.pending) ||
@@ -195,6 +235,10 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
   if (parsed.type === "companion-wake-event") {
     const event = parseWakeEvent(parsed.event);
     return event ? { type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event } : null;
+  }
+  if (parsed.type === "companion-update-request") {
+    const request = parseCompanionUpdateRequest(parsed.request);
+    return request ? { type: "companion-update-request", protocolVersion: COMPANION_PROTOCOL_VERSION, request } : null;
   }
   if (parsed.type === "companion-heartbeat-ack") {
     if (!isHeartbeatId(parsed.heartbeatId)) return null;

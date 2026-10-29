@@ -6,6 +6,9 @@
 export const WAKE_EVENTS_FEATURE = "wakeEventsV1" as const;
 /** A companion that announces this capability takes wake events from the Edge. */
 export const WAKE_EVENTS_CAPABILITY = "wake-events-v1" as const;
+/** The end of an mcp_update: offered by the Edge, and taken only by companions that announce it. */
+export const UPDATE_WAKE_FEATURE = "updateWakeV1" as const;
+export const UPDATE_WAKE_CAPABILITY = "update-wake-v1" as const;
 
 export type WakeEvent =
   | { kind: "task"; taskId: string; workspaceId: string; state: "succeeded" | "failed"; exitCode?: number }
@@ -16,7 +19,8 @@ export type WakeEvent =
     repository: string;
     commitSha: string;
     state: "passed" | "failed" | "timed_out" | "error";
-  };
+  }
+  | { kind: "update"; updateId: string; workspaceId: string; state: "succeeded" | "failed" | "needs_confirmation" };
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const REPOSITORY = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u;
@@ -51,6 +55,11 @@ export function parseWakeEvent(value: unknown): WakeEvent | null {
       commitSha: event.commitSha,
       state: event.state,
     };
+  }
+  if (event.kind === "update") {
+    if (typeof event.updateId !== "string" || !/^upd_[0-9a-f-]{36}$/u.test(event.updateId)) return null;
+    if (event.state !== "succeeded" && event.state !== "failed" && event.state !== "needs_confirmation") return null;
+    return { kind: "update", updateId: event.updateId, workspaceId: event.workspaceId, state: event.state };
   }
   return null;
 }

@@ -113,6 +113,12 @@ export class ReloadableLocalAgent {
     return this.current !== null;
   }
 
+  /** The LocalAgent the current policy built, for work that outlives one generation. */
+  localAgent(): LocalAgent {
+    if (!this.currentAgent) throw new AppError("WORKSPACE_NOT_FOUND", "No local MCP V3 repository is materialized on this device.");
+    return this.currentAgent;
+  }
+
   get currentGeneration(): number {
     return this.generation;
   }

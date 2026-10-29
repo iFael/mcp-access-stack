@@ -29,6 +29,7 @@ export * from "./read-orchestration-contracts.js";
 export * from "./release-lifecycle-contracts.js";
 export * from "./release-prune-contracts.js";
 export * from "./release-orchestrator-contracts.js";
+export * from "./mcp-update-contracts.js";
 export * from "./repository-contracts.js";
 export * from "./repository-executor.js";
 export * from "./service-control-contracts.js";

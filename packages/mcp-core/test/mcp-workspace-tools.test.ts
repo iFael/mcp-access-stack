@@ -169,6 +169,14 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     this.calls.push("oracleReleaseAdvance");
     return {status:"outcome_unknown",operationId:input.operationId};
   }
+  async mcpUpdate(
+    input:import("@vs-code-gpt/shared").McpUpdateInput,
+  ):Promise<import("@vs-code-gpt/shared").McpUpdateResult>{
+    this.calls.push(`mcpUpdate:${input.action}`);
+    return {update:input.action==="read" ? null : {
+      updateId:"upd_00000000-0000-4000-8000-000000000001",mainSha:"a".repeat(40),status:"running",step:"precheck",
+      skipped:[],workflows:{},createdAt:"2026-10-29T03:00:00.000Z",updatedAt:"2026-10-29T03:00:00.000Z"}};
+  }
   async getReleaseState(): Promise<import("@vs-code-gpt/shared").GetReleaseStateResult> {
     this.calls.push("getReleaseState");
     return {
@@ -515,6 +523,30 @@ describe("registerWorkspaceTools", () => {
     });
     expect(invalid.isError).toBe(true);
     expect(executor.calls).toEqual(["oracleReleaseAdvance"]);
+  });
+
+  it("starts, reads and confirms an MCP update only through its typed actions",async()=>{
+    const executor=new MockWorkspaceExecutor();
+    const server=new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerWorkspaceTools(server,executor,{includeTools:["mcp_update"],securitySchemes:[{type:"noauth"}]});
+    const tools=registeredTools(server);
+    expect(tools.mcp_update?.annotations).toMatchObject({readOnlyHint:false,destructiveHint:true,idempotentHint:false});
+    const extra={signal:new AbortController().signal};
+    const started=await tools.mcp_update!.handler({action:"start",workspaceId:"mcp-access-stack",
+      expectedMainSha:"a".repeat(40),planId:"plan_00000000-0000-4000-8000-000000000001"},extra);
+    expect(started.isError).toBeFalsy();
+    expect((started.content as Array<{text:string}>)[0]!.text).toContain("End your answer");
+    expect((await tools.mcp_update!.handler({action:"read",workspaceId:"mcp-access-stack"},extra)).structuredContent)
+      .toEqual({update:null});
+    // A start needs the exact MAIN; a confirmation needs the update and the user's confirmationId.
+    for(const args of [
+      {action:"start",workspaceId:"mcp-access-stack"},
+      {action:"confirm",workspaceId:"mcp-access-stack",updateId:"upd_00000000-0000-4000-8000-000000000001"},
+      {action:"start",workspaceId:"mcp-access-stack-local-x",expectedMainSha:"a".repeat(40)},
+    ]){
+      expect((await tools.mcp_update!.handler(args,extra)).isError).toBe(true);
+    }
+    expect(executor.calls).toEqual(["mcpUpdate:start","mcpUpdate:read"]);
   });
 
   it("registers only the requested subset", async () => {
@@ -1888,7 +1920,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-three source-control tools inside the 59-tool workspace surface", () => {
+  it("publishes twenty-three source-control tools inside the 60-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1915,8 +1947,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(23);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(59);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(59);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(60);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(60);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

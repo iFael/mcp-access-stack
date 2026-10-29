@@ -192,6 +192,12 @@ export class LocalRepositoryManager implements RepositoryExecutor {
     return matches[0]?.path;
   }
 
+  /** The workspace of the canonical MCP Access Stack binding, where companion releases install. */
+  canonicalStackWorkspaceId(): string | undefined {
+    const matches = this.state.repositories.filter((repository) => repository.remoteUrls.some(isCanonicalStackRemote));
+    return matches.length === 1 ? matches[0]!.workspaceId : undefined;
+  }
+
   listMaterializationAnnouncements(): Array<{ repositoryId: string; workspaceId: string; path: string }> {
     return this.state.repositories.map((repository) => ({
       repositoryId: repository.repositoryId,

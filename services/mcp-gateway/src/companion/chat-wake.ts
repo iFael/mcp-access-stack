@@ -21,7 +21,8 @@ export type ChatWakeEvent =
     commitSha: string;
     state: "passed" | "failed" | "timed_out" | "error";
   }
-  | { kind: "handback"; tabId: string; reason?: string };
+  | { kind: "handback"; tabId: string; reason?: string }
+  | { kind: "update"; updateId: string; workspaceId: string; state: "succeeded" | "failed" | "needs_confirmation" };
 
 /** What a place that shows the conversation did with the notice. */
 export type ChatWakeOutcome =
@@ -229,6 +230,7 @@ export class ChatWake {
 }
 
 const CHECKS_STATE = { passed: "passou", failed: "falhou", timed_out: "o tempo acabou", error: "não deu para ler" } as const;
+const UPDATE_STATE = { succeeded: "terminou", failed: "parou com um erro", needs_confirmation: "espera uma confirmação" } as const;
 
 export function chatWakeText(events: readonly ChatWakeEvent[]): string {
   // The user's own words, as they wrote them.
@@ -246,6 +248,10 @@ export function chatWakeText(events: readonly ChatWakeEvent[]): string {
   for (const event of events.filter((entry) => entry.kind === "checks").slice(0, 5)) {
     notes.push(`[MCP V3] O CI de ${event.repository} em ${event.commitSha.slice(0, 7)} terminou: ${CHECKS_STATE[event.state]} ` +
       `(acompanhamento ${event.watchId}, workspace ${event.workspaceId}). Veja com github_wait_commit_checks_watch.`);
+  }
+  for (const event of events.filter((entry) => entry.kind === "update").slice(0, 3)) {
+    notes.push(`[MCP V3] A atualização do MCP ${event.updateId} ${UPDATE_STATE[event.state]} ` +
+      `(workspace ${event.workspaceId}). Veja com mcp_update action=read.`);
   }
   if (notes.length > 0) parts.push(notes.join("\n"));
   return parts.join("\n\n");

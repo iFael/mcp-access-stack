@@ -2335,6 +2335,335 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ]
     },
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "start",
+            "read",
+            "confirm"
+          ],
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedMainSha": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "updateId": {
+          "pattern": "^upd_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "mcp_update",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "update": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeBefore": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "companionTag": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "confirmation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "confirmationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasons": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "step": {
+                      "enum": [
+                        "oracle_prepare",
+                        "oracle_promote",
+                        "windows_prepare",
+                        "windows_promote"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "confirmationId",
+                    "reasons",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                },
+                "createdAt": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "message": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "mainSha": {
+                  "pattern": "^[a-f0-9]{40}$",
+                  "type": "string"
+                },
+                "planId": {
+                  "pattern": "^plan_[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "skipped": {
+                  "items": {
+                    "enum": [
+                      "precheck",
+                      "edge_stage",
+                      "edge_activate",
+                      "connector_tag",
+                      "connector_release",
+                      "oracle_prepare",
+                      "oracle_promote",
+                      "oracle_verify",
+                      "companion_release",
+                      "windows_prepare",
+                      "windows_promote"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "enum": [
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "needs_confirmation"
+                  ],
+                  "type": "string"
+                },
+                "step": {
+                  "enum": [
+                    "precheck",
+                    "edge_stage",
+                    "edge_activate",
+                    "connector_tag",
+                    "connector_release",
+                    "oracle_prepare",
+                    "oracle_promote",
+                    "oracle_verify",
+                    "companion_release",
+                    "windows_prepare",
+                    "windows_promote"
+                  ],
+                  "type": "string"
+                },
+                "tag": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "updateId": {
+                  "pattern": "^upd_[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workflows": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "activate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "bootstrap": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "companion": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "release": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "stage": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "updateId",
+                "mainSha",
+                "status",
+                "step",
+                "skipped",
+                "workflows",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "update"
+      ],
+      "type": "object"
+    },
+    "title": "Update MCP V3 on the execution node and Windows"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": true,
@@ -25318,7 +25647,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing or todo, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25342,7 +25671,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25391,7 +25722,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25477,7 +25810,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25526,7 +25861,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25634,7 +25971,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -26609,15 +26948,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "879fda9ea588306fd935c274db2c4e2a96353f6c38d584427e27dffa2dfec169",
-  "serverVersion": "0.4.0-catalog.c879fda9ea588.s88ae97722abd",
-  "toolCount": 119,
-  "toolSetRevision": "88ae97722abdbd6974236595e117e52f941cebd350f7fa04742e35e58c80d711"
+  "contractRevision": "a91c6958eb484b313129eb21be1dc2b38d5316959cbb102e73c0bac2eb349675",
+  "serverVersion": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f",
+  "toolCount": 120,
+  "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c879fda9ea588.s88ae97722abd"
+  "version": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
