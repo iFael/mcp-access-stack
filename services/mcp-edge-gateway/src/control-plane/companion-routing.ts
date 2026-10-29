@@ -119,3 +119,17 @@ export function selectWorkspaceRuntime<T>(
     ? { kind: "primary" }
     : { kind: "none" };
 }
+
+/**
+ * A workspace that only a device holds, while no online companion announces
+ * it: the device is offline. Its calls must not fall through to the primary
+ * runtime, which does not know the workspace and would say it does not exist.
+ */
+export function isOfflineDeviceWorkspace(
+  materializations: ReadonlyArray<{ deviceId?: string; workspaceId: string }>,
+  workspaceId: string,
+  primaryWorkspaceIds: ReadonlySet<string> | null,
+): boolean {
+  if (primaryWorkspaceIds?.has(workspaceId)) return false;
+  return materializations.some((value) => value.deviceId !== undefined && value.workspaceId === workspaceId);
+}

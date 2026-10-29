@@ -24,6 +24,7 @@ import {
   selectAvailableRuntimeWorkspaceId,
   selectCompanionDevice,
   selectWorkspaceRuntime,
+  isOfflineDeviceWorkspace,
 } from "./control-plane/companion-routing.js";
 import { EdgeAccountStore, type StoredMaterialization } from "./control-plane/account-store.js";
 import {
@@ -1188,6 +1189,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     return companions;
   }
 
+  private async isOfflineDeviceWorkspace(userId: string, workspaceId: string): Promise<boolean> {
+    if (this.primaryWorkspaceIds?.has(workspaceId)) return false;
+    const materializations = [];
+    for (const { repository } of await this.accountStore.listRepositories(userId)) {
+      materializations.push(...await this.accountStore.listMaterializations(userId, repository.id));
+    }
+    return isOfflineDeviceWorkspace(materializations, workspaceId, this.primaryWorkspaceIds);
+  }
+
   private getCompanionRouteCandidates(userId: string) {
     return this.getReadyCompanionsForUser(userId).map(({ webSocket, attachment }) => ({
       target: { webSocket, attachment },
@@ -1347,7 +1357,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
     const routeCandidates = this.getCompanionRouteCandidates(principal.userId);
     if (!routeCandidates.some((candidate) => candidate.workspaceIds.includes(workspaceId))) {
-      return null;
+      return await this.isOfflineDeviceWorkspace(principal.userId, workspaceId)
+        ? mcpToolError(body, "AGENT_UNAVAILABLE",
+          `The MCP V3 device that holds workspace ${workspaceId} is not connected; it reconnects on its own, for example after an update.`)
+        : null;
     }
 
     const primaryIds = await this.ensurePrimaryWorkspaceIds(request, principal);
