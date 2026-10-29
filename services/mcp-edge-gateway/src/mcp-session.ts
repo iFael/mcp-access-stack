@@ -1591,7 +1591,8 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
     if (notices.length === 0) return response;
     const content = Array.isArray(result.result.content) ? result.result.content : [];
-    result.result.content = [...content, ...notices.map((text) => ({ type: "text", text }))];
+    // First, so a long result does not bury what the user asked.
+    result.result.content = [...notices.map((text) => ({ type: "text", text })), ...content];
     const headers = new Headers(response.headers);
     headers.delete("content-length");
     headers.set("cache-control", "no-store");
