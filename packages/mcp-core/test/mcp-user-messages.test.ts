@@ -39,8 +39,8 @@ describe("installUserMessageDelivery", () => {
 
     const first = await call(server, "read_file", { path: "README.md" });
     expect(first.content).toEqual([
-      { type: "text", text: "read_file done" },
       { type: "text", text: expect.stringContaining("- [2026-10-28T15:00:00.000Z] A barra não piscou.") },
+      { type: "text", text: "read_file done" },
     ]);
     // Delivered once: the next call carries nothing more.
     expect((await call(server, "read_file", {})).content).toHaveLength(1);
