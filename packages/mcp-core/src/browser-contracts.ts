@@ -1134,6 +1134,38 @@ export const browserUserReplyResultSchema = z
   .strict();
 export type BrowserUserReplyResult = z.infer<typeof browserUserReplyResultSchema>;
 
+export const browserProgressStepSchema = z
+  .object({
+    text: z.string().trim().min(1).max(200),
+    state: z.enum(["done", "doing", "todo"]),
+  })
+  .strict();
+const progressPlanIdSchema = z.string().regex(/^plan_[0-9a-f-]{36}$/);
+export const browserProgressInputSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120),
+    steps: z.array(browserProgressStepSchema).min(1).max(20),
+  })
+  .strict();
+export type BrowserProgressInput = z.infer<typeof browserProgressInputSchema>;
+export const browserProgressUpdateInputSchema = z
+  .object({
+    planId: progressPlanIdSchema,
+    title: z.string().trim().min(1).max(120).optional(),
+    steps: z.array(browserProgressStepSchema).min(1).max(20),
+  })
+  .strict();
+export const browserProgressReadInputSchema = z.object({ planId: progressPlanIdSchema }).strict();
+export const browserProgressPlanSchema = z
+  .object({
+    planId: progressPlanIdSchema,
+    title: z.string().min(1).max(120),
+    steps: z.array(browserProgressStepSchema).min(1).max(20),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export type BrowserProgressPlan = z.infer<typeof browserProgressPlanSchema>;
+
 export const browserDownloadInputSchema = z
   .object({
     tabId: tabIdSchema,

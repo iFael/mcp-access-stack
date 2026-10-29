@@ -89,6 +89,56 @@ describe("GitHubService read mapping", () => {
   });
 });
 
+describe("GitHubService pull request card", () => {
+  const run = (id: number, name: string, status: string, conclusion: string | null) => ({
+    id, name, status, conclusion, details_url: null, started_at: null, completed_at: null,
+  });
+
+  it("adds the branches, size, files and CI the chat card shows", async () => {
+    const readRepositoryResource = jest.fn<NonNullable<GitHubApiClient["readRepositoryResource"]>>(async () => [
+      { filename: "src/a.ts", status: "modified", additions: 10, deletions: 2 },
+      { filename: "src/b.ts", status: "added", additions: 5, deletions: 0 },
+    ]);
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({
+        head: { sha: headSha, ref: "feat/x" }, base: { sha: baseSha, ref: "main" },
+        draft: true, additions: 15, deletions: 2, changed_files: 2,
+      })),
+      readRepositoryResource,
+      getCommitCheckRuns: jest.fn(async () => ({ total_count: 4, check_runs: [
+        run(1, "build", "completed", "success"),
+        run(2, "lint", "completed", "failure"),
+        run(3, "mac", "completed", "skipped"),
+        run(4, "e2e", "in_progress", null),
+      ] })),
+    }));
+
+    const result = await service.getPullRequest({ workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7 });
+    expect(result.overview).toEqual({
+      headRef: "feat/x", baseRef: "main", draft: true, additions: 15, deletions: 2, changedFiles: 2,
+      files: [
+        { path: "src/a.ts", status: "modified", additions: 10, deletions: 2 },
+        { path: "src/b.ts", status: "added", additions: 5, deletions: 0 },
+      ],
+      checks: { pending: 1, passed: 1, failed: 1, skipped: 1, failing: ["lint"] },
+    });
+    expect(readRepositoryResource).toHaveBeenCalledWith("octo", "repo", ["pulls", 7, "files"], { per_page: "100" }, {});
+  });
+
+  it("still answers with the pull request when the files and CI cannot be read", async () => {
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({
+        head: { sha: headSha, ref: "feat/x" }, base: { sha: baseSha, ref: "main" },
+        draft: false, additions: 1, deletions: 1, changed_files: 1,
+      })),
+      readRepositoryResource: jest.fn(async () => { throw new Error("rate limited"); }),
+      getCommitCheckRuns: jest.fn(async () => { throw new Error("rate limited"); }),
+    }));
+    await expect(service.getPullRequest({ workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7 }))
+      .resolves.toMatchObject({ number: 7, overview: { headRef: "feat/x", additions: 1, changedFiles: 1 } });
+  });
+});
+
 describe("GitHubService commit check mapping", () => {
   it("aggregates pending, successful and failing checks conservatively", async () => {
     const service = new GitHubService(client({

@@ -13647,6 +13647,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "openai/outputTemplate": "ui://mcp-v3/pull-request-v1.html",
+      "openai/toolInvocation/invoked": "PR",
+      "openai/toolInvocation/invoking": "Lendo a PR",
       "securitySchemes": [
         {
           "scopes": [
@@ -13654,7 +13657,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           ],
           "type": "oauth2"
         }
-      ]
+      ],
+      "ui": {
+        "resourceUri": "ui://mcp-v3/pull-request-v1.html"
+      }
     },
     "annotations": {
       "destructiveHint": false,
@@ -13723,6 +13729,126 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991,
           "type": "integer"
+        },
+        "overview": {
+          "additionalProperties": false,
+          "properties": {
+            "additions": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "baseRef": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "changedFiles": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "checks": {
+              "additionalProperties": false,
+              "properties": {
+                "failed": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "failing": {
+                  "items": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 20,
+                  "type": "array"
+                },
+                "passed": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pending": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "skipped": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pending",
+                "passed",
+                "failed",
+                "skipped",
+                "failing"
+              ],
+              "type": "object"
+            },
+            "deletions": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "draft": {
+              "type": "boolean"
+            },
+            "files": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "additions": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "deletions": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "status": {
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "status",
+                  "additions",
+                  "deletions"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "headRef": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "headRef",
+            "baseRef",
+            "draft",
+            "additions",
+            "deletions",
+            "changedFiles"
+          ],
+          "type": "object"
         },
         "state": {
           "enum": [
@@ -25171,6 +25297,386 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "openai/outputTemplate": "ui://mcp-v3/progress-v1.html",
+      "openai/toolInvocation/invoked": "Etapas",
+      "openai/toolInvocation/invoking": "Atualizando as etapas",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ],
+      "ui": {
+        "resourceUri": "ui://mcp-v3/progress-v1.html"
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing or todo, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "name": "browser_progress",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId",
+        "title",
+        "steps",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "title": "browser_progress"
+  },
+  {
+    "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "name": "browser_progress_update",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId",
+        "title",
+        "steps",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "title": "browser_progress_update"
+  },
+  {
+    "_meta": {
+      "openai/visibility": "private",
+      "openai/widgetAccessible": true,
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ],
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Only the plan card of browser_progress calls this, to follow the plan; never call it yourself.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId"
+      ],
+      "type": "object"
+    },
+    "name": "browser_progress_read",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planId",
+        "title",
+        "steps",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "title": "browser_progress_read"
+  },
+  {
+    "_meta": {
       "securitySchemes": [
         {
           "scopes": [
@@ -26103,15 +26609,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "9bbf159d2a0995e3f0900d6393dc8034f2aba39e7eee7eab19bcb66a4d47a520",
-  "serverVersion": "0.4.0-catalog.c9bbf159d2a09.sef9ed569aa90",
-  "toolCount": 116,
-  "toolSetRevision": "ef9ed569aa907bf20cde43328293fc5de1addae3c1ebe19d68441b2ccd4ab003"
+  "contractRevision": "879fda9ea588306fd935c274db2c4e2a96353f6c38d584427e27dffa2dfec169",
+  "serverVersion": "0.4.0-catalog.c879fda9ea588.s88ae97722abd",
+  "toolCount": 119,
+  "toolSetRevision": "88ae97722abdbd6974236595e117e52f941cebd350f7fa04742e35e58c80d711"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c9bbf159d2a09.sef9ed569aa90"
+  "version": "0.4.0-catalog.c879fda9ea588.s88ae97722abd"
 } as const;
 
-export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way.";
+export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

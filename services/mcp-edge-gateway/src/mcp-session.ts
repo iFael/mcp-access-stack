@@ -33,6 +33,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
+import { ProgressPlans } from "./control-plane/progress-card.js";
 import {
   EXPECTED_MCP_CONTRACT_REVISION,
   MCP_CONTRACT_ROLLOUT_STORAGE_KEY,
@@ -153,6 +154,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly connectorTelemetry: ConnectorTelemetryStore;
   private readonly accountStore: EdgeAccountStore;
   private readonly repositoryControlPlane: EdgeRepositoryControlPlane;
+  private readonly progressPlans: ProgressPlans;
   private contractRolloutState!: McpContractRolloutStateV1;
   private hasPersistedContractRolloutState = false;
   private activeMcpCatalog: EdgeMcpCatalog | null = null;
@@ -163,6 +165,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     super(ctx, edgeEnv);
     this.connectorTelemetry = new ConnectorTelemetryStore(this.ctx.storage);
     this.accountStore = new EdgeAccountStore(this.ctx.storage);
+    this.progressPlans = new ProgressPlans(this.ctx.storage);
     this.repositoryControlPlane = new EdgeRepositoryControlPlane(this.accountStore, {
       isDeviceOnline: (deviceId) => this.isCompanionDeviceOnline(deviceId),
       isRemoteRuntimeOnline: () => this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
@@ -1105,6 +1108,8 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.activeMcpCatalog,
       {
         handle: async (body, principal, request) => {
+          const progress = await this.progressPlans.handle(body, principal.userId);
+          if (progress) return progress;
           const cloudResponse = await this.repositoryControlPlane.handle(body, principal);
           if (cloudResponse || !request) return cloudResponse;
           return this.tryRelayCompanionMcpRequest(request, body, principal);
@@ -1534,6 +1539,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (!principal.userId || !request) return response;
     const invocation = readMcpToolInvocation(body);
     if (!invocation || invocation.name === "browser_user_messages" || invocation.name === "browser_user_reply" ||
+        invocation.name === "browser_progress_read" ||
         invocation.name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX)) return response;
     const holders = this.getReadyCompanionsForUser(principal.userId)
       .filter(({ attachment }) => (attachment.pendingUserMessages ?? 0) > 0);

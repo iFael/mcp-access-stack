@@ -249,6 +249,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Open: browser_open (browser_open_authorized_site for private sites), then browser_snapshot or browser_find for refs. Every tab belongs to a task: without a taskId, browser_open starts a new one and returns it as tab.taskId; pass that taskId on the task's later calls.",
       "Act with browser_click, browser_fill or browser_sequence; read-only work uses browser_extract directly.",
       "Login, CAPTCHA or a step only the user should do: browser_wait with forUser and a short reason.",
+      "For work with several steps, browser_progress shows the user a card with the plan (done, in progress, to do) once at the start; then browser_progress_update with its planId and the whole list whenever a step or the plan changes, and the same card follows.",
       "The user can write to you while you work, from the MCP V3 popup or from the reply card browser_user_messages shows in the chat; call it once with the taskId at the start of a long task so the card is there. Their messages arrive with the result of your next call (browser, files, commands, git). To ask them something without ending your turn, browser_user_messages with question and the taskId, then keep working and read the answer with browser_user_messages (waitMs to wait for it).",
       "Finish: browser_finish_task; pause=true instead when you will come back to the same tabs, then resume with a new browser_plan for the task.",
     ],
@@ -301,4 +302,8 @@ export const MCP_AGENT_INSTRUCTIONS =
   "and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell " +
   "to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and " +
   "GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, " +
-  "read get_operation_guide topic=refusals instead of retrying another way.";
+  "read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, " +
+  "call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or " +
+  "the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with " +
+  "every step in its final state. To show the user a pull request (after " +
+  "opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

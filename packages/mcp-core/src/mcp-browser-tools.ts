@@ -26,7 +26,7 @@ export const BROWSER_TOOL_NAMES = [
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
-  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_download",
+  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_download",
   "browser_upload", "browser_console", "browser_network", "browser_trace", "browser_video",
   "browser_pdf", "browser_diagnostics",
 ] as const;
@@ -35,6 +35,10 @@ export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
 export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v1.html";
+// The checklist card browser_progress shows: the plan of the work, done, in
+// progress and to do, which follows browser_progress_update by itself. The
+// Edge answers the three calls, keeps the plans and serves the card.
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v1.html";
 const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
   browser_user_messages: {
     ui: { resourceUri: USER_MESSAGES_CARD_URI },
@@ -42,6 +46,17 @@ const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = 
     "openai/widgetAccessible": true,
     "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
     "openai/toolInvocation/invoked": "Conversa com a tarefa",
+  },
+  browser_progress: {
+    ui: { resourceUri: PROGRESS_CARD_URI },
+    "openai/outputTemplate": PROGRESS_CARD_URI,
+    "openai/toolInvocation/invoking": "Atualizando as etapas",
+    "openai/toolInvocation/invoked": "Etapas",
+  },
+  browser_progress_read: {
+    ui: { visibility: ["app"] },
+    "openai/widgetAccessible": true,
+    "openai/visibility": "private",
   },
   browser_user_reply: {
     ui: { visibility: ["app"] },
@@ -572,6 +587,9 @@ function definitions(
         (activeContext) => postUserMessage(assumeParsed(v), activeContext),
       );
     }),
+    d("browser_progress", "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing or todo, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.", c.browserProgressInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress")),
+    d("browser_progress_update", "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears.", c.browserProgressUpdateInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress_update")),
+    d("browser_progress_read", "Only the plan card of browser_progress calls this, to follow the plan; never call it yourself.", c.browserProgressReadInputSchema, c.browserProgressPlanSchema, true, () => edgeOnly("browser_progress_read")),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.download(assumeParsed(v)),
@@ -792,6 +810,11 @@ function d(
   return { name, description, input, output, readOnly, destructive, run };
 }
 
+// The MCP V3 Edge answers the plan tools itself and keeps the plans.
+function edgeOnly(name: string): Promise<never> {
+  return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", `${name} is answered by the MCP V3 Edge in ChatGPT.`));
+}
+
 function withBrowserRuntimeSelectors(schema: z.ZodType): z.ZodType {
   const extendable = schema as z.ZodType & {
     safeExtend?: (shape: {
@@ -846,6 +869,10 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
     return messages.length > 0
       ? asked + userMessagesNotice(messages)
       : `${asked}No new message from the user yet; keep working and read again later.`;
+  }
+  if (name === "browser_progress" || name === "browser_progress_update" || name === "browser_progress_read") {
+    const steps = Array.isArray(result.steps) ? result.steps as c.BrowserProgressPlan["steps"] : [];
+    return `Plan ${String(result.planId)}: ${steps.filter((step) => step.state === "done").length}/${steps.length} done.`;
   }
   if (name === "browser_user_reply") return result.accepted === true ? "Sent to the agent." : "Not sent.";
   if (name === "browser_tabs") return `${Array.isArray(result.tabs) ? result.tabs.length : 0} MCP browser tab(s).`;
