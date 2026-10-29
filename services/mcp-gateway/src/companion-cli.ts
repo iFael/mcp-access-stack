@@ -8,7 +8,7 @@ import { WindowsElevationBroker } from "@vs-code-gpt/local-agent";
 import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
-import { WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
+import { UPDATE_WAKE_CAPABILITY, WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
@@ -180,7 +180,7 @@ async function main(): Promise<void> {
   if (personalBrowser) capabilities.push("browser");
   if (elevationBroker) capabilities.push("elevation");
   // Tasks and CI watches that end on the execution node wake this chat too.
-  capabilities.push(WAKE_EVENTS_CAPABILITY);
+  capabilities.push(WAKE_EVENTS_CAPABILITY, UPDATE_WAKE_CAPABILITY);
 
   connector = new CompanionConnector({
     edgeBaseUrl: runtime.edgeBaseUrl,

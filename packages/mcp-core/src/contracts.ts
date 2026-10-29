@@ -83,6 +83,7 @@ import {
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import {oracleReleaseAdvanceInputSchema,oracleReleaseAdvanceResultSchema} from "./release-orchestrator-contracts.js";
+import {mcpUpdateInputSchema,mcpUpdateResultSchema} from "./mcp-update-contracts.js";
 
 const workspaceIdSchema = z.string().trim().min(1);
 const relativePathSchema = z.string().min(1);
@@ -923,6 +924,7 @@ export const relayOperations = [
   "deleteFile",
   "getReleaseState",
   "oracleReleaseAdvance",
+  "mcpUpdate",
   "prepareRelease",
   "promoteRelease",
   "pruneReleases",
@@ -1003,6 +1005,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   }).strict(),
   z.object({...relayRequestBase,operation:z.literal("oracleReleaseAdvance"),
     input:oracleReleaseAdvanceInputSchema}).strict(),
+  z.object({...relayRequestBase,operation:z.literal("mcpUpdate"),input:mcpUpdateInputSchema}).strict(),
   z.object({
     ...relayRequestBase,
     operation: z.literal("prepareRelease"),
@@ -1177,6 +1180,7 @@ export const relayResultSchemas = {
   deleteFile: deleteFileResultSchema,
   getReleaseState: getReleaseStateResultSchema,
   oracleReleaseAdvance:oracleReleaseAdvanceResultSchema,
+  mcpUpdate:mcpUpdateResultSchema,
   prepareRelease: prepareReleaseResultSchema,
   promoteRelease: promoteReleaseResultSchema,
   pruneReleases: pruneReleasesResultSchema,

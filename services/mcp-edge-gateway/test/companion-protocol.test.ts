@@ -23,6 +23,16 @@ describe("wake events from the execution node", () => {
       .toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION });
   });
 
+  it("include the end of an MCP update, which only an Edge that offers updateWakeV1 is told", () => {
+    const update = { kind: "update", updateId: "upd_00000000-0000-4000-8000-000000000001", workspaceId: "mcp-access-stack", state: "failed" };
+    expect(parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event: update })))
+      .toEqual({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event: update });
+    expect(parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION,
+      event: { ...update, state: "running" } }))).toBeNull();
+    expect(parseEdgeToConnectorMessage(JSON.stringify({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION,
+      features: ["updateWakeV1"] }))).toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, features: ["updateWakeV1"] });
+  });
+
   it("carry only ids, names and states", () => {
     const bad = (value: Record<string, unknown>) =>
       parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event: value }));

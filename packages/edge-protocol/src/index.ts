@@ -3,7 +3,7 @@ export * from "./browser-latency.js";
 export * from "./wake-events.js";
 export * from "./progress-events.js";
 import { parseProgressUpdate, PROGRESS_FEATURE, type ProgressUpdate } from "./progress-events.js";
-import { parseWakeEvent, WAKE_EVENTS_FEATURE, type WakeEvent } from "./wake-events.js";
+import { parseWakeEvent, UPDATE_WAKE_FEATURE, WAKE_EVENTS_FEATURE, type WakeEvent } from "./wake-events.js";
 
 export const EDGE_PROTOCOL_VERSION = 3 as const;
 export const EDGE_SESSION_NAME = "primary";
@@ -27,7 +27,7 @@ export type EdgeHelloMessage = {
   features?: EdgeConnectorFeature[];
 };
 
-export const EDGE_CONNECTOR_FEATURES = [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE] as const;
+export const EDGE_CONNECTOR_FEATURES = [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE, UPDATE_WAKE_FEATURE] as const;
 export type EdgeConnectorFeature = (typeof EDGE_CONNECTOR_FEATURES)[number];
 
 export type ConnectorRuntimeIdentity = {

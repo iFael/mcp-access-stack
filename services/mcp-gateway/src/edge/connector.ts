@@ -3,6 +3,7 @@ import {
   EDGE_PROTOCOL_VERSION,
   WAKE_EVENTS_FEATURE,
   PROGRESS_FEATURE,
+  UPDATE_WAKE_FEATURE,
   type ProgressUpdate,
   type WakeEvent,
   MAX_EDGE_REQUEST_BODY_BYTES,
@@ -137,6 +138,7 @@ export class EdgeConnector {
   private edgeTakesWakeEvents = false;
   private pendingWakeEvents: WakeEvent[] = [];
   private edgeTakesProgress = false;
+  private edgeTakesUpdateWake = false;
   // Only the latest steps of each plan matter.
   private pendingProgress = new Map<string, ProgressUpdate>();
 
@@ -217,15 +219,23 @@ export class EdgeConnector {
   private flushWakeEvents(): void {
     const socket = this.socket;
     if (!this.edgeTakesWakeEvents || !socket || socket.readyState !== WebSocket.OPEN) return;
+    // An older Edge closes the connection on an event kind it does not know.
+    const held: WakeEvent[] = [];
     while (this.pendingWakeEvents.length > 0) {
       const event = this.pendingWakeEvents[0]!;
+      if (event.kind === "update" && !this.edgeTakesUpdateWake) {
+        held.push(event);
+        this.pendingWakeEvents.shift();
+        continue;
+      }
       try {
         socket.send(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event }));
       } catch {
-        return;
+        break;
       }
       this.pendingWakeEvents.shift();
     }
+    this.pendingWakeEvents = [...held, ...this.pendingWakeEvents];
   }
 
   /**
@@ -449,6 +459,7 @@ export class EdgeConnector {
       connectionState.readyAtMs = this.now();
       this.edgeTakesWakeEvents = message.features?.includes(WAKE_EVENTS_FEATURE) ?? false;
       this.edgeTakesProgress = message.features?.includes(PROGRESS_FEATURE) ?? false;
+      this.edgeTakesUpdateWake = message.features?.includes(UPDATE_WAKE_FEATURE) ?? false;
       const offlineDurationMs = this.currentOfflineDurationMs(connectionState.readyAtMs);
       this.offlineSinceMs = null;
       this.consecutiveFailures = 0;

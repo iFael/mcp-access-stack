@@ -88,6 +88,7 @@ import {
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
+import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
   managedServiceSnapshotSchema,
@@ -249,6 +250,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "delete_file",
   "get_release_state",
   "release_orchestrator",
+  "mcp_update",
   "prepare_release",
   "promote_release",
   "prune_releases",
@@ -1362,6 +1364,37 @@ export function registerWorkspaceTools(
               : "Oracle release operation outcome unknown; reconcile the same operation without retrying POST."
         }],structuredContent};
       } catch(error){return toolError(error);}
+    });
+  }
+
+  if (shouldInclude("mcp_update", include)) {
+    server.registerTool("mcp_update", {
+      title: "Update MCP V3 on the execution node",
+      description:
+        "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. " +
+        "Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. " +
+        "action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. " +
+        "It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",
+      inputSchema: mcpUpdatePublishedInputSchema,
+      outputSchema: mcpUpdateResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: false },
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        const parsed = mcpUpdateInputSchema.parse(input);
+        const structuredContent = mcpUpdateResultSchema.parse(await withToolOperationContext(
+          options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
+          (context) => executor.mcpUpdate(parsed, context)));
+        const update = structuredContent.update;
+        const text = update === null ? "No MCP update yet."
+          : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). End your answer; you are woken when it stops.`
+            : update.status === "succeeded" ? `MCP update ${update.updateId} succeeded (${update.tag ?? "no tag"}).`
+              : update.status === "needs_confirmation" ? `MCP update ${update.updateId} waits for confirmation ${update.confirmation?.confirmationId} at ${update.step}; show the reasons to the user.`
+                : `MCP update ${update.updateId} stopped at ${update.step}: ${update.error?.code}: ${update.error?.message}`;
+        return { content: [{ type: "text", text }], structuredContent };
+      } catch (error) { return toolError(error); }
     });
   }
 
@@ -3810,6 +3843,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   deleteFile: "delete_file",
   getReleaseState: "get_release_state",
   oracleReleaseAdvance:"release_orchestrator",
+  mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",
   promoteRelease: "promote_release",
   pruneReleases: "prune_releases",

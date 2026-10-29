@@ -231,6 +231,8 @@ import {inspectGitHubPublicReleaseAssets,
   type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
 import { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchFinishedEvent } from "./source-control/github-checks-watch-manager.js";
 import { GitHubService } from "./source-control/github-service.js";
+import type { McpUpdateRecord } from "./mcp-update/mcp-update-runner.js";
+import { mcpUpdateInputSchema, mcpUpdateResultSchema, type McpUpdateInput, type McpUpdateResult } from "@vs-code-gpt/shared";
 import { GitHubActionsArtifactIngestor } from "./source-control/github-actions-artifact-ingestor.js";
 import { GitRepositoryService } from "./source-control/git-repository-service.js";
 
@@ -253,6 +255,15 @@ export interface LocalAgentOptions {
   onBackgroundTaskFinished?: (event: BackgroundTaskFinishedEvent) => void;
   /** Called when a GitHub checks watch ends, for example to wake the agent. */
   onCommitChecksWatchFinished?: (event: GitHubCommitChecksWatchFinishedEvent) => void;
+  /**
+   * The execution node's update runner, shared by every policy generation of
+   * this process so one update is never driven twice. Absent: no mcp_update.
+   */
+  mcpUpdates?: {
+    start(input: { mainSha: string; planId?: string }): Promise<McpUpdateRecord>;
+    confirm(updateId: string, confirmationId: string): Promise<McpUpdateRecord>;
+    read(updateId?: string): Promise<McpUpdateRecord | null>;
+  };
   gitRepositoryExecutor?: GitRepositoryExecutor;
   gitOriginResolver?: GitOriginResolver;
   githubExecutor?: GitHubExecutor;
@@ -285,6 +296,7 @@ export class LocalAgent {
   private readonly oracleControlCaller: OracleControlCaller | undefined;
   private readonly serviceControlService = new LinuxServiceControlService();
   private readonly githubChecksWatchManager: GitHubCommitChecksWatchManager;
+  private readonly mcpUpdates: LocalAgentOptions["mcpUpdates"];
   private readonly injectedGitRepositoryExecutor: GitRepositoryExecutor | undefined;
   private readonly injectedGitOriginResolver: GitOriginResolver | undefined;
   private readonly injectedGitHubExecutor: GitHubExecutor | undefined;
@@ -353,6 +365,7 @@ export class LocalAgent {
         ? {}
         : { onFinished: options.onCommitChecksWatchFinished }),
     });
+    this.mcpUpdates = options.mcpUpdates;
   }
 
   static async create(
@@ -615,6 +628,54 @@ export class LocalAgent {
           parsed,this.mutationReceiptStoreFor(workspace),activeContext));
       },
     );
+  }
+
+  /** The execution node publishes MAIN to itself; see McpUpdateRunner. */
+  async mcpUpdate(input: McpUpdateInput, context: OperationContext = {}): Promise<McpUpdateResult> {
+    return this.runValidatedAudited(
+      "mcpUpdate", "shell", mcpUpdateInputSchema, input, context,
+      (parsed) => ({ query: parsed.action, ...(parsed.action === "start" ? { expectedSha: parsed.expectedMainSha } : {}) }),
+      async (workspace, parsed) => {
+        const updates = this.mcpUpdates;
+        if (!updates || workspace.id !== MCP_UPDATE_WORKSPACE || workspace.permissionProfile !== "full-repo-write" ||
+            workspace.confirmationMode !== "trusted-workspace") {
+          throw new AppError("CAPABILITY_UNSUPPORTED", "mcp_update runs only on the trusted execution node workspace.");
+        }
+        try {
+          const record = parsed.action === "start"
+            ? await updates.start({ mainSha: parsed.expectedMainSha, ...(parsed.planId === undefined ? {} : { planId: parsed.planId }) })
+            : parsed.action === "confirm"
+              ? await updates.confirm(parsed.updateId, parsed.confirmationId)
+              : await updates.read(parsed.updateId);
+          return mcpUpdateResultSchema.parse({ update: record === null ? null : publicMcpUpdate(record) });
+        } catch (error) {
+          if (error instanceof Error && "code" in error && typeof error.code === "string" && !(error instanceof AppError)) {
+            const code = error.code === "INVALID_ARGUMENT" ? "INVALID_ARGUMENT" : error.code === "NOT_FOUND" ? "EXECUTION_NOT_FOUND" : "EXECUTION_STATE_INVALID";
+            throw new AppError(code, `${error.code}: ${error.message}`);
+          }
+          throw error;
+        }
+      },
+    );
+  }
+
+  /** tooling/release/edge-catalog-rollout.json of MAIN, read for mcp_update. */
+  async readEdgeCatalogRollout(sha: string): Promise<{ origin: string; previousRevision: string; targetRevision: string; targetToolCount: number }> {
+    const client = await this.getGitHubWorkflowApiClient() as Partial<Pick<GitHubHttpClient, "readRepositoryResource">>;
+    if (!client.readRepositoryResource) throw new AppError("CAPABILITY_UNSUPPORTED", "Repository contents unavailable.");
+    const file = await client.readRepositoryResource(MCP_UPDATE_OWNER, MCP_UPDATE_REPOSITORY,
+      ["contents", "tooling", "release", "edge-catalog-rollout.json"], { ref: sha }) as { content?: unknown; encoding?: unknown };
+    if (typeof file.content !== "string" || file.encoding !== "base64") throw new AppError("INTERNAL_ERROR", "Unreadable rollout file.");
+    const rollout = JSON.parse(Buffer.from(file.content, "base64").toString("utf8")) as Record<string, unknown>;
+    const revision = /^[0-9a-f]{64}$/u;
+    if (typeof rollout.origin !== "string" || !rollout.origin.startsWith("https://") ||
+        typeof rollout.previousRevision !== "string" || !revision.test(rollout.previousRevision) ||
+        typeof rollout.targetRevision !== "string" || !revision.test(rollout.targetRevision) ||
+        typeof rollout.targetToolCount !== "number" || !Number.isInteger(rollout.targetToolCount)) {
+      throw new AppError("INTERNAL_ERROR", "edge-catalog-rollout.json does not have the expected shape.");
+    }
+    return { origin: rollout.origin, previousRevision: rollout.previousRevision,
+      targetRevision: rollout.targetRevision, targetToolCount: rollout.targetToolCount };
   }
 
   async prepareRelease(
@@ -2413,5 +2474,33 @@ function makeAuditEntry(input: {
     status: input.status,
     ...(input.reason === undefined ? {} : { reason: input.reason }),
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
+  };
+}
+
+const MCP_UPDATE_WORKSPACE = "mcp-access-stack";
+const MCP_UPDATE_OWNER = "iFael";
+const MCP_UPDATE_REPOSITORY = "mcp-access-stack";
+
+function publicMcpUpdate(record: McpUpdateRecord) {
+  const { stage, activate, bootstrap, release } = record.data;
+  return {
+    updateId: record.updateId,
+    mainSha: record.mainSha,
+    ...(record.planId === undefined ? {} : { planId: record.planId }),
+    status: record.status,
+    step: record.step,
+    skipped: record.skipped,
+    ...(record.error === undefined ? {} : { error: record.error }),
+    ...(record.confirmation === undefined ? {} : { confirmation: record.confirmation }),
+    ...(record.data.tag === undefined ? {} : { tag: record.data.tag }),
+    ...(record.data.activeBefore === undefined ? {} : { activeBefore: record.data.activeBefore }),
+    workflows: {
+      ...(stage === undefined ? {} : { stage }),
+      ...(activate === undefined ? {} : { activate }),
+      ...(bootstrap === undefined ? {} : { bootstrap }),
+      ...(release === undefined ? {} : { release }),
+    },
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }

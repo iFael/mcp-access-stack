@@ -9,6 +9,8 @@ import {
   WAKE_EVENTS_CAPABILITY,
   WAKE_EVENTS_FEATURE,
   PROGRESS_FEATURE,
+  UPDATE_WAKE_CAPABILITY,
+  UPDATE_WAKE_FEATURE,
   type WakeEvent,
   parseCompanionToEdgeMessage,
   type AuthenticatedEdgePrincipal,
@@ -1168,7 +1170,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     for (const webSocket of this.ctx.getWebSockets("companion")) {
       const attachment = this.readCompanionAttachment(webSocket);
       if (!attachment?.ready || webSocket.readyState !== WebSocket.OPEN ||
-          !attachment.capabilities?.includes(WAKE_EVENTS_CAPABILITY)) continue;
+          !attachment.capabilities?.includes(WAKE_EVENTS_CAPABILITY) ||
+          // An older companion closes the connection on an event kind it does not know.
+          (event.kind === "update" && !attachment.capabilities.includes(UPDATE_WAKE_CAPABILITY))) continue;
       try {
         webSocket.send(message);
       } catch {
@@ -2869,7 +2873,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       disconnectRecorded: false,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
-    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE] }));
+    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE, UPDATE_WAKE_FEATURE] }));
 
     return new Response(null, { status: 101, webSocket: client });
   }

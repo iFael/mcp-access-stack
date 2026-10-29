@@ -25,3 +25,5 @@ export {
   type PolicyValidationResult,
 } from "./policy-deployment.js";
 export { SubprocessWorkspaceExecutor } from "./subprocess-workspace-executor.js";
+export { McpUpdateRunner, MCP_UPDATE_STEPS, nextConnectorRelease, type McpUpdatePort, type McpUpdateRecord, type McpUpdateRunnerOptions } from "./mcp-update/mcp-update-runner.js";
+export { createLocalAgentMcpUpdatePort, type LocalAgentMcpUpdateCallbacks } from "./mcp-update/local-agent-port.js";
