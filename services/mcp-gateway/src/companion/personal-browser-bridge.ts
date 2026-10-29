@@ -45,8 +45,8 @@ import {
   personalRecordingTransportSchema,
 } from "./personal-browser-recording.js";
 import { PersonalBrowserSnapshotState } from "./personal-browser-snapshot-state.js";
-import type { ChatWake, ChatWakeOutcome, ChatWakeStatus } from "./chat-wake.js";
-import type { OpenConversation } from "./conversation-book.js";
+import type { ChatWake, ChatWakeStatus } from "./chat-wake.js";
+import type { DesktopNotify } from "./desktop-notifier.js";
 import { PersonalBrowserTaskInbox } from "./personal-browser-task-inbox.js";
 
 const DEFAULT_PORT = 3361;
@@ -78,6 +78,8 @@ export interface PersonalBrowserBridgeOptions {
   onUserMessagesPending?: (pending: number) => void;
   /** Wakes the ChatGPT conversation when a message or a handed-back tab waits for the agent. */
   chatWake?: Pick<ChatWake, "queue" | "resolveHandback" | "setEnabled">;
+  /** A Windows notification when the agent asks the user something in the card. */
+  notify?: DesktopNotify;
 }
 
 export class PersonalBrowserBridge implements PersonalBrowserExecutor {
@@ -91,8 +93,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   // Messages that only rode on the result of another call: the agent may have
   // read past them, so the wake still writes them in once its turn ends.
   private readonly passedAlong = new Set<string>();
-  private readonly chromeWakes = new Map<string, (outcome: ChatWakeOutcome) => void>();
-  private readonly chromeInspections = new Map<string, (conversations: OpenConversation[]) => void>();
+  // Each question is notified once, however often the agent reads its answer.
+  private readonly notifiedQuestions = new Set<string>();
   private readonly recorder: PersonalBrowserRecorder;
   private readonly coordinateClicks = new Map<string, { x: number; y: number; ref?: string; url: string; pixel?: true }>();
   private readonly pixelEvidence = new Map<string, { url: string; observedAt: number }>();
@@ -662,7 +664,22 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const all = input.taskId === undefined;
     let asked = false;
     if (input.question !== undefined && input.taskId !== undefined) {
-      if (popup) socket!.send(JSON.stringify({ type: "task-question", taskId: input.taskId, question: input.question }));
+      const choices = (input.options ?? []).map((option, index) => `${String.fromCharCode(65 + index)}) ${option}`);
+      const question = [input.question, ...choices].join("\n");
+      if (popup) socket!.send(JSON.stringify({ type: "task-question", taskId: input.taskId, question }));
+      const key = `${input.taskId}\n${question}`;
+      if (!this.notifiedQuestions.has(key)) {
+        this.notifiedQuestions.add(key);
+        while (this.notifiedQuestions.size > 50) this.notifiedQuestions.delete(this.notifiedQuestions.values().next().value!);
+        try {
+          this.options.notify?.({
+            title: choices.length > 0 ? "O agente espera sua escolha" : "O agente fez uma pergunta",
+            body: `${question}\n\nResponda no cartão da conversa no ChatGPT.`,
+          });
+        } catch {
+          // The card and the popup still show the question.
+        }
+      }
       asked = true;
     }
     let waitMs = input.waitMs ?? 0;
@@ -749,67 +766,6 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   /** Whether this message only went along with the result of another call. */
   wasPassedAlong(id: string): boolean {
     return this.passedAlong.has(id);
-  }
-
-  /**
-   * The extension writes the wake notice in a Chrome tab of this conversation,
-   * opening one in the background when none is; without a conversation, in
-   * the ChatGPT tab used last.
-   */
-  wakeChromeTab(text: string, conversationId?: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }> {
-    const socket = this.socket;
-    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeV2")) {
-      return Promise.resolve({ outcome: "unavailable", detail: "extension-not-connected" });
-    }
-    if (conversationId !== undefined && !this.peerInfo.capabilities.includes("chatWakeConversationV1")) {
-      // An older extension only knows the tab used last, which may be another conversation.
-      return Promise.resolve({ outcome: "unavailable", detail: "extension-needs-reload" });
-    }
-    const id = randomUUID();
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.chromeWakes.delete(id);
-        resolve({ outcome: "failed", detail: "timeout" });
-      }, 20_000);
-      timeout.unref?.();
-      this.chromeWakes.set(id, (outcome) => {
-        clearTimeout(timeout);
-        this.chromeWakes.delete(id);
-        resolve({ outcome });
-      });
-      try {
-        socket.send(JSON.stringify({ type: "wake-chrome", id, text,
-          ...(conversationId === undefined ? {} : { conversationId }) }));
-      } catch {
-        this.chromeWakes.get(id)?.("failed");
-      }
-    });
-  }
-
-  /** The ChatGPT conversations open in Chrome and which of them is answering. */
-  openChromeConversations(): Promise<OpenConversation[]> {
-    const socket = this.socket;
-    if (socket?.readyState !== WebSocket.OPEN || !this.peerInfo?.capabilities.includes("chatWakeConversationV1")) {
-      return Promise.resolve([]);
-    }
-    const id = randomUUID();
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.chromeInspections.delete(id);
-        resolve([]);
-      }, 10_000);
-      timeout.unref?.();
-      this.chromeInspections.set(id, (conversations) => {
-        clearTimeout(timeout);
-        this.chromeInspections.delete(id);
-        resolve(conversations);
-      });
-      try {
-        socket.send(JSON.stringify({ type: "wake-inspect", id }));
-      } catch {
-        this.chromeInspections.get(id)?.([]);
-      }
-    });
   }
 
   /** Shows in the popup whether waking is on and what it did last. */
@@ -1333,25 +1289,6 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         /^personal:\d{1,12}$/u.test(message.tabId)) {
       this.options.chatWake?.queue({ kind: "handback", tabId: message.tabId,
         ...(typeof message.reason === "string" && message.reason ? { reason: message.reason.slice(0, 200) } : {}) });
-      return;
-    }
-    if (message.type === "wake-chrome-result" && typeof message.id === "string") {
-      const outcome = typeof message.outcome === "string" &&
-        ["sent", "busy", "typing", "unavailable", "elsewhere", "failed"].includes(message.outcome)
-        ? message.outcome as ChatWakeOutcome : "failed";
-      this.chromeWakes.get(message.id)?.(outcome);
-      return;
-    }
-    if (message.type === "wake-inspect-result" && typeof message.id === "string") {
-      const conversations = Array.isArray(message.conversations)
-        ? message.conversations.flatMap((entry: unknown) => {
-          const record = entry as { conversationId?: unknown; answering?: unknown } | null;
-          return typeof record?.conversationId === "string" && /^[A-Za-z0-9-]{8,80}$/u.test(record.conversationId)
-            ? [{ conversationId: record.conversationId, answering: record.answering === true }]
-            : [];
-        }).slice(0, 20)
-        : [];
-      this.chromeInspections.get(message.id)?.(conversations);
       return;
     }
     if (message.type === "task-messages") {

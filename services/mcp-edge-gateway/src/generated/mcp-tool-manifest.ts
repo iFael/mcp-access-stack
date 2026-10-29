@@ -25441,7 +25441,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v1.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v2.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25454,7 +25454,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v1.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v2.html"
       }
     },
     "annotations": {
@@ -25463,7 +25463,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. Call it once at the start of a long task, with its taskId, so the user has the card to write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. Each message is delivered once.",
+    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. Call it once at the start of a long task, with its taskId, so the user has the card to write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25474,6 +25474,16 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
+        },
+        "options": {
+          "items": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "array"
         },
         "question": {
           "maxLength": 500,
@@ -26948,15 +26958,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "a91c6958eb484b313129eb21be1dc2b38d5316959cbb102e73c0bac2eb349675",
-  "serverVersion": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f",
+  "contractRevision": "89500f908921f6940878b96d5b4d6295a849b76664cc213b55e289a382892233",
+  "serverVersion": "0.4.0-catalog.c89500f908921.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ca91c6958eb48.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.c89500f908921.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -1,5 +1,5 @@
 // The card ChatGPT shows with the result of browser_user_messages: the agent's
-// question, if any, and a field where the user writes to the task without
+// question, if any, its options as buttons, and a field where the user writes to the task without
 // interrupting it. What they send goes through browser_user_reply to the same
 // inbox as the extension popup, and reaches the agent with its next call.
 // Only tools whose _meta.ui.resourceUri names this card make the Edge serve it.
@@ -8,7 +8,7 @@ import { CARD_BASE_CSS } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v1.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v2.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -30,6 +30,9 @@ ${CARD_BASE_CSS}
   .task { color: var(--muted); font-size: 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
   .question { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--soft); white-space: pre-wrap; }
   .question b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+  #options { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+  #options button { text-align: left; background: var(--soft); color: var(--fg); border: 1px solid var(--line); font-weight: 400; }
+  #options button.chosen { border-color: var(--accent); font-weight: 600; }
   textarea { width: 100%; min-height: 64px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
   .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   button { padding: 7px 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
@@ -45,6 +48,7 @@ ${CARD_BASE_CSS}
 <div class="head"><h1>Conversa com a tarefa</h1></div>
 <div class="task" id="task">O agente continua trabalhando enquanto você escreve.</div>
 <p class="question" id="question" hidden><b>O agente pergunta</b><span id="question-text"></span></p>
+<div id="options" hidden></div>
 <div id="composer">
   <textarea id="text" maxlength="2000" placeholder="Escreva para o agente sem interromper a tarefa"></textarea>
   <div class="row"><button id="send" type="button">Enviar</button><span class="status" id="status"></span></div>
@@ -58,16 +62,35 @@ ${CARD_BASE_CSS}
   var send = document.getElementById("send");
   var status = document.getElementById("status");
   var sent = [];
+  var chosen = null;
   var busy = false;
 
   function input() { return (bridge && bridge.toolInput) || {}; }
+  function options() {
+    var list = input().options;
+    return Array.isArray(list) ? list.filter(function (item) { return typeof item === "string" && item.trim(); }).slice(0, 4) : [];
+  }
   function setStatus(message, bad) { status.textContent = message; status.className = bad ? "status bad" : "status"; }
   function render() {
     if (bridge && (bridge.theme === "dark" || bridge.theme === "light")) document.documentElement.setAttribute("data-theme", bridge.theme);
     var args = input();
-    document.getElementById("task").textContent = typeof args.taskId === "string"
-      ? "Tarefa " + args.taskId + ". O agente continua trabalhando enquanto você escreve."
+    var choices = options();
+    var doing = choices.length > 0
+      ? "O agente parou e espera sua escolha. Escolha uma opção ou escreva abaixo; a resposta entra nesta conversa."
       : "O agente continua trabalhando enquanto você escreve.";
+    document.getElementById("task").textContent = typeof args.taskId === "string" ? "Tarefa " + args.taskId + ". " + doing : doing;
+    var box = document.getElementById("options");
+    box.textContent = "";
+    box.hidden = choices.length === 0;
+    choices.forEach(function (label, index) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.textContent = String.fromCharCode(65 + index) + ") " + label;
+      if (chosen === index) button.className = "chosen";
+      button.disabled = busy || chosen !== null || !bridge || typeof bridge.callTool !== "function";
+      button.addEventListener("click", function () { submit("Escolho " + button.textContent, index); });
+      box.appendChild(button);
+    });
     var question = typeof args.question === "string" ? args.question.trim() : "";
     document.getElementById("question").hidden = question === "";
     document.getElementById("question-text").textContent = question;
@@ -86,6 +109,7 @@ ${CARD_BASE_CSS}
   function restore() {
     var state = bridge && bridge.widgetState;
     if (state && Array.isArray(state.sent)) sent = state.sent.filter(function (item) { return item && typeof item.text === "string"; }).slice(-20);
+    if (state && typeof state.chosen === "number") chosen = state.chosen;
   }
 
   if (!bridge || typeof bridge.callTool !== "function") {
@@ -97,8 +121,8 @@ ${CARD_BASE_CSS}
   text.addEventListener("keydown", function (event) {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); send.click(); }
   });
-  send.addEventListener("click", function () {
-    var value = text.value.trim();
+  send.addEventListener("click", function () { submit(text.value.trim(), null); });
+  function submit(value, choice) {
     if (!value || busy || !bridge) return;
     busy = true;
     setStatus("Enviando…", false);
@@ -114,10 +138,11 @@ ${CARD_BASE_CSS}
       var now = new Date();
       sent.push({ text: value, at: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") });
       sent = sent.slice(-20);
-      text.value = "";
+      if (choice === null) text.value = "";
+      else chosen = choice;
       setStatus("Enviado.", false);
       if (typeof bridge.setWidgetState === "function") {
-        try { bridge.setWidgetState({ sent: sent }); } catch (error) {}
+        try { bridge.setWidgetState({ sent: sent, chosen: chosen }); } catch (error) {}
       }
     }).catch(function (error) {
       setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente de novo ou use o popup da extensão.", true);
@@ -125,7 +150,7 @@ ${CARD_BASE_CSS}
       busy = false;
       render();
     });
-  });
+  }
   window.addEventListener("openai:set_globals", function () { restore(); render(); });
   restore();
   render();

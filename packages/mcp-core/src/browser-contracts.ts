@@ -1097,6 +1097,8 @@ export const browserUserMessagesInputSchema = z
   .object({
     taskId: taskIdSchema.optional(),
     question: z.string().trim().min(1).max(500).optional(),
+    // The choices the card shows as buttons, A to D.
+    options: z.array(z.string().trim().min(1).max(120)).min(2).max(4).optional(),
     waitMs: z.number().int().min(0).max(50_000).optional(),
   })
   .strict()
@@ -1106,6 +1108,13 @@ export const browserUserMessagesInputSchema = z
         code: "custom",
         path: ["taskId"],
         message: "browser_user_messages question requires the taskId it is asked for.",
+      });
+    }
+    if (input.options !== undefined && input.question === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "browser_user_messages options require the question they answer.",
       });
     }
   });
