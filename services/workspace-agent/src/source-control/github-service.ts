@@ -15,6 +15,8 @@ import {
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
+  githubPullRequestOverviewSchema,
+  type GitHubPullRequestOverview,
   githubRepositoryResultSchema,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
@@ -146,7 +148,44 @@ export class GitHubService implements GitHubExecutor {
       parsed.pullNumber,
       operationContext,
     );
-    return mapPullRequest(raw);
+    const pullRequest = mapPullRequest(raw);
+    const overview = await this.readPullRequestOverview(parsed.owner, parsed.repository, raw, pullRequest, operationContext);
+    return overview ? { ...pullRequest, overview } : pullRequest;
+  }
+
+  // What the pull request card in the chat shows. Best effort: the pull
+  // request itself is the answer, the files and the CI only add to it.
+  private async readPullRequestOverview(
+    owner: string,
+    repository: string,
+    raw: unknown,
+    pullRequest: GitHubPullRequestResult,
+    context: OperationContext,
+  ): Promise<GitHubPullRequestOverview | undefined> {
+    const record = readObject(raw);
+    const base = {
+      headRef: readObject(record.head).ref,
+      baseRef: readObject(record.base).ref,
+      draft: record.draft === true,
+      additions: record.additions,
+      deletions: record.deletions,
+      changedFiles: record.changed_files,
+    };
+    if (!githubPullRequestOverviewSchema.safeParse(base).success) return undefined;
+    const [files, checks] = await Promise.all([
+      this.client.readRepositoryResource
+        ? this.client.readRepositoryResource(owner, repository, ["pulls", pullRequest.number, "files"], { per_page: "100" }, context)
+          .then(mapPullRequestFiles, () => undefined)
+        : Promise.resolve(undefined),
+      this.client.getCommitCheckRuns(owner, repository, pullRequest.headSha, context)
+        .then((runs) => summarizeChecks(mapCommitChecks(owner, repository, pullRequest.headSha, runs)), () => undefined),
+    ]);
+    const parsed = githubPullRequestOverviewSchema.safeParse({
+      ...base,
+      ...(files === undefined ? {} : { files }),
+      ...(checks === undefined ? {} : { checks }),
+    });
+    return parsed.success ? parsed.data : githubPullRequestOverviewSchema.parse(base);
   }
 
   async createPullRequest(
@@ -368,6 +407,28 @@ function mapRepository(raw: unknown): GitHubRepositoryResult {
   const parsed = githubRepositoryResultSchema.safeParse(candidate);
   if (!parsed.success) throw invalidGitHubResponse();
   return parsed.data;
+}
+
+function mapPullRequestFiles(raw: unknown): GitHubPullRequestOverview["files"] {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.slice(0, 100).map((entry) => {
+    const file = readObject(entry);
+    return { path: file.filename, status: file.status, additions: file.additions, deletions: file.deletions };
+  }) as GitHubPullRequestOverview["files"];
+}
+
+function summarizeChecks(result: GitHubCommitChecksResult): GitHubPullRequestOverview["checks"] {
+  const skipped = result.checks.filter((check) => check.status === "completed" &&
+    (check.conclusion === "skipped" || check.conclusion === "neutral"));
+  const failing = result.checks.filter((check) => check.status === "completed" && check.conclusion !== null &&
+    !["success", "skipped", "neutral"].includes(check.conclusion));
+  return {
+    pending: result.pendingCount,
+    passed: result.checks.filter((check) => check.status === "completed" && check.conclusion === "success").length,
+    failed: failing.length,
+    skipped: skipped.length,
+    failing: failing.slice(0, 20).map((check) => check.name),
+  };
 }
 
 function mapCommitChecks(
