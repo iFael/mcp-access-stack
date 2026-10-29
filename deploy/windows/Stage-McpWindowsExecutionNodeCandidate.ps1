@@ -109,8 +109,11 @@ function Move-McpWindowsExecutionNodeDirectoryWithRetry {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
         [Parameter(Mandatory = $true)][string]$Destination,
-        [int]$MaxAttempts = 8,
-        [int]$BaseDelayMilliseconds = 100
+        # Endpoint protection scans the freshly copied executables and holds
+        # them open for longer than a few seconds, which denies the rename:
+        # wait up to about two minutes before giving up.
+        [int]$MaxAttempts = 24,
+        [int]$BaseDelayMilliseconds = 500
     )
 
     if ($MaxAttempts -lt 1 -or $MaxAttempts -gt 32 -or $BaseDelayMilliseconds -lt 1) {
@@ -133,7 +136,7 @@ function Move-McpWindowsExecutionNodeDirectoryWithRetry {
                 throw ("Execution-node candidate directory move failed after {0} attempts. source={1} destination={2} lastError={3}" -f `
                     $MaxAttempts, $Source, $Destination, $_.Exception.Message)
             }
-            $delay = [Math]::Min($BaseDelayMilliseconds * $attempt, 1000)
+            $delay = [Math]::Min($BaseDelayMilliseconds * $attempt, 10000)
             Start-Sleep -Milliseconds $delay
         }
     }
