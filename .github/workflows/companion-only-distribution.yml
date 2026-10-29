@@ -81,9 +81,10 @@ jobs:
           release_id="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-companion.$CI_RUN_ID"
 
           # Re-delivery of the same CI cannot silently publish a duplicate artifact.
+          # Only this commit's runs can match, so the bound covers the whole relevant history.
           prior_runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
             --workflow companion-only-distribution.yml --event workflow_run \
-            --limit 100 \
+            --commit "$EXPECTED_SHA" --limit 100 \
             --json databaseId,displayTitle,status,conclusion)"
           [[ "$(jq 'length' <<< "$prior_runs")" -lt 100 ]] || {
             echo "Distribution history exceeds bounded duplicate precheck." >&2
@@ -285,7 +286,7 @@ jobs:
           jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" \
             '.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success" and .repository == $repo' <<< "$ci" >/dev/null
           runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow companion-only-distribution.yml \
-            --event workflow_run --limit 100 --json databaseId,displayTitle,status,conclusion,headSha)"
+            --event workflow_run --commit "$EXPECTED_SHA" --limit 100 --json databaseId,displayTitle,status,conclusion,headSha)"
           [[ "$(jq 'length' <<< "$runs")" -lt 100 ]]
           ids="$(jq -r --arg title "companion CI-$CI_RUN_ID @ $EXPECTED_SHA" --arg sha "$EXPECTED_SHA" \
             '[.[] | select(.displayTitle == $title and .headSha == $sha and .status == "completed" and .conclusion == "success") | .databaseId] | .[]' <<< "$runs")"
