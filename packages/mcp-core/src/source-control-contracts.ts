@@ -847,6 +847,32 @@ export const githubGetPullRequestInputSchema = z
   .strict();
 export type GitHubGetPullRequestInput = z.input<typeof githubGetPullRequestInputSchema>;
 
+// What the pull request card in the chat shows: branches, size, files and CI.
+export const githubPullRequestOverviewSchema = z
+  .object({
+    headRef: z.string().min(1).max(255),
+    baseRef: z.string().min(1).max(255),
+    draft: z.boolean(),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+    changedFiles: z.number().int().nonnegative(),
+    files: z.array(z.object({
+      path: z.string().min(1).max(1_024),
+      status: z.string().min(1).max(32),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+    }).strict()).max(100).optional(),
+    checks: z.object({
+      pending: z.number().int().nonnegative(),
+      passed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      skipped: z.number().int().nonnegative(),
+      failing: z.array(z.string().min(1).max(256)).max(20),
+    }).strict().optional(),
+  })
+  .strict();
+export type GitHubPullRequestOverview = z.infer<typeof githubPullRequestOverviewSchema>;
+
 export const githubPullRequestResultSchema = z
   .object({
     number: z.number().int().positive(),
@@ -856,6 +882,7 @@ export const githubPullRequestResultSchema = z
     headSha: gitShaSchema,
     baseSha: gitShaSchema,
     merged: z.boolean(),
+    overview: githubPullRequestOverviewSchema.optional(),
   })
   .strict();
 export type GitHubPullRequestResult = z.infer<typeof githubPullRequestResultSchema>;

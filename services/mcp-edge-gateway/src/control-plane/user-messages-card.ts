@@ -4,6 +4,10 @@
 // inbox as the extension popup, and reaches the agent with its next call.
 // Only tools whose _meta.ui.resourceUri names this card make the Edge serve it.
 
+import { CARD_BASE_CSS } from "./card-style.js";
+import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
+import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
+
 export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v1.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -22,12 +26,7 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #0969da; --accent-fg: #ffffff; --soft: #f6f8fa; --bad: #cf222e; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #212121; --fg: #ececec; --muted: #a3a3a3; --line: #424242; --accent: #4493f8; --accent-fg: #ffffff; --soft: #2a2a2a; --bad: #ff7b72; } }
-  :root[data-theme="dark"] { --bg: #212121; --fg: #ececec; --muted: #a3a3a3; --line: #424242; --accent: #4493f8; --accent-fg: #ffffff; --soft: #2a2a2a; --bad: #ff7b72; }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 14px 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+${CARD_BASE_CSS}
   .task { color: var(--muted); font-size: 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
   .question { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--soft); white-space: pre-wrap; }
   .question b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -37,14 +36,13 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
   button:disabled { opacity: .55; cursor: default; }
   .status { color: var(--muted); font-size: 12px; }
   .status.bad { color: var(--bad); }
-  ul { list-style: none; margin: 10px 0 0; padding: 0; }
-  li { padding: 6px 0; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #sent { margin-top: 10px; }
+  #sent li { display: block; padding: 6px 0; border-top: 1px solid var(--line); white-space: pre-wrap; }
   li small { display: block; color: var(--muted); }
-  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-<h1>Conversa com a tarefa</h1>
+<div class="head"><h1>Conversa com a tarefa</h1></div>
 <div class="task" id="task">O agente continua trabalhando enquanto você escreve.</div>
 <p class="question" id="question" hidden><b>O agente pergunta</b><span id="question-text"></span></p>
 <div id="composer">
@@ -138,6 +136,8 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 `;
 
 const UI_RESOURCES: Readonly<Record<string, EdgeUiResource>> = {
+  [PROGRESS_CARD_URI]: PROGRESS_CARD_RESOURCE,
+  [PULL_REQUEST_CARD_URI]: PULL_REQUEST_CARD_RESOURCE,
   [USER_MESSAGES_CARD_URI]: {
     uri: USER_MESSAGES_CARD_URI,
     name: "Conversa com a tarefa",
