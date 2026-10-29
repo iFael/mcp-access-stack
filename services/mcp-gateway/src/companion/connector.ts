@@ -2,6 +2,8 @@ import os from "node:os";
 import {
   BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_PROTOCOL_VERSION,
+  PROGRESS_FEATURE,
+  type ProgressUpdate,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
   isAllowedEdgeRequest,
@@ -96,6 +98,9 @@ export class CompanionConnector {
   private readonly activeRequests = new Map<string, AbortController>();
   private socket: WebSocket | undefined;
   private edgeTakesUserMessages = false;
+  private edgeTakesProgress = false;
+  // Only the latest steps of each plan matter.
+  private pendingProgress = new Map<string, ProgressUpdate>();
   private stopped = false;
 
   constructor(private readonly options: CompanionConnectorOptions) {
@@ -154,6 +159,31 @@ export class CompanionConnector {
     }
   }
 
+  /**
+   * The latest steps of a long operation on this device, for the plan card
+   * whose planId the agent handed it. Held until an Edge that offers
+   * progressV1 registers this device.
+   */
+  sendProgress(update: ProgressUpdate): void {
+    this.pendingProgress.delete(update.planId);
+    this.pendingProgress.set(update.planId, update);
+    while (this.pendingProgress.size > 20) this.pendingProgress.delete(this.pendingProgress.keys().next().value!);
+    this.flushProgress();
+  }
+
+  private flushProgress(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesProgress || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const [planId, update] of this.pendingProgress) {
+      try {
+        socket.send(JSON.stringify({ type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update }));
+      } catch {
+        return;
+      }
+      this.pendingProgress.delete(planId);
+    }
+  }
+
   stop(): void {
     this.stopped = true;
     for (const controller of this.activeRequests.values()) controller.abort("companion_stopped");
@@ -190,6 +220,7 @@ export class CompanionConnector {
         : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
       this.edgeTakesUserMessages = false;
+      this.edgeTakesProgress = false;
       const clearHeartbeat = () => {
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
@@ -290,7 +321,9 @@ export class CompanionConnector {
       await this.options.repositories.setDeviceId(message.deviceId);
       this.log({ event: "local_runtime_registered", deviceId: message.deviceId });
       this.edgeTakesUserMessages = socket === this.socket && message.features?.includes("userMessagesV1") === true;
+      this.edgeTakesProgress = socket === this.socket && message.features?.includes(PROGRESS_FEATURE) === true;
       if (this.options.pendingUserMessages) this.announceUserMessages(this.options.pendingUserMessages());
+      this.flushProgress();
       return { protocolReady: true, registered: true };
     }
     if (message.type === "companion-heartbeat-ack") {

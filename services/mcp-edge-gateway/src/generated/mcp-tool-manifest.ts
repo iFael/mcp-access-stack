@@ -25318,7 +25318,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing or todo, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25342,7 +25342,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25391,7 +25393,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25477,7 +25481,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25526,7 +25532,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -25634,7 +25642,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "enum": [
                   "done",
                   "doing",
-                  "todo"
+                  "todo",
+                  "failed",
+                  "skipped"
                 ],
                 "type": "string"
               },
@@ -26609,15 +26619,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "879fda9ea588306fd935c274db2c4e2a96353f6c38d584427e27dffa2dfec169",
-  "serverVersion": "0.4.0-catalog.c879fda9ea588.s88ae97722abd",
+  "contractRevision": "30ae4d49e979ec14f212550428a214ffe8e99496d6b2a8e8b0d0952f2f6e6caa",
+  "serverVersion": "0.4.0-catalog.c30ae4d49e979.s88ae97722abd",
   "toolCount": 119,
   "toolSetRevision": "88ae97722abdbd6974236595e117e52f941cebd350f7fa04742e35e58c80d711"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c879fda9ea588.s88ae97722abd"
+  "version": "0.4.0-catalog.c30ae4d49e979.s88ae97722abd"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

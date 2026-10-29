@@ -8,6 +8,7 @@ import {
   COMPANION_PROTOCOL_VERSION,
   WAKE_EVENTS_CAPABILITY,
   WAKE_EVENTS_FEATURE,
+  PROGRESS_FEATURE,
   type WakeEvent,
   parseCompanionToEdgeMessage,
   type AuthenticatedEdgePrincipal,
@@ -977,6 +978,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
 
     if (parsed.type === "connector-wake-event") {
       this.relayWakeEvent(parsed.event);
+      return;
+    }
+
+    if (parsed.type === "connector-progress") {
+      // The execution node serves every user; the planId it was handed names the plan.
+      this.ctx.waitUntil(this.progressPlans.applyUpdate(parsed.update).then(() => undefined, () => undefined));
       return;
     }
 
@@ -2733,6 +2740,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-progress") {
+      if (!attachment.ready || !attachment.deviceId) return;
+      await this.progressPlans.applyUpdate(parsed.update, attachment.userId).catch(() => false);
+      return;
+    }
+
     if (parsed.type === "companion-user-messages") {
       if (!attachment.ready || !attachment.deviceId) return;
       webSocket.serializeAttachment({
@@ -2791,7 +2804,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         type: "companion-registered",
         protocolVersion: COMPANION_PROTOCOL_VERSION,
         deviceId: device.id,
-        features: ["userMessagesV1"],
+        features: ["userMessagesV1", PROGRESS_FEATURE],
       }));
       return;
     }
@@ -2856,7 +2869,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       disconnectRecorded: false,
     } satisfies ConnectorAttachment);
     this.ctx.acceptWebSocket(server, ["connector"]);
-    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE] }));
+    server.send(JSON.stringify({ type: "edge-hello", protocolVersion, features: [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE] }));
 
     return new Response(null, { status: 101, webSocket: client });
   }

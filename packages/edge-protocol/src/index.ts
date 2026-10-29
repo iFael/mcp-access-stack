@@ -1,6 +1,8 @@
 export * from "./companion.js";
 export * from "./browser-latency.js";
 export * from "./wake-events.js";
+export * from "./progress-events.js";
+import { parseProgressUpdate, PROGRESS_FEATURE, type ProgressUpdate } from "./progress-events.js";
 import { parseWakeEvent, WAKE_EVENTS_FEATURE, type WakeEvent } from "./wake-events.js";
 
 export const EDGE_PROTOCOL_VERSION = 3 as const;
@@ -22,8 +24,11 @@ export type EdgeHelloMessage = {
   type: "edge-hello";
   protocolVersion: typeof EDGE_PROTOCOL_VERSION;
   /** Optional features the Edge offers; an older connector ignores them. */
-  features?: (typeof WAKE_EVENTS_FEATURE)[];
+  features?: EdgeConnectorFeature[];
 };
+
+export const EDGE_CONNECTOR_FEATURES = [WAKE_EVENTS_FEATURE, PROGRESS_FEATURE] as const;
+export type EdgeConnectorFeature = (typeof EDGE_CONNECTOR_FEATURES)[number];
 
 export type ConnectorRuntimeIdentity = {
   version: 1;
@@ -84,7 +89,18 @@ export type ConnectorWakeEventMessage = {
   event: WakeEvent;
 };
 
-export type ConnectorToEdgeMessage = ConnectorReadyMessage | EdgeHttpResponseMessage | ConnectorWakeEventMessage;
+// Sent only to an Edge whose hello offers progressV1.
+export type ConnectorProgressMessage = {
+  type: "connector-progress";
+  protocolVersion: typeof EDGE_PROTOCOL_VERSION;
+  update: ProgressUpdate;
+};
+
+export type ConnectorToEdgeMessage =
+  | ConnectorReadyMessage
+  | EdgeHttpResponseMessage
+  | ConnectorWakeEventMessage
+  | ConnectorProgressMessage;
 
 const MCP_PATH = "/mcp";
 const OAUTH_POST_PATHS = new Set(["/token", "/register", "/revoke"]);
@@ -123,8 +139,10 @@ export function parseEdgeToConnectorMessage(value: string): EdgeToConnectorMessa
   if (!parsed || parsed.protocolVersion !== EDGE_PROTOCOL_VERSION || typeof parsed.type !== "string") return null;
 
   if (parsed.type === "edge-hello") {
-    const offersWake = Array.isArray(parsed.features) && parsed.features.includes(WAKE_EVENTS_FEATURE);
-    return { type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, ...(offersWake ? { features: [WAKE_EVENTS_FEATURE] } : {}) };
+    const features = Array.isArray(parsed.features)
+      ? EDGE_CONNECTOR_FEATURES.filter((feature) => (parsed.features as unknown[]).includes(feature))
+      : [];
+    return { type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, ...(features.length === 0 ? {} : { features }) };
   }
   if (parsed.type === "http-cancel") {
     if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;
@@ -171,6 +189,10 @@ export function parseConnectorToEdgeMessage(value: string): ConnectorToEdgeMessa
   if (parsed.type === "connector-wake-event") {
     const event = parseWakeEvent(parsed.event);
     return event ? { type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event } : null;
+  }
+  if (parsed.type === "connector-progress") {
+    const update = parseProgressUpdate(parsed.update);
+    return update ? { type: "connector-progress", protocolVersion: EDGE_PROTOCOL_VERSION, update } : null;
   }
   if (parsed.type !== "http-response") return null;
   if (typeof parsed.requestId !== "string" || parsed.requestId.length === 0) return null;

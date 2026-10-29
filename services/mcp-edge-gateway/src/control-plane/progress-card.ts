@@ -3,17 +3,20 @@
 // agent opens it once; browser_progress_update changes the same plan and the
 // card, which reads it again every few seconds through browser_progress_read,
 // follows. Nothing runs, so the Edge answers these calls itself, even with no
-// companion connected, and keeps each user's recent plans.
+// companion connected, and keeps each user's recent plans. A long operation on
+// a runtime that was handed the planId moves the same plan (applyUpdate).
 
+import { PROGRESS_STEP_STATES, type ProgressStepState, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
 import { CARD_BASE_CSS, CARD_PIN_BUTTON, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
 export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v1.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read"] as const;
 
-const STATES = new Set(["done", "doing", "todo"]);
+const STATES = new Set<string>(PROGRESS_STEP_STATES);
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
 const MAX_PLANS = 20;
+const OWNER_PREFIX = "progress-plan-owner:";
 
 export const PROGRESS_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -24,6 +27,8 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   li { padding: 4px 0; }
   li.done { color: var(--muted); }
   li.doing { font-weight: 600; }
+  li.skipped { color: var(--muted); text-decoration: line-through; }
+  li.failed { font-weight: 600; }
   svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1.6s linear infinite; transform-origin: 50% 50%; }
@@ -39,7 +44,9 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   var ICONS = {
     done: '<svg viewBox="0 0 20 20" aria-label="concluída"><circle cx="10" cy="10" r="9" fill="var(--fg)"/><path d="M6 10.4l2.6 2.6L14.2 7.4" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     doing: '<svg viewBox="0 0 20 20" aria-label="em andamento"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" stroke-width="2"/><path class="spin" d="M10 2a8 8 0 0 1 8 8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>',
-    todo: '<svg viewBox="0 0 20 20" aria-label="a fazer"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="2.6 2.6"/></svg>'
+    todo: '<svg viewBox="0 0 20 20" aria-label="a fazer"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="2.6 2.6"/></svg>',
+    failed: '<svg viewBox="0 0 20 20" aria-label="falhou"><circle cx="10" cy="10" r="9" fill="#d93025"/><path d="M7 7l6 6M13 7l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>',
+    skipped: '<svg viewBox="0 0 20 20" aria-label="pulada"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6"/><path d="M6 10h8" stroke="var(--muted)" stroke-width="1.6" stroke-linecap="round"/></svg>'
   };
   var latest = null;
   function data() {
@@ -70,7 +77,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     steps.forEach(function (step) {
       if (!step || typeof step.text !== "string") return;
       var state = ICONS[step.state] ? step.state : "todo";
-      if (state === "done") done += 1;
+      if (state === "done" || state === "skipped") done += 1;
       var li = document.createElement("li");
       li.className = state;
       li.innerHTML = ICONS[state];
@@ -103,20 +110,21 @@ export const PROGRESS_CARD_RESOURCE: EdgeUiResource = {
   _meta: {
     ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } },
     "openai/widgetPrefersBorder": true,
-    "openai/widgetDescription": "The plan of this conversation's work; it follows the agent's updates by itself.",
+    "openai/widgetDescription": "The plan of this conversation's work; it follows the agent's and the runtimes' updates by itself.",
   },
 };
 
 export interface ProgressPlan {
   planId: string;
   title: string;
-  steps: Array<{ text: string; state: "done" | "doing" | "todo" }>;
+  steps: Array<{ text: string; state: ProgressStepState }>;
   updatedAt: string;
 }
 
 export interface ProgressStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
 }
 
 export class ProgressPlans {
@@ -149,18 +157,46 @@ export class ProgressPlans {
     let plan: ProgressPlan;
     if (name === "browser_progress") {
       plan = { planId: this.newId(), title: input.title!, steps: input.steps, updatedAt: this.now().toISOString() };
-      await this.storage.put(key, [...plans, plan].slice(-MAX_PLANS));
+      const kept = [...plans, plan].slice(-MAX_PLANS);
+      await this.storage.put(key, kept);
+      for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
+        await this.storage.delete(`${OWNER_PREFIX}${dropped.planId}`);
+      }
+      // A runtime given this planId finds whose plan it moves.
+      await this.storage.put(`${OWNER_PREFIX}${plan.planId}`, userId);
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
       plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: input.steps, updatedAt: this.now().toISOString() };
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     }
-    const done = plan.steps.filter((step) => step.state === "done").length;
+    const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
     const text = name === "browser_progress"
       ? `Plan shown to the user (planId ${plan.planId}, ${done}/${plan.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
       : `Plan updated: ${done}/${plan.steps.length} done.`;
     return toolResult(id, text, plan);
+  }
+
+  /**
+   * A runtime's step of a long operation. It replaces the steps of a plan the
+   * agent opened, and nothing else: an unknown or expired planId changes
+   * nothing. ownerUserId, when known (a companion), must own the plan.
+   */
+  async applyUpdate(update: ProgressUpdate, ownerUserId?: string): Promise<boolean> {
+    const userId = await this.storage.get<string>(`${OWNER_PREFIX}${update.planId}`);
+    if (!userId || (ownerUserId !== undefined && ownerUserId !== userId)) return false;
+    const key = `progress-plans:${userId}`;
+    const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
+    const current = plans.find((entry) => entry.planId === update.planId);
+    if (!current) return false;
+    const plan: ProgressPlan = {
+      ...current,
+      ...(update.title === undefined ? {} : { title: update.title }),
+      steps: update.steps,
+      updatedAt: this.now().toISOString(),
+    };
+    await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
+    return true;
   }
 }
 

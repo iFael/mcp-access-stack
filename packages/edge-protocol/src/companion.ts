@@ -1,4 +1,5 @@
 import type { AuthenticatedEdgePrincipal, EdgeHttpMethod } from "./index.js";
+import { parseProgressUpdate, PROGRESS_FEATURE, type ProgressUpdate } from "./progress-events.js";
 import { parseWakeEvent, type WakeEvent } from "./wake-events.js";
 
 export const COMPANION_PROTOCOL_VERSION = 1 as const;
@@ -42,7 +43,7 @@ export type CompanionHelloMessage = {
 };
 
 // Optional protocol features the Edge offers; an older peer ignores them.
-export const COMPANION_EDGE_FEATURES = ["userMessagesV1"] as const;
+export const COMPANION_EDGE_FEATURES = ["userMessagesV1", PROGRESS_FEATURE] as const;
 export type CompanionEdgeFeature = (typeof COMPANION_EDGE_FEATURES)[number];
 
 export type CompanionRegisteredMessage = {
@@ -114,6 +115,13 @@ export type CompanionWakeEventMessage = {
   event: WakeEvent;
 };
 
+// A step of a long operation on this device; sent only to an Edge that offers progressV1.
+export type CompanionProgressMessage = {
+  type: "companion-progress";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  update: ProgressUpdate;
+};
+
 export type EdgeToCompanionMessage =
   | CompanionWakeEventMessage
   | CompanionHelloMessage
@@ -126,6 +134,7 @@ export type CompanionToEdgeMessage =
   | CompanionReadyMessage
   | CompanionHeartbeatMessage
   | CompanionUserMessagesMessage
+  | CompanionProgressMessage
   | CompanionHttpResponseMessage;
 
 export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessage | null {
@@ -151,6 +160,10 @@ export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessa
       protocolVersion: COMPANION_PROTOCOL_VERSION,
       heartbeatId: parsed.heartbeatId,
     };
+  }
+  if (parsed.type === "companion-progress") {
+    const update = parseProgressUpdate(parsed.update);
+    return update ? { type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update } : null;
   }
   if (parsed.type === "companion-user-messages") {
     if (typeof parsed.pending !== "number" || !Number.isInteger(parsed.pending) ||

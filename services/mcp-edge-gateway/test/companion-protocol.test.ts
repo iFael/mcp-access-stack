@@ -33,6 +33,34 @@ describe("wake events from the execution node", () => {
   });
 });
 
+describe("steps of a long operation on a runtime", () => {
+  const update = { planId: "plan_00000000-0000-4000-8000-000000000001", title: "Atualizar o MCP",
+    steps: [{ text: "Catálogo do Edge", state: "skipped" }, { text: "Release do conector", state: "doing" }] };
+
+  it("travel from the connector and from a companion to the Edge, once the Edge offers progressV1", () => {
+    expect(parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-progress", protocolVersion: EDGE_PROTOCOL_VERSION, update })))
+      .toEqual({ type: "connector-progress", protocolVersion: EDGE_PROTOCOL_VERSION, update });
+    expect(parseCompanionToEdgeMessage(JSON.stringify({ type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update })))
+      .toEqual({ type: "companion-progress", protocolVersion: COMPANION_PROTOCOL_VERSION, update });
+    expect(parseEdgeToConnectorMessage(JSON.stringify({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION,
+      features: ["progressV1", "wakeEventsV1"] })))
+      .toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION, features: ["wakeEventsV1", "progressV1"] });
+    expect(parseEdgeToCompanionMessage(JSON.stringify({ type: "companion-registered", protocolVersion: COMPANION_PROTOCOL_VERSION,
+      deviceId: "dev_00000000-0000-4000-8000-000000000001", features: ["userMessagesV1", "progressV1"] })))
+      .toMatchObject({ features: ["userMessagesV1", "progressV1"] });
+  });
+
+  it("carry only a plan of the agent's shape", () => {
+    const bad = (value: Record<string, unknown>) =>
+      parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-progress", protocolVersion: EDGE_PROTOCOL_VERSION, update: value }));
+    expect(bad({ ...update, planId: "plan_x" })).toBeNull();
+    expect(bad({ ...update, steps: [] })).toBeNull();
+    expect(bad({ ...update, steps: [{ text: "a", state: "late" }] })).toBeNull();
+    expect(bad({ ...update, steps: [{ text: "a", state: "done", log: "x" }] })).toBeNull();
+    expect(bad({ ...update, owner: "user_1" })).toBeNull();
+  });
+});
+
 describe("MCP V3 companion protocol", () => {
   it("accepts a valid companion registration and rejects duplicate workspace ids", () => {
     const valid = JSON.stringify({

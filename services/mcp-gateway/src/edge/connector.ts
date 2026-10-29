@@ -2,6 +2,8 @@ import {
   BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   EDGE_PROTOCOL_VERSION,
   WAKE_EVENTS_FEATURE,
+  PROGRESS_FEATURE,
+  type ProgressUpdate,
   type WakeEvent,
   MAX_EDGE_REQUEST_BODY_BYTES,
   MAX_EDGE_RESPONSE_BODY_BYTES,
@@ -134,6 +136,9 @@ export class EdgeConnector {
   private offlineSinceMs: number | null = null;
   private edgeTakesWakeEvents = false;
   private pendingWakeEvents: WakeEvent[] = [];
+  private edgeTakesProgress = false;
+  // Only the latest steps of each plan matter.
+  private pendingProgress = new Map<string, ProgressUpdate>();
 
   constructor(private readonly options: EdgeConnectorOptions) {
     this.edgeUrl = validateEdgeUrl(options.edgeUrl);
@@ -220,6 +225,30 @@ export class EdgeConnector {
         return;
       }
       this.pendingWakeEvents.shift();
+    }
+  }
+
+  /**
+   * The latest steps of a long operation here, for the plan card whose planId
+   * the agent handed it. Held while the Edge is unreachable.
+   */
+  sendProgress(update: ProgressUpdate): void {
+    this.pendingProgress.delete(update.planId);
+    this.pendingProgress.set(update.planId, update);
+    while (this.pendingProgress.size > 20) this.pendingProgress.delete(this.pendingProgress.keys().next().value!);
+    this.flushProgress();
+  }
+
+  private flushProgress(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesProgress || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const [planId, update] of this.pendingProgress) {
+      try {
+        socket.send(JSON.stringify({ type: "connector-progress", protocolVersion: EDGE_PROTOCOL_VERSION, update }));
+      } catch {
+        return;
+      }
+      this.pendingProgress.delete(planId);
     }
   }
 
@@ -419,6 +448,7 @@ export class EdgeConnector {
       connectionState.protocolReady = true;
       connectionState.readyAtMs = this.now();
       this.edgeTakesWakeEvents = message.features?.includes(WAKE_EVENTS_FEATURE) ?? false;
+      this.edgeTakesProgress = message.features?.includes(PROGRESS_FEATURE) ?? false;
       const offlineDurationMs = this.currentOfflineDurationMs(connectionState.readyAtMs);
       this.offlineSinceMs = null;
       this.consecutiveFailures = 0;
@@ -431,6 +461,7 @@ export class EdgeConnector {
         ...(runtime === undefined ? {} : { runtime }),
       }));
       this.flushWakeEvents();
+      this.flushProgress();
       this.log({
         event: "edge_connector_ready",
         generation,
