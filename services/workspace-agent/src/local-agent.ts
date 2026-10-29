@@ -260,7 +260,7 @@ export interface LocalAgentOptions {
    * this process so one update is never driven twice. Absent: no mcp_update.
    */
   mcpUpdates?: {
-    start(input: { mainSha: string; planId?: string }): Promise<McpUpdateRecord>;
+    start(input: { mainSha: string; planId?: string; ownerScope?: string }): Promise<McpUpdateRecord>;
     confirm(updateId: string, confirmationId: string): Promise<McpUpdateRecord>;
     read(updateId?: string): Promise<McpUpdateRecord | null>;
   };
@@ -643,7 +643,8 @@ export class LocalAgent {
         }
         try {
           const record = parsed.action === "start"
-            ? await updates.start({ mainSha: parsed.expectedMainSha, ...(parsed.planId === undefined ? {} : { planId: parsed.planId }) })
+            ? await updates.start({ mainSha: parsed.expectedMainSha, ...(parsed.planId === undefined ? {} : { planId: parsed.planId }),
+              ...(context.ownerScope === undefined ? {} : { ownerScope: context.ownerScope }) })
             : parsed.action === "confirm"
               ? await updates.confirm(parsed.updateId, parsed.confirmationId)
               : await updates.read(parsed.updateId);

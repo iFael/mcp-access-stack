@@ -117,10 +117,12 @@ describe("the autonomous MCP update on the execution node", () => {
   it("publishes MAIN step by step, moves the plan card and wakes the agent once at the end", async () => {
     const env = world();
     const updates = runner(env.port);
-    const started = await updates.start({ mainSha: MAIN, planId: PLAN });
+    const started = await updates.start({ mainSha: MAIN, planId: PLAN, ownerScope: "user:rafael" });
     const done = await updates.settled(started.updateId);
 
     expect(done.status).toBe("succeeded");
+    // Every workflow is dispatched as the user who started the update, as if they had called it.
+    expect(env.dispatched.every((call) => call.ownerScope === "user:rafael")).toBe(true);
     expect(env.calls).toEqual([
       "dispatch edge-cas-candidate-stage.yml",
       "dispatch edge-catalog-activate.yml",
