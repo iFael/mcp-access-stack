@@ -119,7 +119,12 @@ function Assert-McpPublicDistribution {
 }
 
 function Assert-McpPublicReleaseFiles {
-    param([Parameter(Mandatory = $true)][string]$ReleaseRoot)
+    param(
+        [Parameter(Mandatory = $true)][string]$ReleaseRoot,
+        # Release-relative path -> SHA-256 of files the caller already hashed
+        # under this root; those files are not read again.
+        [hashtable]$VerifiedFileHashes
+    )
 
     $resolvedRoot = [System.IO.Path]::GetFullPath($ReleaseRoot)
     $manifest = Read-McpPublicJson -Path (Join-Path $resolvedRoot 'manifest.json')
@@ -128,7 +133,13 @@ function Assert-McpPublicReleaseFiles {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Immutable release file is missing: $($entry.path)"
         }
-        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $relativePath = ([string]$entry.path).Replace('\', '/')
+        $actual = if ($null -ne $VerifiedFileHashes -and $VerifiedFileHashes.ContainsKey($relativePath)) {
+            [string]$VerifiedFileHashes[$relativePath]
+        }
+        else {
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
         if ($actual -ne ([string]$entry.sha256).ToLowerInvariant()) {
             throw "Immutable release file hash mismatch: $($entry.path)"
         }

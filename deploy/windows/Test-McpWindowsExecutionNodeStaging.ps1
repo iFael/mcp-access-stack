@@ -231,6 +231,11 @@ try {
     ) {
         throw 'First candidate staging returned unexpected evidence.'
     }
+    foreach ($phase in @('distributionHashes', 'sourceRelease', 'copy', 'copiedHashes', 'move', 'finalCheck')) {
+        if ($null -eq $first.timingsMs.PSObject.Properties[$phase]) {
+            throw "Candidate staging did not report the duration of phase $phase."
+        }
+    }
     $statePath = Join-Path $installation 'state\lifecycle-state.v1.json'
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     if ($null -ne $state.active -or [string]$state.candidate.releaseId -ne $releaseId) {
@@ -240,6 +245,23 @@ try {
     $second = Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $installation
     if ($second.alreadyPrepared -ne $true -or $second.activeChanged -ne $false) {
         throw 'Candidate staging is not idempotent.'
+    }
+
+    # A release folder left in place is hashed again before it is reused.
+    $tamperedTargetInstallation = Join-Path $testRoot 'tampered-target-install'
+    Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $tamperedTargetInstallation | Out-Null
+    Add-Content `
+        -LiteralPath (Join-Path $tamperedTargetInstallation "releases\$releaseId\node_modules\@vs-code-gpt\remote-mcp-gateway\dist\edge-connector-cli.js") `
+        -Value 'tampered'
+    $tamperedTargetRejected = $false
+    try {
+        Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $tamperedTargetInstallation | Out-Null
+    }
+    catch {
+        $tamperedTargetRejected = $_.Exception.Message -like '*hash mismatch*'
+    }
+    if (-not $tamperedTargetRejected) {
+        throw 'Altered bytes in an existing candidate release were not rejected.'
     }
 
     $tamperedDistribution = Join-Path $testRoot 'tampered'
