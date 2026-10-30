@@ -76,7 +76,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Cut over (only with the user's explicit go-ahead): promote_release with the candidate releaseId. The connector reconnects during the swap; then call get_release_state until candidate is empty and active is the new release.",
     ],
     rules: [
-      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: open a plan card with browser_progress, pass its planId and expectedMainSha, end your answer and wait to be woken. Do the steps by hand only when the user asks for that.",
+      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: open a plan card with browser_progress, pass its planId and expectedMainSha, end your answer and wait to be woken. When it stops with an error, find and fix its cause yourself and call mcp_update action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
       "Use the nextStep returned by get_release_state when unsure which phase comes next.",
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
@@ -252,7 +252,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Open: browser_open (browser_open_authorized_site for private sites), then browser_snapshot or browser_find for refs. Every tab belongs to a task: without a taskId, browser_open starts a new one and returns it as tab.taskId; pass that taskId on the task's later calls.",
       "Act with browser_click, browser_fill or browser_sequence; read-only work uses browser_extract directly.",
       "Login, CAPTCHA or a step only the user should do: browser_wait with forUser and a short reason.",
-      "For work with several steps, browser_progress shows the user a card with the plan (done, in progress, to do) once at the start; then browser_progress_update with its planId and the whole list whenever a step or the plan changes, and the same card follows.",
+      "For work with several steps, browser_progress shows the user a card with the plan (done, in progress, to do) once at the start; then browser_progress_update with its planId and the whole list whenever a step or the plan changes, and the same card follows. While the job goes on, end each answer with browser_progress and only the planId, so the card is shown again at the end.",
       "The user can write to you while you work, from the MCP V3 popup or from the reply card browser_user_messages shows in the chat; call it once with the taskId at the start of a long task so the card is there. Their messages arrive with the result of your next call (browser, files, commands, git). To ask them something without ending your turn, browser_user_messages with question and the taskId, then keep working and read the answer with browser_user_messages (waitMs to wait for it). When they must choose before you can go on, pass options too (A to D) and end your turn: they get one notification on the PC and the answer comes back into this conversation; never wait in a loop for it.",
       "Finish: browser_finish_task; pause=true instead when you will come back to the same tabs, then resume with a new browser_plan for the task.",
     ],
@@ -308,5 +308,6 @@ export const MCP_AGENT_INSTRUCTIONS =
   "read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, " +
   "call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or " +
   "the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with " +
-  "every step in its final state. To show the user a pull request (after " +
+  "every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, " +
+  "so its card is shown again at the end of the answer. To show the user a pull request (after " +
   "opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

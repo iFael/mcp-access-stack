@@ -5,15 +5,17 @@
 // follows. Nothing runs, so the Edge answers these calls itself, even with no
 // companion connected, and keeps each user's recent plans. A long operation on
 // a runtime that was handed the planId moves the same plan (applyUpdate).
+// The Edge notes when each step starts and ends, so the card shows how long
+// it took or has been running. browser_progress with only a planId shows the
+// card again at the end of an answer; its older copies fold into one line.
 
-import { PROGRESS_STEP_STATES, type ProgressStepState, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
-import { CARD_BASE_CSS, CARD_PIN_BUTTON, CARD_THEME_SCRIPT } from "./card-style.js";
+import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
+import { CARD_BASE_CSS, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v1.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v2.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read"] as const;
 
-const STATES = new Set<string>(PROGRESS_STEP_STATES);
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
 const MAX_PLANS = 20;
 const OWNER_PREFIX = "progress-plan-owner:";
@@ -25,6 +27,11 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${CARD_BASE_CSS}
   li { padding: 4px 0; }
+  .when { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .detail { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  a { color: inherit; }
+  .folded #steps { display: none; }
+  .folded h1 { font-weight: 500; color: var(--muted); }
   li.done { color: var(--muted); }
   li.doing { font-weight: 600; }
   li.skipped { color: var(--muted); text-decoration: line-through; }
@@ -36,7 +43,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
 </style>
 </head>
 <body>
-<div class="head"><h1 id="title">Etapas</h1><div class="chips"><span class="chip" id="count" hidden></span>${CARD_PIN_BUTTON}</div></div>
+<div class="head"><h1 id="title">Etapas</h1><div class="chips"><span class="chip" id="count" hidden></span></div></div>
 <ul id="steps"></ul>
 <script>
 (function () {
@@ -66,34 +73,74 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
       if (value && !result.isError && Array.isArray(value.steps)) { latest = value; render(); }
     }).catch(function () {});
   }
+  function took(from, to) {
+    var start = Date.parse(from);
+    var end = to ? Date.parse(to) : Date.now();
+    if (!isFinite(start) || !isFinite(end)) return "";
+    var minutes = Math.floor(Math.max(0, end - start) / 60000);
+    if (minutes < 1) return "<1 min";
+    if (minutes < 60) return minutes + " min";
+    return Math.floor(minutes / 60) + " h " + (minutes % 60) + " min";
+  }
+  function openLink(event) {
+    var bridge = window.openai;
+    if (bridge && typeof bridge.openExternal === "function") {
+      event.preventDefault();
+      bridge.openExternal({ href: event.currentTarget.href });
+    }
+  }
   function render() {
     applyTheme();
     var value = data();
-    document.getElementById("title").textContent = typeof value.title === "string" && value.title.trim() ? value.title : "Etapas";
-    var list = document.getElementById("steps");
-    list.textContent = "";
     var steps = Array.isArray(value.steps) ? value.steps : [];
     var done = 0;
+    steps.forEach(function (step) { if (step && (step.state === "done" || step.state === "skipped")) done += 1; });
+    var title = typeof value.title === "string" && value.title.trim() ? value.title : "Etapas";
+    // A copy shown earlier in the chat folds into one line; the latest one is below.
+    var mine = window.openai && window.openai.toolOutput && window.openai.toolOutput.shownAt;
+    var folded = Boolean(latest && mine && latest.shownAt && latest.shownAt !== mine);
+    document.body.className = folded ? "folded" : "";
+    document.getElementById("title").textContent = folded ? title + ", " + done + "/" + steps.length + ", veja abaixo" : title;
+    var count = document.getElementById("count");
+    count.hidden = folded || steps.length === 0;
+    count.textContent = done + "/" + steps.length;
+    var list = document.getElementById("steps");
+    list.textContent = "";
+    if (folded) return;
     steps.forEach(function (step) {
       if (!step || typeof step.text !== "string") return;
       var state = ICONS[step.state] ? step.state : "todo";
-      if (state === "done" || state === "skipped") done += 1;
       var li = document.createElement("li");
       li.className = state;
       li.innerHTML = ICONS[state];
       var span = document.createElement("span");
       span.className = "grow";
-      span.textContent = step.text;
+      var name = document.createElement(typeof step.link === "string" && step.link.indexOf("https://github.com/") === 0 ? "a" : "span");
+      name.textContent = step.text;
+      if (name.tagName === "A") { name.href = step.link; name.target = "_blank"; name.rel = "noopener"; name.addEventListener("click", openLink); }
+      span.appendChild(name);
+      if (typeof step.detail === "string" && step.detail && (state === "doing" || state === "failed")) {
+        var detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = step.detail;
+        span.appendChild(detail);
+      }
       li.appendChild(span);
+      var time = step.startedAt && (state === "doing" || step.endedAt) ? took(step.startedAt, state === "doing" ? null : step.endedAt) : "";
+      if (time) {
+        var when = document.createElement("span");
+        when.className = "when";
+        when.textContent = time;
+        li.appendChild(when);
+      }
       list.appendChild(li);
     });
-    var count = document.getElementById("count");
-    count.hidden = steps.length === 0;
-    count.textContent = done + "/" + steps.length;
   }
   window.addEventListener("openai:set_globals", render);
   document.addEventListener("visibilitychange", refresh);
   setInterval(refresh, 4000);
+  // The minutes of the step in progress go on even when nothing else changes.
+  setInterval(render, 30000);
   render();
 })();
 </script>
@@ -114,11 +161,14 @@ export const PROGRESS_CARD_RESOURCE: EdgeUiResource = {
   },
 };
 
+export type ProgressPlanStep = ProgressStep & { startedAt?: string; endedAt?: string };
+
 export interface ProgressPlan {
   planId: string;
   title: string;
-  steps: Array<{ text: string; state: ProgressStepState }>;
+  steps: ProgressPlanStep[];
   updatedAt: string;
+  shownAt?: string;
 }
 
 export interface ProgressStorage {
@@ -151,12 +201,23 @@ export class ProgressPlans {
       return plan ? toolResult(id, `Plan ${plan.planId}.`, plan) : toolError(id, "NOT_FOUND", "This plan is no longer kept.");
     }
 
+    const now = this.now().toISOString();
+    let plan: ProgressPlan;
+    if (name === "browser_progress" && args.planId !== undefined) {
+      // The same plan's card again, where the answer is now.
+      if (Object.keys(args).some((key) => key !== "planId")) return invalid(id, name);
+      const current = plans.find((entry) => entry.planId === args.planId);
+      if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
+      plan = { ...current, shownAt: now };
+      await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
+      const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
+      return toolResult(id, `Plan shown again (${done}/${plan.steps.length} done).`, plan);
+    }
     const allowed = name === "browser_progress" ? ["title", "steps"] : ["planId", "title", "steps"];
     const input = readPlanInput(args, allowed);
     if (!input) return invalid(id, name);
-    let plan: ProgressPlan;
     if (name === "browser_progress") {
-      plan = { planId: this.newId(), title: input.title!, steps: input.steps, updatedAt: this.now().toISOString() };
+      plan = { planId: this.newId(), title: input.title!, steps: timed([], input.steps, now), updatedAt: now, shownAt: now };
       const kept = [...plans, plan].slice(-MAX_PLANS);
       await this.storage.put(key, kept);
       for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
@@ -167,7 +228,7 @@ export class ProgressPlans {
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
-      plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: input.steps, updatedAt: this.now().toISOString() };
+      plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: timed(current.steps, input.steps, now), updatedAt: now };
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     }
     const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
@@ -189,18 +250,32 @@ export class ProgressPlans {
     const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
     const current = plans.find((entry) => entry.planId === update.planId);
     if (!current) return false;
+    const now = this.now().toISOString();
     const plan: ProgressPlan = {
       ...current,
       ...(update.title === undefined ? {} : { title: update.title }),
-      steps: update.steps,
-      updatedAt: this.now().toISOString(),
+      steps: timed(current.steps, update.steps, now),
+      updatedAt: now,
     };
     await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     return true;
   }
 }
 
-function readPlanInput(value: Record<string, unknown>, allowed: readonly string[]): { title?: string; steps: ProgressPlan["steps"] } | null {
+/** The new steps, each keeping when it started and ended as the states changed. */
+export function timed(previous: readonly ProgressPlanStep[], next: readonly ProgressStep[], now: string): ProgressPlanStep[] {
+  return next.map((step, index) => {
+    const before = previous[index]?.text === step.text ? previous[index] : previous.find((entry) => entry.text === step.text);
+    const startedAt = step.state === "todo" || step.state === "skipped" ? undefined
+      : before?.startedAt ?? (step.state === "doing" || before?.state === "doing" ? now : undefined);
+    const endedAt = step.state === "done" || step.state === "failed"
+      ? before?.endedAt ?? (startedAt === undefined ? undefined : now)
+      : undefined;
+    return { ...step, ...(startedAt === undefined ? {} : { startedAt }), ...(endedAt === undefined ? {} : { endedAt }) };
+  });
+}
+
+function readPlanInput(value: Record<string, unknown>, allowed: readonly string[]): { title?: string; steps: ProgressStep[] } | null {
   if (Object.keys(value).some((key) => !allowed.includes(key))) return null;
   if (allowed.includes("planId") && (typeof value.planId !== "string" || !PLAN_ID.test(value.planId))) return null;
   let title: string | undefined;
@@ -209,12 +284,11 @@ function readPlanInput(value: Record<string, unknown>, allowed: readonly string[
     if (title.length < 1 || title.length > 120) return null;
   }
   if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 20) return null;
-  const steps: ProgressPlan["steps"] = [];
-  for (const step of value.steps) {
-    if (!isRecord(step) || Object.keys(step).some((key) => key !== "text" && key !== "state")) return null;
-    const text = typeof step.text === "string" ? step.text.trim() : "";
-    if (text.length < 1 || text.length > 200 || typeof step.state !== "string" || !STATES.has(step.state)) return null;
-    steps.push({ text, state: step.state as ProgressPlan["steps"][number]["state"] });
+  const steps: ProgressStep[] = [];
+  for (const entry of value.steps) {
+    const step = parseProgressStep(entry);
+    if (!step) return null;
+    steps.push(step);
   }
   return { ...(title === undefined ? {} : { title }), steps };
 }

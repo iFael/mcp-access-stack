@@ -26,7 +26,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0
 function world(overrides: Partial<McpUpdatePort> = {}) {
   const calls: string[] = [];
   const dispatched: McpUpdateWorkflowCall[] = [];
-  const progress: Array<{ title: string; steps: Array<{ text: string; state: string }> }> = [];
+  const progress: Array<{ title: string; steps: Array<{ text: string; state: string; detail?: string; link?: string }> }> = [];
   const finished: McpUpdateRecord[] = [];
   const state = { active: "1.1.0-beta.102-connector.1" as string | null, candidate: null as string | null };
   const edge = { active: OLD, candidate: null as string | null, toolCount: 119, instance: "before" };
@@ -89,6 +89,7 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
       return { status: "handover_started" };
     },
     ciRun: async () => 4242,
+    companionReleased: async () => false,
     requestCompanionUpdate: (request) => {
       requests.push(request);
       void companion.handle(request);
@@ -147,6 +148,31 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.finished.map((record) => record.status)).toEqual(["succeeded"]);
   });
 
+  it("says on the card what the step waits for and links each workflow to its run", async () => {
+    const env = world();
+    const seen = new Map<string, number>();
+    const reconcile = env.port.reconcile;
+    // Each run is queued once, then in progress once, before it completes.
+    env.port.reconcile = async (call) => {
+      const observed = await reconcile(call);
+      const count = (seen.get(call.operationId) ?? 0) + 1;
+      seen.set(call.operationId, count);
+      if (observed.status !== "observed" || count > 2) return observed;
+      return { ...observed, state: count === 1 ? "queued" : "in_progress", conclusion: null };
+    };
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(done.status).toBe("succeeded");
+    const stage = env.progress.map((entry) => entry.steps[1]!).filter((step) => step.state === "doing");
+    expect(stage.map((step) => step.detail)).toEqual(expect.arrayContaining(["Na fila do GitHub", "Rodando no GitHub"]));
+    expect(stage.at(-1)!.link).toBe(`https://github.com/iFael/mcp-access-stack/actions/runs/${done.data.stage!.runId}`);
+    const last = env.progress.at(-1)!.steps;
+    expect(last[4]!.link).toBe(`https://github.com/iFael/mcp-access-stack/actions/runs/${done.data.release!.runId}`);
+    expect(last.every((step) => step.detail === undefined)).toBe(true);
+    expect(env.progress.some((entry) => entry.steps[9]!.detail === "Instalando no Windows; costuma levar uns 16 min" ||
+      entry.steps[9]!.detail === "Esperando o companion do Windows responder")).toBe(true);
+  });
+
   it("skips the Edge catalog when MAIN does not change the contract", async () => {
     const env = world();
     env.edge.active = NEW;
@@ -187,6 +213,50 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(1);
     expect(env.progress.at(-1)!.title).toBe("Atualização do MCP parou");
     expect(env.progress.at(-1)!.steps[4]!.state).toBe("failed");
+  });
+
+  it("is resumed from the workflow that failed, which it dispatches again, and from nothing before it", async () => {
+    const env = world();
+    let fail = true;
+    const reconcile = env.port.reconcile;
+    env.port.reconcile = async (call) => call.workflow === "release.yml" && fail
+      ? { status: "observed", runId: 7, state: "completed", conclusion: "failure" }
+      : reconcile(call);
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(failed.status).toBe("failed");
+    await expect(updates.resume("upd_00000000-0000-4000-8000-000000000999")).rejects.toThrow();
+    fail = false;
+    expect(await updates.resume(failed.updateId)).toMatchObject({ status: "running", step: "connector_release" });
+    const done = await updates.settled(failed.updateId);
+    expect(done.status).toBe("succeeded");
+    expect(done.error).toBeUndefined();
+    expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(2);
+    expect(env.calls.filter((call) => call === "dispatch release-tag-bootstrap.yml")).toHaveLength(1);
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "UPDATE_NOT_FAILED" });
+  });
+
+  it("goes on with a companion release published before, and one its own run refused to publish again", async () => {
+    const before = world({ companionReleased: async () => true });
+    const first = runner(before.port);
+    const done = await first.settled((await first.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(done.status).toBe("succeeded");
+    expect(before.calls).not.toContain("dispatch companion-only-distribution.yml");
+    expect(before.calls).toContain("windows promote 1.1.0-companion.4242");
+
+    await rm(directory, { recursive: true, force: true });
+    let published = false;
+    const refused = world({ companionReleased: async () => published });
+    const reconcile = refused.port.reconcile;
+    refused.port.reconcile = async (call) => {
+      if (call.workflow !== "companion-only-distribution.yml") return reconcile(call);
+      published = true;
+      return { status: "observed", runId: 9, state: "completed", conclusion: "failure" };
+    };
+    const second = runner(refused.port);
+    const after = await second.settled((await second.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(after.status).toBe("succeeded");
+    expect(refused.windows.active).toBe("1.1.0-companion.4242");
   });
 
   it("waits for the user's confirmation and goes on with it, without a second unconfirmed prepare", async () => {

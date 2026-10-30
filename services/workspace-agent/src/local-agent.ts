@@ -262,6 +262,7 @@ export interface LocalAgentOptions {
   mcpUpdates?: {
     start(input: { mainSha: string; planId?: string; ownerScope?: string }): Promise<McpUpdateRecord>;
     confirm(updateId: string, confirmationId: string): Promise<McpUpdateRecord>;
+    resume(updateId: string): Promise<McpUpdateRecord>;
     read(updateId?: string): Promise<McpUpdateRecord | null>;
   };
   gitRepositoryExecutor?: GitRepositoryExecutor;
@@ -647,7 +648,9 @@ export class LocalAgent {
               ...(context.ownerScope === undefined ? {} : { ownerScope: context.ownerScope }) })
             : parsed.action === "confirm"
               ? await updates.confirm(parsed.updateId, parsed.confirmationId)
-              : await updates.read(parsed.updateId);
+              : parsed.action === "resume"
+                ? await updates.resume(parsed.updateId)
+                : await updates.read(parsed.updateId);
           return mcpUpdateResultSchema.parse({ update: record === null ? null : publicMcpUpdate(record) });
         } catch (error) {
           if (error instanceof Error && "code" in error && typeof error.code === "string" && !(error instanceof AppError)) {

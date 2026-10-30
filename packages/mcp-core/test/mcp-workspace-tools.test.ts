@@ -542,6 +542,7 @@ describe("registerWorkspaceTools", () => {
     for(const args of [
       {action:"start",workspaceId:"mcp-access-stack"},
       {action:"confirm",workspaceId:"mcp-access-stack",updateId:"upd_00000000-0000-4000-8000-000000000001"},
+      {action:"resume",workspaceId:"mcp-access-stack"},
       {action:"start",workspaceId:"mcp-access-stack-local-x",expectedMainSha:"a".repeat(40)},
     ]){
       expect((await tools.mcp_update!.handler(args,extra)).isError).toBe(true);

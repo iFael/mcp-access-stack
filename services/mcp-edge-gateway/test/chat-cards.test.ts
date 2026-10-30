@@ -30,8 +30,9 @@ describe("the plan card", () => {
     const plans = new ProgressPlans(memory(), () => new Date("2026-10-29T02:00:00.000Z"),
       () => `plan_00000000-0000-4000-8000-00000000000${++ids}`);
     const opened = await result(await plans.handle(call("browser_progress", { title: "Corrigir o CI", steps, deviceId: "dev_x" }), "user_1"));
-    expect(opened.structuredContent).toEqual({ planId: "plan_00000000-0000-4000-8000-000000000001", title: "Corrigir o CI", steps,
-      updatedAt: "2026-10-29T02:00:00.000Z" });
+    expect(opened.structuredContent).toEqual({ planId: "plan_00000000-0000-4000-8000-000000000001", title: "Corrigir o CI",
+      steps: [steps[0], { ...steps[1], startedAt: "2026-10-29T02:00:00.000Z" }, steps[2]],
+      updatedAt: "2026-10-29T02:00:00.000Z", shownAt: "2026-10-29T02:00:00.000Z" });
     expect(opened.content[0]!.text).toContain("browser_progress_update");
 
     const planId = opened.structuredContent!.planId;
@@ -57,7 +58,8 @@ describe("the plan card", () => {
 
     expect(await plans.applyUpdate({ planId, steps: moved })).toBe(true);
     expect((await result(await plans.handle(call("browser_progress_read", { planId }), "user_1"))).structuredContent)
-      .toEqual({ planId, title: "Atualizar o MCP", steps: moved, updatedAt: "2026-10-29T03:00:00.000Z" });
+      .toEqual({ planId, title: "Atualizar o MCP", steps: moved, updatedAt: "2026-10-29T03:00:00.000Z",
+        shownAt: "2026-10-29T03:00:00.000Z" });
 
     // A companion of another user, or a plan nobody opened, changes nothing.
     expect(await plans.applyUpdate({ planId, steps }, "user_2")).toBe(false);
@@ -70,6 +72,31 @@ describe("the plan card", () => {
     }
     expect(storage.values.has(`progress-plan-owner:${planId}`)).toBe(false);
     expect(await plans.applyUpdate({ planId, steps })).toBe(false);
+  });
+
+  it("times each step, says why it waits and shows the card again where the answer is", async () => {
+    let now = "2026-10-30T10:00:00.000Z";
+    const plans = new ProgressPlans(memory(), () => new Date(now), () => "plan_00000000-0000-4000-8000-000000000001");
+    const planId = "plan_00000000-0000-4000-8000-000000000001";
+    const start = [{ text: "Build", state: "doing" }, { text: "Prepare", state: "todo" }];
+    await plans.handle(call("browser_progress", { title: "Atualizar", steps: start }), "user_1");
+    now = "2026-10-30T10:07:00.000Z";
+    const link = "https://github.com/iFael/mcp-access-stack/actions/runs/41";
+    expect(await plans.applyUpdate({ planId, steps: [{ text: "Build", state: "done", link },
+      { text: "Prepare", state: "doing", detail: "Instalando no Windows" }] })).toBe(true);
+    now = "2026-10-30T10:09:00.000Z";
+    const shown = await result(await plans.handle(call("browser_progress", { planId }), "user_1"));
+    expect(shown.structuredContent).toMatchObject({
+      shownAt: "2026-10-30T10:09:00.000Z",
+      steps: [
+        { text: "Build", state: "done", link, startedAt: "2026-10-30T10:00:00.000Z", endedAt: "2026-10-30T10:07:00.000Z" },
+        { text: "Prepare", state: "doing", detail: "Instalando no Windows", startedAt: "2026-10-30T10:07:00.000Z" },
+      ],
+    });
+    // Showing it again changes nothing else, and takes nothing but the planId.
+    expect((await result(await plans.handle(call("browser_progress", { planId, title: "x" }), "user_1"))).isError).toBe(true);
+    expect((await result(await plans.handle(call("browser_progress_update", { planId,
+      steps: [{ text: "Build", state: "done", link: "https://example.com/x" }] }), "user_1"))).isError).toBe(true);
   });
 
   it("refuses what the contract refuses and leaves other tools alone", async () => {
@@ -89,6 +116,8 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
+    expect(resources[0]!.text).toContain("veja abaixo");
+    expect(resources[0]!.text).not.toContain('id="pin"');
     expect(resources[1]!.text).toContain("Abrir no GitHub");
     for (const resource of resources) {
       expect(resource.text).toContain("requestDisplayMode");

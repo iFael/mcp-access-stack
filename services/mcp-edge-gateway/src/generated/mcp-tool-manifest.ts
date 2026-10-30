@@ -2340,7 +2340,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. It never repeats a dispatch, a prepare or a promote; when it stops, bring the user the exact error instead of redoing a step by hand.",
+    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2352,7 +2352,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "enum": [
             "start",
             "read",
-            "confirm"
+            "confirm",
+            "resume"
           ],
           "type": "string"
         },
@@ -25636,7 +25637,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v1.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v2.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "securitySchemes": [
@@ -25648,7 +25649,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v1.html"
+        "resourceUri": "ui://mcp-v3/progress-v2.html"
       }
     },
     "annotations": {
@@ -25657,7 +25658,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.",
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. While the job goes on, end each answer with browser_progress and only that planId: the card shows again at the end, as it is now, and its older copies fold into one line; never open a second plan for the same job.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25669,6 +25670,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
         },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
         "runtimeId": {
           "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
@@ -25677,6 +25682,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "items": {
             "additionalProperties": false,
             "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
               "state": {
                 "enum": [
                   "done",
@@ -25709,10 +25723,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "string"
         }
       },
-      "required": [
-        "title",
-        "steps"
-      ],
       "type": "object"
     },
     "name": "browser_progress",
@@ -25724,10 +25734,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
         },
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
         "steps": {
           "items": {
             "additionalProperties": false,
             "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
               "state": {
                 "enum": [
                   "done",
@@ -25816,6 +25850,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "items": {
             "additionalProperties": false,
             "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
               "state": {
                 "enum": [
                   "done",
@@ -25863,10 +25906,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
         },
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
         "steps": {
           "items": {
             "additionalProperties": false,
             "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
               "state": {
                 "enum": [
                   "done",
@@ -25973,10 +26040,34 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
         },
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
         "steps": {
           "items": {
             "additionalProperties": false,
             "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
               "state": {
                 "enum": [
                   "done",
@@ -26958,15 +27049,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "89500f908921f6940878b96d5b4d6295a849b76664cc213b55e289a382892233",
-  "serverVersion": "0.4.0-catalog.c89500f908921.s6c1db2a31b7f",
+  "contractRevision": "b667af073aeb0d81f327b8b1ed25802de8fd1b0efec426e5849d3ff75a7ab478",
+  "serverVersion": "0.4.0-catalog.cb667af073aeb.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c89500f908921.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.cb667af073aeb.s6c1db2a31b7f"
 } as const;
 
-export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
+export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, so its card is shown again at the end of the answer. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
