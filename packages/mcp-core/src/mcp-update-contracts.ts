@@ -33,12 +33,17 @@ export const mcpUpdateInputSchema = z.discriminatedUnion("action", [
     updateId: UPDATE_ID,
     confirmationId: CONFIRMATION_ID,
   }).strict(),
+  z.object({
+    action: z.literal("resume"),
+    workspaceId: z.literal("mcp-access-stack"),
+    updateId: UPDATE_ID,
+  }).strict(),
 ]);
 export type McpUpdateInput = z.infer<typeof mcpUpdateInputSchema>;
 
 /** Object-shaped for the MCP SDK; the union above still validates each call. */
 export const mcpUpdatePublishedInputSchema = z.object({
-  action: z.enum(["start", "read", "confirm"]),
+  action: z.enum(["start", "read", "confirm", "resume"]),
   workspaceId: z.literal("mcp-access-stack"),
   expectedMainSha: SHA.optional(),
   planId: PLAN_ID.optional(),

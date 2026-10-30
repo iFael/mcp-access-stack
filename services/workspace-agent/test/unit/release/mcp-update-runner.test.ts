@@ -89,6 +89,7 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
       return { status: "handover_started" };
     },
     ciRun: async () => 4242,
+    companionReleased: async () => false,
     requestCompanionUpdate: (request) => {
       requests.push(request);
       void companion.handle(request);
@@ -212,6 +213,50 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(1);
     expect(env.progress.at(-1)!.title).toBe("Atualização do MCP parou");
     expect(env.progress.at(-1)!.steps[4]!.state).toBe("failed");
+  });
+
+  it("is resumed from the workflow that failed, which it dispatches again, and from nothing before it", async () => {
+    const env = world();
+    let fail = true;
+    const reconcile = env.port.reconcile;
+    env.port.reconcile = async (call) => call.workflow === "release.yml" && fail
+      ? { status: "observed", runId: 7, state: "completed", conclusion: "failure" }
+      : reconcile(call);
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(failed.status).toBe("failed");
+    await expect(updates.resume("upd_00000000-0000-4000-8000-000000000999")).rejects.toThrow();
+    fail = false;
+    expect(await updates.resume(failed.updateId)).toMatchObject({ status: "running", step: "connector_release" });
+    const done = await updates.settled(failed.updateId);
+    expect(done.status).toBe("succeeded");
+    expect(done.error).toBeUndefined();
+    expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(2);
+    expect(env.calls.filter((call) => call === "dispatch release-tag-bootstrap.yml")).toHaveLength(1);
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "UPDATE_NOT_FAILED" });
+  });
+
+  it("goes on with a companion release published before, and one its own run refused to publish again", async () => {
+    const before = world({ companionReleased: async () => true });
+    const first = runner(before.port);
+    const done = await first.settled((await first.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(done.status).toBe("succeeded");
+    expect(before.calls).not.toContain("dispatch companion-only-distribution.yml");
+    expect(before.calls).toContain("windows promote 1.1.0-companion.4242");
+
+    await rm(directory, { recursive: true, force: true });
+    let published = false;
+    const refused = world({ companionReleased: async () => published });
+    const reconcile = refused.port.reconcile;
+    refused.port.reconcile = async (call) => {
+      if (call.workflow !== "companion-only-distribution.yml") return reconcile(call);
+      published = true;
+      return { status: "observed", runId: 9, state: "completed", conclusion: "failure" };
+    };
+    const second = runner(refused.port);
+    const after = await second.settled((await second.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(after.status).toBe("succeeded");
+    expect(refused.windows.active).toBe("1.1.0-companion.4242");
   });
 
   it("waits for the user's confirmation and goes on with it, without a second unconfirmed prepare", async () => {

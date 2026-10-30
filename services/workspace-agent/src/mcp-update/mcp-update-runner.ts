@@ -147,6 +147,8 @@ export interface McpUpdatePort extends ReleaseInstallPort {
   reconcile(call: McpUpdateWorkflowCall): Promise<McpUpdateWorkflowObservation>;
   /** The successful push run of the CI workflow on that main commit, or null. */
   ciRun(sha: string): Promise<number | null>;
+  /** That companion release is on GitHub with its archive and checksum. */
+  companionReleased(tag: string): Promise<boolean>;
   /** Asks the user's companions, through the Edge, to install the Windows release; repeated while waiting. */
   requestCompanionUpdate(request: CompanionUpdateRequest): void;
   /** The plan card the agent opened, moved to the update's steps. */
@@ -247,6 +249,27 @@ export class McpUpdateRunner {
       throw new StopUpdate("CONFIRMATION_MISMATCH", "This update does not wait for that confirmationId.");
     }
     const resumed: McpUpdateRecord = { ...record, status: "running" };
+    await this.save(resumed);
+    this.drive(updateId);
+    return resumed;
+  }
+
+  /**
+   * Continues a failed update from the step that failed, once the agent fixed
+   * its cause. A workflow that ended in failure is dispatched again; what the
+   * steps saved before keeps them from redoing anything else.
+   */
+  async resume(updateId: string): Promise<McpUpdateRecord> {
+    const record = await this.require(updateId);
+    if (record.status !== "failed") throw new StopUpdate("UPDATE_NOT_FAILED", `Update ${updateId} is ${record.status}; only a failed update resumes.`);
+    const open = (await this.list()).find((other) => other.status === "running" || other.status === "needs_confirmation");
+    if (open) throw new StopUpdate("UPDATE_IN_PROGRESS", `Update ${open.updateId} is ${open.status}.`);
+    const { error, ...rest } = record;
+    const run = STEP_RUN[record.step];
+    const data = { ...rest.data };
+    if (run !== undefined && error?.code === "WORKFLOW_FAILED") delete data[run];
+    this.companionStatus.delete(updateId);
+    const resumed: McpUpdateRecord = { ...rest, status: "running", data };
     await this.save(resumed);
     this.drive(updateId);
     return resumed;
@@ -410,11 +433,19 @@ export class McpUpdateRunner {
           current = { ...current, data: { ...current.data, companionCiRunId: ciRunId, companionTag: `v${version}-companion.${ciRunId}` } };
           await this.save(current);
         }
-        const companion = await this.workflow(current, "companion", {
-          workflow: "companion-only-distribution.yml",
-          ciRunId: current.data.companionCiRunId!,
-        });
-        return { ...current, data: { ...current.data, companion } };
+        // Published before, by hand or by an earlier run: the workflow refuses to publish it twice.
+        const tag = current.data.companionTag!;
+        if (current.data.companion === undefined && await port.companionReleased(tag)) return current;
+        try {
+          const companion = await this.workflow(current, "companion", {
+            workflow: "companion-only-distribution.yml",
+            ciRunId: current.data.companionCiRunId!,
+          });
+          return { ...current, data: { ...current.data, companion } };
+        } catch (error) {
+          if (error instanceof StopUpdate && error.code === "WORKFLOW_FAILED" && await port.companionReleased(tag)) return current;
+          throw error;
+        }
       }
       case "windows_prepare":
         await this.windows(record, confirmationId, (status) => status.phase === "promote" || status.state === "succeeded");

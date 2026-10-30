@@ -76,7 +76,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Cut over (only with the user's explicit go-ahead): promote_release with the candidate releaseId. The connector reconnects during the swap; then call get_release_state until candidate is empty and active is the new release.",
     ],
     rules: [
-      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: open a plan card with browser_progress, pass its planId and expectedMainSha, end your answer and wait to be woken. Do the steps by hand only when the user asks for that.",
+      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: open a plan card with browser_progress, pass its planId and expectedMainSha, end your answer and wait to be woken. When it stops with an error, find and fix its cause yourself and call mcp_update action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
       "Use the nextStep returned by get_release_state when unsure which phase comes next.",
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",

@@ -61,6 +61,13 @@ export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks
       const ids = runs.items.map((run) => run.id).filter((id): id is number => typeof id === "number");
       return ids.length === 0 ? null : Math.max(...ids);
     },
+    companionReleased: async (tag) => {
+      const releases = await agent().githubRead({ workspaceId, ...REPOSITORY, kind: "releases", page: 1, perPage: 100 });
+      const release = releases.items.find((item) => item.tag === tag && item.draft === false);
+      const assets = Array.isArray(release?.assets) ? release.assets : [];
+      const archive = `${tag}-windows-x64.zip`;
+      return [archive, `${archive}.sha256`].every((name) => assets.some((asset) => asset.startsWith(`${name} (`)));
+    },
     requestCompanionUpdate: callbacks.requestCompanionUpdate,
     ...(callbacks.progress === undefined ? {} : { progress: callbacks.progress }),
     ...(callbacks.finished === undefined ? {} : { finished: callbacks.finished }),
