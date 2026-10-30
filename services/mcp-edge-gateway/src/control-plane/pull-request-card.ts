@@ -3,10 +3,10 @@
 // branches, lines added and removed, the files it changes and how its CI is
 // doing. Links open the pull request on GitHub.
 
-import { CARD_BASE_CSS, CARD_PIN_BUTTON, CARD_THEME_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v1.html";
+export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v2.html";
 
 export const PULL_REQUEST_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -25,7 +25,6 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
   <div class="chips">
     <span class="chip" id="size" hidden><span class="add" id="adds"></span><span class="del" id="dels"></span></span>
     <span class="chip" id="ci" hidden><span class="dot" id="ci-dot"></span>CI</span>
-    ${CARD_PIN_BUTTON}
   </div>
 </div>
 <div class="sub" id="sub"></div>
@@ -39,7 +38,7 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
   <button class="link more" id="more" type="button" hidden></button>
 </section>
 <section>
-  <button class="link" id="open" type="button">Abrir no GitHub</button>
+  <button class="btn" id="open" type="button">Abrir no GitHub</button>
 </section>
 <script>
 (function () {
