@@ -700,11 +700,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<NonNullable<BrowserExecutor["postUserMessage"]>> {
     const [input] = args;
     const message = {
-      id: `msg_${randomUUID()}`,
+      id: input.id ?? `msg_${randomUUID()}`,
       text: input.text,
       sentAt: new Date().toISOString(),
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
     };
+    const known = this.inbox.knows(message.id);
     const { added } = this.inbox.accept({ messages: [message] });
     if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
     if (added > 0) {
@@ -719,7 +720,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         // The message is already waiting here; the popup only misses its copy.
       }
     }
-    return { id: message.id, accepted: added > 0 };
+    // The card sends again when ChatGPT lost the answer; a message already here was accepted then.
+    return { id: message.id, accepted: added > 0 || known };
   }
 
   takeUserMessages(

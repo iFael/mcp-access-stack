@@ -54,6 +54,11 @@ export class PersonalBrowserTaskInbox {
     return taken;
   }
 
+  /** Whether a message with this id is waiting here or was delivered. */
+  knows(id: string): boolean {
+    return this.queued.has(id) || this.delivered.has(id);
+  }
+
   /**
    * Adds the messages of a "task-messages" push. Returns how many were new and
    * the ids already delivered, whose delivery the extension never heard of.
