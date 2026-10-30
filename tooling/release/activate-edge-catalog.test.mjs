@@ -253,7 +253,7 @@ test("candidate preparation names the Edge refusal and retries only an old-build
       return response({error:"build_contract_mismatch"},409);
     }}),
     /EDGE_CATALOG_PREPARE_OUTCOME_UNKNOWN_HTTP_409_build_contract_mismatch/);
-  assert.equal(stuck,10);
+  assert.equal(stuck,20);
 });
 
 test("workflow isolates CI/Stage identity, Environment and Cloudflare mutation", async () => {
