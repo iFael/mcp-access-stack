@@ -44,7 +44,7 @@ export type ChatWakeOutcome =
 export interface ChatWakeTarget {
   readonly name: "app";
   /** Writes the notice in this conversation (chatgpt.com/c/<id>); without one, in the conversation open. */
-  deliver(text: string, conversationId?: string): Promise<{ outcome: ChatWakeOutcome; detail?: string }>;
+  deliver(text: string, conversationId?: string): Promise<{ outcome: ChatWakeOutcome; detail?: string; front?: string }>;
   /** The conversations this place shows and whether each is answering, without writing. */
   openConversations?(): Promise<OpenConversation[]>;
 }
@@ -228,7 +228,8 @@ export class ChatWake {
         }
         this.options.log?.({ event: "mcp_v3_chat_wake_attempt", target: target.name, outcome: result.outcome,
           ...(conversationId === undefined ? {} : { conversationId }),
-          ...(result.detail === undefined ? {} : { detail: result.detail.slice(0, 200) }) });
+          ...(result.detail === undefined ? {} : { detail: result.detail.slice(0, 200) }),
+          ...(result.front === undefined ? {} : { front: result.front }) });
         if (result.outcome === "sent") {
           const sentAt = this.now();
           // Events that arrived while writing, or belong to another conversation, wait for the next notice.

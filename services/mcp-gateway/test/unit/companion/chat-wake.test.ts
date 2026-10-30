@@ -285,5 +285,12 @@ describe("the ChatGPT app for Windows", () => {
     expect(parseDesktopChatAppResult("{\"outcome\":\"typing\",\"detail\":\"x\"}")).toEqual({ outcome: "typing", detail: "x" });
     expect(parseDesktopChatAppResult("{\"outcome\":\"launch\"}")).toMatchObject({ outcome: "failed" });
     expect(parseDesktopChatAppResult("")).toMatchObject({ outcome: "failed" });
+    expect(parseDesktopChatAppResult("{\"outcome\":\"sent\",\"front\":\"restored\"}")).toEqual({ outcome: "sent", front: "restored" });
+    expect(parseDesktopChatAppResult("{\"outcome\":\"sent\",\"front\":\"x\"}")).toEqual({ outcome: "sent" });
+  });
+
+  it("gives the front back to the window the user had there", () => {
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("$before = [McpV3Front]::GetForegroundWindow()");
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("[McpV3Front]::GiveBack($script:front)");
   });
 });
