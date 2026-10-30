@@ -1,5 +1,6 @@
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError, type EdgeAuthenticator } from "./auth.js";
+import { attachNextStep, nextStepsOf } from "./next-step.js";
 import { uiResourcesForManifest } from "./user-messages-card.js";
 
 const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
@@ -81,6 +82,7 @@ export interface EdgeMcpControlPlane {
 export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): EdgeMcpControlPlane {
   // Cards are offered only when the active catalog's tools point at them.
   const uiResources = uiResourcesForManifest(options.manifest);
+  const nextSteps = nextStepsOf(options.manifest);
   return {
     async handle(request: Request): Promise<Response> {
       let principal: AuthenticatedEdgePrincipal;
@@ -149,10 +151,11 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
         });
       }
 
-      const finish = (response: Response): Promise<Response> =>
-        parsed.method === "tools/call" && options.finishToolCall
-          ? options.finishToolCall(parsed.raw, principal, response, request)
-          : Promise.resolve(response);
+      const finish = async (response: Response): Promise<Response> => {
+        if (parsed.method !== "tools/call") return response;
+        const next = await attachNextStep(parsed.raw, response, nextSteps);
+        return options.finishToolCall ? options.finishToolCall(parsed.raw, principal, next, request) : next;
+      };
 
       if (parsed.method === "tools/call" && options.localTools) {
         const localResponse = await options.localTools.handle(parsed.raw, principal, request);

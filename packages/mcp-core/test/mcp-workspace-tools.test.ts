@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, jest } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
+import { PROGRESS_CARD_URI } from "../src/mcp-browser-tools.js";
 import type {
   BackgroundTaskListResult,
   BackgroundTaskLogsLookupResult,
@@ -484,6 +485,7 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
 
 interface RegisteredTool {
   annotations?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
   handler(
     input: unknown,
     extra: { signal: AbortSignal },
@@ -536,6 +538,9 @@ describe("registerWorkspaceTools", () => {
       expectedMainSha:"a".repeat(40),planId:"plan_00000000-0000-4000-8000-000000000001"},extra);
     expect(started.isError).toBeFalsy();
     expect((started.content as Array<{text:string}>)[0]!.text).toContain("End your answer");
+    // It names the exact next call and shows the plan card by itself.
+    expect((started.content as Array<{text:string}>)[0]!.text).toContain('Next: mcp_update {"action":"read","workspaceId":"mcp-access-stack","updateId":');
+    expect(tools.mcp_update?._meta).toMatchObject({"openai/outputTemplate":PROGRESS_CARD_URI});
     expect((await tools.mcp_update!.handler({action:"read",workspaceId:"mcp-access-stack"},extra)).structuredContent)
       .toEqual({update:null});
     // A start needs the exact MAIN; a confirmation needs the update and the user's confirmationId.

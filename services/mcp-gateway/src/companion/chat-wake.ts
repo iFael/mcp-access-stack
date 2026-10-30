@@ -322,7 +322,8 @@ export function chatWakeText(events: readonly ChatWakeEvent[]): string {
   }
   for (const event of events.filter((entry) => entry.kind === "update").slice(0, 3)) {
     notes.push(`[MCP V3] A atualização do MCP ${event.updateId} ${UPDATE_STATE[event.state]} ` +
-      `(workspace ${event.workspaceId}). Veja com mcp_update action=read.`);
+      `(workspace ${event.workspaceId}). Veja com mcp_update ` +
+      `${JSON.stringify({ action: "read", workspaceId: event.workspaceId, updateId: event.updateId })}.`);
   }
   if (notes.length > 0) parts.push(notes.join("\n"));
   return parts.join("\n\n");

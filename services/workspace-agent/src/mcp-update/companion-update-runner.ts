@@ -17,7 +17,7 @@ import {
 // written before every effect, so the companion its own promote starts picks
 // up the wait and answers the next request with the outcome.
 
-export type CompanionUpdateRequest = { updateId: string; tag: string; confirmationId?: string };
+export type CompanionUpdateRequest = { updateId: string; tag: string; confirmationId?: string; attempt?: number };
 
 export type CompanionUpdateStatus = {
   updateId: string;
@@ -34,6 +34,8 @@ export interface CompanionUpdateRecord extends CompanionUpdateStatus {
   updatedAt: string;
   /** The approved confirmation, kept until the phase that asked for it is done. */
   approvedConfirmationId?: string;
+  /** The resume of the update this install runs for; a higher one tries a failed install again. */
+  attempt?: number;
   data: ReleaseInstallData;
 }
 
@@ -117,6 +119,15 @@ export class CompanionUpdateRunner {
       const { confirmation: _confirmation, ...waiting } = record;
       record = { ...waiting, state: "running", approvedConfirmationId: request.confirmationId };
       await this.save(record);
+    } else if (record.state === "failed" && (request.attempt ?? 0) > (record.attempt ?? 0)) {
+      // The update was resumed once its cause was fixed. A failed prepare is asked again;
+      // a promote already asked for is only waited for, never asked twice.
+      const { error: _error, ...failed } = record;
+      const data = record.phase === "prepare"
+        ? (record.data.activeBefore === undefined ? {} : { activeBefore: record.data.activeBefore })
+        : record.data;
+      record = { ...failed, state: "running", attempt: request.attempt!, data };
+      await this.save(record);
     }
     if (record.state === "running") this.drive(record.updateId);
     this.options.report(statusOf(record));
@@ -152,7 +163,7 @@ export class CompanionUpdateRunner {
               await this.save(record);
               break;
             }
-            if (state.candidate !== null) throw new StopUpdate("CANDIDATE_PENDING", `This companion already has candidate ${state.candidate}.`);
+            // A candidate left by an earlier prepare is only prepared, never active: this prepare replaces it.
             data = { ...data, ...(state.active === null ? {} : { activeBefore: state.active }) };
           }
           record = { ...current, phase: "promote", data: await prepareOnce(context, record.tag, data) };

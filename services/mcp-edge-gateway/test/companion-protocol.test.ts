@@ -220,6 +220,10 @@ describe("the Windows half of an MCP update", () => {
     expect(ask({ ...request, tag: "v1.1.0-beta.103-connector.1" })).toBeNull();
     expect(ask({ ...request, tag: "v1.1.0-companion.1; rm" })).toBeNull();
     expect(ask({ ...request, command: "x" })).toBeNull();
+    // A resume raises the attempt; nothing else counts as one.
+    expect(ask({ ...request, attempt: 2 })).toMatchObject({ request: { attempt: 2 } });
+    expect(ask({ ...request, attempt: 0 })).toBeNull();
+    expect(ask({ ...request, attempt: "2" })).toBeNull();
     const answer = (value: Record<string, unknown>) =>
       parseCompanionToEdgeMessage(JSON.stringify({ type: "companion-update-status", protocolVersion: COMPANION_PROTOCOL_VERSION, status: value }));
     expect(answer({ ...status, phase: "verify" })).toBeNull();

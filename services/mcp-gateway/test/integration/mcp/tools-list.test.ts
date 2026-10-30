@@ -47,7 +47,9 @@ describe("advanced browser tools list", () => {
           openWorldHint: true,
           idempotentHint: false,
         });
-        expect(tool._meta).toEqual({
+        // Its next step aside, which ends its description too.
+        const { "io.github.ifael/next-step": _next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
+        expect(meta).toEqual({
           securitySchemes: [{ type: "noauth" }],
         });
       }

@@ -105,6 +105,8 @@ export interface McpUpdateRecord {
     companionCiRunId?: number;
     companion?: McpUpdateWorkflowRun;
     companionTag?: string;
+    /** Raised by each resume at a Windows step. */
+    windowsAttempt?: number;
   };
 }
 
@@ -268,6 +270,8 @@ export class McpUpdateRunner {
     const run = STEP_RUN[record.step];
     const data = { ...rest.data };
     if (run !== undefined && error?.code === "WORKFLOW_FAILED") delete data[run];
+    // The companion tries a failed install again only for a higher attempt.
+    if (record.step === "windows_prepare" || record.step === "windows_promote") data.windowsAttempt = (data.windowsAttempt ?? 0) + 1;
     this.companionStatus.delete(updateId);
     const resumed: McpUpdateRecord = { ...rest, status: "running", data };
     await this.save(resumed);
@@ -473,6 +477,7 @@ export class McpUpdateRunner {
       updateId: record.updateId,
       tag: record.data.companionTag!,
       ...(confirmationId === undefined ? {} : { confirmationId }),
+      ...(record.data.windowsAttempt === undefined ? {} : { attempt: record.data.windowsAttempt }),
     };
     const askedSince = this.now().getTime();
     await this.until("WINDOWS_TIMEOUT", "the Windows companion", async () => {

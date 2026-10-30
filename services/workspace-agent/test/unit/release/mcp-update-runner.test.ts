@@ -368,13 +368,32 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.calls.filter((call) => call.startsWith("windows promote"))).toHaveLength(1);
   });
 
-  it("stops with the companion's own error, and when no companion answers", async () => {
+  it("replaces a candidate an earlier prepare left on Windows", async () => {
+    const env = world();
+    env.windows.candidate = "1.1.0-companion.39999";
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(done.status).toBe("succeeded");
+    expect(env.windows).toEqual({ active: "1.1.0-companion.4242", candidate: null });
+  });
+
+  it("stops with the companion's own error, tries again once resumed, and stops when no companion answers", async () => {
     const pending = world();
-    pending.windows.candidate = "1.1.0-companion.39999";
+    let fail = true;
+    const prepare = pending.windowsPort.prepare;
+    pending.windowsPort.prepare = async (tag, confirmationId) => {
+      if (fail) throw new Error("Access to the path is denied.");
+      return prepare(tag, confirmationId);
+    };
     const updates = runner(pending.port);
     const failed = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
-    expect(failed).toMatchObject({ status: "failed", step: "windows_prepare", error: { code: "CANDIDATE_PENDING" } });
-    expect(failed.error!.message).toContain("1.1.0-companion.39999");
+    expect(failed).toMatchObject({ status: "failed", step: "windows_prepare", error: { message: "Windows: Access to the path is denied." } });
+    fail = false;
+    await updates.resume(failed.updateId);
+    const done = await updates.settled(failed.updateId);
+    expect(done.status).toBe("succeeded");
+    expect(pending.requests.at(-1)).toMatchObject({ attempt: 1 });
+    expect(pending.windows.active).toBe("1.1.0-companion.4242");
 
     const silent = world({ requestCompanionUpdate: () => undefined });
     const quiet = runner(silent.port, tick, 20);

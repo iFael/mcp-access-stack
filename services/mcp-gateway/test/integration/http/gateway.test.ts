@@ -77,10 +77,13 @@ describe("embedded gateway HTTP surface", () => {
           name:tool.name, outputSchemaType:"object",
         });
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
-        // Only the tools behind a chat card carry more than their security scheme.
+        // Besides its security scheme, a tool carries its next step, and a chat card's tools their card.
+        const { "io.github.ifael/next-step": next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
+        if (next !== undefined) expect(String(tool.description)).toContain(`Next: ${String(next)}`);
+        tool._meta = meta;
         if (["browser_user_messages", "browser_user_reply", "browser_progress_read"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
-        } else if (["browser_progress", "github_get_pull_request"].includes(String(tool.name))) {
+        } else if (["browser_progress", "github_get_pull_request", "mcp_update"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],
             "openai/outputTemplate": expect.stringMatching(/^ui:\/\/mcp-v3\//u) });
         } else {

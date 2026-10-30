@@ -43,3 +43,4 @@ export * from "./windows-execution-node-contracts.js";
 export * from "./workspace-catalog.js";
 export * from "./workspace-executor.js";
 export * from "./windows-credential-broker.js";
+export * from "./mcp-tool-next-steps.js";

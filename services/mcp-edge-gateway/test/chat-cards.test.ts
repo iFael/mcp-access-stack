@@ -99,6 +99,32 @@ describe("the plan card", () => {
       steps: [{ text: "Build", state: "done", link: "https://example.com/x" }] }), "user_1"))).isError).toBe(true);
   });
 
+  it("gives mcp_update action=start its own plan, which the update then moves", async () => {
+    const plans = new ProgressPlans(memory(), () => new Date("2026-10-30T20:00:00.000Z"),
+      () => "plan_00000000-0000-4000-8000-000000000007");
+    const body = call("mcp_update", { action: "start", workspaceId: "mcp-access-stack", expectedMainSha: "a".repeat(40) });
+    await plans.openForUpdate(body, "user_1");
+    expect(body.params.arguments).toMatchObject({ planId: "plan_00000000-0000-4000-8000-000000000007" });
+    expect(await plans.applyUpdate({ planId: "plan_00000000-0000-4000-8000-000000000007",
+      steps: [{ text: "Pré-checagem", state: "done" }] }, "user_1")).toBe(true);
+    expect((await result(await plans.handle(call("browser_progress_read", { planId: "plan_00000000-0000-4000-8000-000000000007" }), "user_1")))
+      .structuredContent).toMatchObject({ title: "Atualizando o MCP", steps: [{ text: "Pré-checagem", state: "done" }] });
+
+    // A plan the agent passed, another action, another tool or no user: nothing changes.
+    for (const other of [
+      call("mcp_update", { action: "start", planId: "plan_00000000-0000-4000-8000-000000000001" }),
+      call("mcp_update", { action: "read" }),
+      call("browser_open", { url: "https://example.com" }),
+    ]) {
+      const before = JSON.stringify(other);
+      await plans.openForUpdate(other, "user_1");
+      expect(JSON.stringify(other)).toBe(before);
+    }
+    const anonymous = call("mcp_update", { action: "start" });
+    await plans.openForUpdate(anonymous, undefined);
+    expect(anonymous.params.arguments).not.toHaveProperty("planId");
+  });
+
   it("refuses what the contract refuses and leaves other tools alone", async () => {
     const plans = new ProgressPlans(memory());
     expect((await result(await plans.handle(call("browser_progress", { title: "", steps }), "user_1"))).isError).toBe(true);

@@ -16,6 +16,8 @@ export type CompanionUpdateRequest = {
   tag: string;
   /** The confirmation the user approved for the step that asked for one. */
   confirmationId?: string;
+  /** Raised by each resume of the update: a companion tries again an install that failed on a lower attempt. */
+  attempt?: number;
 };
 
 export type CompanionUpdatePhase = "prepare" | "promote";
@@ -34,15 +36,18 @@ const CONFIRMATION_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
 
 export function parseCompanionUpdateRequest(value: unknown): CompanionUpdateRequest | null {
-  if (!isRecord(value) || !onlyKeys(value, ["updateId", "tag", "confirmationId"])) return null;
+  if (!isRecord(value) || !onlyKeys(value, ["updateId", "tag", "confirmationId", "attempt"])) return null;
   if (typeof value.updateId !== "string" || !UPDATE_ID.test(value.updateId)) return null;
   if (typeof value.tag !== "string" || !COMPANION_RELEASE_TAG.test(value.tag)) return null;
   if (value.confirmationId !== undefined &&
       (typeof value.confirmationId !== "string" || !CONFIRMATION_ID.test(value.confirmationId))) return null;
+  if (value.attempt !== undefined &&
+      (typeof value.attempt !== "number" || !Number.isInteger(value.attempt) || value.attempt < 1 || value.attempt > 99)) return null;
   return {
     updateId: value.updateId,
     tag: value.tag,
     ...(value.confirmationId === undefined ? {} : { confirmationId: value.confirmationId as string }),
+    ...(value.attempt === undefined ? {} : { attempt: value.attempt as number }),
   };
 }
 

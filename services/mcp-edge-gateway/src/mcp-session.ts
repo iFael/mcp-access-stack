@@ -1132,6 +1132,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.activeMcpCatalog,
       {
         handle: async (body, principal, request) => {
+          await this.progressPlans.openForUpdate(body, principal.userId);
           const progress = await this.progressPlans.handle(body, principal.userId);
           if (progress) return progress;
           const cloudResponse = await this.repositoryControlPlane.handle(body, principal);

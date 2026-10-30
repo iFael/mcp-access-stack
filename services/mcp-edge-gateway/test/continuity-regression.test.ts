@@ -64,7 +64,7 @@ describe("MCP control-plane continuity regression", () => {
       name: "list_workspaces",
       arguments: {},
     })));
-    expect(firstExecution).toMatchObject({ result: { content: [{ text: "generation:1" }] } });
+    expect(firstExecution).toMatchObject({ result: { content: [{ text: "generation:1" }, { text: expect.stringMatching(/^Next: /u) }] } });
 
     execution.ready = false;
     execution.generation = null;
@@ -103,7 +103,7 @@ describe("MCP control-plane continuity regression", () => {
       name: "list_workspaces",
       arguments: {},
     })));
-    expect(secondExecution).toMatchObject({ result: { content: [{ text: "generation:2" }] } });
+    expect(secondExecution).toMatchObject({ result: { content: [{ text: "generation:2" }, { text: expect.stringMatching(/^Next: /u) }] } });
     expect(execution.calls).toEqual([
       { generation: 1, principal },
       { generation: 2, principal },
