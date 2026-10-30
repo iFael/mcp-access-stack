@@ -32,6 +32,7 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
   const edge = { active: OLD, candidate: null as string | null, toolCount: 119, instance: "before" };
   const windows = { active: "1.1.0-companion.40000" as string | null, candidate: null as string | null };
   const requests: CompanionUpdateRequest[] = [];
+  const owners: Array<string | undefined> = [];
   const windowsPort: ReleaseInstallPort = {
     releaseState: async () => ({ ...windows }),
     prepare: async (tag) => {
@@ -72,12 +73,16 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
       return id === undefined ? { status: "outcome_unknown" }
         : { status: "observed", runId: id, state: "completed", conclusion: "success" };
     },
-    prepare: async (tag) => {
+    prepare: async (tag, _confirmationId, ownerScope) => {
       calls.push(`prepare ${tag}`);
+      owners.push(ownerScope);
       state.candidate = tag.slice(1);
       return { status: "started", taskId: "task_1" };
     },
-    task: async () => "succeeded",
+    task: async (_taskId, ownerScope) => {
+      owners.push(ownerScope);
+      return "succeeded";
+    },
     promote: async (releaseId) => {
       calls.push(`promote ${releaseId}`);
       state.active = releaseId;
@@ -98,7 +103,7 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
     finished: (record) => finished.push(record),
     ...overrides,
   };
-  return { port, calls, dispatched, progress, finished, state, edge, windows, windowsPort, requests };
+  return { port, calls, dispatched, progress, finished, state, edge, windows, windowsPort, requests, owners };
 }
 
 describe("the autonomous MCP update on the execution node", () => {
@@ -124,6 +129,9 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(done.status).toBe("succeeded");
     // Every workflow is dispatched as the user who started the update, as if they had called it.
     expect(env.dispatched.every((call) => call.ownerScope === "user:rafael")).toBe(true);
+    // So is the prepare task: the agent can read the task it is woken about.
+    expect(env.owners.length).toBeGreaterThan(0);
+    expect(env.owners.every((owner) => owner === "user:rafael")).toBe(true);
     expect(env.calls).toEqual([
       "dispatch edge-cas-candidate-stage.yml",
       "dispatch edge-catalog-activate.yml",

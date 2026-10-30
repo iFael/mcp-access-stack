@@ -467,6 +467,7 @@ export class McpUpdateRunner {
       until: (code, what, done, since) => this.until(code, what, done, since),
       now: this.now,
       confirmationId,
+      ownerScope: record.ownerScope,
     };
   }
 
