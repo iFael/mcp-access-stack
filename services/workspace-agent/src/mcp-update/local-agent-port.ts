@@ -85,14 +85,16 @@ export function createLocalAgentReleasePort(agent: () => LocalAgent, workspaceId
       const { state } = await agent().getReleaseState({ workspaceId });
       return { active: state.active?.releaseId ?? null, candidate: state.candidate?.releaseId ?? null };
     },
-    prepare: async (tag, confirmationId) => {
-      const result = await agent().prepareRelease({ workspaceId, tag, ...(confirmationId === undefined ? {} : { confirmationId }) });
+    // As the user who asked for the update, so they can read the task it starts (and are woken about) themselves.
+    prepare: async (tag, confirmationId, ownerScope) => {
+      const result = await agent().prepareRelease({ workspaceId, tag, ...(confirmationId === undefined ? {} : { confirmationId }) },
+        ownerScope === undefined ? {} : { ownerScope });
       if (result.status === "confirmation_required") return confirmation(result);
       if (result.task === undefined) throw new AppError("INTERNAL_ERROR", "prepare_release started no task.");
       return { status: "started", taskId: result.task.id };
     },
-    task: async (taskId) => {
-      const { task } = await agent().getBackgroundTask({ workspaceId, id: taskId });
+    task: async (taskId, ownerScope) => {
+      const { task } = await agent().getBackgroundTask({ workspaceId, id: taskId }, ownerScope === undefined ? {} : { ownerScope });
       if (task === null) throw new AppError("TASK_NOT_FOUND", `Background task ${taskId} is gone.`);
       return task.state === "succeeded" ? "succeeded" : task.state === "starting" || task.state === "running" ? "running" : "failed";
     },

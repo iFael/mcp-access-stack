@@ -52,8 +52,9 @@ export type ReleaseConfirmation = {
 
 export interface ReleaseInstallPort {
   releaseState(): Promise<{ active: string | null; candidate: string | null }>;
-  prepare(tag: string, confirmationId?: string): Promise<ReleaseConfirmation | { status: "started"; taskId: string }>;
-  task(taskId: string): Promise<"running" | "succeeded" | "failed">;
+  /** ownerScope: the user who asked for the update, so the task is theirs to read like one they started. */
+  prepare(tag: string, confirmationId?: string, ownerScope?: string): Promise<ReleaseConfirmation | { status: "started"; taskId: string }>;
+  task(taskId: string, ownerScope?: string): Promise<"running" | "succeeded" | "failed">;
   promote(releaseId: string, confirmationId?: string): Promise<ReleaseConfirmation | { status: "handover_started" }>;
 }
 
@@ -74,6 +75,8 @@ export interface ReleaseInstallContext {
   now(): Date;
   /** The confirmation the user approved for this step, if it asked for one. */
   confirmationId?: string | undefined;
+  /** Who asked for the update; the prepare task is theirs. */
+  ownerScope?: string | undefined;
 }
 
 /** v1.1.0-beta.103-connector.1 → 1.1.0-beta.103-connector.1 */
@@ -82,14 +85,14 @@ export function releaseIdOf(tag: string): string {
 }
 
 export async function prepareOnce(context: ReleaseInstallContext, tag: string, data: ReleaseInstallData): Promise<ReleaseInstallData> {
-  const { port, confirmationId } = context;
+  const { port, confirmationId, ownerScope } = context;
   let taskId = data.prepareTaskId;
   if (taskId === undefined) {
     if (data.prepareRequested && confirmationId === undefined) {
       throw new StopUpdate("PREPARE_OUTCOME_UNKNOWN", "prepare_release was requested but its answer was lost; read get_release_state, never prepare again.");
     }
     await context.save({ ...data, prepareRequested: true });
-    const prepared = await port.prepare(tag, confirmationId);
+    const prepared = await port.prepare(tag, confirmationId, ownerScope);
     if (prepared.status === "confirmation_required") {
       throw new StopUpdate("CONFIRMATION_REQUIRED", "prepare_release asks for confirmation.", {
         confirmationId: prepared.confirmationId, reasons: prepared.reasons, expiresAt: prepared.expiresAt,
@@ -99,7 +102,7 @@ export async function prepareOnce(context: ReleaseInstallContext, tag: string, d
     await context.save({ ...data, prepareRequested: true, prepareTaskId: taskId });
   }
   await context.until("PREPARE_TIMEOUT", "prepare_release", async () => {
-    const state = await port.task(taskId!);
+    const state = await port.task(taskId!, ownerScope);
     if (state === "failed") throw new StopUpdate("PREPARE_FAILED", `The prepare_release task ${taskId} failed.`);
     return state === "succeeded";
   });
