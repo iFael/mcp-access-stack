@@ -78,9 +78,8 @@ async function main(): Promise<void> {
   const chatWake = new ChatWake({
     targets: () => (desktopChatApp ? [desktopChatApp] : []),
     conversationOf: (event) => conversations.conversationOf(event),
-    isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false) ||
-      (personalBrowser?.wasPassedAlong(event.messageId) ?? false),
-    passedAlong: (event) => personalBrowser?.wasPassedAlong(event.messageId) ?? false,
+    // A message that went with the result of one of the agent's calls was delivered: it is not written again.
+    isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false),
     onStatus: (status) => personalBrowser?.showChatWakeStatus(status),
     ...(notifier === undefined ? {} : { notify: notifier }),
     onSent: (events) => personalBrowser?.deliverWokenMessages(
