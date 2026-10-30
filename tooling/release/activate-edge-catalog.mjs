@@ -81,7 +81,8 @@ export function verifyProvenance(p, input, phase, receipt) {
   if (!record(p) || p.worker !== CATALOG.worker ||
       p.referenceVersionId !== input.targetVersion ||
       p.activeDeploymentId !== (phase === "before" ? input.deployment : receipt) ||
-      p.activeVersionId !== (phase === "before" ? input.activeVersion : input.targetVersion) ||
+      p.activeVersionId !== (phase === "before" || receipt === input.deployment
+        ? input.activeVersion : input.targetVersion) ||
       p.referenceVersionSource !== "wrangler" ||
       p.referenceBindingInspection?.namePresence !== "present" ||
       p.referenceBindingInspection?.type !== "secret_text" ||
@@ -145,15 +146,27 @@ const provenance = (input, compare) =>
   compare({ accountId: input.accountId, token: input.token, referenceVersionId: input.targetVersion });
 const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+/** "deployed" when an earlier activation of the same code already deployed it and only its
+ * preparation failed: the pinned deployment then runs a script identical to the staged one. */
 export async function preflight(input, {compare = compareWorkerVersions, fetchImpl = fetch} = {}) {
-  verifyProvenance(await provenance(input, compare), input, "before");
+  const first = await provenance(input, compare);
+  if (first?.status === "matching_script") {
+    verifyProvenance(first, input, "after", input.deployment);
+    verifyHealth(await health(fetchImpl), "deployed");
+    verifyProvenance(await provenance(input, compare), input, "after", input.deployment);
+    return "deployed";
+  }
+  verifyProvenance(first, input, "before");
   verifyHealth(await health(fetchImpl), "before");
   verifyProvenance(await provenance(input, compare), input, "before");
-  return true;
+  return "fresh";
 }
 
 export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {
-  await preflight(input, {compare, fetchImpl});
+  if (await preflight(input, {compare, fetchImpl}) === "deployed") {
+    console.error("EDGE_CATALOG_ALREADY_DEPLOYED id=" + input.deployment);
+    return input.deployment;
+  }
   let response;
   try {
     response = await fetchImpl(API + input.accountId + "/workers/scripts/" + CATALOG.worker + "/deployments", {

@@ -192,6 +192,29 @@ test("reconciliation never accepts the CAS-pinned previous deployment or another
   assert.equal(posts,1);
 });
 
+test("an activation whose code is already live under the pinned deployment only prepares", async () => {
+  const live = {...provenance("after"), activeDeploymentId: DEPLOY, activeVersionId: ACTIVE};
+  let posts = 0, prepares = 0;
+  const fetchImpl = async (url, request) => {
+    if (request.method === "GET") return response(health(prepares ? "prepared" : "deployed"));
+    if (String(url).includes("/deployments")) posts++;
+    else prepares++;
+    return response(prepared());
+  };
+  assert.equal(await preflight(input, {compare: async () => live, fetchImpl}), "deployed");
+  assert.equal(await deployOnce(input, {compare: async () => live, fetchImpl, sleep: async () => {}}), DEPLOY);
+  assert.equal(posts, 0);
+  assert.equal(await prepareOnce({...input, newDeployment: DEPLOY}, {compare: async () => live, fetchImpl}), true);
+  assert.equal(prepares, 1);
+
+  for (const drift of [{activeDeploymentId: RECEIPT}, {activeVersionId: TARGET}, {scriptEtagEqual: false}]) {
+    await assert.rejects(preflight(input, {compare: async () => ({...live, ...drift}), fetchImpl}),
+      /DEPLOYMENT_CAS_MISMATCH/);
+  }
+  await assert.rejects(preflight(input, {compare: async () => live, fetchImpl: async () => response(health())}),
+    /HEALTH_CAS_MISMATCH/);
+});
+
 test("post-deploy preparation sends ONE isolated-token POST, never promotes", async () => {
   let post=0,reads=0;
   const fetchImpl=async(url,init)=>{
