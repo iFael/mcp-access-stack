@@ -80,7 +80,7 @@ describe("embedded gateway HTTP surface", () => {
         // Only the tools behind a chat card carry more than their security scheme.
         if (["browser_user_messages", "browser_user_reply", "browser_progress_read"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
-        } else if (["browser_progress", "github_get_pull_request"].includes(String(tool.name))) {
+        } else if (["browser_progress", "github_get_pull_request", "mcp_update"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],
             "openai/outputTemplate": expect.stringMatching(/^ui:\/\/mcp-v3\//u) });
         } else {

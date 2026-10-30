@@ -66,7 +66,9 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   // The agent changes the plan with browser_progress_update; the card reads it again.
   function refresh() {
     var bridge = window.openai;
-    var planId = bridge && bridge.toolOutput && bridge.toolOutput.planId;
+    var out = bridge && bridge.toolOutput;
+    // browser_progress answers with the plan; mcp_update with the update that moves it.
+    var planId = out && (out.planId || (out.update && out.update.planId));
     if (!planId || typeof bridge.callTool !== "function" || document.hidden) return;
     Promise.resolve(bridge.callTool("browser_progress_read", { planId: planId })).then(function (result) {
       var value = result && (result.structuredContent || result);
@@ -142,6 +144,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   // The minutes of the step in progress go on even when nothing else changes.
   setInterval(render, 30000);
   render();
+  refresh();
 })();
 </script>
 </body>
@@ -217,14 +220,7 @@ export class ProgressPlans {
     const input = readPlanInput(args, allowed);
     if (!input) return invalid(id, name);
     if (name === "browser_progress") {
-      plan = { planId: this.newId(), title: input.title!, steps: timed([], input.steps, now), updatedAt: now, shownAt: now };
-      const kept = [...plans, plan].slice(-MAX_PLANS);
-      await this.storage.put(key, kept);
-      for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
-        await this.storage.delete(`${OWNER_PREFIX}${dropped.planId}`);
-      }
-      // A runtime given this planId finds whose plan it moves.
-      await this.storage.put(`${OWNER_PREFIX}${plan.planId}`, userId);
+      plan = await this.open(userId, plans, input.title!, input.steps);
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
@@ -236,6 +232,34 @@ export class ProgressPlans {
       ? `Plan shown to the user (planId ${plan.planId}, ${done}/${plan.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
       : `Plan updated: ${done}/${plan.steps.length} done.`;
     return toolResult(id, text, plan);
+  }
+
+  /**
+   * mcp_update action=start without a planId gets its own plan here, before
+   * the call goes on to the execution node: its answer shows the card, and
+   * the agent never has to remember to open one.
+   */
+  async openForUpdate(body: unknown, userId: string | undefined): Promise<void> {
+    if (!userId || !isRecord(body) || body.method !== "tools/call" || !isRecord(body.params) || body.params.name !== "mcp_update") return;
+    const args = body.params.arguments;
+    if (!isRecord(args) || args.action !== "start" || args.planId !== undefined) return;
+    const plans = (await this.storage.get<ProgressPlan[]>(`progress-plans:${userId}`)) ?? [];
+    const plan = await this.open(userId, plans, "Atualizando o MCP",
+      [{ text: "Pré-checagem: CI da MAIN, estado da Oracle e do Edge", state: "doing" }]);
+    args.planId = plan.planId;
+  }
+
+  private async open(userId: string, plans: ProgressPlan[], title: string, steps: ProgressStep[]): Promise<ProgressPlan> {
+    const now = this.now().toISOString();
+    const plan: ProgressPlan = { planId: this.newId(), title, steps: timed([], steps, now), updatedAt: now, shownAt: now };
+    const kept = [...plans, plan].slice(-MAX_PLANS);
+    await this.storage.put(`progress-plans:${userId}`, kept);
+    for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
+      await this.storage.delete(`${OWNER_PREFIX}${dropped.planId}`);
+    }
+    // A runtime given this planId finds whose plan it moves.
+    await this.storage.put(`${OWNER_PREFIX}${plan.planId}`, userId);
+    return plan;
   }
 
   /**

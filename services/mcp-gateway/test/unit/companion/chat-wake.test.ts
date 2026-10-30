@@ -178,7 +178,8 @@ describe("ChatWake", () => {
       "Veja com github_wait_commit_checks_watch.");
     expect(chatWakeText([{ kind: "update", updateId: "upd_00000000-0000-4000-8000-000000000001", workspaceId: "mcp-access-stack",
       state: "needs_confirmation" }])).toBe("[MCP V3] A atualização do MCP upd_00000000-0000-4000-8000-000000000001 espera uma " +
-      "confirmação (workspace mcp-access-stack). Veja com mcp_update action=read.");
+      "confirmação (workspace mcp-access-stack). Veja com mcp_update " +
+      '{"action":"read","workspaceId":"mcp-access-stack","updateId":"upd_00000000-0000-4000-8000-000000000001"}.');
     expect(wake.status()).toEqual({ enabled: true, waiting: 0,
       recent: [{ at: expect.any(Number), kinds: ["message", "task"], target: "app" }] });
     expect(statuses.at(-1)).toEqual(wake.status());

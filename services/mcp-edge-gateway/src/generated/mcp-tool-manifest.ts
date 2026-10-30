@@ -2325,6 +2325,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "openai/outputTemplate": "ui://mcp-v3/progress-v2.html",
+      "openai/toolInvocation/invoked": "Atualização do MCP",
+      "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
         {
           "scopes": [
@@ -2332,7 +2335,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           ],
           "type": "oauth2"
         }
-      ]
+      ],
+      "ui": {
+        "resourceUri": "ui://mcp-v3/progress-v2.html"
+      }
     },
     "annotations": {
       "destructiveHint": true,
@@ -2340,7 +2346,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take.",
+    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start shows the user a plan card by itself and moves it step by step; you need not open one. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -27049,15 +27055,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "b667af073aeb0d81f327b8b1ed25802de8fd1b0efec426e5849d3ff75a7ab478",
-  "serverVersion": "0.4.0-catalog.cb667af073aeb.s6c1db2a31b7f",
+  "contractRevision": "19a790ba2a67c9a343662bc7b7f492b2b046cc0ba013b1833693d3d3304946d7",
+  "serverVersion": "0.4.0-catalog.c19a790ba2a67.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cb667af073aeb.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.c19a790ba2a67.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, so its card is shown again at the end of the answer. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

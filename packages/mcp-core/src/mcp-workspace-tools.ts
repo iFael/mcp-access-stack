@@ -89,6 +89,7 @@ import {
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
+import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
   managedServiceSnapshotSchema,
@@ -1373,14 +1374,15 @@ export function registerWorkspaceTools(
       description:
         "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. " +
         "Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. " +
-        "Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. First open the plan card with browser_progress and pass its planId: the update moves the same card step by step. " +
+        "Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start shows the user a plan card by itself and moves it step by step; you need not open one. " +
         "action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. " +
         "action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. " +
         "It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take.",
       inputSchema: mcpUpdatePublishedInputSchema,
       outputSchema: mcpUpdateResultSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: false },
-      _meta: meta,
+      _meta: { ...meta, ui: { resourceUri: PROGRESS_CARD_URI }, "openai/outputTemplate": PROGRESS_CARD_URI,
+        "openai/toolInvocation/invoking": "Atualizando o MCP", "openai/toolInvocation/invoked": "Atualização do MCP" },
     }, async (input, extra) => {
       const authError = validateAuthentication(options, extra.authInfo);
       if (authError) return authError;
@@ -1390,11 +1392,14 @@ export function registerWorkspaceTools(
           options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
           (context) => executor.mcpUpdate(parsed, context)));
         const update = structuredContent.update;
+        // Each answer names the exact next call, so the agent never has to look for it.
+        const next = (action: string, extra: Record<string, string> = {}) => update === null ? "" :
+          ` Next: mcp_update ${JSON.stringify({ action, workspaceId: "mcp-access-stack", updateId: update.updateId, ...extra })}.`;
         const text = update === null ? "No MCP update yet."
-          : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). End your answer; you are woken when it stops.`
+          : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). End your answer; you are woken when it stops.${next("read")}`
             : update.status === "succeeded" ? `MCP update ${update.updateId} succeeded (${update.tag ?? "no tag"}).`
-              : update.status === "needs_confirmation" ? `MCP update ${update.updateId} waits for confirmation ${update.confirmation?.confirmationId} at ${update.step}; show the reasons to the user.`
-                : `MCP update ${update.updateId} stopped at ${update.step}: ${update.error?.code}: ${update.error?.message}. Find and fix the cause yourself, then action=resume.`;
+              : update.status === "needs_confirmation" ? `MCP update ${update.updateId} waits for confirmation at ${update.step}; show the reasons to the user and, once they approve,${next("confirm", { confirmationId: update.confirmation?.confirmationId ?? "" }).slice(0, -1)}.`
+                : `MCP update ${update.updateId} stopped at ${update.step}: ${update.error?.code}: ${update.error?.message}. Find and fix the cause yourself, then resume.${next("resume")}`;
         return { content: [{ type: "text", text }], structuredContent };
       } catch (error) { return toolError(error); }
     });
