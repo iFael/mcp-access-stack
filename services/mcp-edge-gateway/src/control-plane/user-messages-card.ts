@@ -8,7 +8,7 @@ import { CARD_BASE_CSS } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v4.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v5.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -27,34 +27,39 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 ${CARD_BASE_CSS}
-  .task { color: var(--muted); font-size: 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
-  .question { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--soft); white-space: pre-wrap; }
-  .question b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
-  #options { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
-  #options button { text-align: left; background: var(--soft); color: var(--fg); border: 1px solid var(--line); font-weight: 400; }
-  #options button.chosen { border-color: var(--accent); font-weight: 600; }
-  textarea { width: 100%; min-height: 64px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
-  .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-  button { padding: 7px 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
-  button:disabled { opacity: .55; cursor: default; }
-  .status { color: var(--muted); font-size: 12px; }
+  .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+  #options .chosen { border-color: var(--fg); font-weight: 600; }
+  #options .btn:disabled:not(.chosen) { opacity: .45; }
+  #sent { display: flex; flex-direction: column; gap: 10px; margin: 0 0 12px; }
+  #sent li { display: flex; flex-direction: column; align-items: flex-end; padding: 0; }
+  .bubble { max-width: 85%; padding: 8px 12px; border-radius: 16px 16px 4px 16px; background: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .state { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; color: var(--muted); font-size: 11px; }
+  .state.done { color: var(--good); }
+  .state .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .field { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--soft); }
+  .field:focus-within { border-color: var(--muted); }
+  textarea { flex: 1; min-height: 24px; max-height: 140px; margin: 6px 0; padding: 0; border: 0; outline: 0; resize: none; background: transparent; color: var(--fg); font: inherit; line-height: 1.45; }
+  textarea::placeholder { color: var(--muted); }
+  #send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+  #send:disabled { opacity: .25; cursor: default; }
+  .status { min-height: 0; margin: 6px 4px 0; color: var(--muted); font-size: 12px; }
+  .status:empty { display: none; }
   .status.bad { color: var(--bad); }
-  #sent { margin-top: 10px; }
-  #sent li { display: block; padding: 6px 0; border-top: 1px solid var(--line); white-space: pre-wrap; }
-  li small { display: block; color: var(--muted); }
 </style>
 </head>
 <body>
-<div class="head"><h1>Conversa com a tarefa</h1></div>
-<div class="task" id="task">O agente continua trabalhando enquanto você escreve.</div>
-<p class="question" id="question" hidden><b>O agente pergunta</b><span id="question-text"></span></p>
+<p class="question" id="question" hidden></p>
 <div id="options" hidden></div>
+<ul id="sent"></ul>
 <div id="composer">
-  <textarea id="text" maxlength="2000" placeholder="Escreva para o agente sem interromper a tarefa"></textarea>
-  <div class="row"><button id="send" type="button">Enviar</button><span class="status" id="status"></span></div>
+  <div class="field">
+    <textarea id="text" rows="1" maxlength="2000" placeholder="Escreva para o agente"></textarea>
+    <button class="btn primary" id="send" type="button" aria-label="Enviar" title="Enviar"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+  <p class="status" id="status"></p>
 </div>
 <p class="status" id="unavailable" hidden>Este app não deixa o cartão enviar mensagens. Responda pelo ícone da extensão MCP V3 no Chrome.</p>
-<ul id="sent"></ul>
 <script>
 (function () {
   var bridge = window.openai;
@@ -75,39 +80,56 @@ ${CARD_BASE_CSS}
     if (bridge && (bridge.theme === "dark" || bridge.theme === "light")) document.documentElement.setAttribute("data-theme", bridge.theme);
     var args = input();
     var choices = options();
-    var doing = choices.length > 0
-      ? "O agente parou e espera sua escolha. Escolha uma opção ou escreva abaixo; a resposta entra nesta conversa."
-      : "O agente continua trabalhando enquanto você escreve.";
-    document.getElementById("task").textContent = typeof args.taskId === "string" ? "Tarefa " + args.taskId + ". " + doing : doing;
+    var question = typeof args.question === "string" ? args.question.trim() : "";
+    var asking = document.getElementById("question");
+    asking.hidden = question === "";
+    asking.textContent = question;
     var box = document.getElementById("options");
     box.textContent = "";
     box.hidden = choices.length === 0;
     choices.forEach(function (label, index) {
       var button = document.createElement("button");
       button.type = "button";
-      button.textContent = String.fromCharCode(65 + index) + ") " + label;
-      if (chosen === index) button.className = "chosen";
+      button.className = "btn";
+      if (chosen === index) {
+        button.className = "btn chosen";
+        button.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      }
+      button.appendChild(document.createTextNode(label));
       button.disabled = busy || chosen !== null || !bridge || typeof bridge.callTool !== "function";
-      button.addEventListener("click", function () { submit("Escolho " + button.textContent, index); });
+      button.addEventListener("click", function () { submit("Escolho " + label, index); });
       box.appendChild(button);
     });
-    var question = typeof args.question === "string" ? args.question.trim() : "";
-    document.getElementById("question").hidden = question === "";
-    document.getElementById("question-text").textContent = question;
+    text.placeholder = choices.length > 0 ? "Ou escreva outra resposta" : "Escreva para o agente";
     var list = document.getElementById("sent");
     list.textContent = "";
-    sent.slice().reverse().forEach(function (item) {
+    sent.forEach(function (item) {
       var li = document.createElement("li");
-      var when = document.createElement("small");
-      when.textContent = item.deliveredAt
-        ? "Enviado às " + item.at + ". Entregue ao agente às " + item.deliveredAt + "."
-        : item.watch === false
-          ? "Enviado às " + item.at + ". Chega ao agente com a próxima ação dele."
-          : "Enviado às " + item.at + ". Ainda não entregue: chega ao agente quando a ação dele em andamento terminar.";
-      li.textContent = item.text;
-      li.appendChild(when);
+      var bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = item.text;
+      var state = document.createElement("span");
+      if (item.deliveredAt) {
+        state.className = "state done";
+        state.textContent = "✓ Entregue às " + item.deliveredAt;
+      } else if (item.watch === false) {
+        state.className = "state";
+        state.textContent = "Enviado às " + item.at;
+      } else {
+        state.className = "state";
+        state.title = "Chega ao agente quando a ação dele em andamento terminar.";
+        var pulse = document.createElement("span");
+        pulse.className = "pulse";
+        state.appendChild(pulse);
+        state.appendChild(document.createTextNode("Enviado às " + item.at + " · aguardando o agente"));
+      }
+      li.appendChild(bubble);
+      li.appendChild(state);
       list.appendChild(li);
     });
+    list.hidden = sent.length === 0;
+    text.style.height = "auto";
+    text.style.height = Math.min(text.scrollHeight, 140) + "px";
     send.disabled = busy || text.value.trim() === "";
   }
   function restore() {
@@ -160,8 +182,9 @@ ${CARD_BASE_CSS}
   }
 
   text.addEventListener("input", render);
+  // Enter sends, Shift+Enter breaks the line, as in the ChatGPT field.
   text.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); send.click(); }
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send.click(); }
   });
   send.addEventListener("click", function () { submit(text.value.trim(), null); });
   function submit(value, choice) {
@@ -196,7 +219,7 @@ ${CARD_BASE_CSS}
       sent = sent.slice(-20);
       if (choice === null) text.value = "";
       else chosen = choice;
-      setStatus("Enviado.", false);
+      setStatus("", false);
       save();
       watch(item);
     }).catch(function (error) {

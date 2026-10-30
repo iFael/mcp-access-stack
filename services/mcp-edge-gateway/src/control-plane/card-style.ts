@@ -2,31 +2,42 @@
 // one set: the colors in light and dark, a header with the title on the left
 // and small chips on the right, muted secondary lines and quiet lists.
 export const CARD_BASE_CSS = `
-  :root { --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --soft: #f6f8fa; --accent: #0969da; --accent-fg: #ffffff; --good: #1a7f37; --bad: #cf222e; --warn: #9a6700; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #212121; --fg: #ececec; --muted: #a3a3a3; --line: #424242; --soft: #2a2a2a; --accent: #4493f8; --accent-fg: #ffffff; --good: #3fb950; --bad: #ff7b72; --warn: #d29922; } }
-  :root[data-theme="dark"] { --bg: #212121; --fg: #ececec; --muted: #a3a3a3; --line: #424242; --soft: #2a2a2a; --accent: #4493f8; --accent-fg: #ffffff; --good: #3fb950; --bad: #ff7b72; --warn: #d29922; }
+  :root { --bg: #ffffff; --fg: #0d0d0d; --muted: #6b6b6b; --line: rgba(0, 0, 0, .09); --soft: #f4f4f4; --accent: #2f6fdb; --accent-fg: #ffffff;
+    --good: #12805c; --bad: #d93025; --warn: #b26b00; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #212121; --fg: #ececec; --muted: #a0a0a0; --line: rgba(255, 255, 255, .1);
+    --soft: #2f2f2f; --accent: #6aa6ff; --accent-fg: #0d0d0d; --good: #3ecf8e; --bad: #ff6b6b; --warn: #e3a33b; } }
+  :root[data-theme="dark"] { --bg: #212121; --fg: #ececec; --muted: #a0a0a0; --line: rgba(255, 255, 255, .1);
+    --soft: #2f2f2f; --accent: #6aa6ff; --accent-fg: #0d0d0d; --good: #3ecf8e; --bad: #ff6b6b; --warn: #e3a33b; }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 14px 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .head h1 { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased;
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+  .head h1 { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; overflow-wrap: anywhere; }
   .chips { display: flex; flex: none; gap: 6px; }
-  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 6px; background: var(--soft); font-size: 12px; font-weight: 600; white-space: nowrap; }
-  .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--soft);
+    font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 12px; overflow-wrap: anywhere; }
   .add { color: var(--good); }
   .del { color: var(--bad); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .dot.good { background: var(--good); }
   .dot.bad { background: var(--bad); }
   .dot.warn { background: var(--warn); }
-  section { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
-  section h2 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  section { margin-top: 14px; }
+  section h2 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   ul { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; align-items: flex-start; gap: 10px; padding: 3px 0; overflow-wrap: anywhere; }
+  li { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; overflow-wrap: anywhere; }
   .grow { flex: 1; min-width: 0; }
-  .num { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .num { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   a, .link { color: var(--accent); text-decoration: none; cursor: pointer; background: none; border: 0; padding: 0; font: inherit; }
+  a:hover, .link:hover { text-decoration: underline; }
   .muted { color: var(--muted); font-size: 12px; }
-  .pin { flex: none; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+  /* Actions: rounded pills, as ChatGPT draws them. */
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+    background: transparent; color: var(--fg); font: inherit; cursor: pointer; transition: background .15s, border-color .15s; }
+  .btn:hover:not(:disabled) { background: var(--soft); }
+  .btn:disabled { cursor: default; }
+  .btn.primary { border-color: transparent; background: var(--fg); color: var(--bg); font-weight: 500; }
   [hidden] { display: none !important; }
 `;
 
@@ -51,6 +62,3 @@ export const CARD_THEME_SCRIPT = `
       .then(applyTheme, applyTheme);
   });
 `;
-
-/** The button that pins a card; shown only where ChatGPT can float it. */
-export const CARD_PIN_BUTTON = `<button class="pin" id="pin" type="button" title="Manter o cartão visível enquanto a conversa rola" hidden>Fixar</button>`;

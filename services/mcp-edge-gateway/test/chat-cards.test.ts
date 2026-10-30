@@ -153,9 +153,11 @@ describe("the chat cards the Edge serves", () => {
 
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v4.html");
-    expect(card!.text).toContain("Entregue ao agente às");
-    expect(card!.text).toContain("Ainda não entregue");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v5.html");
+    expect(card!.text).toContain("Entregue às");
+    expect(card!.text).toContain("aguardando o agente");
+    // Clean: no title or task id over the field.
+    expect(card!.text).not.toContain("Conversa com a tarefa");
     // It asks again with the same id, which never sends the message twice.
     expect(card!.text).toContain("structured.delivered === true");
     expect(card!.text).not.toContain("${");

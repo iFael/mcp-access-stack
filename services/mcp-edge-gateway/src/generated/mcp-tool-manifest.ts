@@ -2339,7 +2339,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v2.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v3.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2351,7 +2351,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v2.html"
+        "resourceUri": "ui://mcp-v3/progress-v3.html"
       }
     },
     "annotations": {
@@ -14043,7 +14043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_start_commit_checks_watch on its head for CI; github_read for its reviews and comments.",
-      "openai/outputTemplate": "ui://mcp-v3/pull-request-v1.html",
+      "openai/outputTemplate": "ui://mcp-v3/pull-request-v2.html",
       "openai/toolInvocation/invoked": "PR",
       "openai/toolInvocation/invoking": "Lendo a PR",
       "securitySchemes": [
@@ -14055,7 +14055,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/pull-request-v1.html"
+        "resourceUri": "ui://mcp-v3/pull-request-v2.html"
       }
     },
     "annotations": {
@@ -25545,7 +25545,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v4.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v5.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25558,7 +25558,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v4.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v5.html"
       }
     },
     "annotations": {
@@ -25748,7 +25748,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v2.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v3.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "securitySchemes": [
@@ -25760,7 +25760,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v2.html"
+        "resourceUri": "ui://mcp-v3/progress-v3.html"
       }
     },
     "annotations": {
