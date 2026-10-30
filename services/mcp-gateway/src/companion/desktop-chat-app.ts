@@ -9,7 +9,9 @@ import type { OpenConversation } from "./conversation-book.js";
 // keystrokes, clipboard or taking focus. It only reads the window when the
 // agent is answering (a Stop button) or the user has something in the field,
 // and when the app shows another conversation than the notice's, read before
-// filling and again before sending. The app's page address is its own
+// filling and again before sending. Filling the field can still bring the
+// app to the front, so the window the user had in front gets it back.
+// The app's page address is its own
 // (app://-/index.html), so a conversation is known by its title, the name of
 // the page; a generic title ("ChatGPT", "Nova conversa") names none.
 // With MCP_V3_WAKE_INSPECT it writes nothing and tells which conversation is
@@ -19,13 +21,42 @@ export const DESKTOP_CHAT_APP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell writes its output in the console code page, which turned
 # "Homologação" into a different title than the app shows: only ASCII leaves.
+$script:front = [IntPtr]::Zero
+$script:chat = [IntPtr]::Zero
 function Done($result) {
+  if ($script:front -ne [IntPtr]::Zero) {
+    try {
+      Start-Sleep -Milliseconds 300
+      if ([McpV3Front]::GetForegroundWindow() -eq $script:chat) {
+        $result.front = if ([McpV3Front]::GiveBack($script:front)) { 'restored' } else { 'kept' }
+      }
+    } catch {}
+  }
   $json = $result | ConvertTo-Json -Compress
   [regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
   exit 0
 }
 try {
   Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+  Add-Type -Language CSharp @'
+using System;
+using System.Runtime.InteropServices;
+public static class McpV3Front {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  // Windows lets only the thread in front choose the next one: join its input for the call.
+  public static bool GiveBack(IntPtr hWnd) {
+    uint me = GetCurrentThreadId();
+    uint now = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+    bool joined = now != 0 && now != me && AttachThreadInput(me, now, true);
+    try { return SetForegroundWindow(hWnd); }
+    finally { if (joined) AttachThreadInput(me, now, false); }
+  }
+}
+'@
   $A = [System.Windows.Automation.AutomationElement]
   $T = [System.Windows.Automation.TreeScope]
   $All = [System.Windows.Automation.Condition]::TrueCondition
@@ -72,6 +103,9 @@ try {
   if (-not $s.composer) { Done @{ outcome = 'failed'; detail = 'no-message-field' } }
   if ($s.stop) { Done @{ outcome = 'busy' } }
   $field = $s.composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+  $script:chat = [IntPtr]$window.Current.NativeWindowHandle
+  $before = [McpV3Front]::GetForegroundWindow()
+  if ($before -ne $script:chat) { $script:front = $before }
   # Empty, the field reads back its own placeholder ("Pergunte ao ChatGPT").
   $current = ([string]$field.Current.Value).Trim()
   if ($current -and $current -ne $s.composer.Current.Name.Trim()) { Done @{ outcome = 'typing' } }
@@ -165,14 +199,16 @@ export function createDesktopChatAppTarget(options: DesktopChatAppOptions): Chat
   }
 }
 
-export function parseDesktopChatAppResult(output: string): { outcome: ChatWakeOutcome; detail?: string } {
+export function parseDesktopChatAppResult(output: string): { outcome: ChatWakeOutcome; detail?: string; front?: string } {
   const line = output.trim().split(/\r?\n/u).at(-1) ?? "";
   try {
-    const parsed = JSON.parse(line) as { outcome?: unknown; detail?: unknown };
+    const parsed = JSON.parse(line) as { outcome?: unknown; detail?: unknown; front?: unknown };
     if (typeof parsed.outcome === "string" && OUTCOMES.has(parsed.outcome as ChatWakeOutcome)) {
       return {
         outcome: parsed.outcome as ChatWakeOutcome,
         ...(typeof parsed.detail === "string" ? { detail: parsed.detail.slice(0, 200) } : {}),
+        // Whether the app took the front and the user's window got it back.
+        ...(parsed.front === "restored" || parsed.front === "kept" ? { front: parsed.front } : {}),
       };
     }
   } catch {
