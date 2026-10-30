@@ -720,8 +720,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         // The message is already waiting here; the popup only misses its copy.
       }
     }
-    // The card sends again when ChatGPT lost the answer; a message already here was accepted then.
-    return { id: message.id, accepted: added > 0 || known };
+    // The card sends again when ChatGPT lost the answer, and to learn whether the agent has it yet:
+    // a message already here was accepted then, and never goes in twice.
+    return { id: message.id, accepted: added > 0 || known, delivered: known && !this.inbox.holds(message.id) };
   }
 
   takeUserMessages(

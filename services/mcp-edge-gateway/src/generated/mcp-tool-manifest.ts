@@ -25545,7 +25545,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v3.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v4.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25558,7 +25558,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v3.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v4.html"
       }
     },
     "annotations": {
@@ -25727,6 +25727,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "additionalProperties": false,
       "properties": {
         "accepted": {
+          "type": "boolean"
+        },
+        "delivered": {
           "type": "boolean"
         },
         "id": {
@@ -27160,15 +27163,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "97953d3f1821cd52597c4fe994e1bd3298b53756ed57c37f877954468dabd2d3",
-  "serverVersion": "0.4.0-catalog.c97953d3f1821.s6c1db2a31b7f",
+  "contractRevision": "c54546cd22ef74fbd3b91d1ddd023471aed7f62f9621d9e5db3e999dfd6d9127",
+  "serverVersion": "0.4.0-catalog.cc54546cd22ef.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c97953d3f1821.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.cc54546cd22ef.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, so its card is shown again at the end of the answer. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

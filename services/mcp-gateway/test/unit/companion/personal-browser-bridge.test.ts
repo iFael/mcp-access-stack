@@ -1601,7 +1601,7 @@ describe("PersonalBrowserBridge popup messages", () => {
       const shown = nextWireMessage(extension, (wire) => wire.type === "task-messages-external");
       const answer = bridge.userMessages({ taskId: "task-1", question: "Posso apagar?", waitMs: 5_000 });
       const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pode apagar." });
-      expect(posted).toEqual({ id: expect.stringMatching(/^msg_[0-9a-f-]{36}$/u), accepted: true });
+      expect(posted).toEqual({ id: expect.stringMatching(/^msg_[0-9a-f-]{36}$/u), accepted: true, delivered: false });
       await expect(shown).resolves.toMatchObject({ message: { id: posted.id, text: "Pode apagar.", taskId: "task-1" } });
       await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: posted.id, text: "Pode apagar." }] });
       // The extension sends it back with its own copies after a reconnect: it is only acknowledged.
@@ -1628,7 +1628,7 @@ describe("PersonalBrowserBridge popup messages", () => {
       await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: "msg_card12345", text: "Pode." }] });
       // The card sends the same id again when ChatGPT lost the first answer: accepted, never twice.
       await expect(bridge.postUserMessage({ taskId: "task-1", text: "Pode.", id: "msg_card12345" }))
-        .resolves.toEqual({ id: "msg_card12345", accepted: true });
+        .resolves.toEqual({ id: "msg_card12345", accepted: true, delivered: true });
       expect(bridge.pendingUserMessages()).toBe(0);
       expect(posted.id).toBe("msg_card12345");
 
@@ -1637,8 +1637,13 @@ describe("PersonalBrowserBridge popup messages", () => {
       const extension = await connectExtension(port, token,
         PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "taskMessagesV1"), "1.12.1");
       try {
-        await bridge.postUserMessage({ text: "Outra." });
+        await bridge.postUserMessage({ text: "Outra.", id: "msg_card67890" });
+        // Asked again by the card before the agent took it: accepted, not yet delivered, still once.
+        await expect(bridge.postUserMessage({ text: "Outra.", id: "msg_card67890" }))
+          .resolves.toEqual({ id: "msg_card67890", accepted: true, delivered: false });
         await expect(bridge.userMessages({})).resolves.toMatchObject({ messages: [{ text: "Outra." }] });
+        await expect(bridge.postUserMessage({ text: "Outra.", id: "msg_card67890" }))
+          .resolves.toMatchObject({ delivered: true });
       } finally {
         extension.close();
       }

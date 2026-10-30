@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import { ProgressPlans, PROGRESS_CARD_URI } from "../src/control-plane/progress-card.js";
 import { PULL_REQUEST_CARD_URI } from "../src/control-plane/pull-request-card.js";
-import { uiResourcesForManifest } from "../src/control-plane/user-messages-card.js";
+import { USER_MESSAGES_CARD_URI, uiResourcesForManifest } from "../src/control-plane/user-messages-card.js";
 
 function call(name: string, args: Record<string, unknown>, id = 1) {
   return { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } };
@@ -149,5 +149,15 @@ describe("the chat cards the Edge serves", () => {
       expect(resource.text).toContain("requestDisplayMode");
       expect(resource.text).not.toContain("${");
     }
+  });
+
+  it("tells in the reply card whether the agent has each message yet", () => {
+    const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v4.html");
+    expect(card!.text).toContain("Entregue ao agente às");
+    expect(card!.text).toContain("Ainda não entregue");
+    // It asks again with the same id, which never sends the message twice.
+    expect(card!.text).toContain("structured.delivered === true");
+    expect(card!.text).not.toContain("${");
   });
 });
