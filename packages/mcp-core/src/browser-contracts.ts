@@ -1147,15 +1147,26 @@ export const browserProgressStepSchema = z
   .object({
     text: z.string().trim().min(1).max(200),
     state: z.enum(["done", "doing", "todo", "failed", "skipped"]),
+    /** Why the step is waiting, or what it is doing now, in a few words. */
+    detail: z.string().trim().min(1).max(160).optional(),
+    /** The GitHub page that shows this step (a workflow run, a pull request). */
+    link: z.string().regex(/^https:\/\/github\.com\/[^\s"<>]{1,280}$/u).optional(),
   })
   .strict();
 const progressPlanIdSchema = z.string().regex(/^plan_[0-9a-f-]{36}$/);
 export const browserProgressInputSchema = z
   .object({
-    title: z.string().trim().min(1).max(120),
-    steps: z.array(browserProgressStepSchema).min(1).max(20),
+    title: z.string().trim().min(1).max(120).optional(),
+    steps: z.array(browserProgressStepSchema).min(1).max(20).optional(),
+    /** Shows the card of this plan again, as it is now, where the answer is. */
+    planId: progressPlanIdSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => value.planId !== undefined
+    ? value.title === undefined && value.steps === undefined
+    : value.title !== undefined && value.steps !== undefined, {
+    message: "Pass title and steps to open a plan, or only planId to show its card again.",
+  });
 export type BrowserProgressInput = z.infer<typeof browserProgressInputSchema>;
 export const browserProgressUpdateInputSchema = z
   .object({
@@ -1169,8 +1180,14 @@ export const browserProgressPlanSchema = z
   .object({
     planId: progressPlanIdSchema,
     title: z.string().min(1).max(120),
-    steps: z.array(browserProgressStepSchema).min(1).max(20),
+    steps: z.array(browserProgressStepSchema.extend({
+      /** When the step began and ended, as the Edge saw its states change. */
+      startedAt: z.iso.datetime().optional(),
+      endedAt: z.iso.datetime().optional(),
+    }).strict()).min(1).max(20),
     updatedAt: z.iso.datetime(),
+    /** When its card was last shown; an older card of the plan folds into one line. */
+    shownAt: z.iso.datetime().optional(),
   })
   .strict();
 export type BrowserProgressPlan = z.infer<typeof browserProgressPlanSchema>;

@@ -38,7 +38,7 @@ export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v2.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v1.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v2.html";
 const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
   browser_user_messages: {
     ui: { resourceUri: USER_MESSAGES_CARD_URI },
@@ -587,7 +587,7 @@ function definitions(
         (activeContext) => postUserMessage(assumeParsed(v), activeContext),
       );
     }),
-    d("browser_progress", "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself; do not open another card for the same job.", c.browserProgressInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress")),
+    d("browser_progress", "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. While the job goes on, end each answer with browser_progress and only that planId: the card shows again at the end, as it is now, and its older copies fold into one line; never open a second plan for the same job.", c.browserProgressInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress")),
     d("browser_progress_update", "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears.", c.browserProgressUpdateInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress_update")),
     d("browser_progress_read", "Only the plan card of browser_progress calls this, to follow the plan; never call it yourself.", c.browserProgressReadInputSchema, c.browserProgressPlanSchema, true, () => edgeOnly("browser_progress_read")),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(

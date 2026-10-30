@@ -54,6 +54,16 @@ const STEP_TEXT: Record<McpUpdateStep, string> = {
   windows_promote: "Promote no Windows (a tarefa de 5 minutos aplica a troca)",
 };
 
+// The workflow each step runs, whose GitHub page the card links to.
+const STEP_RUN: Partial<Record<McpUpdateStep, "stage" | "activate" | "bootstrap" | "release" | "companion">> = {
+  edge_stage: "stage",
+  edge_activate: "activate",
+  connector_tag: "bootstrap",
+  connector_release: "release",
+  companion_release: "companion",
+};
+const RUN_URL = "https://github.com/iFael/mcp-access-stack/actions/runs/";
+
 const CONFIRMABLE_STEPS = ["oracle_prepare", "oracle_promote", "windows_prepare", "windows_promote"] as const;
 
 export type McpUpdateStatus = "running" | "succeeded" | "failed" | "needs_confirmation";
@@ -140,7 +150,12 @@ export interface McpUpdatePort extends ReleaseInstallPort {
   /** Asks the user's companions, through the Edge, to install the Windows release; repeated while waiting. */
   requestCompanionUpdate(request: CompanionUpdateRequest): void;
   /** The plan card the agent opened, moved to the update's steps. */
-  progress?(planId: string, title: string, steps: Array<{ text: string; state: "done" | "doing" | "todo" | "failed" | "skipped" }>): void;
+  progress?(planId: string, title: string, steps: Array<{
+    text: string;
+    state: "done" | "doing" | "todo" | "failed" | "skipped";
+    detail?: string;
+    link?: string;
+  }>): void;
   /** The update stopped: it succeeded, failed or waits for a confirmation. */
   finished?(record: McpUpdateRecord): void;
 }
@@ -174,6 +189,8 @@ export class McpUpdateRunner {
   private readonly driving = new Set<string>();
   /** The latest answer of the companion for each update; it answers again whenever asked. */
   private readonly companionStatus = new Map<string, CompanionUpdateStatus>();
+  /** What the step in progress waits for, shown under it on the card; not kept across restarts. */
+  private readonly waiting = new Map<string, { step: McpUpdateStep; detail: string; runId?: number }>();
 
   constructor(private readonly options: McpUpdateRunnerOptions) {
     this.now = options.now ?? (() => new Date());
@@ -250,7 +267,10 @@ export class McpUpdateRunner {
   private drive(updateId: string): void {
     if (this.driving.has(updateId)) return;
     this.driving.add(updateId);
-    void this.run(updateId).finally(() => this.driving.delete(updateId));
+    void this.run(updateId).finally(() => {
+      this.driving.delete(updateId);
+      this.waiting.delete(updateId);
+    });
   }
 
   private async run(updateId: string): Promise<void> {
@@ -297,6 +317,7 @@ export class McpUpdateRunner {
     switch (record.step) {
       case "precheck": {
         if ((await port.mainHead()) !== record.mainSha) throw new StopUpdate("MAIN_MOVED", "main is no longer the MAIN this update was asked for.");
+        this.wait(record, "Esperando o CI da MAIN");
         await this.until("CI_NOT_GREEN", "MAIN's CI", async () => {
           const checks = await port.checks(record.mainSha);
           if (checks === "failed") throw new StopUpdate("CI_FAILED", "A check failed on MAIN.");
@@ -426,6 +447,9 @@ export class McpUpdateRunner {
     await this.until("WINDOWS_TIMEOUT", "the Windows companion", async () => {
       this.options.port.requestCompanionUpdate(request);
       const status = this.companionStatus.get(record.updateId);
+      this.wait(record, status === undefined ? "Esperando o companion do Windows responder"
+        : status.phase === "promote" ? "Esperando a tarefa de 5 minutos aplicar a troca"
+          : "Instalando no Windows; costuma levar uns 16 min");
       if (status === undefined) {
         if (this.now().getTime() - askedSince >= this.companionAnswerMs) {
           throw new StopUpdate("COMPANION_NOT_ANSWERING",
@@ -468,9 +492,15 @@ export class McpUpdateRunner {
     let runId: number | undefined;
     await this.until("WORKFLOW_TIMEOUT", call.workflow, async () => {
       const observed = await port.reconcile(full(operationId));
-      if (observed.status !== "observed") return false;
+      if (observed.status !== "observed") {
+        this.wait(record, "Esperando o GitHub mostrar o run");
+        return false;
+      }
       runId = observed.runId;
-      if (observed.state !== "completed") return false;
+      if (observed.state !== "completed") {
+        this.wait(record, observed.state === "queued" ? "Na fila do GitHub" : "Rodando no GitHub", observed.runId);
+        return false;
+      }
       if (observed.conclusion !== "success") {
         throw new StopUpdate("WORKFLOW_FAILED", `${call.workflow} run ${observed.runId} ended ${observed.conclusion}.`);
       }
@@ -488,17 +518,36 @@ export class McpUpdateRunner {
     }
   }
 
+  /** Says on the card what the step in progress waits for, when that changes. */
+  private wait(record: McpUpdateRecord, detail: string, runId?: number): void {
+    const before = this.waiting.get(record.updateId);
+    if (before?.step === record.step && before.detail === detail && before.runId === runId) return;
+    this.waiting.set(record.updateId, { step: record.step, detail, ...(runId === undefined ? {} : { runId }) });
+    this.report(record);
+  }
+
   private report(record: McpUpdateRecord): void {
     if (record.planId === undefined || !this.options.port.progress) return;
     const at = MCP_UPDATE_STEPS.indexOf(record.step);
-    const steps = MCP_UPDATE_STEPS.map((step, index) => ({
-      text: STEP_TEXT[step],
-      state: record.skipped.includes(step) ? "skipped" as const
+    const waiting = this.waiting.get(record.updateId);
+    const steps = MCP_UPDATE_STEPS.map((step, index) => {
+      const state = record.skipped.includes(step) ? "skipped" as const
         : index < at || record.status === "succeeded" ? "done" as const
           : index > at ? "todo" as const
             : record.status === "failed" ? "failed" as const
-              : "doing" as const,
-    }));
+              : "doing" as const;
+      const run = STEP_RUN[step];
+      const runId = (run === undefined ? undefined : record.data[run]?.runId) ??
+        (waiting?.step === step ? waiting.runId : undefined);
+      const detail = state === "failed" ? record.error?.message.slice(0, 160)
+        : state === "doing" && waiting?.step === step ? waiting.detail : undefined;
+      return {
+        text: STEP_TEXT[step],
+        state,
+        ...(detail === undefined ? {} : { detail }),
+        ...(runId === undefined ? {} : { link: `${RUN_URL}${runId}` }),
+      };
+    });
     const title = record.status === "succeeded" ? "MCP atualizado"
       : record.status === "failed" ? "Atualização do MCP parou"
         : record.status === "needs_confirmation" ? "Atualização do MCP: falta uma confirmação"

@@ -26,7 +26,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0
 function world(overrides: Partial<McpUpdatePort> = {}) {
   const calls: string[] = [];
   const dispatched: McpUpdateWorkflowCall[] = [];
-  const progress: Array<{ title: string; steps: Array<{ text: string; state: string }> }> = [];
+  const progress: Array<{ title: string; steps: Array<{ text: string; state: string; detail?: string; link?: string }> }> = [];
   const finished: McpUpdateRecord[] = [];
   const state = { active: "1.1.0-beta.102-connector.1" as string | null, candidate: null as string | null };
   const edge = { active: OLD, candidate: null as string | null, toolCount: 119, instance: "before" };
@@ -145,6 +145,31 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.progress.at(-1)).toMatchObject({ title: "MCP atualizado" });
     expect(env.progress.at(-1)!.steps.every((step) => step.state === "done")).toBe(true);
     expect(env.finished.map((record) => record.status)).toEqual(["succeeded"]);
+  });
+
+  it("says on the card what the step waits for and links each workflow to its run", async () => {
+    const env = world();
+    const seen = new Map<string, number>();
+    const reconcile = env.port.reconcile;
+    // Each run is queued once, then in progress once, before it completes.
+    env.port.reconcile = async (call) => {
+      const observed = await reconcile(call);
+      const count = (seen.get(call.operationId) ?? 0) + 1;
+      seen.set(call.operationId, count);
+      if (observed.status !== "observed" || count > 2) return observed;
+      return { ...observed, state: count === 1 ? "queued" : "in_progress", conclusion: null };
+    };
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(done.status).toBe("succeeded");
+    const stage = env.progress.map((entry) => entry.steps[1]!).filter((step) => step.state === "doing");
+    expect(stage.map((step) => step.detail)).toEqual(expect.arrayContaining(["Na fila do GitHub", "Rodando no GitHub"]));
+    expect(stage.at(-1)!.link).toBe(`https://github.com/iFael/mcp-access-stack/actions/runs/${done.data.stage!.runId}`);
+    const last = env.progress.at(-1)!.steps;
+    expect(last[4]!.link).toBe(`https://github.com/iFael/mcp-access-stack/actions/runs/${done.data.release!.runId}`);
+    expect(last.every((step) => step.detail === undefined)).toBe(true);
+    expect(env.progress.some((entry) => entry.steps[9]!.detail === "Instalando no Windows; costuma levar uns 16 min" ||
+      entry.steps[9]!.detail === "Esperando o companion do Windows responder")).toBe(true);
   });
 
   it("skips the Edge catalog when MAIN does not change the contract", async () => {
