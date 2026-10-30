@@ -60,7 +60,9 @@ describe("advanced browser tools HTTP list", () => {
         expect(tool.inputSchema).toMatchObject({ type: "object" });
         expect(tool.outputSchema).toMatchObject({ type: "object" });
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
-        expect(tool._meta).toEqual({
+        // Its next step aside, which ends its description too.
+        const { "io.github.ifael/next-step": _next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
+        expect(meta).toEqual({
           securitySchemes: [{ type: "noauth" }],
         });
       }

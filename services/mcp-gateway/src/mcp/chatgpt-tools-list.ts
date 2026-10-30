@@ -6,6 +6,9 @@ import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   getMcpPublishedInputSchema,
   MCP_TOOL_CATALOG_META_KEY,
+  MCP_TOOL_NEXT_STEP_META_KEY,
+  MCP_TOOL_NEXT_STEPS,
+  withMcpToolNextStep,
   createMcpToolCatalogMetadata,
   type McpToolCatalogMetadata,
 } from "@vs-code-gpt/shared";
@@ -45,17 +48,19 @@ export function buildPublishedTools(
   return Object.entries(internals._registeredTools)
     .filter(([name, tool]) => tool.enabled && !name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX))
     .map(([name, tool]): PublishedTool => {
+      // Every tool says what comes after it; the Edge repeats it in each result.
+      const next = (MCP_TOOL_NEXT_STEPS as Record<string, string | undefined>)[name];
       const definition: PublishedTool = {
         name,
         title: tool.title,
-        description: tool.description,
+        description: withMcpToolNextStep(name, tool.description),
         inputSchema: toInputJsonSchema(
           getMcpPublishedInputSchema(tool, tool.inputSchema),
         ),
         annotations: tool.annotations,
         execution: tool.execution,
         securitySchemes,
-        _meta: tool._meta,
+        _meta: next ? { ...tool._meta, [MCP_TOOL_NEXT_STEP_META_KEY]: next } : tool._meta,
       };
       if (tool.outputSchema) {
         definition.outputSchema = toOutputJsonSchema(tool.outputSchema);
