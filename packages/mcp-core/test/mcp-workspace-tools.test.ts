@@ -485,6 +485,7 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
 
 interface RegisteredTool {
   annotations?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
   handler(
     input: unknown,
     extra: { signal: AbortSignal },
