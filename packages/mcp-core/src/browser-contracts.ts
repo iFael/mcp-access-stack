@@ -1132,6 +1132,8 @@ export const browserUserReplyInputSchema = z
   .object({
     taskId: taskIdSchema.optional(),
     text: z.string().trim().min(1).max(2_000),
+    /** Chosen by the card, so sending the same message again after a lost answer never delivers it twice. */
+    id: z.string().regex(/^msg_[a-z0-9-]{8,64}$/).optional(),
   })
   .strict();
 export type BrowserUserReplyInput = z.infer<typeof browserUserReplyInputSchema>;

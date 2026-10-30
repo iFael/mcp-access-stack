@@ -1624,8 +1624,13 @@ describe("PersonalBrowserBridge popup messages", () => {
     try {
       // No extension at all: the card writes and the agent reads, in the companion.
       const answer = bridge.userMessages({ taskId: "task-1", question: "Posso seguir?", waitMs: 5_000 });
-      const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pode." });
-      await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: posted.id, text: "Pode." }] });
+      const posted = await bridge.postUserMessage({ taskId: "task-1", text: "Pode.", id: "msg_card12345" });
+      await expect(answer).resolves.toMatchObject({ asked: true, messages: [{ id: "msg_card12345", text: "Pode." }] });
+      // The card sends the same id again when ChatGPT lost the first answer: accepted, never twice.
+      await expect(bridge.postUserMessage({ taskId: "task-1", text: "Pode.", id: "msg_card12345" }))
+        .resolves.toEqual({ id: "msg_card12345", accepted: true });
+      expect(bridge.pendingUserMessages()).toBe(0);
+      expect(posted.id).toBe("msg_card12345");
 
       const workerSource = await readFile(path.join(root, "browser", "personal-extension", "service-worker.js"), "utf8");
       const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)![1]!;

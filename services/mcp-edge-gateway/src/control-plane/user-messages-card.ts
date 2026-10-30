@@ -8,7 +8,7 @@ import { CARD_BASE_CSS } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v2.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v3.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -126,15 +126,28 @@ ${CARD_BASE_CSS}
     if (!value || busy || !bridge) return;
     busy = true;
     setStatus("Enviando…", false);
+    // ChatGPT may take long to answer the card, or never answer it, even when the message arrived.
+    var slow = setTimeout(function () {
+      if (busy) setStatus("O ChatGPT ainda não confirmou o envio. Se não aparecer na conversa em 1 minuto, escreva no popup da extensão.", false);
+    }, 20000);
     render();
-    var args = { text: value };
+    // One id per message: sending it again after ChatGPT lost the answer never delivers it twice.
+    var args = { text: value, id: "msg_" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36) };
     if (typeof input().taskId === "string") args.taskId = input().taskId;
-    Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
-      var structured = result && (result.structuredContent || result);
-      if (!result || result.isError || !structured || structured.accepted !== true) {
-        var detail = result && Array.isArray(result.content) && result.content[0] && result.content[0].text;
-        throw new Error(detail || "o MCP recusou a mensagem");
-      }
+    function attempt(left) {
+      return Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
+        var structured = result && (result.structuredContent || result);
+        if (!result || result.isError || !structured || structured.accepted !== true) {
+          var detail = result && Array.isArray(result.content) && result.content[0] && result.content[0].text;
+          throw new Error(detail || "o MCP recusou a mensagem");
+        }
+      }).catch(function (error) {
+        if (left <= 0) throw error;
+        setStatus("O ChatGPT não confirmou; enviando de novo…", false);
+        return new Promise(function (resolve) { setTimeout(resolve, 3000); }).then(function () { return attempt(left - 1); });
+      });
+    }
+    attempt(2).then(function () {
       var now = new Date();
       sent.push({ text: value, at: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") });
       sent = sent.slice(-20);
@@ -147,6 +160,7 @@ ${CARD_BASE_CSS}
     }).catch(function (error) {
       setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente de novo ou use o popup da extensão.", true);
     }).then(function () {
+      clearTimeout(slow);
       busy = false;
       render();
     });
