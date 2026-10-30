@@ -92,7 +92,6 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly inbox = new PersonalBrowserTaskInbox();
   // Messages that only rode on the result of another call: the agent may have
   // read past them, so the wake still writes them in once its turn ends.
-  private readonly passedAlong = new Set<string>();
   // Each question is notified once, however often the agent reads its answer.
   private readonly notifiedQuestions = new Set<string>();
   private readonly recorder: PersonalBrowserRecorder;
@@ -720,8 +719,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         // The message is already waiting here; the popup only misses its copy.
       }
     }
-    // The card sends again when ChatGPT lost the answer; a message already here was accepted then.
-    return { id: message.id, accepted: added > 0 || known };
+    // The card sends again when ChatGPT lost the answer, and to learn whether the agent has it yet:
+    // a message already here was accepted then, and never goes in twice.
+    return { id: message.id, accepted: added > 0 || known, delivered: known && !this.inbox.holds(message.id) };
   }
 
   takeUserMessages(
@@ -730,8 +730,6 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     // Only the extension that announced taskMessagesV1 sends messages, so an older one simply has none.
     const [scope] = args;
     const messages = this.deliverUserMessages(this.inbox.take(scope, scope.taskId === undefined && scope.tabId === undefined), true);
-    for (const message of messages) this.passedAlong.add(message.id);
-    while (this.passedAlong.size > 50) this.passedAlong.delete(this.passedAlong.values().next().value!);
     return messages;
   }
 
@@ -756,18 +754,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   /** The wake wrote these messages into the conversation: they reached the agent. */
   deliverWokenMessages(ids: readonly string[]): void {
-    for (const id of ids) this.passedAlong.delete(id);
     this.deliverUserMessages(this.inbox.takeIds(ids), true);
   }
 
   /** Whether the agent has yet to take this message. */
   hasUserMessage(id: string): boolean {
     return this.inbox.holds(id);
-  }
-
-  /** Whether this message only went along with the result of another call. */
-  wasPassedAlong(id: string): boolean {
-    return this.passedAlong.has(id);
   }
 
   /** Shows in the popup whether waking is on and what it did last. */

@@ -8,7 +8,7 @@ import { CARD_BASE_CSS } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v3.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v4.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -99,7 +99,11 @@ ${CARD_BASE_CSS}
     sent.slice().reverse().forEach(function (item) {
       var li = document.createElement("li");
       var when = document.createElement("small");
-      when.textContent = "Enviado às " + item.at + ". Chega ao agente com a próxima ação dele.";
+      when.textContent = item.deliveredAt
+        ? "Enviado às " + item.at + ". Entregue ao agente às " + item.deliveredAt + "."
+        : item.watch === false
+          ? "Enviado às " + item.at + ". Chega ao agente com a próxima ação dele."
+          : "Enviado às " + item.at + ". Ainda não entregue: chega ao agente quando a ação dele em andamento terminar.";
       li.textContent = item.text;
       li.appendChild(when);
       list.appendChild(li);
@@ -110,6 +114,44 @@ ${CARD_BASE_CSS}
     var state = bridge && bridge.widgetState;
     if (state && Array.isArray(state.sent)) sent = state.sent.filter(function (item) { return item && typeof item.text === "string"; }).slice(-20);
     if (state && typeof state.chosen === "number") chosen = state.chosen;
+    sent.forEach(watch);
+  }
+  function clock(date) { return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0"); }
+  function save() {
+    if (typeof bridge.setWidgetState === "function") {
+      try { bridge.setWidgetState({ sent: sent, chosen: chosen }); } catch (error) {}
+    }
+  }
+  // Asks the companion, with the same id, whether the agent has the message yet. Asking again never
+  // sends it twice. An older companion does not say, and then the card stops asking.
+  var watching = {};
+  function watch(item) {
+    if (!item.id || item.deliveredAt || item.watch === false || watching[item.id] || !bridge || typeof bridge.callTool !== "function") return;
+    if (typeof item.since === "number" && Date.now() - item.since > 15 * 60000) return;
+    watching[item.id] = true;
+    var args = { text: item.text, id: item.id };
+    if (typeof item.taskId === "string") args.taskId = item.taskId;
+    function ask() {
+      Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
+        // The list may have been restored meanwhile: mark the message it holds now.
+        item = sent.filter(function (entry) { return entry.id === args.id; })[0] || item;
+        var structured = result && (result.structuredContent || result);
+        if (structured && structured.delivered === true) {
+          item.deliveredAt = clock(new Date());
+        } else if (!structured || typeof structured.delivered !== "boolean") {
+          item.watch = false;
+        }
+      }).catch(function () {}).then(function () {
+        if (item.deliveredAt || item.watch === false || Date.now() - item.since > 15 * 60000) {
+          delete watching[item.id];
+          save();
+          render();
+          return;
+        }
+        setTimeout(ask, 4000);
+      });
+    }
+    setTimeout(ask, 2000);
   }
 
   if (!bridge || typeof bridge.callTool !== "function") {
@@ -148,15 +190,15 @@ ${CARD_BASE_CSS}
       });
     }
     attempt(2).then(function () {
-      var now = new Date();
-      sent.push({ text: value, at: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") });
+      var item = { text: value, at: clock(new Date()), id: args.id, since: Date.now() };
+      if (typeof args.taskId === "string") item.taskId = args.taskId;
+      sent.push(item);
       sent = sent.slice(-20);
       if (choice === null) text.value = "";
       else chosen = choice;
       setStatus("Enviado.", false);
-      if (typeof bridge.setWidgetState === "function") {
-        try { bridge.setWidgetState({ sent: sent, chosen: chosen }); } catch (error) {}
-      }
+      save();
+      watch(item);
     }).catch(function (error) {
       setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente de novo ou use o popup da extensão.", true);
     }).then(function () {
