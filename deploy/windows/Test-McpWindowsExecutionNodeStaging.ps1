@@ -251,6 +251,17 @@ try {
     $updaterDownload = Join-Path ([IO.Path]::GetTempPath()) ('mcp-public-update-' + [guid]::NewGuid().ToString('N'))
     try {
         Copy-Item -LiteralPath $distribution -Destination $updaterDownload -Recurse
+        # Endpoint protection holds a fresh file open for a while (reads allowed,
+        # rename denied); the move waits for it instead of failing.
+        Add-Type -TypeDefinition @'
+public static class McpStageTestLock {
+    public static void HoldFor(string path, int milliseconds) {
+        var stream = System.IO.File.Open(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);
+        System.Threading.Tasks.Task.Delay(milliseconds).ContinueWith(_ => stream.Dispose());
+    }
+}
+'@
+        [McpStageTestLock]::HoldFor((Join-Path $updaterDownload "releases\$releaseId\manifest.json"), 3000)
         $movedInstallation = Join-Path $testRoot 'moved-install'
         $moved = Invoke-TestStage -DistributionRoot $updaterDownload -InstallationRoot $movedInstallation -ExpectedReleaseId $releaseId
         if (

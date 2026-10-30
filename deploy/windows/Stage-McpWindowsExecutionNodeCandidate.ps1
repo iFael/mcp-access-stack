@@ -147,12 +147,17 @@ function Move-McpWindowsExecutionNodeDirectoryWithRetry {
             return
         }
         catch {
-            $isTransient = $_.Exception -is [IO.IOException] -or
-                $_.Exception -is [System.UnauthorizedAccessException]
+            # PowerShell wraps what a .NET method throws: the denial is inside.
+            $failure = $_.Exception
+            if ($failure -is [System.Management.Automation.MethodInvocationException] -and $failure.InnerException) {
+                $failure = $failure.InnerException
+            }
+            $isTransient = $failure -is [IO.IOException] -or
+                $failure -is [System.UnauthorizedAccessException]
             if (-not $isTransient) { throw }
             if ($attempt -ge $MaxAttempts) {
                 throw ("Execution-node candidate directory move failed after {0} attempts. source={1} destination={2} lastError={3}" -f `
-                    $MaxAttempts, $Source, $Destination, $_.Exception.Message)
+                    $MaxAttempts, $Source, $Destination, $failure.Message)
             }
             $delay = [Math]::Min($BaseDelayMilliseconds * $attempt, 10000)
             Start-Sleep -Milliseconds $delay
