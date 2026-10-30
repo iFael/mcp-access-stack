@@ -247,6 +247,26 @@ try {
         throw 'Candidate staging is not idempotent.'
     }
 
+    # The updater's download folder is moved, not copied: it is thrown away after staging.
+    $updaterDownload = Join-Path ([IO.Path]::GetTempPath()) ('mcp-public-update-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Copy-Item -LiteralPath $distribution -Destination $updaterDownload -Recurse
+        $movedInstallation = Join-Path $testRoot 'moved-install'
+        $moved = Invoke-TestStage -DistributionRoot $updaterDownload -InstallationRoot $movedInstallation -ExpectedReleaseId $releaseId
+        if (
+            [string]$moved.status -ne 'ready' -or
+            $null -eq $moved.timingsMs.PSObject.Properties['moveSource'] -or
+            $null -ne $moved.timingsMs.PSObject.Properties['copy'] -or
+            (Test-Path -LiteralPath (Join-Path $updaterDownload "releases\$releaseId")) -or
+            -not (Test-Path -LiteralPath (Join-Path $movedInstallation "releases\$releaseId\manifest.json") -PathType Leaf)
+        ) {
+            throw 'Candidate staging did not move the release out of the updater download.'
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $updaterDownload -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     # A release folder left in place is hashed again before it is reused.
     $tamperedTargetInstallation = Join-Path $testRoot 'tampered-target-install'
     Invoke-TestStage -DistributionRoot $distribution -InstallationRoot $tamperedTargetInstallation | Out-Null

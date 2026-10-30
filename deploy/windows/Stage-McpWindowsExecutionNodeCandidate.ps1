@@ -65,7 +65,7 @@ if ((Test-McpPathContains -Parent $distributionRoot -Child $installationRoot) -o
     throw 'Execution-node distribution and installation roots must not overlap.'
 }
 # Every file is hashed once against the distribution manifest here and once
-# more after the copy. The other checks reuse those hashes: hashing the whole
+# more after a copy (a move needs no second pass). The other checks reuse those hashes: hashing the whole
 # release at every step took longer than the prepare timeout on Windows.
 $timingsMs = [ordered]@{}
 $phaseClock = [Diagnostics.Stopwatch]::StartNew()
@@ -221,13 +221,28 @@ try {
         $stagingPath = Join-Path $releasesRoot (
             '.staging-{0}-{1}' -f $releaseId, [guid]::NewGuid().ToString('N')
         )
-        Copy-Item -LiteralPath $sourceRelease -Destination $stagingPath -Recurse
-        Complete-McpStagePhase -Name 'copy'
-        Assert-McpWindowsExecutionNodeMaterializedRelease `
-            -DistributionManifest $distribution `
-            -ReleaseId $releaseId `
-            -ReleaseRoot $stagingPath
-        Complete-McpStagePhase -Name 'copiedHashes'
+        # The updater's download folder is thrown away after staging: moving
+        # its release is a rename of bytes already hashed above. Copying its
+        # thousands of files took longer than the prepare timeout on Windows.
+        $updaterDownload = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') +
+            [IO.Path]::DirectorySeparatorChar + 'mcp-public-update-'
+        $moveSource = $sourceRelease.StartsWith($updaterDownload, [StringComparison]::OrdinalIgnoreCase) -and
+            [IO.Path]::GetPathRoot($sourceRelease) -eq [IO.Path]::GetPathRoot($stagingPath)
+        if ($moveSource) {
+            Move-McpWindowsExecutionNodeDirectoryWithRetry `
+                -Source $sourceRelease `
+                -Destination $stagingPath
+            Complete-McpStagePhase -Name 'moveSource'
+        }
+        else {
+            Copy-Item -LiteralPath $sourceRelease -Destination $stagingPath -Recurse
+            Complete-McpStagePhase -Name 'copy'
+            Assert-McpWindowsExecutionNodeMaterializedRelease `
+                -DistributionManifest $distribution `
+                -ReleaseId $releaseId `
+                -ReleaseRoot $stagingPath
+            Complete-McpStagePhase -Name 'copiedHashes'
+        }
         $stagedVerification = Assert-McpWindowsExecutionNodeRelease `
             -ReleaseRoot $stagingPath `
             -ExpectedReleaseId $releaseId `

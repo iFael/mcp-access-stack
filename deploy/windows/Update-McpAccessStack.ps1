@@ -68,7 +68,9 @@ try {
     }
 
     $expandedRoot = Join-Path $temporaryRoot 'expanded'
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedRoot
+    # Expand-Archive took over ten minutes for this archive's thousands of files.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $expandedRoot)
     $manifestFiles = @(Get-ChildItem -LiteralPath $expandedRoot -Recurse -File -Filter 'distribution-manifest.ps1')
     if ($manifestFiles.Count -ne 1) {
         throw 'The release archive must contain exactly one distribution manifest.'
