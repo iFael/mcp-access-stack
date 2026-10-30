@@ -17,7 +17,13 @@ import type { OpenConversation } from "./conversation-book.js";
 // The text goes in through an environment variable, never the command line.
 export const DESKTOP_CHAT_APP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-function Done($result) { $result | ConvertTo-Json -Compress; exit 0 }
+# Windows PowerShell writes its output in the console code page, which turned
+# "Homologação" into a different title than the app shows: only ASCII leaves.
+function Done($result) {
+  $json = $result | ConvertTo-Json -Compress
+  [regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
+  exit 0
+}
 try {
   Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
   $A = [System.Windows.Automation.AutomationElement]

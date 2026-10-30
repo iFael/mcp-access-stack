@@ -146,6 +146,12 @@ describe("ConversationBook", () => {
     expect(DESKTOP_CHAT_APP_SCRIPT).toContain("MCP_V3_WAKE_CONVERSATION");
     expect(DESKTOP_CHAT_APP_SCRIPT).toContain("'switched'");
   });
+
+  it("reads a title with accents the way the script escapes it", () => {
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("[^\\x00-\\x7F]");
+    expect(parseDesktopChatAppInspect('{"outcome":"inspect","conversationId":"title:Homologa\\u00e7\\u00e3o MCP V3","answering":true}'))
+      .toEqual([{ conversationId: "title:Homologação MCP V3", answering: true }]);
+  });
 });
 
 describe("ChatWake", () => {
