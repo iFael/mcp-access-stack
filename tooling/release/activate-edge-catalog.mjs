@@ -235,7 +235,7 @@ async function refusalCode(response) {
 // Right after a deployment the session Durable Object can still run the
 // previous build for a while; it then refuses with build_contract_mismatch and
 // applies nothing. Only that refusal is retried.
-const BUILD_MISMATCH_ATTEMPTS = 10;
+const BUILD_MISMATCH_ATTEMPTS = 20;
 const BUILD_MISMATCH_DELAY_MS = 30000;
 
 export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {

@@ -119,7 +119,7 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: public-release
     permissions:
       contents: read

@@ -270,10 +270,18 @@ export class McpUpdateRunner {
     const run = STEP_RUN[record.step];
     const data = { ...rest.data };
     if (run !== undefined && error?.code === "WORKFLOW_FAILED") delete data[run];
+    // A failed activation may have deployed the staged Worker already, and a new activation pins
+    // the deployment the stage saw: it starts again from a new stage of the same MAIN. Preparing
+    // the candidate again is harmless, the Edge answers that it is already prepared.
+    let step = record.step;
+    if (step === "edge_activate" && error?.code === "WORKFLOW_FAILED") {
+      delete data.stage;
+      step = "edge_stage";
+    }
     // The companion tries a failed install again only for a higher attempt.
     if (record.step === "windows_prepare" || record.step === "windows_promote") data.windowsAttempt = (data.windowsAttempt ?? 0) + 1;
     this.companionStatus.delete(updateId);
-    const resumed: McpUpdateRecord = { ...rest, status: "running", data };
+    const resumed: McpUpdateRecord = { ...rest, step, status: "running", data };
     await this.save(resumed);
     this.drive(updateId);
     return resumed;

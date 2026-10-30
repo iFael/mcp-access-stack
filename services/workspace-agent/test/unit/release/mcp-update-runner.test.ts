@@ -244,6 +244,24 @@ describe("the autonomous MCP update on the execution node", () => {
     await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "UPDATE_NOT_FAILED" });
   });
 
+  it("is resumed after a failed Edge activation from a new stage of the same MAIN", async () => {
+    const env = world();
+    let fail = true;
+    const reconcile = env.port.reconcile;
+    env.port.reconcile = async (call) => call.workflow === "edge-catalog-activate.yml" && fail
+      ? { status: "observed", runId: 8, state: "completed", conclusion: "failure" }
+      : reconcile(call);
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(failed).toMatchObject({ status: "failed", step: "edge_activate", error: { code: "WORKFLOW_FAILED" } });
+    fail = false;
+    expect(await updates.resume(failed.updateId)).toMatchObject({ status: "running", step: "edge_stage" });
+    const done = await updates.settled(failed.updateId);
+    expect(done.status).toBe("succeeded");
+    expect(env.calls.filter((call) => call === "dispatch edge-cas-candidate-stage.yml")).toHaveLength(2);
+    expect(env.calls.filter((call) => call === "dispatch edge-catalog-activate.yml")).toHaveLength(2);
+  });
+
   it("goes on with a companion release published before, and one its own run refused to publish again", async () => {
     const before = world({ companionReleased: async () => true });
     const first = runner(before.port);
