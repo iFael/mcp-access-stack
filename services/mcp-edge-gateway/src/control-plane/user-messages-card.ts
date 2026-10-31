@@ -28,7 +28,14 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <style>
 ${CARD_BASE_CSS}
   body { padding: 4px 0; }
-  .label { margin: 0 2px 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .label { display: flex; align-items: center; gap: 6px; margin: 0 2px 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .label.none { color: var(--bad); }
+  .label.asking { color: #c99a00; }
+  .label.waiting { color: var(--warn); }
+  .label.done { color: var(--good); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .label.asking { color: #f2cc4d; } }
+  :root[data-theme="dark"] .label.asking { color: #f2cc4d; }
   .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
   #options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
   #options .chosen { border-color: var(--fg); font-weight: 600; }
@@ -85,9 +92,11 @@ ${CARD_BASE_CSS}
     var choices = options();
     var question = typeof args.question === "string" ? args.question.trim() : "";
     var last = sent[sent.length - 1];
-    document.getElementById("label").textContent = last
-      ? (last.deliveredAt ? "Mensagem entregue" : "Mensagem enviada")
-      : question !== "" ? "Pergunta" : "Sem mensagens";
+    var label = document.getElementById("label");
+    var state = last ? (last.deliveredAt ? ["done", "Mensagem entregue"] : ["waiting", "Mensagem enviada"])
+      : question !== "" ? ["asking", "Pergunta"] : ["none", "Sem mensagens"];
+    label.className = "label " + state[0];
+    label.textContent = state[1];
     var asking = document.getElementById("question");
     asking.hidden = question === "";
     asking.textContent = question;
