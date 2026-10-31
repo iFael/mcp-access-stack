@@ -252,8 +252,8 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Open: browser_open (browser_open_authorized_site for private sites), then browser_snapshot or browser_find for refs. Every tab belongs to a task: without a taskId, browser_open starts a new one and returns it as tab.taskId; pass that taskId on the task's later calls.",
       "Act with browser_click, browser_fill or browser_sequence; read-only work uses browser_extract directly.",
       "Login, CAPTCHA or a step only the user should do: browser_wait with forUser and a short reason.",
-      "For work with several steps, browser_progress shows the user a card with the plan (done, in progress, to do) once at the start; then browser_progress_update with its planId and the whole list whenever a step or the plan changes, and the same card follows. While the job goes on, end each answer with browser_progress and only the planId, so the card is shown again at the end. Something more the user asks for meanwhile becomes a new step; when you lose track of the job, browser_progress with only the planId shows what was asked, what is done and what remains.",
-      "The user can write to you while you work, from the MCP V3 popup or from the reply card browser_user_messages shows in the chat; end every answer that used MCP V3 with it, after your message and with the taskId when there is one, and while a job goes on call it again after each step that took a while, so the field stays close to where the user is looking; older cards fold into one line. Their messages arrive with the result of your next call (browser, files, commands, git). To ask them something without ending your turn, browser_user_messages with question and the taskId, then keep working and read the answer with browser_user_messages (waitMs to wait for it). When they must choose before you can go on, pass options too (A to D) and end your turn: they get one notification on the PC and the answer comes back into this conversation; never wait in a loop for it.",
+      "Every job that uses MCP V3, not only work with many steps, gets a plan card: browser_progress shows the user the plan (done, in progress, to do) once at the start, before the job's first other call; then browser_progress_update with its planId and the whole list whenever a step or the plan changes, and the same card follows. While the job goes on, end each answer with browser_progress and only the planId, so the card is shown again at the end. Something more the user asks for meanwhile becomes a new step; when you lose track of the job, browser_progress with only the planId shows what was asked, what is done and what remains.",
+      "The user can write to you while you work, from the MCP V3 popup or from the reply card browser_user_messages shows in the chat; show it only while work is under way: while a job goes on, call it after each step that took a while, with the taskId, and end an answer with it only when something is still running after the answer (an update, a background task, a CI watch), so the field stays close to where the user is looking; older cards fold into one line, and an answer that ends with nothing running does not show it. Their messages arrive with the result of your next call (browser, files, commands, git). To ask them something without ending your turn, browser_user_messages with question and the taskId, then keep working and read the answer with browser_user_messages (waitMs to wait for it). When they must choose before you can go on, pass options too (A to D) and end your turn: they get one notification on the PC and the answer comes back into this conversation; never wait in a loop for it.",
       "Finish: browser_finish_task; pause=true instead when you will come back to the same tabs, then resume with a new browser_plan for the task.",
     ],
     rules: [
@@ -305,9 +305,14 @@ export const MCP_AGENT_INSTRUCTIONS =
   "and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell " +
   "to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and " +
   "GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, " +
-  "read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, " +
-  "call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or " +
-  "the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with " +
-  "every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, " +
-  "so its card is shown again at the end of the answer. To show the user a pull request (after " +
+  "read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 " +
+  "(an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the " +
+  "first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a " +
+  "step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the " +
+  "planId to mcp_update action=start); then, whenever " +
+  "a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), " +
+  "ending with every step in its final state. A card shows where its call is made, so write your text first and end " +
+  "every answer with the cards: browser_progress with only that planId, then browser_user_messages only while work is " +
+  "still running after the answer (an update, a background task, a CI watch), and nothing after " +
+  "them. To show the user a pull request (after " +
   "opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
