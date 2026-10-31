@@ -12,7 +12,9 @@ import type { ChatWakeEvent } from "./chat-wake.js";
 // answering then is most likely the one making the call. Another conversation
 // may be answering in the background, so it counts only once two such looks,
 // apart in time, agree, and a look that disagrees unlearns it. It is looked at
-// again now and then, since a title can change.
+// again now and then, since a title can change. A message written in the reply
+// card comes from the conversation the app shows at that moment: with only one
+// shown, the message belongs to it, whatever the looks have learned.
 
 /** The ChatGPT conversation the app shows ("title:<title>"). */
 export interface OpenConversation {
@@ -46,6 +48,7 @@ export class ConversationBook {
   private readonly lastSeen = new Map<string, string>();
   private readonly lastCallAt = new Map<string, number>();
   private readonly lastLearnAt = new Map<string, number>();
+  private readonly conversationOfCardMessage = new Map<string, string>();
   private readonly now: () => number;
 
   constructor(private readonly options: ConversationBookOptions) {
@@ -65,8 +68,18 @@ export class ConversationBook {
     void this.learn(call.session);
   }
 
+  /** Notes the conversation the app shows as the one a card message was written in. */
+  async noteCardMessage(messageId: string): Promise<void> {
+    const open = await this.options.openConversations();
+    this.options.log?.({ event: "mcp_v3_conversation_card_message", open: open.length });
+    if (open.length !== 1) return;
+    touch(this.conversationOfCardMessage, messageId, open[0]!.conversationId, MAX_IDS);
+  }
+
   /** The conversation this event belongs to, when known. */
   conversationOf(event: ChatWakeEvent): string | undefined {
+    const written = event.kind === "message" ? this.conversationOfCardMessage.get(event.messageId) : undefined;
+    if (written !== undefined) return written;
     const session = this.sessionOf(event);
     return session === undefined ? undefined : this.conversationOfSession.get(session);
   }
