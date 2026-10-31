@@ -2338,7 +2338,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
+      "io.github.ifael/next-step": "end your answer with browser_progress planId; you are woken when it stops, then mcp_update action=read with the updateId.",
       "openai/outputTemplate": "ui://mcp-v3/progress-v6.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
@@ -2360,7 +2360,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start moves a plan card step by step: pass the planId of the conversation's card when there is one, and the card takes the shape of the update; without it, the update opens its own. Its result carries the planId: as in every job, write your text first and end each answer about the update with browser_progress and only that planId, then browser_user_messages while the update runs, so the cards sit under your text. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take. Next: end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
+    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start moves a plan card step by step: pass the planId of the conversation's card when there is one, and the card takes the shape of the update; without it, the update opens its own. Its result carries the planId: as in every job, write your text first and end each answer about the update with browser_progress and only that planId, then browser_user_messages while the update runs, so the cards sit under your text. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take. Next: end your answer with browser_progress planId; you are woken when it stops, then mcp_update action=read with the updateId.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2675,7 +2675,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "end your answer and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
+      "io.github.ifael/next-step": "end your answer with browser_progress planId and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
       "securitySchemes": [
         {
           "scopes": [
@@ -2691,7 +2691,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path. This is the only supported way to stage a candidate (never run the updater through a shell); follow the returned task with wait_background_task. See get_operation_guide topic=release. Next: end your answer and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
+    "description": "Prepares one exact signed GitHub release tag as the local execution-node candidate using the updater bootstrap embedded in the active release. The caller cannot provide a shell command, repository override, token, URL or filesystem path. This is the only supported way to stage a candidate (never run the updater through a shell); follow the returned task with wait_background_task. See get_operation_guide topic=release. Next: end your answer with browser_progress planId and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -5295,7 +5295,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "end your answer and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
+      "io.github.ifael/next-step": "end your answer with browser_progress planId and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
       "securitySchemes": [
         {
           "scopes": [
@@ -5311,7 +5311,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Set interactive=true only when persistent stdin is required; interactive start always requires explicit confirmation and can then be controlled with write_background_task_stdin. Active duplicate commands are deduplicated. Next: end your answer and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
+    "description": "Starts a long-running command in an authorized workspace. Risky commands require a bound one-shot confirmation before any task is created. Set interactive=true only when persistent stdin is required; interactive start always requires explicit confirmation and can then be controlled with write_background_task_stdin. Active duplicate commands are deduplicated. Next: end your answer with browser_progress planId and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -5714,7 +5714,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "while it runs, end your answer (you are woken when it ends) or wait_background_task; then read_background_task_output.",
+      "io.github.ifael/next-step": "while it runs, end your answer with browser_progress planId (you are woken when it ends) or wait_background_task; then read_background_task_output.",
       "securitySchemes": [
         {
           "scopes": [
@@ -5730,7 +5730,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Returns the persisted state and result of one background task. Next: while it runs, end your answer (you are woken when it ends) or wait_background_task; then read_background_task_output.",
+    "description": "Returns the persisted state and result of one background task. Next: while it runs, end your answer with browser_progress planId (you are woken when it ends) or wait_background_task; then read_background_task_output.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -6439,7 +6439,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "still running: end your answer (you are woken when it ends) or call it again; ended: read_background_task_output for its whole output.",
+      "io.github.ifael/next-step": "still running: end your answer with browser_progress planId (you are woken when it ends) or call it again; ended: read_background_task_output for its whole output.",
       "securitySchemes": [
         {
           "scopes": [
@@ -6455,7 +6455,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Short-polls one persisted background task for at most 30 seconds. A wait timeout stops waiting only and never cancels the task. For longer work, use get_background_task or get_background_tasks between polls. Returns the current/terminal task plus size-limited redacted stdout/stderr tails. Next: still running: end your answer (you are woken when it ends) or call it again; ended: read_background_task_output for its whole output.",
+    "description": "Short-polls one persisted background task for at most 30 seconds. A wait timeout stops waiting only and never cancels the task. For longer work, use get_background_task or get_background_tasks between polls. Returns the current/terminal task plus size-limited redacted stdout/stderr tails. Next: still running: end your answer with browser_progress planId (you are woken when it ends) or call it again; ended: read_background_task_output for its whole output.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12380,7 +12380,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "pending: github_start_commit_checks_watch and end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+      "io.github.ifael/next-step": "pending: github_start_commit_checks_watch and end your answer with browser_progress planId, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
       "securitySchemes": [
         {
           "scopes": [
@@ -12396,7 +12396,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads up to 100 GitHub check-runs for an exact commit SHA in an authorized repository and returns conservative aggregate CI state. Next: pending: github_start_commit_checks_watch and end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+    "description": "Reads up to 100 GitHub check-runs for an exact commit SHA in an authorized repository and returns conservative aggregate CI state. Next: pending: github_start_commit_checks_watch and end your answer with browser_progress planId, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12889,7 +12889,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "end your answer; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
+      "io.github.ifael/next-step": "end your answer with browser_progress planId; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
       "securitySchemes": [
         {
           "scopes": [
@@ -12905,7 +12905,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Starts or reuses a persistent owner-scoped watch for GitHub check-runs on an exact commit SHA. The watch polls GitHub without shell commands and survives agent restart. Next: end your answer; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
+    "description": "Starts or reuses a persistent owner-scoped watch for GitHub check-runs on an exact commit SHA. The watch polls GitHub without shell commands and survives agent restart. Next: end your answer with browser_progress planId; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -13578,7 +13578,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "still running: end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+      "io.github.ifael/next-step": "still running: end your answer with browser_progress planId, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
       "securitySchemes": [
         {
           "scopes": [
@@ -13594,7 +13594,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Waits up to 30 seconds for one persistent GitHub commit-check watch to reach a terminal state. A wait timeout never cancels the watch. Next: still running: end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+    "description": "Waits up to 30 seconds for one persistent GitHub commit-check watch to reach a terminal state. A wait timeout never cancels the watch. Next: still running: end your answer with browser_progress planId, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -14278,7 +14278,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "github_start_commit_checks_watch on its head and end your answer; you are woken when CI ends.",
+      "io.github.ifael/next-step": "github_start_commit_checks_watch on its head and end your answer with browser_progress planId; you are woken when CI ends.",
       "securitySchemes": [
         {
           "scopes": [
@@ -14294,7 +14294,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Creates a pull request in an authorized GitHub repository after typed confirmation. Next: github_start_commit_checks_watch on its head and end your answer; you are woken when CI ends.",
+    "description": "Creates a pull request in an authorized GitHub repository after typed confirmation. Next: github_start_commit_checks_watch on its head and end your answer with browser_progress planId; you are woken when CI ends.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -27231,15 +27231,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "9aebf317e6db2516f262c37a8ffc47d9a1a33d4a266fec221230c5fa9a14d09c",
-  "serverVersion": "0.4.0-catalog.c9aebf317e6db.sb65bd697da48",
+  "contractRevision": "89edee8ec34a67514840f1557661d520f1fc4e0873188c4a9f0826c2308eb9a3",
+  "serverVersion": "0.4.0-catalog.c89edee8ec34a.sb65bd697da48",
   "toolCount": 121,
   "toolSetRevision": "b65bd697da48ad28205a3079de31ce4f2f9083ebf82a3d652c9ceda7ff34a24a"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c9aebf317e6db.sb65bd697da48"
+  "version": "0.4.0-catalog.c89edee8ec34a.sb65bd697da48"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, then browser_user_messages only while work is still running after the answer (an update, a background task, a CI watch), and nothing after them. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
