@@ -87,7 +87,7 @@ ${CARD_BASE_CSS}
     var last = sent[sent.length - 1];
     document.getElementById("label").textContent = last
       ? (last.deliveredAt ? "Mensagem entregue" : "Mensagem enviada")
-      : question !== "" ? "Pergunta do agente" : "Sem mensagens";
+      : question !== "" ? "Pergunta" : "Sem mensagens";
     var asking = document.getElementById("question");
     asking.hidden = question === "";
     asking.textContent = question;
