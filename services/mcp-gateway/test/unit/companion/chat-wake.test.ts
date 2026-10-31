@@ -315,6 +315,12 @@ describe("the ChatGPT app for Windows", () => {
     expect(parseDesktopChatAppResult("{\"outcome\":\"sent\",\"front\":\"x\"}")).toEqual({ outcome: "sent" });
   });
 
+  it("waits for an idle app and takes a refused send as busy, never as sent", () => {
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("detail = 'just-answered'");
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("steering requires|compatible turn");
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("outcome = 'busy'; detail = 'steering-refused'");
+  });
+
   it("gives the front back to the window the user had there", () => {
     expect(DESKTOP_CHAT_APP_SCRIPT).toContain("$before = [McpV3Front]::GetForegroundWindow()");
     expect(DESKTOP_CHAT_APP_SCRIPT).toContain("[McpV3Front]::GiveBack($script:front)");

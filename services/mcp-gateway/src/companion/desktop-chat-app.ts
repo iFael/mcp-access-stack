@@ -16,6 +16,10 @@ import type { OpenConversation } from "./conversation-book.js";
 // the page; a generic title ("ChatGPT", "Nova conversa") names none.
 // With MCP_V3_WAKE_INSPECT it writes nothing and tells which conversation is
 // open and whether it is answering.
+// A turn that only just ended can still refuse what is sent ("Steering
+// requires an active compatible turn"): the app must stay idle for a moment
+// before the text goes in, and a refusal counts as busy, so the message is
+// tried again and never marked delivered.
 // The text goes in through an environment variable, never the command line.
 export const DESKTOP_CHAT_APP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -67,17 +71,18 @@ public static class McpV3Front {
     Select-Object -First 1
   if (-not $window) { Done @{ outcome = 'unavailable'; detail = 'no-window' } }
   function Read-State {
-    $state = @{ composer = $null; stop = $null; send = $null; title = ''; url = '' }
+    $state = @{ composer = $null; stop = $null; send = $null; title = ''; url = ''; refused = $false }
     foreach ($e in $window.FindAll($T::Descendants, $All)) {
       $c = $e.Current
       $type = $c.ControlType.ProgrammaticName
+      if ($c.Name -match '(?i)steering requires|compatible turn') { $state.refused = $true }
       if ($type -eq 'ControlType.Document' -and $c.AutomationId -eq 'RootWebArea' -and -not $state.title) {
         $state.title = $c.Name
         try { $state.url = [string]$e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch {}
       }
       elseif ($type -eq 'ControlType.Edit' -and $c.ClassName -like '*ProseMirror*') { $state.composer = $e }
       elseif ($type -eq 'ControlType.Button') {
-        if ($c.Name -match '^(?i)(parar|stop)') { $state.stop = $e }
+        if ($c.Name -match '^(?i)(parar|stop|interromper)') { $state.stop = $e }
         elseif ($c.Name -match '^(?i)(enviar|send)') { $state.send = $e }
       }
     }
@@ -102,6 +107,10 @@ public static class McpV3Front {
   Assert-Conversation $s
   if (-not $s.composer) { Done @{ outcome = 'failed'; detail = 'no-message-field' } }
   if ($s.stop) { Done @{ outcome = 'busy' } }
+  Start-Sleep -Milliseconds 1500
+  $s = Read-State
+  if ($s.stop) { Done @{ outcome = 'busy'; detail = 'just-answered' } }
+  $wasRefused = $s.refused
   $field = $s.composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
   $script:chat = [IntPtr]$window.Current.NativeWindowHandle
   $before = [McpV3Front]::GetForegroundWindow()
@@ -131,6 +140,13 @@ public static class McpV3Front {
     Start-Sleep -Milliseconds 250
     $s = Read-State
     if ($s.stop) { Done @{ outcome = 'sent' } }
+    if ($s.refused -and -not $wasRefused) {
+      try {
+        $field = $s.composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        if (([string]$field.Current.Value).Trim() -eq $text.Trim()) { $field.SetValue('') }
+      } catch {}
+      Done @{ outcome = 'busy'; detail = 'steering-refused' }
+    }
   }
   $left = ([string]$s.composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value).Trim()
   if (-not $left -or $left -eq $s.composer.Current.Name.Trim()) { Done @{ outcome = 'sent'; detail = 'no-stop-seen' } }
