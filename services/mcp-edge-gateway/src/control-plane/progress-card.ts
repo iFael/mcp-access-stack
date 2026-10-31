@@ -10,10 +10,10 @@
 // card again at the end of an answer; its older copies fold into one line.
 
 import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
-import { CARD_BASE_CSS, CARD_THEME_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v3.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v4.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -147,6 +147,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   refresh();
 })();
 </script>
+<script>${CARD_FIT_SCRIPT}</script>
 </body>
 </html>
 `;

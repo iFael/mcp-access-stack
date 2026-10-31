@@ -153,7 +153,7 @@ describe("the chat cards the Edge serves", () => {
 
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v5.html");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v6.html");
     expect(card!.text).toContain("Entregue às");
     expect(card!.text).toContain("aguardando o agente");
     // Clean: no title or task id over the field.
@@ -161,5 +161,23 @@ describe("the chat cards the Edge serves", () => {
     // It asks again with the same id, which never sends the message twice.
     expect(card!.text).toContain("structured.delivered === true");
     expect(card!.text).not.toContain("${");
+  });
+
+  it("sizes every card to its content, and the reply card is only the field", () => {
+    const resources = uiResourcesForManifest([
+      { name: "browser_progress", _meta: { ui: { resourceUri: PROGRESS_CARD_URI } } },
+      { name: "github_get_pull_request", _meta: { "openai/outputTemplate": PULL_REQUEST_CARD_URI } },
+      { name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } },
+    ]);
+    for (const resource of resources) expect(resource.text).toContain("notifyIntrinsicHeight");
+    expect(resources[2]!._meta).toMatchObject({ ui: { prefersBorder: false }, "openai/widgetPrefersBorder": false });
+  });
+
+  it("serves the current cards under the previous addresses while an update is under way", () => {
+    const [card] = uiResourcesForManifest([
+      { name: "browser_user_messages", _meta: { ui: { resourceUri: "ui://mcp-v3/user-messages-v5.html" } } },
+    ]);
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v5.html");
+    expect(card!.text).toContain("notifyIntrinsicHeight");
   });
 });

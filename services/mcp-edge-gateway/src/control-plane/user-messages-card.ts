@@ -4,11 +4,11 @@
 // inbox as the extension popup, and reaches the agent with its next call.
 // Only tools whose _meta.ui.resourceUri names this card make the Edge serve it.
 
-import { CARD_BASE_CSS } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v5.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v6.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -27,6 +27,7 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 ${CARD_BASE_CSS}
+  body { padding: 4px 0; }
   .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
   #options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
   #options .chosen { border-color: var(--fg); font-weight: 600; }
@@ -235,6 +236,7 @@ ${CARD_BASE_CSS}
   render();
 })();
 </script>
+<script>${CARD_FIT_SCRIPT}</script>
 </body>
 </html>
 `;
@@ -249,11 +251,19 @@ const UI_RESOURCES: Readonly<Record<string, EdgeUiResource>> = {
     mimeType: MCP_APP_MIME_TYPE,
     text: USER_MESSAGES_CARD_HTML,
     _meta: {
-      ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } },
-      "openai/widgetPrefersBorder": true,
+      ui: { prefersBorder: false, csp: { connectDomains: [], resourceDomains: [] } },
+      "openai/widgetPrefersBorder": false,
       "openai/widgetDescription": "A reply box for the running task; what the user sends reaches the agent with its next tool call.",
     },
   },
+};
+
+// While an update is under way the Edge can run new code with the previous contract,
+// whose tools still point at the previous cards: they get the current ones.
+const PREVIOUS_URIS: Readonly<Record<string, string>> = {
+  "ui://mcp-v3/progress-v3.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/pull-request-v2.html": PULL_REQUEST_CARD_URI,
+  "ui://mcp-v3/user-messages-v5.html": USER_MESSAGES_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */
@@ -267,7 +277,11 @@ export function uiResourcesForManifest(
     if (typeof ui.resourceUri === "string") uris.add(ui.resourceUri);
     if (typeof meta["openai/outputTemplate"] === "string") uris.add(meta["openai/outputTemplate"]);
   }
-  return [...uris].flatMap((uri) => (Object.hasOwn(UI_RESOURCES, uri) ? [UI_RESOURCES[uri]!] : []));
+  return [...uris].flatMap((uri) => {
+    if (Object.hasOwn(UI_RESOURCES, uri)) return [UI_RESOURCES[uri]!];
+    const current = Object.hasOwn(PREVIOUS_URIS, uri) ? UI_RESOURCES[PREVIOUS_URIS[uri]!] : undefined;
+    return current ? [{ ...current, uri }] : [];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

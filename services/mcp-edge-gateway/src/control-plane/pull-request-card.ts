@@ -3,10 +3,10 @@
 // branches, lines added and removed, the files it changes and how its CI is
 // doing. Links open the pull request on GitHub.
 
-import { CARD_BASE_CSS, CARD_THEME_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v2.html";
+export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v3.html";
 
 export const PULL_REQUEST_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -135,6 +135,7 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
   render();
 })();
 </script>
+<script>${CARD_FIT_SCRIPT}</script>
 </body>
 </html>
 `;
