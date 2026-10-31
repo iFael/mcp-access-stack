@@ -14,11 +14,14 @@ import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.
 import type { EdgeUiResource } from "./user-messages-card.js";
 
 export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v6.html";
-export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read"] as const;
+export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
 const MAX_PLANS = 20;
 const OWNER_PREFIX = "progress-plan-owner:";
+// When the newest reply card of each task was shown ("" for none), so older ones fold.
+const USER_CARD_PREFIX = "user-card-shown:";
+const MAX_USER_CARDS = 50;
 
 export const PROGRESS_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -204,6 +207,12 @@ export class ProgressPlans {
     const key = `progress-plans:${userId}`;
     const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
 
+    if (name === "browser_user_card") {
+      const taskId = typeof args.taskId === "string" ? args.taskId : "";
+      const shown = (await this.storage.get<Record<string, string>>(`${USER_CARD_PREFIX}${userId}`)) ?? {};
+      const shownAt = shown[taskId];
+      return rpc(id, { content: [{ type: "text", text: `Newest card shown at ${shownAt ?? "never"}.` }], structuredContent: shownAt ? { shownAt } : {} });
+    }
     if (name === "browser_progress_read") {
       const plan = typeof args.planId === "string" ? plans.find((entry) => entry.planId === args.planId) : undefined;
       return plan ? toolResult(id, `Plan ${plan.planId}.`, plan) : toolError(id, "NOT_FOUND", "This plan is no longer kept.");
@@ -237,6 +246,18 @@ export class ProgressPlans {
       ? `Plan shown to the user (planId ${plan.planId}, ${done}/${plan.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
       : `Plan updated: ${done}/${plan.steps.length} done.`;
     return toolResult(id, text, plan);
+  }
+
+  /** Notes that a reply card of this task is shown now, and says when. */
+  async noteUserCard(userId: string, taskId: string | undefined): Promise<string> {
+    const now = this.now().toISOString();
+    const key = `${USER_CARD_PREFIX}${userId}`;
+    const shown = (await this.storage.get<Record<string, string>>(key)) ?? {};
+    const task = taskId ?? "";
+    delete shown[task];
+    const kept = Object.entries({ ...shown, [task]: now }).slice(-MAX_USER_CARDS);
+    await this.storage.put(key, Object.fromEntries(kept));
+    return now;
   }
 
   /**

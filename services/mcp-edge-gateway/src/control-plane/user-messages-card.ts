@@ -8,7 +8,7 @@ import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v8.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v9.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -38,6 +38,9 @@ ${CARD_BASE_CSS}
   .label.asking { color: #c99a00; }
   .label.waiting { color: var(--good); }
   .label.done { color: #3b82f6; }
+  /* A newer card of the task is below: this one is a line pointing to it. */
+  .label.folded { margin-bottom: 0; color: var(--muted); }
+  body.folded #question, body.folded #options, body.folded #sent, body.folded #composer, body.folded #unavailable { display: none !important; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .label.asking { color: #f2cc4d; } }
   :root[data-theme="dark"] .label.asking { color: #f2cc4d; }
   .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -83,6 +86,7 @@ ${CARD_BASE_CSS}
   var sent = [];
   var chosen = null;
   var busy = false;
+  var newest = null;
 
   function input() { return (bridge && bridge.toolInput) || {}; }
   function options() {
@@ -99,6 +103,9 @@ ${CARD_BASE_CSS}
     var label = document.getElementById("label");
     var state = last ? (last.deliveredAt ? ["done", "Mensagem entregue"] : ["waiting", "Mensagem enviada"])
       : question !== "" ? ["asking", "Pergunta"] : ["none", "Sem mensagens"];
+    // A choice still to make keeps its card open; otherwise only the newest card is the field.
+    if (folded()) state = ["folded", "Campo de mensagens mais abaixo ↓"];
+    document.body.className = state[0] === "folded" ? "folded" : "";
     label.className = "label " + state[0];
     label.textContent = state[1];
     var asking = document.getElementById("question");
@@ -151,6 +158,22 @@ ${CARD_BASE_CSS}
     text.style.height = "auto";
     text.style.height = Math.min(text.scrollHeight, 140) + "px";
     send.disabled = busy || text.value.trim() === "";
+  }
+  function mine() { return bridge && bridge.toolOutput && typeof bridge.toolOutput.shownAt === "string" ? bridge.toolOutput.shownAt : null; }
+  function folded() {
+    return Boolean(newest && mine() && newest !== mine() && !(options().length > 0 && chosen === null));
+  }
+  // Asks the Edge when the newest card of this task was shown; once folded, a card stays folded.
+  function look() {
+    if (!bridge || typeof bridge.callTool !== "function" || document.hidden || !mine() || folded()) return;
+    var args = typeof input().taskId === "string" ? { taskId: input().taskId } : {};
+    Promise.resolve(bridge.callTool("browser_user_card", args)).then(function (result) {
+      var structured = result && (result.structuredContent || result);
+      if (structured && !result.isError && typeof structured.shownAt === "string" && structured.shownAt !== newest) {
+        newest = structured.shownAt;
+        render();
+      }
+    }).catch(function () {});
   }
   function restore() {
     var state = bridge && bridge.widgetState;
@@ -251,6 +274,8 @@ ${CARD_BASE_CSS}
     });
   }
   window.addEventListener("openai:set_globals", function () { restore(); render(); });
+  document.addEventListener("visibilitychange", look);
+  setInterval(look, 4000);
   restore();
   render();
 })();
@@ -289,6 +314,7 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/progress-v5.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/user-messages-v7.html": USER_MESSAGES_CARD_URI,
   "ui://mcp-v3/pull-request-v4.html": PULL_REQUEST_CARD_URI,
+  "ui://mcp-v3/user-messages-v8.html": USER_MESSAGES_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */
