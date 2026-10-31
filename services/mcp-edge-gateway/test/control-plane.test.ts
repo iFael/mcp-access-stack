@@ -119,7 +119,7 @@ describe("Edge MCP control plane availability", () => {
     expect(await response.json()).toMatchObject({
       jsonrpc: "2.0",
       id: 70,
-      result: { content: [{ text: "executed" }] },
+      result: { content: [{ text: "executed" }, { text: expect.stringMatching(/^Card: /u) }] },
     });
   });
 
@@ -267,7 +267,7 @@ describe("Edge MCP control plane availability", () => {
     expect(execution.waitUntilReadyCalls).toBe(0);
     expect(execution.forwardedCalls).toHaveLength(0);
     expect(await response.json()).toMatchObject({
-      result: { content: [{ text: "local" }] },
+      result: { content: [{ text: "local" }, { text: expect.stringMatching(/^Card: /u) }] },
     });
   });
 
