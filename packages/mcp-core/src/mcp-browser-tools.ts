@@ -32,6 +32,12 @@ export const BROWSER_TOOL_NAMES = [
 ] as const;
 export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
 
+// ChatGPT names each call above its card by the tool's title: the card tools get a plain one.
+const TOOL_TITLES: Readonly<Record<string, string>> = {
+  browser_user_messages: "Mensagens para o agente",
+  browser_progress: "Etapas",
+};
+
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
 export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v6.html";
@@ -269,7 +275,7 @@ export function registerBrowserTools(
     register(
       definition.name,
       {
-        title: definition.name,
+        title: TOOL_TITLES[definition.name] ?? definition.name,
         description: definition.description,
         inputSchema: withBrowserRuntimeSelectors(definition.input),
         outputSchema: definition.output,
