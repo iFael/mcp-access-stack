@@ -13,7 +13,7 @@ import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v6.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v7.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -43,11 +43,37 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1.6s linear infinite; transform-origin: 50% 50%; }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  /* While steps remain, the user writes to the agent under them. */
+  #talk { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .folded #talk { display: none; }
+  #sent { display: flex; flex-direction: column; gap: 10px; margin: 0 0 12px; }
+  #sent li { display: flex; flex-direction: column; align-items: flex-end; padding: 0; }
+  .bubble { max-width: 85%; padding: 8px 12px; border-radius: 16px 16px 4px 16px; background: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .state { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; color: var(--muted); font-size: 11px; }
+  .state.done { color: #3b82f6; }
+  .state .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+  .field { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--soft); }
+  .field:focus-within { border-color: var(--muted); }
+  textarea { flex: 1; min-width: 0; min-height: 24px; max-height: 140px; margin: 6px 0; padding: 0; border: 0; outline: 0; resize: none; background: transparent; color: var(--fg); font: inherit; line-height: 1.45; }
+  textarea::placeholder { color: var(--muted); }
+  #send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+  #send:disabled { opacity: .25; cursor: default; }
+  .status { margin: 6px 4px 0; color: var(--muted); font-size: 12px; }
+  .status:empty { display: none; }
+  .status.bad { color: var(--bad); }
 </style>
 </head>
 <body>
 <div class="head"><h1 id="title">Etapas</h1><div class="chips"><span class="chip" id="count" hidden></span></div></div>
 <ul id="steps"></ul>
+<div id="talk" hidden>
+  <ul id="sent" hidden></ul>
+  <div class="field">
+    <textarea id="text" rows="1" maxlength="2000" placeholder="Escreva para o agente"></textarea>
+    <button class="btn primary" id="send" type="button" aria-label="Enviar" title="Enviar" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+  <p class="status" id="status"></p>
+</div>
 <script>
 (function () {
   ${CARD_THEME_SCRIPT}
@@ -109,6 +135,11 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     var count = document.getElementById("count");
     count.hidden = folded || steps.length === 0;
     count.textContent = done + "/" + steps.length;
+    var open = steps.some(function (step) { return step && (step.state === "todo" || step.state === "doing" || !ICONS[step.state]); });
+    var bridge = window.openai;
+    document.getElementById("talk").hidden = folded || !(open || sent.length > 0 && sent.some(waiting)) ||
+      !bridge || typeof bridge.callTool !== "function";
+    drawSent();
     var list = document.getElementById("steps");
     list.textContent = "";
     if (folded) return;
@@ -145,7 +176,129 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
       list.appendChild(li);
     });
   }
-  window.addEventListener("openai:set_globals", render);
+  // What the user writes here goes to the agent through browser_user_reply, as
+  // in the card of browser_user_messages, and the card asks again, with the
+  // same id, until the agent has it.
+  var text = document.getElementById("text");
+  var send = document.getElementById("send");
+  var status = document.getElementById("status");
+  var sent = [];
+  var busy = false;
+  var watching = {};
+  function waiting(item) { return !item.deliveredAt && item.watch !== false; }
+  function clock(date) { return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0"); }
+  function setStatus(message, bad) { status.textContent = message; status.className = bad ? "status bad" : "status"; }
+  function save() {
+    var bridge = window.openai;
+    if (bridge && typeof bridge.setWidgetState === "function") {
+      try { bridge.setWidgetState({ sent: sent }); } catch (error) {}
+    }
+  }
+  function restore() {
+    var state = window.openai && window.openai.widgetState;
+    if (state && Array.isArray(state.sent)) sent = state.sent.filter(function (item) { return item && typeof item.text === "string"; }).slice(-20);
+    sent.forEach(watch);
+  }
+  function drawSent() {
+    var list = document.getElementById("sent");
+    list.textContent = "";
+    sent.forEach(function (item) {
+      var li = document.createElement("li");
+      var bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = item.text;
+      var state = document.createElement("span");
+      if (item.deliveredAt) {
+        state.className = "state done";
+        state.textContent = "✓ Entregue às " + item.deliveredAt;
+      } else if (item.watch === false) {
+        state.className = "state";
+        state.textContent = "Enviado às " + item.at;
+      } else {
+        state.className = "state";
+        state.title = "Chega ao agente com a próxima ação dele.";
+        var pulse = document.createElement("span");
+        pulse.className = "pulse";
+        state.appendChild(pulse);
+        state.appendChild(document.createTextNode("Enviado às " + item.at + " · aguardando o agente"));
+      }
+      li.appendChild(bubble);
+      li.appendChild(state);
+      list.appendChild(li);
+    });
+    list.hidden = sent.length === 0;
+    text.style.height = "auto";
+    text.style.height = Math.min(text.scrollHeight, 140) + "px";
+    send.disabled = busy || text.value.trim() === "";
+  }
+  function watch(item) {
+    var bridge = window.openai;
+    if (!item.id || !waiting(item) || watching[item.id] || !bridge || typeof bridge.callTool !== "function") return;
+    if (typeof item.since === "number" && Date.now() - item.since > 15 * 60000) return;
+    watching[item.id] = true;
+    var args = { text: item.text, id: item.id };
+    function ask() {
+      Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
+        item = sent.filter(function (entry) { return entry.id === args.id; })[0] || item;
+        var structured = result && (result.structuredContent || result);
+        if (structured && structured.delivered === true) item.deliveredAt = clock(new Date());
+        else if (!structured || typeof structured.delivered !== "boolean") item.watch = false;
+      }).catch(function () {}).then(function () {
+        if (!waiting(item) || Date.now() - item.since > 15 * 60000) {
+          delete watching[item.id];
+          save();
+          render();
+          return;
+        }
+        setTimeout(ask, 4000);
+      });
+    }
+    setTimeout(ask, 2000);
+  }
+  function submit() {
+    var bridge = window.openai;
+    var value = text.value.trim();
+    if (!value || busy || !bridge || typeof bridge.callTool !== "function") return;
+    busy = true;
+    setStatus("Enviando…", false);
+    drawSent();
+    // One id per message: sending it again after ChatGPT lost the answer never delivers it twice.
+    var args = { text: value, id: "msg_" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36) };
+    function attempt(left) {
+      return Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
+        var structured = result && (result.structuredContent || result);
+        if (!result || result.isError || !structured || structured.accepted !== true) {
+          var detail = result && Array.isArray(result.content) && result.content[0] && result.content[0].text;
+          throw new Error(detail || "o MCP recusou a mensagem");
+        }
+      }).catch(function (error) {
+        if (left <= 0) throw error;
+        setStatus("O ChatGPT não confirmou; enviando de novo…", false);
+        return new Promise(function (resolve) { setTimeout(resolve, 3000); }).then(function () { return attempt(left - 1); });
+      });
+    }
+    attempt(2).then(function () {
+      var item = { text: value, at: clock(new Date()), id: args.id, since: Date.now() };
+      sent = sent.concat([item]).slice(-20);
+      text.value = "";
+      setStatus("", false);
+      save();
+      watch(item);
+    }).catch(function (error) {
+      setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente de novo.", true);
+    }).then(function () {
+      busy = false;
+      render();
+    });
+  }
+  text.addEventListener("input", drawSent);
+  // Enter sends, Shift+Enter breaks the line, as in the ChatGPT field.
+  text.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); submit(); }
+  });
+  send.addEventListener("click", submit);
+  restore();
+  window.addEventListener("openai:set_globals", function () { if (sent.length === 0) restore(); render(); });
   document.addEventListener("visibilitychange", refresh);
   setInterval(refresh, 4000);
   // The minutes of the step in progress go on even when nothing else changes.
