@@ -47,16 +47,20 @@ export const CARD_BASE_CSS = `
 export const CARD_FIT_SCRIPT = `
 (function () {
   var last = 0;
+  var told = false;
   function fit() {
-    var height = Math.ceil(document.documentElement.getBoundingClientRect().height);
-    if (height === last) return;
+    var height = Math.ceil(document.body.getBoundingClientRect().height);
+    var bridge = window.openai && typeof window.openai.notifyIntrinsicHeight === "function";
+    // ChatGPT can hand the card its bridge after the first look, so it is told again then.
+    if (height === last && (told || !bridge)) return;
     last = height;
-    try { if (window.openai && typeof window.openai.notifyIntrinsicHeight === "function") window.openai.notifyIntrinsicHeight(height); } catch (e) {}
+    try { if (bridge) { window.openai.notifyIntrinsicHeight(height); told = true; } } catch (e) {}
     try { window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: height } }, "*"); } catch (e) {}
   }
   if (window.ResizeObserver) new ResizeObserver(fit).observe(document.body);
   window.addEventListener("load", fit);
-  fit();
+  window.addEventListener("openai:set_globals", fit);
+  [0, 300, 1000, 3000].forEach(function (ms) { setTimeout(fit, ms); });
 })();
 `;
 
