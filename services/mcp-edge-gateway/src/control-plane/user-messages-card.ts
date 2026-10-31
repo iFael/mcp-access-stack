@@ -286,6 +286,7 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/user-messages-v6.html": USER_MESSAGES_CARD_URI,
   "ui://mcp-v3/progress-v4.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/pull-request-v3.html": PULL_REQUEST_CARD_URI,
+  "ui://mcp-v3/progress-v5.html": PROGRESS_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */
