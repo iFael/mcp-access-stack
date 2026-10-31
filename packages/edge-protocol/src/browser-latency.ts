@@ -49,6 +49,7 @@ export const BROWSER_LATENCY_OPERATIONS = [
   "browser_progress",
   "browser_progress_update",
   "browser_progress_read",
+  "browser_user_card",
   "browser_download",
   "browser_upload",
   "browser_console",

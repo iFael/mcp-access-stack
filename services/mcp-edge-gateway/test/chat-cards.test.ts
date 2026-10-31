@@ -151,9 +151,29 @@ describe("the chat cards the Edge serves", () => {
     }
   });
 
+  it("keeps only the newest reply card of a task as the field; the older ones fold into a line", async () => {
+    let now = new Date("2026-10-31T03:00:00.000Z");
+    const plans = new ProgressPlans(memory(), () => now);
+    expect((await result(await plans.handle(call("browser_user_card", { taskId: "t1" }), "user_1"))).structuredContent).toEqual({});
+    const first = await plans.noteUserCard("user_1", "t1");
+    now = new Date("2026-10-31T03:01:00.000Z");
+    const second = await plans.noteUserCard("user_1", "t1");
+    await plans.noteUserCard("user_1", "t2");
+    await plans.noteUserCard("user_1", undefined);
+    expect(first).not.toBe(second);
+    expect((await result(await plans.handle(call("browser_user_card", { taskId: "t1" }), "user_1"))).structuredContent)
+      .toEqual({ shownAt: second });
+    // Another user's cards are theirs.
+    expect((await result(await plans.handle(call("browser_user_card", { taskId: "t1" }), "user_2"))).structuredContent).toEqual({});
+
+    const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
+    expect(card!.text).toContain("browser_user_card");
+    expect(card!.text).toContain("Campo de mensagens mais abaixo");
+  });
+
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v8.html");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v9.html");
     expect(card!.text).toContain("Entregue às");
     expect(card!.text).toContain("aguardando o agente");
     // Clean: no title or task id over the field.

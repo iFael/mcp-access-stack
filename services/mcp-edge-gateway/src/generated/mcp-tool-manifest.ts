@@ -25545,7 +25545,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v8.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v9.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25558,7 +25558,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v8.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v9.html"
       }
     },
     "annotations": {
@@ -25567,7 +25567,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. While a task runs, make it the last call of each answer, after your message and with the task's taskId, and write nothing after it: the card then sits at the end of the conversation, where the user can write to you without interrupting and sees whether each message reached you. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
+    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The card is the user's field to write to you, so keep it close to where they are looking: end every answer that used MCP V3 with this call, after your message and with the task's taskId when there is one, and write nothing after it; while a job goes on, also call it after each step that took a while (a command, a wait, a workflow), with the same taskId. The newest card is the field and the older ones fold into one line, and each call also brings you what the user wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25652,6 +25652,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           },
           "maxItems": 50,
           "type": "array"
+        },
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
         }
       },
       "required": [
@@ -26092,6 +26097,69 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_progress_update"
+  },
+  {
+    "_meta": {
+      "openai/visibility": "private",
+      "openai/widgetAccessible": true,
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ],
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Only the reply card of browser_user_messages calls this, to fold when a newer card of its task is shown; never call it yourself.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "runtimeId": {
+          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "taskId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "browser_user_card",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "title": "browser_user_card"
   },
   {
     "_meta": {
@@ -27163,15 +27231,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ac1f913f6cda02a326650953b24c908de9553838c36991b470be035a50059519",
-  "serverVersion": "0.4.0-catalog.cac1f913f6cda.s6c1db2a31b7f",
-  "toolCount": 120,
-  "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
+  "contractRevision": "148b466139b415912e5d548794391e430ff5f26b2787b30a98278d0bbf5a7859",
+  "serverVersion": "0.4.0-catalog.c148b466139b4.sb65bd697da48",
+  "toolCount": 121,
+  "toolSetRevision": "b65bd697da48ad28205a3079de31ce4f2f9083ebf82a3d652c9ceda7ff34a24a"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cac1f913f6cda.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.c148b466139b4.sb65bd697da48"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, so its card is shown again at the end of the answer. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

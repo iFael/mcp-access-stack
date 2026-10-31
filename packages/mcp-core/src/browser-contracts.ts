@@ -1123,9 +1123,14 @@ export const browserUserMessagesResultSchema = z
   .object({
     messages: z.array(browserUserMessageSchema).max(50),
     asked: z.boolean().optional(),
+    /** When the Edge showed this card; an older card of the task folds into one line. */
+    shownAt: z.iso.datetime().optional(),
   })
   .strict();
 export type BrowserUserMessagesResult = z.infer<typeof browserUserMessagesResultSchema>;
+// The reply card asks when the newest card of its task was shown, to fold when it is not that one.
+export const browserUserCardInputSchema = z.object({ taskId: taskIdSchema.optional() }).strict();
+export const browserUserCardResultSchema = z.object({ shownAt: z.iso.datetime().optional() }).strict();
 // What the user writes in the card browser_user_messages shows in the ChatGPT
 // conversation. Only that card calls it; the model never does.
 export const browserUserReplyInputSchema = z

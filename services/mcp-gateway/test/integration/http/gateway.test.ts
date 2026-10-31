@@ -81,7 +81,7 @@ describe("embedded gateway HTTP surface", () => {
         const { "io.github.ifael/next-step": next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
         if (next !== undefined) expect(String(tool.description)).toContain(`Next: ${String(next)}`);
         tool._meta = meta;
-        if (["browser_user_messages", "browser_user_reply", "browser_progress_read"].includes(String(tool.name))) {
+        if (["browser_user_messages", "browser_user_reply", "browser_progress_read", "browser_user_card"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
         } else if (["browser_progress", "github_get_pull_request", "mcp_update"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],

@@ -26,7 +26,7 @@ export const BROWSER_TOOL_NAMES = [
   "browser_press", "browser_wait", "browser_extract", "browser_sequence", "browser_frame_extract",
   "browser_frame_click", "browser_frame_fill", "browser_profile_page", "browser_dom_index",
   "browser_frame_sequence", "browser_navigate_path", "browser_screenshot",
-  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_download",
+  "browser_go_back", "browser_go_forward", "browser_close_tab", "browser_finish_task", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "browser_download",
   "browser_upload", "browser_console", "browser_network", "browser_trace", "browser_video",
   "browser_pdf", "browser_diagnostics",
 ] as const;
@@ -40,7 +40,7 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
 
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v8.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v9.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
@@ -60,6 +60,11 @@ const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = 
     "openai/toolInvocation/invoked": "Etapas",
   },
   browser_progress_read: {
+    ui: { visibility: ["app"] },
+    "openai/widgetAccessible": true,
+    "openai/visibility": "private",
+  },
+  browser_user_card: {
     ui: { visibility: ["app"] },
     "openai/widgetAccessible": true,
     "openai/visibility": "private",
@@ -571,7 +576,7 @@ function definitions(
       () => e.plan(assumeParsed(v)),
       (activeContext) => e.plan(assumeParsed(v), activeContext),
     )),
-    d("browser_user_messages", "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. While a task runs, make it the last call of each answer, after your message and with the task's taskId, and write nothing after it: the card then sits at the end of the conversation, where the user can write to you without interrupting and sees whether each message reached you. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
+    d("browser_user_messages", "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The card is the user's field to write to you, so keep it close to where they are looking: end every answer that used MCP V3 with this call, after your message and with the task's taskId when there is one, and write nothing after it; while a job goes on, also call it after each step that took a while (a command, a wait, a workflow), with the same taskId. The newest card is the field and the older ones fold into one line, and each call also brings you what the user wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
       if (typeof e.userMessages !== "function") {
         return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "browser_user_messages requires the MCP V3 personal Chrome extension."));
       }
@@ -595,6 +600,7 @@ function definitions(
     }),
     d("browser_progress", "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. When the user asks for something more while the job goes on, add it to the plan as a new step, so nothing they asked is lost. browser_progress with only the planId also answers with the plan as it is now: call it when you lose track of the job, after a long pause or a summary of the conversation, to see again what was asked, what is done and what remains. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. While the job goes on, end each answer with browser_progress and only that planId: the card shows again at the end, as it is now, and its older copies fold into one line, so the user always follows the latest one; never open a second plan for the same job.", c.browserProgressInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress")),
     d("browser_progress_update", "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears.", c.browserProgressUpdateInputSchema, c.browserProgressPlanSchema, false, () => edgeOnly("browser_progress_update")),
+    d("browser_user_card", "Only the reply card of browser_user_messages calls this, to fold when a newer card of its task is shown; never call it yourself.", c.browserUserCardInputSchema, c.browserUserCardResultSchema, true, () => edgeOnly("browser_user_card")),
     d("browser_progress_read", "Only the plan card of browser_progress calls this, to follow the plan; never call it yourself.", c.browserProgressReadInputSchema, c.browserProgressPlanSchema, true, () => edgeOnly("browser_progress_read")),
     d("browser_download", "Downloads into private runtime storage.", c.browserDownloadInputSchema, c.browserDownloadResultSchema, false, (v, context) => callWithOptionalContext(
       context,
@@ -880,6 +886,7 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
     const steps = Array.isArray(result.steps) ? result.steps as c.BrowserProgressPlan["steps"] : [];
     return `Plan ${String(result.planId)}: ${steps.filter((step) => step.state === "done").length}/${steps.length} done.`;
   }
+  if (name === "browser_user_card") return `Newest card shown at ${String(result.shownAt ?? "never")}.`;
   if (name === "browser_user_reply") return result.accepted === true ? "Sent to the agent." : "Not sent.";
   if (name === "browser_tabs") return `${Array.isArray(result.tabs) ? result.tabs.length : 0} MCP browser tab(s).`;
   if (name === "browser_console" || name === "browser_network") {

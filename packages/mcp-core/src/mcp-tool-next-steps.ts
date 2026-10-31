@@ -147,6 +147,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   browser_progress: "browser_progress_update with the planId when a step changes.",
   browser_progress_update: "while the job goes on, end your answer with browser_progress and only the planId.",
   browser_progress_read: "",
+  browser_user_card: "",
 };
 
 /** "Next: …", or "" for a tool that ends its job. */

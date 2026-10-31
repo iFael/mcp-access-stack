@@ -1607,8 +1607,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   ): Promise<Response> {
     if (!principal.userId || !request) return response;
     const invocation = readMcpToolInvocation(body);
-    if (!invocation || invocation.name === "browser_user_messages" || invocation.name === "browser_user_reply" ||
-        invocation.name === "browser_progress_read" ||
+    if (invocation?.name === "browser_user_messages") return this.stampUserCard(invocation, principal.userId, response);
+    if (!invocation || invocation.name === "browser_user_reply" ||
+        invocation.name === "browser_progress_read" || invocation.name === "browser_user_card" ||
         invocation.name.startsWith(COMPANION_INTERNAL_TOOL_PREFIX)) return response;
     const holders = this.getReadyCompanionsForUser(principal.userId)
       .filter(({ attachment }) => (attachment.pendingUserMessages ?? 0) > 0);
@@ -1649,6 +1650,26 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const content = Array.isArray(result.result.content) ? result.result.content : [];
     // First, so a long result does not bury what the user asked.
     result.result.content = [...notices.map((text) => ({ type: "text", text })), ...content];
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.set("cache-control", "no-store");
+    headers.set("content-type", "application/json; charset=utf-8");
+    return new Response(JSON.stringify(result), { status: response.status, headers });
+  }
+
+  // The reply card says when it was shown: the cards of the same task shown before it fold into one line.
+  private async stampUserCard(
+    invocation: { arguments: Record<string, unknown> },
+    userId: string,
+    response: Response,
+  ): Promise<Response> {
+    if (!response.ok) return response;
+    let result: unknown;
+    try { result = await response.clone().json(); } catch { return response; }
+    if (!isRecord(result) || !isRecord(result.result) || result.result.isError === true ||
+        !isRecord(result.result.structuredContent)) return response;
+    const taskId = typeof invocation.arguments.taskId === "string" ? invocation.arguments.taskId : undefined;
+    result.result.structuredContent.shownAt = await this.progressPlans.noteUserCard(userId, taskId);
     const headers = new Headers(response.headers);
     headers.delete("content-length");
     headers.set("cache-control", "no-store");
