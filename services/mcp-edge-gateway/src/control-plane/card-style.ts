@@ -42,6 +42,24 @@ export const CARD_BASE_CSS = `
 `;
 
 /** Follows ChatGPT's theme when it says one; otherwise the system's. */
+// ChatGPT gives a card a fixed height unless the card says how tall it is, which left
+// a large empty box under a short card. It is told again whenever the content changes.
+export const CARD_FIT_SCRIPT = `
+(function () {
+  var last = 0;
+  function fit() {
+    var height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    if (height === last) return;
+    last = height;
+    try { if (window.openai && typeof window.openai.notifyIntrinsicHeight === "function") window.openai.notifyIntrinsicHeight(height); } catch (e) {}
+    try { window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: height } }, "*"); } catch (e) {}
+  }
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(document.body);
+  window.addEventListener("load", fit);
+  fit();
+})();
+`;
+
 export const CARD_THEME_SCRIPT = `
   function applyTheme() {
     var theme = window.openai && window.openai.theme;

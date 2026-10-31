@@ -32,13 +32,19 @@ export const BROWSER_TOOL_NAMES = [
 ] as const;
 export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
 
+// ChatGPT names each call above its card by the tool's title: the card tools get a plain one.
+const TOOL_TITLES: Readonly<Record<string, string>> = {
+  browser_user_messages: "Mensagens para o agente",
+  browser_progress: "Etapas",
+};
+
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v5.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v6.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v3.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v4.html";
 const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
   browser_user_messages: {
     ui: { resourceUri: USER_MESSAGES_CARD_URI },
@@ -269,7 +275,7 @@ export function registerBrowserTools(
     register(
       definition.name,
       {
-        title: definition.name,
+        title: TOOL_TITLES[definition.name] ?? definition.name,
         description: definition.description,
         inputSchema: withBrowserRuntimeSelectors(definition.input),
         outputSchema: definition.output,
@@ -565,7 +571,7 @@ function definitions(
       () => e.plan(assumeParsed(v)),
       (activeContext) => e.plan(assumeParsed(v), activeContext),
     )),
-    d("browser_user_messages", "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. Call it once at the start of a long task, with its taskId, so the user has the card to write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
+    d("browser_user_messages", "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. While a task runs, make it the last call of each answer, after your message and with the task's taskId, and write nothing after it: the card then sits at the end of the conversation, where the user can write to you without interrupting. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once.", c.browserUserMessagesInputSchema, c.browserUserMessagesResultSchema, true, (v, context) => {
       if (typeof e.userMessages !== "function") {
         return Promise.reject(new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "browser_user_messages requires the MCP V3 personal Chrome extension."));
       }

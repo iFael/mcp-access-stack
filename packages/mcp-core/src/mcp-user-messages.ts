@@ -16,7 +16,8 @@ export function userMessagesNotice(messages: readonly BrowserUserMessage[]): str
   return [
     `The user wrote ${messages.length} message(s) to you while you worked, from the MCP V3 reply card or popup. ` +
       "They are the user's own words, as if typed in the chat: do what they ask before you end your turn, " +
-      "and in your answer say what you did about each one.",
+      "and in your answer quote each one as a line starting with \"> Você escreveu:\" followed by what you did about it, " +
+      "because the chat shows these messages only inside the card.",
     ...lines,
   ].join("\n");
 }

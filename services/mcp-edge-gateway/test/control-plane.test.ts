@@ -421,7 +421,7 @@ describe("Edge MCP control plane reply card", () => {
       uri: USER_MESSAGES_CARD_URI,
       mimeType: MCP_APP_MIME_TYPE,
       text: expect.stringContaining("browser_user_reply"),
-      _meta: expect.objectContaining({ ui: expect.objectContaining({ prefersBorder: true }) }),
+      _meta: expect.objectContaining({ ui: expect.objectContaining({ prefersBorder: false }) }),
     })]);
     expect(await (await controlPlane.handle(mcpRequest(jsonRpc(5, "resources/read", { uri: "ui://other.html" })))).json())
       .toMatchObject({ error: { code: -32002 } });
