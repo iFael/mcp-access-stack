@@ -8,7 +8,7 @@ import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v6.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v7.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -27,7 +27,11 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 ${CARD_BASE_CSS}
-  body { padding: 4px 0; }
+  /* No background of its own: ChatGPT may give the card more height than it needs, and the rest
+     then reads as part of the chat instead of an empty box. */
+  html, body { background: transparent; }
+  body { padding: 4px 1px; }
+  textarea { min-width: 0; }
   .label { display: flex; align-items: center; gap: 6px; margin: 0 2px 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
   .label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .label.none { color: var(--bad); }
@@ -279,6 +283,9 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/progress-v3.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/pull-request-v2.html": PULL_REQUEST_CARD_URI,
   "ui://mcp-v3/user-messages-v5.html": USER_MESSAGES_CARD_URI,
+  "ui://mcp-v3/user-messages-v6.html": USER_MESSAGES_CARD_URI,
+  "ui://mcp-v3/progress-v4.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/pull-request-v3.html": PULL_REQUEST_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */

@@ -153,7 +153,7 @@ describe("the chat cards the Edge serves", () => {
 
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v6.html");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v7.html");
     expect(card!.text).toContain("Entregue às");
     expect(card!.text).toContain("aguardando o agente");
     // Clean: no title or task id over the field.

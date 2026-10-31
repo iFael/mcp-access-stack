@@ -13,7 +13,7 @@ import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v4.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v5.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;

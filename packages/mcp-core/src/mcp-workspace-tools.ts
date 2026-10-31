@@ -3098,7 +3098,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
 };
 
 // The pull request card the chat shows with github_get_pull_request. The Edge serves it.
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v3.html";
+export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v4.html";
 const PULL_REQUEST_CARD_META = {
   ui: { resourceUri: PULL_REQUEST_CARD_URI },
   "openai/outputTemplate": PULL_REQUEST_CARD_URI,
