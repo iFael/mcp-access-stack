@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { McpConversationCall } from "@vs-code-gpt/shared";
 import type { ChatWakeEvent } from "./chat-wake.js";
 
@@ -21,6 +23,11 @@ export interface OpenConversation {
 export interface ConversationBookOptions {
   /** The conversations open right now in the app. */
   openConversations: () => Promise<readonly OpenConversation[]>;
+  /**
+   * Where the book is kept. The companion restarts at the end of an update, and the update's
+   * notice must still find its conversation then.
+   */
+  file?: string;
   log?: (entry: Record<string, unknown>) => void;
   now?: () => number;
 }
@@ -43,12 +50,14 @@ export class ConversationBook {
 
   constructor(private readonly options: ConversationBookOptions) {
     this.now = options.now ?? Date.now;
+    this.load();
   }
 
   noteCall(call: Pick<McpConversationCall, "session" | "ids">): void {
     const now = this.now();
     touch(this.lastCallAt, call.session, now, MAX_SESSIONS);
     for (const id of call.ids) touch(this.sessionOfId, id, call.session, MAX_IDS);
+    this.save();
     const spacing = this.conversationOfSession.has(call.session) ? RELEARN_SPACING_MS : LEARN_SPACING_MS;
     const last = this.lastLearnAt.get(call.session);
     if (last !== undefined && now - last < spacing) return;
@@ -93,6 +102,42 @@ export class ConversationBook {
       if (id === conversationId && other !== session) this.conversationOfSession.delete(other);
     }
     touch(this.conversationOfSession, session, conversationId, MAX_SESSIONS);
+    this.save();
+  }
+
+  private load(): void {
+    if (this.options.file === undefined) return;
+    try {
+      const saved = JSON.parse(readFileSync(this.options.file, "utf8")) as Partial<Record<string, [string, unknown][]>>;
+      fill(this.sessionOfId, saved.sessionOfId, "string");
+      fill(this.conversationOfSession, saved.conversationOfSession, "string");
+      fill(this.lastSeen, saved.lastSeen, "string");
+      fill(this.lastCallAt, saved.lastCallAt, "number");
+    } catch {
+      // No book yet, or an unreadable one: start empty.
+    }
+  }
+
+  private save(): void {
+    if (this.options.file === undefined) return;
+    try {
+      mkdirSync(path.dirname(this.options.file), { recursive: true });
+      const temporary = `${this.options.file}.tmp`;
+      writeFileSync(temporary, JSON.stringify({
+        sessionOfId: [...this.sessionOfId], conversationOfSession: [...this.conversationOfSession],
+        lastSeen: [...this.lastSeen], lastCallAt: [...this.lastCallAt],
+      }));
+      renameSync(temporary, this.options.file);
+    } catch (error) {
+      this.options.log?.({ event: "mcp_v3_conversation_book_save_failed", message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+function fill<V>(map: Map<string, V>, entries: unknown, type: "string" | "number"): void {
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries.slice(-MAX_IDS)) {
+    if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === type) map.set(entry[0], entry[1] as V);
   }
 }
 

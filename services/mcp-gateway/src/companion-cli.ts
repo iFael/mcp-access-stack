@@ -73,6 +73,7 @@ async function main(): Promise<void> {
   const notifier = createDesktopNotifier({ scriptDirectory: path.join(runtime.stateRoot, "browser"), log: writeLog });
   const conversations = new ConversationBook({
     openConversations: async () => (await desktopChatApp?.openConversations?.()) ?? [],
+    file: path.join(runtime.stateRoot, "state", "conversation-book.json"),
     log: writeLog,
   });
   const chatWake = new ChatWake({

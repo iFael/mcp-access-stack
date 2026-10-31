@@ -89,6 +89,21 @@ describe("ChatWake per conversation", () => {
 });
 
 describe("ConversationBook", () => {
+  it("still knows the update's conversation after the companion restarts", async () => {
+    const file = path.join(await mkdtemp(path.join(os.tmpdir(), "book-")), "state", "conversation-book.json");
+    let now = 1_000;
+    const open = async () => [{ conversationId: "title:Publicar MAIN", answering: true }];
+    const before = new ConversationBook({ openConversations: open, file, now: () => now });
+    before.noteCall({ session: "session-a", ids: ["upd_1"] });
+    now += 6_000;
+    before.noteCall({ session: "session-a", ids: [] });
+    const update = { kind: "update", updateId: "upd_1", workspaceId: "w", state: "succeeded" } as const;
+    await until(() => before.conversationOf(update) !== undefined);
+
+    const after = new ConversationBook({ openConversations: open, file, now: () => now });
+    expect(after.conversationOf(update)).toBe("title:Publicar MAIN");
+  });
+
   it("learns a conversation once two looks while its call arrives agree, and unlearns it when one disagrees", async () => {
     let open: OpenConversation[] = [
       { conversationId: "title:Conversa A", answering: true },
