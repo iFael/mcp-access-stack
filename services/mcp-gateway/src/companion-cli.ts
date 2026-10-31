@@ -138,6 +138,7 @@ async function main(): Promise<void> {
         onUserMessagesPending: (pending) => connector?.announceUserMessages(pending),
         chatWake,
         ...(notifier === undefined ? {} : { notify: notifier }),
+        onCardMessage: (messageId) => conversations.noteCardMessage(messageId),
       });
     } catch (error) {
       const browserError = asAppError(error);

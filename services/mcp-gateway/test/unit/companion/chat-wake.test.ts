@@ -104,6 +104,18 @@ describe("ConversationBook", () => {
     expect(after.conversationOf(update)).toBe("title:Publicar MAIN");
   });
 
+  it("files a card message under the one conversation the app shows, with nothing learned yet", async () => {
+    let open: OpenConversation[] = [{ conversationId: "title:Homologar cartão", answering: false }];
+    const book = new ConversationBook({ openConversations: async () => open });
+    await book.noteCardMessage("msg_1");
+    expect(book.conversationOf({ kind: "message", messageId: "msg_1", text: "oi", taskId: "t1" })).toBe("title:Homologar cartão");
+
+    // Two conversations shown: it waits for what the looks learn.
+    open = [...open, { conversationId: "title:Outra", answering: false }];
+    await book.noteCardMessage("msg_2");
+    expect(book.conversationOf({ kind: "message", messageId: "msg_2", text: "oi", taskId: "t1" })).toBeUndefined();
+  });
+
   it("learns a conversation once two looks while its call arrives agree, and unlearns it when one disagrees", async () => {
     let open: OpenConversation[] = [
       { conversationId: "title:Conversa A", answering: true },
