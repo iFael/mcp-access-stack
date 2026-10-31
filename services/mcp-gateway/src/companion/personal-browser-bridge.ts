@@ -80,6 +80,8 @@ export interface PersonalBrowserBridgeOptions {
   chatWake?: Pick<ChatWake, "queue" | "resolveHandback" | "setEnabled">;
   /** A Windows notification when the agent asks the user something in the card. */
   notify?: DesktopNotify;
+  /** A message was just written in the reply card, before its wake is queued. */
+  onCardMessage?: (messageId: string) => Promise<void>;
 }
 
 export class PersonalBrowserBridge implements PersonalBrowserExecutor {
@@ -708,6 +710,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const { added } = this.inbox.accept({ messages: [message] });
     if (added > 0) this.options.onUserMessagesPending?.(this.inbox.size);
     if (added > 0) {
+      await this.options.onCardMessage?.(message.id).catch(() => undefined);
       this.options.chatWake?.queue({ kind: "message", messageId: message.id, text: message.text,
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }) });
     }
