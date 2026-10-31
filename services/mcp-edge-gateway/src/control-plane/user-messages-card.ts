@@ -32,8 +32,8 @@ ${CARD_BASE_CSS}
   .label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .label.none { color: var(--bad); }
   .label.asking { color: #c99a00; }
-  .label.waiting { color: var(--warn); }
-  .label.done { color: var(--good); }
+  .label.waiting { color: var(--good); }
+  .label.done { color: #3b82f6; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .label.asking { color: #f2cc4d; } }
   :root[data-theme="dark"] .label.asking { color: #f2cc4d; }
   .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -44,8 +44,8 @@ ${CARD_BASE_CSS}
   #sent li { display: flex; flex-direction: column; align-items: flex-end; padding: 0; }
   .bubble { max-width: 85%; padding: 8px 12px; border-radius: 16px 16px 4px 16px; background: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
   .state { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; color: var(--muted); font-size: 11px; }
-  .state.done { color: var(--good); }
-  .state .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .state.done { color: #3b82f6; }
+  .state .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
   .field { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--soft); }
   .field:focus-within { border-color: var(--muted); }
   textarea { flex: 1; min-height: 24px; max-height: 140px; margin: 6px 0; padding: 0; border: 0; outline: 0; resize: none; background: transparent; color: var(--fg); font: inherit; line-height: 1.45; }
