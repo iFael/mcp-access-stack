@@ -6,7 +6,7 @@
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v4.html";
+export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v5.html";
 
 export const PULL_REQUEST_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">

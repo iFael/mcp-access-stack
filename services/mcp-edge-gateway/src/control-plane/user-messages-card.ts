@@ -8,7 +8,7 @@ import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v7.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v8.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -286,6 +286,9 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/user-messages-v6.html": USER_MESSAGES_CARD_URI,
   "ui://mcp-v3/progress-v4.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/pull-request-v3.html": PULL_REQUEST_CARD_URI,
+  "ui://mcp-v3/progress-v5.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/user-messages-v7.html": USER_MESSAGES_CARD_URI,
+  "ui://mcp-v3/pull-request-v4.html": PULL_REQUEST_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */
