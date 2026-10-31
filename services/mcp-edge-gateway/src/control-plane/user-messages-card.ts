@@ -28,6 +28,7 @@ export const USER_MESSAGES_CARD_HTML = `<!doctype html>
 <style>
 ${CARD_BASE_CSS}
   body { padding: 4px 0; }
+  .label { margin: 0 2px 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   .question { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
   #options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
   #options .chosen { border-color: var(--fg); font-weight: 600; }
@@ -50,6 +51,7 @@ ${CARD_BASE_CSS}
 </style>
 </head>
 <body>
+<p class="label" id="label"></p>
 <p class="question" id="question" hidden></p>
 <div id="options" hidden></div>
 <ul id="sent"></ul>
@@ -82,6 +84,10 @@ ${CARD_BASE_CSS}
     var args = input();
     var choices = options();
     var question = typeof args.question === "string" ? args.question.trim() : "";
+    var last = sent[sent.length - 1];
+    document.getElementById("label").textContent = last
+      ? (last.deliveredAt ? "Mensagem entregue" : "Mensagem enviada")
+      : question !== "" ? "Pergunta do agente" : "Sem mensagens";
     var asking = document.getElementById("question");
     asking.hidden = question === "";
     asking.textContent = question;
