@@ -25769,7 +25769,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. While the job goes on, end each answer with browser_progress and only that planId: the card shows again at the end, as it is now, and its older copies fold into one line, so the user always follows the latest one; never open a second plan for the same job. Next: browser_progress_update with the planId when a step changes.",
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once, at the start of any job with several steps (any MCP V3 work, not only the browser), not for a quick answer. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. When the user asks for something more while the job goes on, add it to the plan as a new step, so nothing they asked is lost. browser_progress with only the planId also answers with the plan as it is now: call it when you lose track of the job, after a long pause or a summary of the conversation, to see again what was asked, what is done and what remains. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. While the job goes on, end each answer with browser_progress and only that planId: the card shows again at the end, as it is now, and its older copies fold into one line, so the user always follows the latest one; never open a second plan for the same job. Next: browser_progress_update with the planId when a step changes.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -27163,15 +27163,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ecdd1971ec98b436c70eb5e10327175336ee87f46f049d7d88efc12b85ed8efd",
-  "serverVersion": "0.4.0-catalog.cecdd1971ec98.s6c1db2a31b7f",
+  "contractRevision": "ac1f913f6cda02a326650953b24c908de9553838c36991b470be035a50059519",
+  "serverVersion": "0.4.0-catalog.cac1f913f6cda.s6c1db2a31b7f",
   "toolCount": 120,
   "toolSetRevision": "6c1db2a31b7f4ef6a89c2686cceecdc0ba722217d1cf8cccef35ee65575387bd"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cecdd1971ec98.s6c1db2a31b7f"
+  "version": "0.4.0-catalog.cac1f913f6cda.s6c1db2a31b7f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. At the start of any job with several steps, call browser_progress once with a short title and the plan of this conversation as steps; then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. While the job goes on, end each answer with browser_progress and only that planId, so its card is shown again at the end of the answer. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
