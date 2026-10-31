@@ -50,6 +50,8 @@ export const CARD_FIT_SCRIPT = `
   var told = false;
   function fit() {
     var height = Math.ceil(document.body.getBoundingClientRect().height);
+    // A card ChatGPT hides for a moment measures 0; told so, ChatGPT would keep it at 0.
+    if (height < 1) return;
     var bridge = window.openai && typeof window.openai.notifyIntrinsicHeight === "function";
     // ChatGPT can hand the card its bridge after the first look, so it is told again then.
     if (height === last && (told || !bridge)) return;

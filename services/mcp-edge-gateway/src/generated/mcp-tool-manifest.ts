@@ -14043,7 +14043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_start_commit_checks_watch on its head for CI; github_read for its reviews and comments.",
-      "openai/outputTemplate": "ui://mcp-v3/pull-request-v4.html",
+      "openai/outputTemplate": "ui://mcp-v3/pull-request-v5.html",
       "openai/toolInvocation/invoked": "PR",
       "openai/toolInvocation/invoking": "Lendo a PR",
       "securitySchemes": [
@@ -14055,7 +14055,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/pull-request-v4.html"
+        "resourceUri": "ui://mcp-v3/pull-request-v5.html"
       }
     },
     "annotations": {
@@ -25545,7 +25545,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v7.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v8.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25558,7 +25558,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v7.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v8.html"
       }
     },
     "annotations": {

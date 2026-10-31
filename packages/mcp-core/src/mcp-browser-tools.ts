@@ -40,7 +40,7 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
 
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v7.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v8.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
