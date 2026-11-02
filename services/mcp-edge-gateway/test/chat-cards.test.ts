@@ -30,13 +30,21 @@ describe("the plan card", () => {
       () => `plan_00000000-0000-4000-8000-00000000000${++index}`);
     const forSession = (session: string) => ({
       ...call("browser_progress", { title: "Test", steps: [{ text: "Work", state: "doing" }] }),
-      params: { ...call("browser_progress", {}).params, _meta: { "openai/session": session } },
+      params: { ...call("browser_progress", { title: "Test", steps: [{ text: "Work", state: "doing" }] }).params, _meta: { "openai/session": session } },
     });
     const first = await result(await plans.handle(forSession("chat-a"), "user_1"));
     const second = await result(await plans.handle(forSession("chat-b"), "user_1"));
+    expect(first.structuredContent?.planId).toMatch(/^plan_/);
+    expect(second.structuredContent?.planId).toMatch(/^plan_/);
+    expect(first.structuredContent?.planId).not.toBe(second.structuredContent?.planId);
     expect(await plans.planForSession("user_1", "chat-a")).toBe(first.structuredContent?.planId);
     expect(await plans.planForSession("user_1", "chat-b")).toBe(second.structuredContent?.planId);
     expect(await plans.planForSession("user_2", "chat-a")).toBeUndefined();
+    // A plan already shown in this conversation can be rebound after a reconnection.
+    const shownCall = call("browser_progress", { planId: first.structuredContent?.planId });
+    const shown = { ...shownCall, params: { ...shownCall.params, _meta: { "openai/session": "chat-reconnected" } } };
+    expect((await result(await plans.handle(shown, "user_1"))).isError).not.toBe(true);
+    expect(await plans.planForSession("user_1", "chat-reconnected")).toBe(first.structuredContent?.planId);
   });
 
   const steps = [{ text: "Ler o código", state: "done" }, { text: "Corrigir", state: "doing" }, { text: "Publicar", state: "todo" }];

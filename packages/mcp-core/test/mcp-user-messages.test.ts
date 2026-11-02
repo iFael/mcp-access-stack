@@ -22,10 +22,10 @@ function register(server: McpServer, name: string, structuredContent: Record<str
 }
 
 describe("installUserMessageDelivery", () => {
-  it("binds a progress call to its plan and preserves ordinary browser task scopes", () => {
+  it("does not trust a tool-supplied planId to claim a conversation", () => {
     const planId = "plan_00000000-0000-4000-8000-000000000001";
-    expect(userMessageScope({ planId })).toEqual({ planId });
-    expect(userMessageScope({ taskId: "task-7", planId })).toEqual({ taskId: "task-7", planId });
+    expect(userMessageScope({ planId })).toEqual({});
+    expect(userMessageScope({ taskId: "task-7", planId })).toEqual({ taskId: "task-7" });
   });
 
   const note: BrowserUserMessage = { id: "msg_aaaaaaaa", text: "A barra não piscou.", sentAt: "2026-10-28T15:00:00.000Z" };

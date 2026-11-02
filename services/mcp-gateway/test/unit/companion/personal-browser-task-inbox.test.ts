@@ -12,6 +12,7 @@ describe("PersonalBrowserTaskInbox", () => {
     const second = "plan_00000000-0000-4000-8000-000000000002";
     inbox.accept({ messages: [message("eeeeeeee", { taskId: first })] });
     expect(inbox.take({ taskId: second })).toEqual([]);
+    expect(inbox.take({ taskId: first })).toEqual([]); // taskId alone is not trusted conversation identity
     expect(inbox.take({ planId: second }, true)).toEqual([]);
     expect(inbox.take({}, true)).toEqual([]);
     expect(inbox.holds("msg_eeeeeeee")).toBe(true);

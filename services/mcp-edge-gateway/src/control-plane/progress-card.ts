@@ -391,6 +391,8 @@ export class ProgressPlans {
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
       plan = { ...current, shownAt: now };
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
+      // Reusing an existing card also restores its session association after a reconnect/update.
+      await this.bindSession(userId, progressSession(body), plan.planId);
       const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
       return toolResult(id, `Plan shown again (${done}/${plan.steps.length} done).`, plan);
     }

@@ -1630,10 +1630,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const rawSession = meta["openai/session"] ?? meta.sessionId;
     const session = typeof rawSession === "string" && rawSession.trim() && rawSession.length <= 200
       ? rawSession.trim() : undefined;
-    const planId = typeof invocation.arguments.planId === "string" &&
-      /^plan_[0-9a-f-]{36}$/u.test(invocation.arguments.planId)
-      ? invocation.arguments.planId
-      : await this.progressPlans.planForSession(principal.userId, session);
+    // Tool arguments are not proof of conversation ownership. Only the server-side
+    // association learned from ChatGPT session metadata may unlock a card message.
+    const planId = await this.progressPlans.planForSession(principal.userId, session);
     if (planId) scope.planId = planId;
     const notices: string[] = [];
     for (const { webSocket } of holders) {

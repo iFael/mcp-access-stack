@@ -155,7 +155,7 @@ export class PersonalBrowserTaskInbox {
 function matches(queued: QueuedMessage, scope: TaskInboxScope): boolean {
   const taskId = queued.message.taskId;
   if (taskId === undefined) return true;
-  if (taskId.startsWith("plan_")) return scope.planId === taskId || scope.taskId === taskId;
+  if (taskId.startsWith("plan_")) return scope.planId === taskId;
   if (scope.taskId !== undefined && scope.taskId === taskId) return true;
   return scope.tabId !== undefined && queued.tabIds.includes(scope.tabId);
 }

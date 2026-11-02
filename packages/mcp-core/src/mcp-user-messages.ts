@@ -55,7 +55,7 @@ export function installUserMessageDelivery(server: McpServer, take: TakeUserMess
     };
 }
 
-export function userMessageScope(input: unknown, structured?: unknown): { taskId?: string; tabId?: string; planId?: string } {
+export function userMessageScope(input: unknown, structured?: unknown): { taskId?: string; tabId?: string } {
   const record = asRecord(input);
   const tab = asRecord(asRecord(structured).tab);
   const taskId = typeof record.taskId === "string"
@@ -64,12 +64,9 @@ export function userMessageScope(input: unknown, structured?: unknown): { taskId
   const tabId = typeof record.tabId === "string"
     ? record.tabId
     : typeof tab.tabId === "string" ? tab.tabId : undefined;
-  const planId = typeof record.planId === "string" && /^plan_[0-9a-f-]{36}$/u.test(record.planId)
-    ? record.planId : undefined;
   return {
     ...(taskId === undefined ? {} : { taskId }),
     ...(tabId === undefined ? {} : { tabId }),
-    ...(planId === undefined ? {} : { planId }),
   };
 }
 
