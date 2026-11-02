@@ -16,6 +16,8 @@
 // then it waits, the user's own words with no time limit, and a Windows
 // notification tells the user once that the conversation has news.
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { OpenConversation } from "./conversation-book.js";
 
 export type ChatWakeEvent =
@@ -76,16 +78,25 @@ export interface ChatWakeOptions {
   spacingMs?: number;
   retryMs?: number;
   ttlMs?: number;
+  /** Durable acknowledgements for completed background-task notices. */
+  receiptFile?: string;
 }
 
 type Queued = ChatWakeEvent & { at: number };
 
 const MAX_EVENTS = 20;
+const MAX_TASK_RECEIPTS = 5_000;
+const TASK_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function taskReceiptKey(event: ChatWakeEvent): string | undefined {
+  return event.kind === "task" ? JSON.stringify([event.kind, event.workspaceId ?? null, event.taskId]) : undefined;
+}
 
 export class ChatWake {
   private enabled = true;
   private pending: Queued[] = [];
   private readonly notified = new WeakSet<Queued>();
+  private readonly sentTasks = new Map<string, number>();
   private recent: ChatWakeStatus["recent"] = [];
   private lastError: string | undefined;
   private lastSentAt: number | undefined;
@@ -103,11 +114,33 @@ export class ChatWake {
     this.spacingMs = options.spacingMs ?? 30_000;
     this.retryMs = options.retryMs ?? 60_000;
     this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+    if (options.receiptFile) {
+      try {
+        const saved: unknown = JSON.parse(readFileSync(options.receiptFile, "utf8"));
+        if (!saved || typeof saved !== "object" || !('version' in saved) || saved.version !== 1 ||
+            !('entries' in saved) || !Array.isArray(saved.entries)) throw new Error("invalid receipt format");
+        for (const entry of saved.entries) {
+          if (!Array.isArray(entry) || typeof entry[0] !== "string" ||
+              typeof entry[1] !== "number" || !Number.isFinite(entry[1])) throw new Error("invalid receipt entry");
+          if (this.now() - entry[1] < TASK_RECEIPT_RETENTION_MS) this.sentTasks.set(entry[0], entry[1]);
+        }
+        this.pruneTaskReceipts();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error("ChatWake task receipts are unreadable; refusing to risk duplicate notices.", { cause: error });
+        }
+      }
+    }
   }
 
   /** Something the agent may be waiting for happened. */
   queue(event: ChatWakeEvent): void {
     if (!this.enabled || this.closed) return;
+    const key = taskReceiptKey(event);
+    if (key !== undefined && (this.sentTasks.has(key) || this.pending.some((pending) => taskReceiptKey(pending) === key))) {
+      if (event.kind === "task") this.options.log?.({ event: "mcp_v3_chat_wake_task_deduplicated", taskId: event.taskId, workspaceId: event.workspaceId });
+      return;
+    }
     const queued: Queued = { ...event, at: this.now() };
     this.pending = [...this.pending, queued].slice(-MAX_EVENTS);
     // The update waits for the user whether or not the conversation is open.
@@ -228,6 +261,7 @@ export class ChatWake {
           ...(result.front === undefined ? {} : { front: result.front }) });
         if (result.outcome === "sent") {
           const sentAt = this.now();
+          this.recordSentTasks(events, sentAt);
           // Events that arrived while writing, or belong to another conversation, wait for the next notice.
           const written = new Set(batch);
           this.pending = this.pending.filter((event) =>
@@ -261,6 +295,37 @@ export class ChatWake {
     this.lastError = lastError;
     this.publish();
     this.schedule(this.retryMs);
+  }
+
+  private recordSentTasks(events: readonly Queued[], sentAt: number): void {
+    let changed = false;
+    for (const event of events) {
+      const key = taskReceiptKey(event);
+      if (key === undefined || this.sentTasks.has(key)) continue;
+      this.sentTasks.set(key, sentAt);
+      changed = true;
+      if (event.kind === "task") this.options.log?.({ event: "mcp_v3_chat_wake_task_sent", taskId: event.taskId, workspaceId: event.workspaceId });
+    }
+    if (!changed || !this.options.receiptFile) return;
+    this.pruneTaskReceipts();
+    try {
+      const file = this.options.receiptFile;
+      mkdirSync(path.dirname(file), { recursive: true });
+      const temporary = file + ".tmp";
+      writeFileSync(temporary, JSON.stringify({ version: 1, entries: [...this.sentTasks] }), { mode: 0o600 });
+      renameSync(temporary, file);
+    } catch (error) {
+      // The notice has already been submitted. Do not enqueue it again in this process.
+      this.options.log?.({ event: "mcp_v3_chat_wake_receipt_persist_failed",
+        error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private pruneTaskReceipts(): void {
+    for (const [key, at] of this.sentTasks) {
+      if (this.now() - at >= TASK_RECEIPT_RETENTION_MS) this.sentTasks.delete(key);
+    }
+    while (this.sentTasks.size > MAX_TASK_RECEIPTS) this.sentTasks.delete(this.sentTasks.keys().next().value!);
   }
 
   // The user's own words need no notice: they know what they wrote.

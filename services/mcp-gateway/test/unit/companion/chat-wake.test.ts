@@ -182,6 +182,89 @@ describe("ConversationBook", () => {
 });
 
 describe("ChatWake", () => {
+  it("does not repeat a completed task queued twice before the first send", async () => {
+    const app = target("app", ["sent"]);
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 10 });
+    const task = { kind: "task", taskId: "task-dup", workspaceId: "w", state: "succeeded" } as const;
+    wake.queue(task);
+    wake.queue({ ...task });
+    await until(() => wake.status().recent.length === 1);
+    expect(app.texts).toHaveLength(1);
+    expect(app.texts[0]!.match(/A tarefa em segundo plano/g)).toHaveLength(1);
+    wake.close();
+  });
+
+  it("does not requeue the same task during a delivery already in progress", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const texts: string[] = [];
+    const app: ChatWakeTarget = { name: "app", deliver: async (text) => {
+      texts.push(text);
+      await gate;
+      return { outcome: "sent" };
+    } };
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 10 });
+    const task = { kind: "task", taskId: "task-inflight", workspaceId: "w", state: "succeeded" } as const;
+    wake.queue(task);
+    await until(() => texts.length === 1);
+    wake.queue({ ...task });
+    release();
+    await until(() => wake.status().waiting === 0);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(texts).toHaveLength(1);
+    wake.close();
+  });
+
+  it("remembers a sent task across replays and companion restarts", async () => {
+    const file = path.join(await mkdtemp(path.join(os.tmpdir(), "wake-receipts-")), "state", "wake-receipts.json");
+    const app = target("app", ["sent"]);
+    const task = { kind: "task", taskId: "task-restart", workspaceId: "w", state: "succeeded" } as const;
+    const first = new ChatWake({ targets: () => [app], receiptFile: file, spacingMs: 1 });
+    first.queue(task);
+    await until(() => first.status().recent.length === 1);
+    first.queue({ ...task });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(app.texts).toHaveLength(1);
+    first.close();
+    const afterRestart = new ChatWake({ targets: () => [app], receiptFile: file, spacingMs: 1 });
+    afterRestart.queue({ ...task });
+    expect(afterRestart.status().waiting).toBe(0);
+    expect(app.texts).toHaveLength(1);
+    afterRestart.close();
+  });
+
+  it("does not record a declined send as delivered across a restart", async () => {
+    const file = path.join(await mkdtemp(path.join(os.tmpdir(), "wake-retry-")), "wake-receipts.json");
+    const task = { kind: "task", taskId: "task-retry", workspaceId: "w", state: "succeeded" } as const;
+    const busy = target("app", ["busy"]);
+    const first = new ChatWake({ targets: () => [busy], receiptFile: file, spacingMs: 1, retryMs: 60_000 });
+    first.queue(task);
+    await until(() => busy.texts.length === 1);
+    await first.settled();
+    first.close();
+
+    const available = target("app", ["sent"]);
+    const restarted = new ChatWake({ targets: () => [available], receiptFile: file, spacingMs: 1 });
+    restarted.queue({ ...task });
+    await until(() => restarted.status().recent.length === 1);
+    expect(available.texts).toHaveLength(1);
+    restarted.close();
+  });
+
+  it("retries busy sends without treating them as delivered and distinguishes workspaces", async () => {
+    const app = target("app", ["busy", "sent", "sent"]);
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 10 });
+    const task = { kind: "task", taskId: "task-across", workspaceId: "first", state: "succeeded" } as const;
+    wake.queue(task);
+    wake.queue({ ...task });
+    await until(() => wake.status().recent.length === 1);
+    expect(app.texts).toHaveLength(2); // Busy was retried, never lost.
+    wake.queue({ ...task, workspaceId: "second" });
+    await until(() => wake.status().recent.length === 2);
+    expect(app.texts).toHaveLength(3);
+    wake.close();
+  });
+
   it("writes what the user wrote in the ChatGPT app as they wrote it, with short notes for the rest", async () => {
     const app = target("app", ["sent"]);
     const statuses: ChatWakeStatus[] = [];
