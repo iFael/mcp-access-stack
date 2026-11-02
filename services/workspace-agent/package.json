@@ -24,7 +24,7 @@
     "test:coverage": "node ../../tooling/testing/run-jest.mjs --config jest.config.ts --runInBand --coverage"
   },
   "dependencies": {
-    "@ast-grep/cli": "^0.44.1",
+    "@ast-grep/cli": "^0.51.0",
     "@mcp-access-stack/update-control-contract": "0.1.0",
     "@vs-code-gpt/shared": "0.1.0",
     "iconv-lite": "^0.7.3",
