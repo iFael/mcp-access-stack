@@ -77,6 +77,7 @@ async function main(): Promise<void> {
     log: writeLog,
   });
   const chatWake = new ChatWake({
+    receiptFile: path.join(runtime.stateRoot, "state", "chat-wake-task-receipts.json"),
     targets: () => (desktopChatApp ? [desktopChatApp] : []),
     conversationOf: (event) => conversations.conversationOf(event),
     // A message that went with the result of one of the agent's calls was delivered: it is not written again.
