@@ -1616,6 +1616,27 @@ describe("PersonalBrowserBridge popup messages", () => {
     }
   });
 
+  it("keeps a plan-bound card message for its own conversation even with Chrome closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-plan-card-"));
+    temporaryRoots.push(root);
+    const port = await reservePort();
+    const bridge = await PersonalBrowserBridge.start({ stateRoot: root, port });
+    try {
+      const ownPlan = "plan_00000000-0000-4000-8000-000000000001";
+      const otherPlan = "plan_00000000-0000-4000-8000-000000000002";
+      const sent = await bridge.postUserMessage({ taskId: ownPlan, text: "Sincronize a main", id: "msg_plancheck00001" });
+      expect(sent).toEqual({ id: "msg_plancheck00001", accepted: true, delivered: false });
+      expect(bridge.takeUserMessages({})).toEqual([]);
+      expect(bridge.takeUserMessages({ planId: otherPlan })).toEqual([]);
+      expect(bridge.pendingUserMessages()).toBe(1);
+      expect(bridge.takeUserMessages({ planId: ownPlan }).map((m) => m.text)).toEqual(["Sincronize a main"]);
+      expect(await bridge.postUserMessage({ taskId: ownPlan, text: "Sincronize a main", id: "msg_plancheck00001" }))
+        .toMatchObject({ accepted: true, delivered: true });
+    } finally {
+      await bridge.close();
+    }
+  });
+
   it("keeps the chat card's messages working with Chrome closed or an older extension", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);

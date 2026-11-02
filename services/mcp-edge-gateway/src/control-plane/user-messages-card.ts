@@ -8,7 +8,7 @@ import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v9.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v10.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -101,7 +101,7 @@ ${CARD_BASE_CSS}
     var question = typeof args.question === "string" ? args.question.trim() : "";
     var last = sent[sent.length - 1];
     var label = document.getElementById("label");
-    var state = last ? (last.deliveredAt ? ["done", "Mensagem entregue"] : ["waiting", "Mensagem enviada"])
+    var state = last ? (last.deliveredAt ? ["done", "Mensagem encaminhada"] : ["waiting", "Mensagem enviada"])
       : question !== "" ? ["asking", "Pergunta"] : ["none", "Sem mensagens"];
     // A choice still to make keeps its card open; otherwise only the newest card is the field.
     if (folded()) state = ["folded", "Campo de mensagens mais abaixo ↓"];
@@ -138,7 +138,8 @@ ${CARD_BASE_CSS}
       var state = document.createElement("span");
       if (item.deliveredAt) {
         state.className = "state done";
-        state.textContent = "✓ Entregue às " + item.deliveredAt;
+        state.textContent = "✓ Encaminhada às " + item.deliveredAt;
+        state.title = "A leitura do agente não foi confirmada pela plataforma.";
       } else if (item.watch === false) {
         state.className = "state";
         state.textContent = "Enviado às " + item.at;

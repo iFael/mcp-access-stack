@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { BrowserUserMessage } from "./browser-contracts.js";
 
 /** Takes the user's undelivered messages for a call's task or tab; an unscoped call takes them all. */
-export type TakeUserMessages = (scope: { taskId?: string; tabId?: string }) => BrowserUserMessage[];
+export type TakeUserMessages = (scope: { taskId?: string; tabId?: string; planId?: string }) => BrowserUserMessage[];
 
 // The user's reply card calls browser_user_reply; its result goes back to the
 // card, never to the agent, so it must not take the agent's messages.
@@ -55,7 +55,7 @@ export function installUserMessageDelivery(server: McpServer, take: TakeUserMess
     };
 }
 
-export function userMessageScope(input: unknown, structured?: unknown): { taskId?: string; tabId?: string } {
+export function userMessageScope(input: unknown, structured?: unknown): { taskId?: string; tabId?: string; planId?: string } {
   const record = asRecord(input);
   const tab = asRecord(asRecord(structured).tab);
   const taskId = typeof record.taskId === "string"
@@ -64,9 +64,12 @@ export function userMessageScope(input: unknown, structured?: unknown): { taskId
   const tabId = typeof record.tabId === "string"
     ? record.tabId
     : typeof tab.tabId === "string" ? tab.tabId : undefined;
+  const planId = typeof record.planId === "string" && /^plan_[0-9a-f-]{36}$/u.test(record.planId)
+    ? record.planId : undefined;
   return {
     ...(taskId === undefined ? {} : { taskId }),
     ...(tabId === undefined ? {} : { tabId }),
+    ...(planId === undefined ? {} : { planId }),
   };
 }
 

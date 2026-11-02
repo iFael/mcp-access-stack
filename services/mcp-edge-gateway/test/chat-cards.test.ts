@@ -23,6 +23,22 @@ function memory() {
 }
 
 describe("the plan card", () => {
+  it("binds a plan to the originating MCP session, not another conversation", async () => {
+    const storage = memory();
+    let index = 0;
+    const plans = new ProgressPlans(storage, () => new Date("2026-11-02T22:00:00.000Z"),
+      () => `plan_00000000-0000-4000-8000-00000000000${++index}`);
+    const forSession = (session: string) => ({
+      ...call("browser_progress", { title: "Test", steps: [{ text: "Work", state: "doing" }] }),
+      params: { ...call("browser_progress", {}).params, _meta: { "openai/session": session } },
+    });
+    const first = await result(await plans.handle(forSession("chat-a"), "user_1"));
+    const second = await result(await plans.handle(forSession("chat-b"), "user_1"));
+    expect(await plans.planForSession("user_1", "chat-a")).toBe(first.structuredContent?.planId);
+    expect(await plans.planForSession("user_1", "chat-b")).toBe(second.structuredContent?.planId);
+    expect(await plans.planForSession("user_2", "chat-a")).toBeUndefined();
+  });
+
   const steps = [{ text: "Ler o código", state: "done" }, { text: "Corrigir", state: "doing" }, { text: "Publicar", state: "todo" }];
 
   it("opens one plan, changes it in place and lets the card read the latest", async () => {
@@ -142,6 +158,8 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
+    expect(resources[0]!.text).toContain("taskId: planId");
+    expect(resources[0]!.text).toContain("Encaminhada às");
     expect(resources[0]!.text).toContain("veja abaixo");
     expect(resources[0]!.text).not.toContain('id="pin"');
     expect(resources[1]!.text).toContain("Abrir no GitHub");
@@ -173,8 +191,9 @@ describe("the chat cards the Edge serves", () => {
 
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v9.html");
-    expect(card!.text).toContain("Entregue às");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v10.html");
+    expect(card!.text).toContain("Encaminhada às");
+    expect(card!.text).not.toContain("✓ Entregue às");
     expect(card!.text).toContain("aguardando o agente");
     // Clean: no title or task id over the field.
     expect(card!.text).not.toContain("Conversa com a tarefa");

@@ -6,6 +6,7 @@ import { z } from "zod";
 const takeUserMessagesInputSchema = z.object({
   taskId: z.string().min(1).max(128).optional(),
   tabId: z.string().min(1).max(128).optional(),
+  planId: z.string().regex(/^plan_[0-9a-f-]{36}$/u).optional(),
 }).strict();
 
 const takeUserMessagesResultSchema = z.object({
@@ -37,6 +38,7 @@ export function registerCompanionInternalUserMessageTools(
       const messages = take({
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
         ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
+        ...(input.planId === undefined ? {} : { planId: input.planId }),
       });
       const structuredContent = takeUserMessagesResultSchema.parse({
         count: messages.length,

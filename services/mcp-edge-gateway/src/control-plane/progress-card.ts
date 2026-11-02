@@ -13,7 +13,7 @@ import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v7.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v8.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -21,6 +21,8 @@ const MAX_PLANS = 20;
 const OWNER_PREFIX = "progress-plan-owner:";
 // When the newest reply card of each task was shown ("" for none), so older ones fold.
 const USER_CARD_PREFIX = "user-card-shown:";
+const SESSION_PLAN_PREFIX = "progress-plan-sessions:";
+const MAX_SESSION_PLANS = 100;
 const MAX_USER_CARDS = 50;
 
 export const PROGRESS_CARD_HTML = `<!doctype html>
@@ -186,6 +188,10 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   var busy = false;
   var watching = {};
   function waiting(item) { return !item.deliveredAt && item.watch !== false; }
+  function cardPlanId() {
+    var output = window.openai && window.openai.toolOutput;
+    return output && (output.planId || (output.update && output.update.planId)) || data().planId;
+  }
   function clock(date) { return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0"); }
   function setStatus(message, bad) { status.textContent = message; status.className = bad ? "status bad" : "status"; }
   function save() {
@@ -210,7 +216,8 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
       var state = document.createElement("span");
       if (item.deliveredAt) {
         state.className = "state done";
-        state.textContent = "✓ Entregue às " + item.deliveredAt;
+        state.textContent = "✓ Encaminhada às " + item.deliveredAt;
+        state.title = "O MCP encaminhou a mensagem; a leitura pelo agente não é confirmada pela plataforma.";
       } else if (item.watch === false) {
         state.className = "state";
         state.textContent = "Enviado às " + item.at;
@@ -236,7 +243,9 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     if (!item.id || !waiting(item) || watching[item.id] || !bridge || typeof bridge.callTool !== "function") return;
     if (typeof item.since === "number" && Date.now() - item.since > 15 * 60000) return;
     watching[item.id] = true;
-    var args = { text: item.text, id: item.id };
+    var taskId = item.taskId || cardPlanId();
+    if (!taskId) return;
+    var args = { text: item.text, id: item.id, taskId: taskId };
     function ask() {
       Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
         item = sent.filter(function (entry) { return entry.id === args.id; })[0] || item;
@@ -259,11 +268,13 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     var bridge = window.openai;
     var value = text.value.trim();
     if (!value || busy || !bridge || typeof bridge.callTool !== "function") return;
+    var planId = cardPlanId();
+    if (!planId) { setStatus("Não foi possível identificar esta conversa. Abra novamente o cartão.", true); return; }
     busy = true;
     setStatus("Enviando…", false);
     drawSent();
     // One id per message: sending it again after ChatGPT lost the answer never delivers it twice.
-    var args = { text: value, id: "msg_" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36) };
+    var args = { text: value, id: "msg_" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36), taskId: planId };
     function attempt(left) {
       return Promise.resolve(bridge.callTool("browser_user_reply", args)).then(function (result) {
         var structured = result && (result.structuredContent || result);
@@ -278,7 +289,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
       });
     }
     attempt(2).then(function () {
-      var item = { text: value, at: clock(new Date()), id: args.id, since: Date.now() };
+      var item = { text: value, at: clock(new Date()), id: args.id, taskId: planId, since: Date.now() };
       sent = sent.concat([item]).slice(-20);
       text.value = "";
       setStatus("", false);
@@ -388,6 +399,7 @@ export class ProgressPlans {
     if (!input) return invalid(id, name);
     if (name === "browser_progress") {
       plan = await this.open(userId, plans, input.title!, input.steps);
+      await this.bindSession(userId, progressSession(body), plan.planId);
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
@@ -426,6 +438,25 @@ export class ProgressPlans {
     const plan = await this.open(userId, plans, "Atualizando o MCP",
       [{ text: "Pré-checagem: CI da MAIN, estado da Oracle e do Edge", state: "doing" }]);
     args.planId = plan.planId;
+    await this.bindSession(userId, progressSession(body), plan.planId);
+  }
+
+  /** Resolves only plans created by this user and this exact ChatGPT session. */
+  async planForSession(userId: string, session: string | undefined): Promise<string | undefined> {
+    if (!session) return undefined;
+    const assignments = (await this.storage.get<Record<string, string>>(`${SESSION_PLAN_PREFIX}${userId}`)) ?? {};
+    const planId = assignments[session];
+    if (!planId) return undefined;
+    const plans = (await this.storage.get<ProgressPlan[]>(`progress-plans:${userId}`)) ?? [];
+    return plans.some((plan) => plan.planId === planId) ? planId : undefined;
+  }
+
+  private async bindSession(userId: string, session: string | undefined, planId: string): Promise<void> {
+    if (!session) return;
+    const key = `${SESSION_PLAN_PREFIX}${userId}`;
+    const current = (await this.storage.get<Record<string, string>>(key)) ?? {};
+    delete current[session];
+    await this.storage.put(key, Object.fromEntries(Object.entries({ ...current, [session]: planId }).slice(-MAX_SESSION_PLANS)));
   }
 
   private async open(userId: string, plans: ProgressPlan[], title: string, steps: ProgressStep[]): Promise<ProgressPlan> {
@@ -463,6 +494,14 @@ export class ProgressPlans {
     await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     return true;
   }
+}
+
+/** The session metadata is supplied by ChatGPT to the MCP request, not by the card. */
+export function progressSession(body: unknown): string | undefined {
+  if (!isRecord(body) || !isRecord(body.params) || !isRecord(body.params._meta)) return undefined;
+  const meta = body.params._meta;
+  const value = meta["openai/session"] ?? meta.sessionId;
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 200 ? value.trim() : undefined;
 }
 
 /** The new steps, each keeping when it started and ended as the states changed. */

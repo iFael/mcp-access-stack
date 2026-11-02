@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { BrowserUserMessage } from "../src/browser-contracts.js";
 import type { BrowserExecutor } from "../src/browser-executor.js";
 import { registerBrowserTools, USER_MESSAGES_CARD_URI } from "../src/mcp-browser-tools.js";
-import { installUserMessageDelivery } from "../src/mcp-user-messages.js";
+import { installUserMessageDelivery, userMessageScope } from "../src/mcp-user-messages.js";
 
 type Handler = (...args: unknown[]) => Promise<CallToolResult>;
 
@@ -22,6 +22,12 @@ function register(server: McpServer, name: string, structuredContent: Record<str
 }
 
 describe("installUserMessageDelivery", () => {
+  it("binds a progress call to its plan and preserves ordinary browser task scopes", () => {
+    const planId = "plan_00000000-0000-4000-8000-000000000001";
+    expect(userMessageScope({ planId })).toEqual({ planId });
+    expect(userMessageScope({ taskId: "task-7", planId })).toEqual({ taskId: "task-7", planId });
+  });
+
   const note: BrowserUserMessage = { id: "msg_aaaaaaaa", text: "A barra não piscou.", sentAt: "2026-10-28T15:00:00.000Z" };
 
   it("adds the user's popup messages to the result of any tool, scoped by the call's task or tab", async () => {
@@ -137,7 +143,7 @@ describe("the reply card in the chat", () => {
     } as unknown as BrowserExecutor, { includeTools: ["browser_user_reply"] });
     const result = await call(server, "browser_user_reply", { taskId: "task-1", text: "  Pode seguir.  " });
     expect(inputs).toEqual([{ taskId: "task-1", text: "Pode seguir." }]);
-    expect(result).toMatchObject({ structuredContent: { id: "msg_cccccccc", accepted: true }, content: [{ text: "Sent to the agent." }] });
+    expect(result).toMatchObject({ structuredContent: { id: "msg_cccccccc", accepted: true }, content: [{ text: "Message queued for the conversation." }] });
     await expect(call(server, "browser_user_reply", { text: "" })).resolves.toMatchObject({ isError: true });
   });
 });
