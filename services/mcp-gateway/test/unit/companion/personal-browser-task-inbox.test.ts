@@ -6,6 +6,26 @@ const message = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("PersonalBrowserTaskInbox", () => {
+  it("never lets another conversation or an unscoped tool consume a plan-bound message", () => {
+    const inbox = new PersonalBrowserTaskInbox();
+    const first = "plan_00000000-0000-4000-8000-000000000001";
+    const second = "plan_00000000-0000-4000-8000-000000000002";
+    inbox.accept({ messages: [message("eeeeeeee", { taskId: first })] });
+    expect(inbox.take({ taskId: second })).toEqual([]);
+    expect(inbox.take({ taskId: first })).toEqual([]); // taskId alone is not trusted conversation identity
+    expect(inbox.take({ planId: second }, true)).toEqual([]);
+    expect(inbox.take({}, true)).toEqual([]);
+    expect(inbox.holds("msg_eeeeeeee")).toBe(true);
+    expect(inbox.take({ planId: first }, true).map((m) => m.text)).toEqual(["nota eeeeeeee"]);
+    expect(inbox.take({ planId: first }, true)).toEqual([]);
+  });
+
+  it("preserves legacy popup messages on an unscoped call", () => {
+    const inbox = new PersonalBrowserTaskInbox();
+    inbox.accept({ messages: [message("ffffffff", { taskId: "personal-task" })] });
+    expect(inbox.take({}, true).map((m) => m.text)).toEqual(["nota ffffffff"]);
+  });
+
   it("drops malformed entries and keeps only personal tab ids", () => {
     const inbox = new PersonalBrowserTaskInbox();
     expect(inbox.accept({ messages: [

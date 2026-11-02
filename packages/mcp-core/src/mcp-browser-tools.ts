@@ -40,11 +40,11 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
 
 // The card ChatGPT shows with browser_user_messages, where the user answers the
 // task without leaving the conversation. The Edge serves it.
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v9.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v10.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v7.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v8.html";
 const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
   browser_user_messages: {
     ui: { resourceUri: USER_MESSAGES_CARD_URI },
@@ -888,7 +888,7 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
     return `Plan ${String(result.planId)}: ${steps.filter((step) => step.state === "done").length}/${steps.length} done.`;
   }
   if (name === "browser_user_card") return `Newest card shown at ${String(result.shownAt ?? "never")}.`;
-  if (name === "browser_user_reply") return result.accepted === true ? "Sent to the agent." : "Not sent.";
+  if (name === "browser_user_reply") return result.accepted === true ? "Message queued for the conversation." : "Not sent.";
   if (name === "browser_tabs") return `${Array.isArray(result.tabs) ? result.tabs.length : 0} MCP browser tab(s).`;
   if (name === "browser_console" || name === "browser_network") {
     return `tabId=${String(result.tabId)}; characters=${typeof result.text === "string" ? result.text.length : 0}; truncated=${String(result.truncated)}`;

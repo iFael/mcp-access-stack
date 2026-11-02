@@ -2339,7 +2339,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v7.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v8.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2351,7 +2351,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v7.html"
+        "resourceUri": "ui://mcp-v3/progress-v8.html"
       }
     },
     "annotations": {
@@ -25545,7 +25545,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v9.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v10.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25558,7 +25558,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v9.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v10.html"
       }
     },
     "annotations": {
@@ -25753,7 +25753,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v7.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v8.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "openai/widgetAccessible": true,
@@ -25766,7 +25766,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v7.html"
+        "resourceUri": "ui://mcp-v3/progress-v8.html"
       }
     },
     "annotations": {

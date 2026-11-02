@@ -1146,7 +1146,7 @@ export const browserUserReplyResultSchema = z
   .object({
     id: z.string().regex(/^msg_[a-z0-9-]{8,64}$/),
     accepted: z.boolean(),
-    /** The agent has it: it went with the result of one of its calls, or was written into the conversation. */
+    /** The MCP forwarded it with a tool result or submitted it to the conversation; this is not a model-read acknowledgement. */
     delivered: z.boolean().optional(),
   })
   .strict();

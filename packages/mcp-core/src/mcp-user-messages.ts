@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { BrowserUserMessage } from "./browser-contracts.js";
 
 /** Takes the user's undelivered messages for a call's task or tab; an unscoped call takes them all. */
-export type TakeUserMessages = (scope: { taskId?: string; tabId?: string }) => BrowserUserMessage[];
+export type TakeUserMessages = (scope: { taskId?: string; tabId?: string; planId?: string }) => BrowserUserMessage[];
 
 // The user's reply card calls browser_user_reply; its result goes back to the
 // card, never to the agent, so it must not take the agent's messages.

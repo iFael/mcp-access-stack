@@ -345,6 +345,7 @@ export class BrowserModeRouter implements BrowserExecutor {
     return this.personal.takeUserMessages?.({
       ...(taskId === undefined ? {} : { taskId }),
       ...(tabId === undefined ? {} : { tabId }),
+      ...(scope.planId === undefined ? {} : { planId: scope.planId }),
     }) ?? [];
   }
 

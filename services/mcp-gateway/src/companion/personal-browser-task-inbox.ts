@@ -16,6 +16,8 @@ interface QueuedMessage {
 export interface TaskInboxScope {
   taskId?: string;
   tabId?: string;
+  /** The chat's progress plan, never shared with another conversation. */
+  planId?: string;
 }
 
 export class PersonalBrowserTaskInbox {
@@ -106,7 +108,9 @@ export class PersonalBrowserTaskInbox {
   take(scope: TaskInboxScope, all = false): BrowserUserMessage[] {
     const taken: BrowserUserMessage[] = [];
     for (const [id, queued] of this.queued) {
-      if (!all && !matches(queued, scope)) continue;
+      // The general popup inbox remains available to unscoped tools, but a card
+      // bound to one plan can only be read by that conversation's plan.
+      if ((!all || queued.message.taskId?.startsWith("plan_")) && !matches(queued, scope)) continue;
       this.queued.delete(id);
       this.remember(id);
       taken.push(queued.message);
@@ -116,7 +120,7 @@ export class PersonalBrowserTaskInbox {
 
   has(scope: TaskInboxScope, all = false): boolean {
     for (const queued of this.queued.values()) {
-      if (all || matches(queued, scope)) return true;
+      if ((all && !queued.message.taskId?.startsWith("plan_")) || matches(queued, scope)) return true;
     }
     return false;
   }
@@ -151,6 +155,7 @@ export class PersonalBrowserTaskInbox {
 function matches(queued: QueuedMessage, scope: TaskInboxScope): boolean {
   const taskId = queued.message.taskId;
   if (taskId === undefined) return true;
+  if (taskId.startsWith("plan_")) return scope.planId === taskId;
   if (scope.taskId !== undefined && scope.taskId === taskId) return true;
   return scope.tabId !== undefined && queued.tabIds.includes(scope.tabId);
 }

@@ -1623,6 +1623,17 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       const value = invocation.arguments[key];
       if (typeof value === "string" && value.length > 0 && value.length <= 128) scope[key] = value;
     }
+    // A card belongs to the ChatGPT session that created its progress plan.
+    // Never let an unscoped tool from another conversation drain its message.
+    const params = isRecord(body) && isRecord(body.params) ? body.params : {};
+    const meta = isRecord(params._meta) ? params._meta : {};
+    const rawSession = meta["openai/session"] ?? meta.sessionId;
+    const session = typeof rawSession === "string" && rawSession.trim() && rawSession.length <= 200
+      ? rawSession.trim() : undefined;
+    // Tool arguments are not proof of conversation ownership. Only the server-side
+    // association learned from ChatGPT session metadata may unlock a card message.
+    const planId = await this.progressPlans.planForSession(principal.userId, session);
+    if (planId) scope.planId = planId;
     const notices: string[] = [];
     for (const { webSocket } of holders) {
       try {

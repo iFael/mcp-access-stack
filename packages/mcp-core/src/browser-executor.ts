@@ -129,7 +129,7 @@ export interface BrowserExecutor {
   /** Queues what the user wrote in the chat card for the agent's next call on the task. */
   postUserMessage?(input: BrowserUserReplyInput, context?: OperationContext): Promise<BrowserUserReplyResult>;
   /** Takes the user's undelivered popup messages for the task a call works on; never waits. */
-  takeUserMessages?(scope: { taskId?: string; tabId?: string }): BrowserUserMessage[];
+  takeUserMessages?(scope: { taskId?: string; tabId?: string; planId?: string }): BrowserUserMessage[];
   download(input: BrowserDownloadInput, context?: OperationContext): Promise<BrowserDownloadResult>;
   upload(input: BrowserUploadInput, context?: OperationContext): Promise<BrowserUploadResult>;
   console(input: BrowserConsoleInput, context?: OperationContext): Promise<BrowserConsoleResult>;
