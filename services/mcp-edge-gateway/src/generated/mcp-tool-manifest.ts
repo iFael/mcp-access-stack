@@ -2339,7 +2339,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v8.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v9.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2351,7 +2351,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v8.html"
+        "resourceUri": "ui://mcp-v3/progress-v9.html"
       }
     },
     "annotations": {
@@ -25567,7 +25567,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The plan card of browser_progress already holds the user's field while work goes on, so call this tool only to read what they wrote or to ask them something; each call brings you what the user wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
+    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The browser_progress card displays steps only, without a message field. Call this tool only to read what the user wrote or explicitly ask them something; each call brings you what they wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25690,7 +25690,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Only the cards of browser_user_messages and browser_progress call this, to send what the user typed there; never call it yourself.",
+    "description": "Only the reply card of browser_user_messages calls this, to send what the user typed there; never call it yourself.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -25753,7 +25753,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v8.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v9.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "openai/widgetAccessible": true,
@@ -25766,7 +25766,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v8.html"
+        "resourceUri": "ui://mcp-v3/progress-v9.html"
       }
     },
     "annotations": {
@@ -25775,7 +25775,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once at the start of every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work), before the job's first other call; only an answer that uses no MCP V3 tool goes without it. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. When the user asks for something more while the job goes on, add it to the plan as a new step, so nothing they asked is lost. browser_progress with only the planId also answers with the plan as it is now: call it when you lose track of the job, after a long pause or a summary of the conversation, to see again what was asked, what is done and what remains. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. A card shows where its call is made, so write your text first and end every answer of the job with browser_progress and only that planId, and nothing after it: the card shows again at the end, as it is now, and its older copies fold into one line, so the user always follows the latest one; one conversation has one card: never open a second plan in it. When the work turns to something else (an update, a change in a repository, a web search, the browser), keep the same planId and reshape the card with browser_progress_update: a new title for what you do now and the steps of that flow. While the plan has steps to do or in progress, the card also holds the field where the user writes to you; what they write comes with your next MCP V3 call. Every other MCP V3 result ends with a \"Card:\" line that reminds you of this. Next: browser_progress_update with the planId when a step changes.",
+    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once at the start of every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work), before the job's first other call; only an answer that uses no MCP V3 tool goes without it. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. When the user asks for something more while the job goes on, add it to the plan as a new step, so nothing they asked is lost. browser_progress with only the planId also answers with the plan as it is now: call it when you lose track of the job, after a long pause or a summary of the conversation, to see again what was asked, what is done and what remains. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. A card shows where its call is made, so write your text first and end every answer of the job with browser_progress and only that planId, and nothing after it: the card shows again at the end, as it is now, and its older copies fold into one line, so the user always follows the latest one; one conversation has one card: never open a second plan in it. When the work turns to something else (an update, a change in a repository, a web search, the browser), keep the same planId and reshape the card with browser_progress_update: a new title for what you do now and the steps of that flow. The progress card contains only the steps, without a message field or send control. Messages, when needed, use the separate browser_user_messages tool or the Chrome extension. Every other MCP V3 result ends with a \"Card:\" line that reminds you of this. Next: browser_progress_update with the planId when a step changes.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -27232,15 +27232,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "6642581e73cedfe88e6de15c886e78a36f846e5f2cace1d10e7e0a985bcf440d",
-  "serverVersion": "0.4.0-catalog.c6642581e73ce.sb65bd697da48",
+  "contractRevision": "71f56e29b2fa196ec226cd97cec97983c2d52ae43ac6f99cb9073942119eaee0",
+  "serverVersion": "0.4.0-catalog.c71f56e29b2fa.sb65bd697da48",
   "toolCount": 121,
   "toolSetRevision": "b65bd697da48ad28205a3079de31ce4f2f9083ebf82a3d652c9ceda7ff34a24a"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c6642581e73ce.sb65bd697da48"
+  "version": "0.4.0-catalog.c71f56e29b2fa.sb65bd697da48"
 } as const;
 
-export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it: while steps remain, the card holds the user's message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
+export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

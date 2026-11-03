@@ -313,5 +313,5 @@ export const MCP_AGENT_INSTRUCTIONS =
   "a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), " +
   "ending with every step in its final state. A card shows where its call is made, so write your text first and end " +
   "every answer with the cards: browser_progress with only that planId, and nothing " +
-  "after it: while steps remain, the card holds the user's message field. To show the user a pull request (after " +
+  "after it. The progress card displays only steps, without a message field. To show the user a pull request (after " +
   "opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
