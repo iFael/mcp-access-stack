@@ -166,8 +166,12 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
-    expect(resources[0]!.text).toContain("taskId: planId");
-    expect(resources[0]!.text).toContain("Encaminhada às");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v9.html");
+    expect(resources[0]!.text).not.toContain('id="talk"');
+    expect(resources[0]!.text).not.toContain('<textarea');
+    expect(resources[0]!.text).not.toContain('id="send"');
+    expect(resources[0]!.text).not.toContain("browser_user_reply");
+    expect(resources[0]!.text).not.toContain("setWidgetState");
     expect(resources[0]!.text).toContain("veja abaixo");
     expect(resources[0]!.text).not.toContain('id="pin"');
     expect(resources[1]!.text).toContain("Abrir no GitHub");
@@ -226,5 +230,11 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(card!.uri).toBe("ui://mcp-v3/user-messages-v5.html");
     expect(card!.text).toContain("notifyIntrinsicHeight");
+    const [legacyPlan] = uiResourcesForManifest([
+      { name: "browser_progress", _meta: { ui: { resourceUri: "ui://mcp-v3/progress-v8.html" } } },
+    ]);
+    expect(legacyPlan!.uri).toBe("ui://mcp-v3/progress-v8.html");
+    expect(legacyPlan!.text).toContain("browser_progress_read");
+    expect(legacyPlan!.text).not.toContain('<textarea');
   });
 });

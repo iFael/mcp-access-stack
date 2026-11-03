@@ -48,10 +48,10 @@ describe("MCP tool catalog identity", () => {
         "openai/toolInvocation/invoking": invoking,
       },
     }];
-    const original = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v7.html"));
-    const updated = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v8.html"));
+    const original = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v8.html"));
+    const updated = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v9.html"));
     expect(updated).not.toBe(original);
-    expect(createMcpToolContractRevision(resource("ui://mcp-v3/progress-v8.html", "Doing work"))).toBe(updated);
+    expect(createMcpToolContractRevision(resource("ui://mcp-v3/progress-v9.html", "Doing work"))).toBe(updated);
   });
 
   it("keeps descriptor-derived metadata deterministic regardless of registration order", () => {
