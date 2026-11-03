@@ -42,6 +42,7 @@ export interface McpToolDescriptorFingerprintInput {
   outputSchema?: unknown;
   annotations?: unknown;
   execution?: unknown;
+  _meta?: unknown;
 }
 
 export function createMcpToolSetRevision(names: readonly string[]): string {
@@ -56,19 +57,23 @@ export function createMcpToolContractRevision(
   tools: readonly McpToolDescriptorFingerprintInput[],
 ): string {
   const projected = tools
-    .map((tool) => ({
-      name: tool.name,
-      ...(tool.title === undefined ? {} : { title: tool.title }),
-      ...(tool.description === undefined ? {} : { description: tool.description }),
-      ...(tool.inputSchema === undefined ? {} : { inputSchema: tool.inputSchema }),
-      ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
-      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
-      ...(tool.execution === undefined ? {} : { execution: tool.execution }),
-    }))
+    .map((tool) => {
+      const ui = uiContractMetadata(tool._meta);
+      return {
+        name: tool.name,
+        ...(tool.title === undefined ? {} : { title: tool.title }),
+        ...(tool.description === undefined ? {} : { description: tool.description }),
+        ...(tool.inputSchema === undefined ? {} : { inputSchema: tool.inputSchema }),
+        ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
+        ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
+        ...(tool.execution === undefined ? {} : { execution: tool.execution }),
+        ...(ui === undefined ? {} : { ui }),
+      };
+    })
     .sort((left, right) => compareText(left.name, right.name));
   const canonical = JSON.stringify(canonicalize(projected));
   return createHash("sha256")
-    .update("mcp-tool-contract-v1\0", "utf8")
+    .update("mcp-tool-contract-v2\0", "utf8")
     .update(canonical, "utf8")
     .digest("hex");
 }
@@ -91,6 +96,18 @@ export function createMcpToolCatalogMetadata(
     toolSetRevision: createMcpToolSetRevision(names),
     toolCount: new Set(names).size,
     serverVersion: createMcpServerVersion(tools),
+  };
+}
+
+// UI resource routing is a public tool contract: changing a card must trigger
+// the same guarded Edge publication as a schema change.
+function uiContractMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const meta = value as Record<string, unknown>;
+  if (meta.ui === undefined && meta["openai/outputTemplate"] === undefined) return undefined;
+  return {
+    ...(meta.ui === undefined ? {} : { ui: meta.ui }),
+    ...(meta["openai/outputTemplate"] === undefined ? {} : { outputTemplate: meta["openai/outputTemplate"] }),
   };
 }
 

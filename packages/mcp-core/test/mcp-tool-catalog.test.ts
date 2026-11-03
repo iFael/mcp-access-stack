@@ -4,6 +4,7 @@ import {
   MCP_REPOSITORY_TOOL_NAMES,
   createMcpServerVersion,
   createMcpToolCatalogMetadata,
+  createMcpToolContractRevision,
   createMcpToolSetRevision,
 } from "../src/mcp-tool-catalog.js";
 
@@ -35,6 +36,22 @@ describe("MCP tool catalog identity", () => {
     );
 
     expect(reduced).not.toBe(complete);
+  });
+
+  it("changes contract revision for UI resource routing, not incidental display text", () => {
+    const resource = (uri: string, invoking = "Working") => [{
+      name: "browser_progress",
+      inputSchema: { type: "object" },
+      _meta: {
+        ui: { resourceUri: uri },
+        "openai/outputTemplate": uri,
+        "openai/toolInvocation/invoking": invoking,
+      },
+    }];
+    const original = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v7.html"));
+    const updated = createMcpToolContractRevision(resource("ui://mcp-v3/progress-v8.html"));
+    expect(updated).not.toBe(original);
+    expect(createMcpToolContractRevision(resource("ui://mcp-v3/progress-v8.html", "Doing work"))).toBe(updated);
   });
 
   it("keeps descriptor-derived metadata deterministic regardless of registration order", () => {
