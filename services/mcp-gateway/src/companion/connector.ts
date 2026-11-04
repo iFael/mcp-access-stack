@@ -405,6 +405,7 @@ export class CompanionConnector {
 
   private async sendReady(socket: WebSocket): Promise<void> {
     const summaries = await this.options.repositories.listWorkspaceSummaries();
+    const workspaceIds = new Set(summaries.map((workspace) => workspace.id));
     const deviceId = this.options.repositories.getDeviceId();
     const registration = {
       ...(deviceId === undefined ? {} : { deviceId }),
@@ -428,7 +429,8 @@ export class CompanionConnector {
         shellsEnabled: workspace.shellsEnabled,
         allowedShells: [...workspace.allowedShells],
       })),
-      materializations: this.options.repositories.listMaterializationAnnouncements(),
+      materializations: this.options.repositories.listMaterializationAnnouncements()
+        .filter((materialization) => workspaceIds.has(materialization.workspaceId)),
     };
     socket.send(JSON.stringify(ready));
   }

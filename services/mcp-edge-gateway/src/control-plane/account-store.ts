@@ -395,16 +395,17 @@ export class EdgeAccountStore {
     if (!displayName || displayName.length > 200) throw new Error("Device name is invalid.");
     if (input.deviceId) {
       const existing = await this.storage.get<StoredDevice>(deviceKey(input.deviceId));
-      if (isDevice(existing) && existing.userId === userId && !existing.revokedAt) {
-        const updated: StoredDevice = {
-          ...existing,
-          displayName,
-          platform: input.platform,
-          lastSeenAt: new Date().toISOString(),
-        };
-        await this.storage.put(deviceKey(existing.id), updated);
-        return updated;
+      if (!isDevice(existing) || existing.userId !== userId || existing.revokedAt) {
+        throw new Error("Device is not authorized.");
       }
+      const updated: StoredDevice = {
+        ...existing,
+        displayName,
+        platform: input.platform,
+        lastSeenAt: new Date().toISOString(),
+      };
+      await this.storage.put(deviceKey(existing.id), updated);
+      return updated;
     }
     const ids = (await this.storage.get<string[]>(userDeviceIdsKey(userId))) ?? [];
     if (ids.length >= MAX_DEVICES_PER_USER) throw new Error("Device limit reached.");

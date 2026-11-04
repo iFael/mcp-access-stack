@@ -124,6 +124,57 @@ const RUNTIME_ID = "rt_33333333-3333-4333-8333-333333333333";
 const OLD_EPOCH = "44444444-4444-4444-8444-444444444444";
 const NEW_EPOCH = "55555555-5555-4555-8555-555555555555";
 
+describe("McpSession companion registration isolation", () => {
+  it("keeps the device ready when individual repository bindings are stale or unauthorized", async () => {
+    const { EdgeAccountStore } = await import("../src/control-plane/account-store.js");
+    const { COMPANION_PROTOCOL_VERSION } = await import("@mcp-access-stack/edge-protocol");
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const user = await accounts.createSingleUserIdentity("Device owner");
+    const repo = await accounts.createRepository(user.id, "good");
+    let currentAttachment: Record<string, unknown> = {
+      role: "companion", ready: false, protocolVersion: COMPANION_PROTOCOL_VERSION, userId: user.id,
+    };
+    const sent: string[] = [];
+    const socket = {
+      readyState: 1,
+      send: jest.fn((value: string) => { sent.push(value); }),
+      close: jest.fn(),
+      serializeAttachment: jest.fn((value: Record<string, unknown>) => { currentAttachment = value; }),
+      deserializeAttachment: jest.fn(() => currentAttachment),
+    };
+    const session = await createSession(storage, [socket]);
+    const workspace = (workspaceId: string) => ({
+      workspaceId, name: workspaceId, workspaceKind: "repository", enabled: true,
+      permissionProfile: "full-repo-write", confirmationMode: "standard",
+      writesEnabled: true, shellsEnabled: true, allowedShells: ["powershell"],
+    });
+    const message = JSON.stringify({
+      type: "companion-ready",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      registration: { displayName: "Local computer", platform: "windows", capabilities: ["files", "terminal"] },
+      workspaces: [workspace("good"), workspace("unauthorized"), { ...workspace("computer"), workspaceKind: "aggregate" }],
+      materializations: [
+        { repositoryId: repo.id, workspaceId: "good", path: "C:/Users/user/good" },
+        { repositoryId: repo.id, workspaceId: "removed", path: "C:/Users/user/removed" },
+        { repositoryId: "repo_99999999-9999-4999-8999-999999999999", workspaceId: "unauthorized", path: "C:/Users/user/other" },
+      ],
+    });
+    await (session as unknown as {
+      handleCompanionMessage(socket: unknown, message: string, attachment: unknown): Promise<void>;
+    }).handleCompanionMessage(socket, message, currentAttachment);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(currentAttachment).toMatchObject({ role: "companion", ready: true });
+    expect((currentAttachment.workspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual([
+      "good", "unauthorized", "computer",
+    ]);
+    expect(sent.map((value) => JSON.parse(value) as { type: string })).toContainEqual(
+      expect.objectContaining({ type: "companion-registered" }),
+    );
+    expect(await accounts.listMaterializations(user.id, repo.id)).toHaveLength(1);
+  });
+});
+
 describe("McpSession read-only contract inspection", () => {
   it("never writes storage on a cold-start with an existing active contract", async () => {
     const { MCP_CONTRACT_ROLLOUT_STORAGE_KEY } = await import("../src/contract-compatibility.js");

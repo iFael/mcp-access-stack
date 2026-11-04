@@ -115,11 +115,19 @@ describe("CompanionConnector end-to-end", () => {
     const repository = path.join(temporaryRoot, "project");
     await mkdir(repository, { recursive: true });
     await execFileAsync("git", ["init", repository]);
+    const staleRepository = path.join(temporaryRoot, "stale-project");
+    await mkdir(staleRepository);
+    await execFileAsync("git", ["init", staleRepository]);
+    const missingRepository = path.join(temporaryRoot, "missing-project");
+    await mkdir(missingRepository);
+    await execFileAsync("git", ["init", missingRepository]);
 
     const repositories = await LocalRepositoryManager.create({
       stateDirectory: path.join(temporaryRoot, "state"),
       managedRoot: path.join(temporaryRoot, "managed"),
       homeDirectory: temporaryRoot,
+      exposeComputerWorkspace: true,
+      computerRoots: [temporaryRoot],
     });
     await repositories.bindRepositories([{
       repositoryId: "repo_33333333-3333-4333-8333-333333333333",
@@ -128,7 +136,25 @@ describe("CompanionConnector end-to-end", () => {
       workspaceId: "project",
       remoteUrls: [],
       managed: false,
+    }, {
+      repositoryId: "repo_44444444-4444-4444-8444-444444444444",
+      name: "stale-project",
+      path: staleRepository,
+      workspaceId: "stale-project",
+      remoteUrls: [],
+      managed: false,
+    }, {
+      repositoryId: "repo_55555555-5555-4555-8555-555555555555",
+      name: "missing-project",
+      path: missingRepository,
+      workspaceId: "missing-project",
+      remoteUrls: [],
+      managed: false,
     }]);
+    // A folder without Git remains accessible; a missing folder stays bound but offline.
+    await rm(path.join(staleRepository, ".git"), { recursive: true });
+    await rm(missingRepository, { recursive: true });
+    expect(repositories.listBindings()).toHaveLength(3);
 
     let storedCredential: DesktopOAuthRefreshCredential | null = {
       clientId: "client-1",
@@ -252,19 +278,25 @@ describe("CompanionConnector end-to-end", () => {
       registration: {
         displayName: "Integration Device",
       },
-      workspaces: [
-        expect.objectContaining({
-          workspaceId: "project",
-          name: "project",
-        }),
-      ],
-      materializations: [
+      workspaces: expect.arrayContaining([
+        expect.objectContaining({ workspaceKind: "aggregate", name: "Local computer" }),
+        expect.objectContaining({ workspaceId: "project", name: "project" }),
+        expect.objectContaining({ workspaceId: "stale-project", name: "stale-project" }),
+      ]),
+      materializations: expect.arrayContaining([
         expect.objectContaining({
           repositoryId: "repo_33333333-3333-4333-8333-333333333333",
           workspaceId: "project",
         }),
-      ],
+        expect.objectContaining({
+          repositoryId: "repo_44444444-4444-4444-8444-444444444444",
+          workspaceId: "stale-project",
+        }),
+      ]),
     });
+    expect(ready.workspaces).toHaveLength(3);
+    expect(ready.materializations).toHaveLength(2);
+    expect(repositories.listBindings()).toHaveLength(3);
 
     edgeSocket.send(JSON.stringify({
       type: "companion-registered",
@@ -434,6 +466,7 @@ describe("CompanionConnector end-to-end", () => {
     servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
 
     let connectionCount = 0;
+    let closeRegisteredSocket: (() => void) | undefined;
     edgeWss.on("connection", (socket) => {
       connectionCount += 1;
       socket.send(JSON.stringify({
@@ -448,7 +481,7 @@ describe("CompanionConnector end-to-end", () => {
             protocolVersion: COMPANION_PROTOCOL_VERSION,
             deviceId: DEVICE_ID,
           }));
-          setTimeout(() => socket.close(4000, "device reconnected"), 10);
+          closeRegisteredSocket = () => socket.close(4000, "device reconnected");
         }
       });
     });
@@ -464,7 +497,12 @@ describe("CompanionConnector end-to-end", () => {
       reconnectMaxMs: 20,
       webSocketFactory: (_url, options) =>
         new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options),
-      log: (entry) => { logs.push(entry); },
+      log: (entry) => {
+        logs.push(entry);
+        if (entry.event === "local_runtime_registered") {
+          setImmediate(() => closeRegisteredSocket?.());
+        }
+      },
     });
 
     await withTimeout(connector.run(), "superseded connector shutdown");
