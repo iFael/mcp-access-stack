@@ -226,12 +226,13 @@ export class CompanionConnector {
     try {
       token = await this.options.oauth.getAccessToken(signal);
     } catch (error) {
-      this.log({ event: "local_runtime_auth_failed", reason: errorName(error) });
+      this.log({ event: "local_runtime_auth_failed", reason: errorName(error), ...safeErrorCode(error) });
       return false;
     }
 
     return new Promise<boolean>((resolve) => {
       let protocolReady = false;
+      let registered = false;
       let settled = false;
       let heartbeatSequence = 0;
       let pendingHeartbeatId: string | undefined;
@@ -298,7 +299,10 @@ export class CompanionConnector {
       socket.on("message", (data, isBinary) => {
         void this.handleMessage(socket, data, isBinary).then((result) => {
           if (result.protocolReady) protocolReady = true;
-          if (result.registered) startHeartbeat();
+          if (result.registered) {
+            registered = true;
+            startHeartbeat();
+          }
           if (result.heartbeatAckId !== undefined && result.heartbeatAckId === pendingHeartbeatId) {
             pendingHeartbeatId = undefined;
             if (heartbeatDeadline) clearTimeout(heartbeatDeadline);
@@ -309,8 +313,9 @@ export class CompanionConnector {
           if (socket.readyState === WebSocket.OPEN) socket.close(1011, "local runtime message failed");
         });
       });
-      socket.on("error", (error) => this.log({ event: "local_runtime_socket_error", reason: errorName(error) }));
+      socket.on("error", (error) => this.log({ event: "local_runtime_socket_error", reason: errorName(error), ...safeErrorCode(error) }));
       socket.once("close", (code) => {
+        this.log({ event: "local_runtime_socket_closed", code, protocolReady, registered });
         for (const controller of this.activeRequests.values()) controller.abort(`socket_closed_${code}`);
         this.activeRequests.clear();
         if (code === 4000) {
@@ -581,4 +586,14 @@ function errorName(error: unknown): string {
   return typeof error === "object" && error !== null && "name" in error && typeof error.name === "string"
     ? error.name.slice(0, 128)
     : "UnknownError";
+}
+
+// Only stable, non-secret transport error codes may enter logs, never exception messages.
+function safeErrorCode(error: unknown): { code?: string } {
+  for (const value of [error, typeof error === "object" && error !== null && "cause" in error ? error.cause : null]) {
+    if (typeof value !== "object" || value === null || !("code" in value)) continue;
+    const code = value.code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(code)) return { code };
+  }
+  return {};
 }
