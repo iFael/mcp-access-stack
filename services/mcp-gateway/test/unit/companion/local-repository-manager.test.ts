@@ -85,7 +85,8 @@ describe("LocalRepositoryManager binding lifecycle", () => {
       code: expect.stringMatching(/INVALID_PATH|PATH_OUTSIDE_WORKSPACE/u),
     });
     expect(() => assertSourceControlCapability({
-      policy: policy.workspaces[0]!, capability: "git.branch.write", mutation: true,
+      policy: { ...policy.workspaces[0]!, sourceControl: policy.workspaces[0]!.sourceControl! },
+      capability: "git.branch.write", mutation: true,
     })).not.toThrow();
     const inspected = await agent.inspectGit({ workspaceId, root: "Documents/new-project" });
     expect(inspected).toMatchObject({ branch: expect.any(String) });

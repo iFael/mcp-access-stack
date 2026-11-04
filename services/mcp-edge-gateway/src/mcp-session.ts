@@ -41,6 +41,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
+import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { ProgressPlans } from "./control-plane/progress-card.js";
 import {
   EXPECTED_MCP_CONTRACT_REVISION,
@@ -801,6 +802,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (url.pathname === "/status") {
       return jsonResponse(await this.getStatus());
     }
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/devices")) {
+      return this.handleDeviceAdminDashboard(request);
+    }
     if (url.pathname.startsWith("/viewer/")) {
       return this.handleBrowserLiveViewer(request);
     }
@@ -812,6 +816,37 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     return jsonResponse({ error: "not_found" }, 404);
+  }
+
+  private async handleDeviceAdminDashboard(request: Request): Promise<Response> {
+    let runtime: EdgeControlPlaneRuntime;
+    try {
+      runtime = this.getControlRuntime();
+    } catch (error) {
+      if (error instanceof EdgeControlPlaneConfigurationError) {
+        return jsonResponse({ error: "edge_control_plane_not_configured" }, 503);
+      }
+      throw error;
+    }
+    const ownerOAuth = runtime.oauth;
+    if (!(ownerOAuth instanceof EdgeOwnerOAuth)) {
+      return jsonResponse({ error: "admin_requires_owner_accounts" }, 503);
+    }
+    const dashboard = new DeviceAdminDashboard(this.ctx.storage, {
+      authenticate: (password) => ownerOAuth.authenticateViewer(password),
+      credentialVersion: () => ownerOAuth.viewerCredentialVersion(),
+      devices: async (userId) => (await this.accountStore.listDevices(userId)).map((device) => ({
+        id: device.id,
+        displayName: device.displayName,
+        platform: device.platform,
+        status: device.revokedAt
+          ? "revoked" as const
+          : this.isCompanionDeviceOnline(device.id) ? "online" as const : "offline" as const,
+        createdAt: device.createdAt,
+        ...(device.lastSeenAt === undefined ? {} : { lastSeenAt: device.lastSeenAt }),
+      })),
+    });
+    return dashboard.handle(request);
   }
 
   private async handleBrowserLiveViewer(request: Request): Promise<Response> {

@@ -73,6 +73,26 @@ describe("Repository identity and ACL control plane", () => {
     expect((await accounts.revokeDevice(rafael.id, device.id))?.revokedAt).toBeDefined();
   });
 
+
+  it("enrolls an authorized computer once and reuses its cloud identity", async () => {
+    const accounts = new EdgeAccountStore(new MemoryStorage());
+    const owner = await accounts.createSingleUserIdentity("Owner");
+    const initial = await accounts.registerDevice(owner.id, {
+      displayName: "New Windows computer", platform: "windows",
+    });
+    expect(initial.id).toMatch(/^dev_[0-9a-f-]{36}$/u);
+    expect((await accounts.listDevices(owner.id))).toHaveLength(1);
+    const reconnect = await accounts.registerDevice(owner.id, {
+      deviceId: initial.id, displayName: "New Windows computer", platform: "windows",
+    });
+    expect(reconnect.id).toBe(initial.id);
+    expect((await accounts.listDevices(owner.id))).toHaveLength(1);
+    await accounts.revokeDevice(owner.id, initial.id);
+    await expect(accounts.registerDevice(owner.id, {
+      deviceId: initial.id, displayName: "New Windows computer", platform: "windows",
+    })).rejects.toThrow("Device is not authorized.");
+  });
+
   it("reports only announced repository workspaces online while the computer stays online", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
