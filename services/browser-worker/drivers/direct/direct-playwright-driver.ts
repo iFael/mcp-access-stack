@@ -25,6 +25,11 @@ import {
   type BrowserDialogResult,
 } from "@vs-code-gpt/shared";
 import {
+  exportBrowserVideo,
+  requireBrowserVideoEncoder,
+  type BrowserVideoFormat,
+} from "@vs-code-gpt/shared/browser-video-export";
+import {
   normalizeBrowserDiagnosticPayload,
   validateBrowserNetworkFilter,
   type BrowserAdvancedDriver,
@@ -139,6 +144,7 @@ interface NetworkEntry {
 interface ActiveScreencast {
   session: CDPSession;
   outputPath: string;
+  format: BrowserVideoFormat;
   frameDirectory: string;
   frameCount: number;
   pendingWrites: Promise<void>;
@@ -1369,11 +1375,13 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
         "The Playwright ffmpeg binary required for dynamic video is unavailable.",
       );
     }
+    const format = options.format ?? "webm";
+    await requireBrowserVideoEncoder(format);
     await this.artifacts.prepare();
     const outputPath = this.artifacts.resolveFilename(
-      options.filename,
+      options.filename?.replace(/\.(?:webm|gif|mp4)$/iu, ""),
       "video",
-      ".webm",
+      `.${format}`,
     );
     const frameDirectory = path.join(
       this.config.privateDirectory,
@@ -1388,6 +1396,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     const state: ActiveScreencast = {
       session,
       outputPath,
+      format,
       frameDirectory,
       frameCount: 0,
       pendingWrites: Promise.resolve(),
@@ -1459,12 +1468,16 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
           "The Playwright ffmpeg binary required to finalize video is unavailable.",
         );
       }
-      await encodeScreencast(
-        ffmpegPath,
-        state.frameDirectory,
-        state.outputPath,
-      );
-      return await this.artifacts.describe("video", state.outputPath);
+      const webmPath = state.format === "webm" ? state.outputPath : `${state.outputPath}.source.webm`;
+      try {
+        await encodeScreencast(ffmpegPath, state.frameDirectory, webmPath);
+        if (state.format !== "webm") {
+          await exportBrowserVideo(webmPath, state.outputPath, state.format, this.config.outputMaxBytes);
+        }
+        return await this.artifacts.describe("video", state.outputPath);
+      } finally {
+        if (webmPath !== state.outputPath) await rm(webmPath, { force: true }).catch(() => undefined);
+      }
     } finally {
       await state.session.detach().catch(() => undefined);
       await rm(state.frameDirectory, {

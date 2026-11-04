@@ -210,6 +210,7 @@ const browserVideoToolInputSchema = z
     action: z.enum(["start", "stop"]),
     tabId: c.browserTraceInputSchema.shape.tabId,
     filename: c.browserVideoStartInputSchema.shape.filename,
+    format: c.browserVideoStartInputSchema.shape.format,
     width: c.browserVideoStartInputSchema.shape.width,
     height: c.browserVideoStartInputSchema.shape.height,
   })
@@ -218,7 +219,7 @@ const browserVideoToolInputSchema = z
     if (input.action === "stop") {
       rejectDefinedFields(
         input,
-        ["filename", "width", "height"],
+        ["filename", "format", "width", "height"],
         context,
         "video stop",
       );
@@ -616,13 +617,13 @@ function definitions(
     )),
     d("browser_network", "Capture network events on the owned tab (action=list, capture=start), read while browsing (capture=read), then stop (capture=stop). Optional captureHeaders/captureBodies opt into bounded sanitized header and textual request/response body inspection; action=inspect with index/detail retrieves one stored request. Never returns cookies, credentials, raw binary or authentication secrets.", browserNetworkToolInputSchema, c.browserNetworkResultSchema, false, (v, context) => runNetworkTool(e, assumeParsed(v), context)),
     d("browser_trace", "Starts or stops trace recording for an MCP-owned tab in diagnostic mode.", browserTraceToolInputSchema, browserTraceToolResultSchema, false, (v, context) => runTraceTool(e, assumeParsed(v), context)),
-    d("browser_video", "Starts or stops video recording for an MCP-owned tab in diagnostic mode.", browserVideoToolInputSchema, browserVideoToolResultSchema, false, (v, context) => runVideoTool(e, assumeParsed(v), context)),
+    d("browser_video", "Records an MCP-owned tab in interactive or diagnostic mode; optional format=webm, gif or mp4 on start. GIF/MP4 require full FFmpeg on the browser runtime.", browserVideoToolInputSchema, browserVideoToolResultSchema, false, (v, context) => runVideoTool(e, assumeParsed(v), context)),
     d("browser_pdf", "Stores a PDF of an MCP-owned tab in private runtime storage in diagnostic mode.", c.browserPdfInputSchema, c.browserPdfResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.pdf(assumeParsed(v)),
       (activeContext) => e.pdf(assumeParsed(v), activeContext),
     )),
-    d("browser_diagnostics", "Collects sanitized console and network-list diagnostics for an MCP-owned tab without replacing the tab; available in interactive and diagnostic modes. Trace/video/PDF and detailed network inspection remain diagnostic-only.", c.browserDiagnosticsInputSchema, c.browserDiagnosticsResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_diagnostics", "Collects sanitized console and network-list diagnostics for an MCP-owned tab without replacing the tab; available in interactive and diagnostic modes. Trace/PDF and detailed network inspection remain diagnostic-only; owned-tab video recording is also available in interactive mode.", c.browserDiagnosticsInputSchema, c.browserDiagnosticsResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.diagnostics(assumeParsed(v)),
       (activeContext) => e.diagnostics(assumeParsed(v), activeContext),
@@ -780,6 +781,7 @@ async function runVideoTool(
     const operationInput = c.browserVideoStartInputSchema.parse({
       tabId: input.tabId,
       ...(input.filename === undefined ? {} : { filename: input.filename }),
+      ...(input.format === undefined ? {} : { format: input.format }),
       ...(input.width === undefined ? {} : { width: input.width }),
       ...(input.height === undefined ? {} : { height: input.height }),
     });

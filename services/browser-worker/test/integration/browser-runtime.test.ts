@@ -1698,6 +1698,21 @@ describe("BrowserRuntime Playwright layer", () => {
     expect(fake.advancedCalls).toEqual([]);
   });
 
+  it("records an MCP-owned tab in interactive mode without enabling diagnostic tracing", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+    await runtime.connect({});
+    const [tab] = (await runtime.tabs({})).tabs;
+    if (!tab) throw new Error("Expected an MCP-owned tab.");
+    await expect(runtime.videoStart({ tabId: tab.tabId })).resolves.toMatchObject({ active: true });
+    await expect(runtime.videoStop({ tabId: tab.tabId })).resolves.toMatchObject({ kind: "video" });
+    await expect(runtime.traceStart({ tabId: tab.tabId })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    expect(fake.advancedCalls).toEqual(["videoStart", "videoStop"]);
+  });
+
   it("allows basic sanitized observability in interactive mode without opening detailed diagnostics", async () => {
     const directory = await makeTemporaryDirectory();
     const fake = new FakeBrowserDriver();

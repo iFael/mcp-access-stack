@@ -8,6 +8,7 @@ import {
   type BrowserDiagnosticTextResult,
   type BrowserNetworkDetail,
 } from "@vs-code-gpt/shared";
+import type { BrowserVideoFormat } from "@vs-code-gpt/shared/browser-video-export";
 export type {
   BrowserArtifact,
   BrowserArtifactCollection,
@@ -38,6 +39,7 @@ export interface BrowserNetworkOptions {
 
 export interface BrowserVideoOptions {
   filename?: string;
+  format?: BrowserVideoFormat;
   width?: number;
   height?: number;
 }

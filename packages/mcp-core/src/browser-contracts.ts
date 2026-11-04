@@ -1443,10 +1443,13 @@ export type BrowserTraceStopResult = z.infer<
   typeof browserTraceStopResultSchema
 >;
 
+export const browserVideoFormatSchema = z.enum(["webm", "gif", "mp4"]);
+
 export const browserVideoStartInputSchema = z
   .object({
     tabId: tabIdSchema,
     filename: browserArtifactFilenameSchema.optional(),
+    format: browserVideoFormatSchema.optional(),
     width: z.number().int().min(64).max(3_840).optional(),
     height: z.number().int().min(64).max(2_160).optional(),
   })

@@ -467,7 +467,8 @@ export class BrowserRuntime implements BrowserExecutor {
       console: advancedEnabled,
       network: advancedEnabled,
       trace: advancedEnabled,
-      video: advancedEnabled && advanced.ffmpegAvailable,
+      video: connected && advancedDriver !== undefined && advanced.ffmpegAvailable &&
+        (modeAllowsAdvanced || this.session.mode === "interactive"),
       pdf: advancedEnabled,
       diagnostics: advancedEnabled,
     };

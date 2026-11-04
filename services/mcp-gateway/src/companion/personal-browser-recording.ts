@@ -6,6 +6,11 @@ import {
   type BrowserExecutor,
   type OperationContext,
 } from "@vs-code-gpt/shared";
+import {
+  exportBrowserVideo,
+  requireBrowserVideoEncoder,
+  type BrowserVideoFormat,
+} from "@vs-code-gpt/shared/browser-video-export";
 import { z } from "zod";
 
 // Chrome encodes every recorded frame as a lossy WebP still. A lossy WebP's
@@ -64,7 +69,7 @@ interface Recording {
   writeFailed: boolean;
   live: boolean;
   truncated: boolean;
-  video?: { path: string; startedAt: number } | undefined;
+  video?: { path: string; startedAt: number; format: BrowserVideoFormat } | undefined;
   trace?: { startedAt: number; actions: PersonalTraceAction[]; dropped: number } | undefined;
 }
 
@@ -99,16 +104,17 @@ export class PersonalBrowserRecorder {
       if (this.byTab.get(input.tabId)?.video) {
         throw new AppError("INVALID_ARGUMENT", "Video recording is already active.");
       }
-      const name = input.filename ?? `video-${Date.now()}.webm`;
+      const format = input.format ?? "webm";
+      await requireBrowserVideoEncoder(format);
+      const name = (input.filename ?? `video-${Date.now()}`).replace(/\.(?:webm|gif|mp4)$/iu, "");
       const directory = path.join(this.artifactsRoot, "videos");
       await mkdir(directory, { recursive: true, mode: 0o700 });
-      const outputPath = path.join(directory,
-        `${randomUUID()}-${name.toLowerCase().endsWith(".webm") ? name : `${name}.webm`}`);
+      const outputPath = path.join(directory, `${randomUUID()}-${name}.${format}`);
       const recording = await this.acquire(input.tabId,
         input.width !== undefined && input.height !== undefined
           ? { width: input.width, height: input.height } : undefined,
         context);
-      recording.video = { path: outputPath, startedAt: Date.now() };
+      recording.video = { path: outputPath, startedAt: Date.now(), format };
       return { tabId: input.tabId, path: outputPath, active: true as const };
     });
   }
@@ -124,15 +130,19 @@ export class PersonalBrowserRecorder {
       }
       const stoppedAt = await this.release(recording, "video", context);
       recording.video = undefined;
+      const webmPath = video.format === "webm" ? video.path : `${video.path}.source.webm`;
       try {
-        const sizeBytes = await this.writeVideo(recording, video.startedAt, stoppedAt, video.path);
-        if (sizeBytes === undefined) {
+        const webmBytes = await this.writeVideo(recording, video.startedAt, stoppedAt, webmPath);
+        if (webmBytes === undefined) {
           throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
             "Chrome painted no frames for this recording; the MCP tab must be visible while it records.");
         }
+        const sizeBytes = video.format === "webm" ? webmBytes :
+          await exportBrowserVideo(webmPath, video.path, video.format, MAX_RECORDING_BYTES);
         return { tabId: input.tabId, kind: "video" as const, path: video.path, sizeBytes,
           createdAt: new Date(stoppedAt).toISOString() };
       } finally {
+        if (webmPath !== video.path) await rm(webmPath, { force: true }).catch(() => undefined);
         if (!recording.trace) await this.discard(recording);
       }
     });
