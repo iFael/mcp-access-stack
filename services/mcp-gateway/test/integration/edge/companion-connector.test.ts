@@ -118,11 +118,16 @@ describe("CompanionConnector end-to-end", () => {
     const staleRepository = path.join(temporaryRoot, "stale-project");
     await mkdir(staleRepository);
     await execFileAsync("git", ["init", staleRepository]);
+    const missingRepository = path.join(temporaryRoot, "missing-project");
+    await mkdir(missingRepository);
+    await execFileAsync("git", ["init", missingRepository]);
 
     const repositories = await LocalRepositoryManager.create({
       stateDirectory: path.join(temporaryRoot, "state"),
       managedRoot: path.join(temporaryRoot, "managed"),
       homeDirectory: temporaryRoot,
+      exposeComputerWorkspace: true,
+      computerRoots: [temporaryRoot],
     });
     await repositories.bindRepositories([{
       repositoryId: "repo_33333333-3333-4333-8333-333333333333",
@@ -138,10 +143,18 @@ describe("CompanionConnector end-to-end", () => {
       workspaceId: "stale-project",
       remoteUrls: [],
       managed: false,
+    }, {
+      repositoryId: "repo_55555555-5555-4555-8555-555555555555",
+      name: "missing-project",
+      path: missingRepository,
+      workspaceId: "missing-project",
+      remoteUrls: [],
+      managed: false,
     }]);
-    // A formerly valid binding is retained, but no longer passes Git inspection.
+    // A folder without Git remains accessible; a missing folder stays bound but offline.
     await rm(path.join(staleRepository, ".git"), { recursive: true });
-    expect(repositories.listBindings()).toHaveLength(2);
+    await rm(missingRepository, { recursive: true });
+    expect(repositories.listBindings()).toHaveLength(3);
 
     let storedCredential: DesktopOAuthRefreshCredential | null = {
       clientId: "client-1",
@@ -265,22 +278,25 @@ describe("CompanionConnector end-to-end", () => {
       registration: {
         displayName: "Integration Device",
       },
-      workspaces: [
-        expect.objectContaining({
-          workspaceId: "project",
-          name: "project",
-        }),
-      ],
-      materializations: [
+      workspaces: expect.arrayContaining([
+        expect.objectContaining({ workspaceKind: "aggregate", name: "Local computer" }),
+        expect.objectContaining({ workspaceId: "project", name: "project" }),
+        expect.objectContaining({ workspaceId: "stale-project", name: "stale-project" }),
+      ]),
+      materializations: expect.arrayContaining([
         expect.objectContaining({
           repositoryId: "repo_33333333-3333-4333-8333-333333333333",
           workspaceId: "project",
         }),
-      ],
+        expect.objectContaining({
+          repositoryId: "repo_44444444-4444-4444-8444-444444444444",
+          workspaceId: "stale-project",
+        }),
+      ]),
     });
-    expect(ready.workspaces).toHaveLength(1);
-    expect(ready.materializations).toHaveLength(1);
-    expect(repositories.listBindings()).toHaveLength(2);
+    expect(ready.workspaces).toHaveLength(3);
+    expect(ready.materializations).toHaveLength(2);
+    expect(repositories.listBindings()).toHaveLength(3);
 
     edgeSocket.send(JSON.stringify({
       type: "companion-registered",

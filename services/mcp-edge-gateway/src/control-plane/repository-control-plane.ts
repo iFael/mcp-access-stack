@@ -3,6 +3,7 @@ import { EdgeAccountStore, type StoredDevice, type StoredMaterialization, type S
 
 export interface RepositoryPresence {
   isDeviceOnline(deviceId: string): boolean;
+  isDeviceWorkspaceOnline?(userId: string, deviceId: string, workspaceId: string): boolean;
   isRemoteRuntimeOnline(): boolean;
   disconnectDevice?(deviceId: string): void;
 }
@@ -131,7 +132,9 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
         workspaceId: value.workspaceId,
         platform: value.platform,
         path: value.path,
-        status: this.presence.isDeviceOnline(value.deviceId) ? "online" as const : "offline" as const,
+        status: this.presence.isDeviceOnline(value.deviceId) &&
+          (this.presence.isDeviceWorkspaceOnline?.(value.userId, value.deviceId, value.workspaceId) ?? true)
+          ? "online" as const : "offline" as const,
       };
     }
     return {

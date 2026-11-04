@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { assertSourceControlCapability, policyFileSchema } from "@vs-code-gpt/shared";
+import { LocalAgent } from "@vs-code-gpt/local-agent";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "../../../src/companion/local-repository-manager.js";
 
 const execFileAsync = promisify(execFile);
@@ -16,6 +17,151 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     await Promise.all(
       temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
     );
+  });
+
+  it("exposes an authorized computer home even without Git bindings", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-computer-root-")));
+    temporaryRoots.push(root);
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(root, "state"),
+      managedRoot: path.join(root, "managed"),
+      homeDirectory: root,
+      platform: "win32",
+      exposeComputerWorkspace: true,
+      computerRoots: [root],
+      githubAccountOwners: ["iFael"],
+    });
+    const policy = await manager.buildPolicy();
+    expect(policy?.workspaces).toHaveLength(1);
+    expect(policy?.workspaces[0]).toMatchObject({
+      name: "Local computer",
+      rootPath: root,
+      workspaceKind: "aggregate",
+      permissionProfile: "full-repo-write",
+      allowedRoots: ["."],
+      allowShell: ["."],
+      allowWrites: ["."],
+    });
+    expect(policy?.workspaces[0]?.sourceControl).toMatchObject({
+      capabilities: expect.arrayContaining(["git.branch.write", "git.commit.write"]),
+      accountOwners: [],
+      additionalRepositories: [],
+    });
+    expect(policy?.workspaces[0]?.sourceControl?.capabilities).not.toContain("github.repository.create");
+    expect((await manager.listWorkspaceSummaries())[0]?.workspaceKind).toBe("aggregate");
+    expect(manager.listMaterializationAnnouncements()).toEqual([]);
+    expect(policyFileSchema.parse(policy)).toEqual(policy);
+  });
+
+  it("grants filesystem and Git access to the computer without repository bindings, while protecting secrets", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-host-access-")));
+    temporaryRoots.push(root);
+    await mkdir(path.join(root, "Documents"), { recursive: true });
+    await mkdir(path.join(root, "MCP V3", "Local", "private"), { recursive: true });
+    await mkdir(path.join(root, ".ssh"), { recursive: true });
+    await writeFile(path.join(root, "Documents", "note.txt"), "available without Git\\n");
+    const unregisteredGit = path.join(root, "Documents", "new-project");
+    await mkdir(unregisteredGit);
+    await execFileAsync("git", ["init", unregisteredGit]);
+    await execFileAsync("git", ["-C", unregisteredGit, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial"]);
+    await writeFile(path.join(root, "MCP V3", "Local", "private", "refresh.dat"), "not-readable");
+    await writeFile(path.join(root, ".ssh", "config"), "not-readable");
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(root, "state"),
+      managedRoot: path.join(root, "managed"),
+      homeDirectory: root,
+      exposeComputerWorkspace: true,
+      computerRoots: [root],
+    });
+    const policy = (await manager.buildPolicy())!;
+    const workspaceId = policy.workspaces[0]!.id;
+    const agent = await LocalAgent.createFromPolicy(policy);
+    expect((await agent.listWorkspaceRoots({ workspaceId })).roots).toContain("Documents");
+    expect((await agent.readFile({ workspaceId, path: "Documents/note.txt" })).content).toBe("available without Git\\n");
+    for (const blocked of ["MCP V3/Local/private/refresh.dat", ".ssh/config"]) {
+      await expect(agent.readFile({ workspaceId, path: blocked })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    }
+    await expect(agent.readFile({ workspaceId, path: "../elsewhere.txt" })).rejects.toMatchObject({
+      code: expect.stringMatching(/INVALID_PATH|PATH_OUTSIDE_WORKSPACE/u),
+    });
+    expect(() => assertSourceControlCapability({
+      policy: policy.workspaces[0]!, capability: "git.branch.write", mutation: true,
+    })).not.toThrow();
+    const inspected = await agent.inspectGit({ workspaceId, root: "Documents/new-project" });
+    expect(inspected).toMatchObject({ branch: expect.any(String) });
+    await expect(agent.inspectGit({ workspaceId, root: "Documents" })).rejects.toMatchObject({
+      code: "NOT_GIT_REPOSITORY",
+    });
+  });
+
+  it("makes every connected computer root available without registering each repository", async () => {
+    const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-home-drive-")));
+    const otherDrive = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-other-drive-")));
+    temporaryRoots.push(home, otherDrive);
+    const project = path.join(otherDrive, "unregistered-project");
+    await mkdir(project);
+    await execFileAsync("git", ["init", project]);
+    await execFileAsync("git", ["-C", project, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial"]);
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(home, "state"),
+      managedRoot: path.join(home, "managed"),
+      homeDirectory: home,
+      exposeComputerWorkspace: true,
+      computerRoots: [home, otherDrive],
+    });
+    const policy = (await manager.buildPolicy())!;
+    expect(policy.workspaces).toHaveLength(2);
+    expect(new Set(policy.workspaces.map((workspace) => workspace.id)).size).toBe(2);
+    expect(manager.listBindings()).toEqual([]);
+    const agent = await LocalAgent.createFromPolicy(policy);
+    const workspace = policy.workspaces.find((candidate) => candidate.rootPath === otherDrive)!;
+    await expect(agent.inspectGit({ workspaceId: workspace.id, root: "unregistered-project" }))
+      .resolves.toMatchObject({ branch: expect.any(String) });
+  });
+
+  it("automatically exposes the system drive on a real Windows host", async () => {
+    if (process.platform !== "win32") return;
+    const stateRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-real-drives-")));
+    temporaryRoots.push(stateRoot);
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(stateRoot, "state"),
+      managedRoot: path.join(stateRoot, "managed"),
+      homeDirectory: os.homedir(),
+      exposeComputerWorkspace: true,
+    });
+    const systemDrive = path.win32.parse(os.homedir()).root.toLowerCase();
+    expect((await manager.buildPolicy())!.workspaces.some((workspace) =>
+      workspace.workspaceKind === "aggregate" && workspace.rootPath.toLowerCase() === systemDrive,
+    )).toBe(true);
+  });
+
+  it("preserves folder and shell access after a bound repository loses .git", async () => {
+    const fixture = await createGitFixture();
+    const manager = await LocalRepositoryManager.create({
+      stateDirectory: path.join(fixture.root, "state"),
+      managedRoot: path.join(fixture.root, "managed"),
+      homeDirectory: fixture.root,
+      exposeComputerWorkspace: true,
+      computerRoots: [fixture.root],
+    });
+    await manager.bindRepositories([repositoryBinding(fixture.repository)]);
+    await rm(path.join(fixture.repository, ".git"), { recursive: true });
+    const policy = await manager.buildPolicy();
+    const folder = policy?.workspaces.find((workspace) => workspace.id === "project");
+    expect(folder).toMatchObject({
+      rootPath: fixture.repository,
+      allowWrites: ["."],
+      allowShell: ["."],
+      workspaceKind: "repository",
+    });
+    expect(folder?.sourceControl).toBeUndefined();
+    expect(policy?.workspaces).toHaveLength(2);
+    expect(manager.listBindings()).toHaveLength(1);
+    expect(manager.listMaterializationAnnouncements()).toHaveLength(1);
+    await writeFile(path.join(fixture.repository, ".git"), "gitdir: missing\\n");
+    const brokenGitPolicy = await manager.buildPolicy();
+    expect(brokenGitPolicy?.workspaces.find((workspace) => workspace.id === "project")?.sourceControl).toBeUndefined();
+    expect(brokenGitPolicy?.workspaces.find((workspace) => workspace.id === "project")?.allowShell).toEqual(["."]);
   });
 
   it("skips broken .git markers and continues repository discovery", async () => {

@@ -108,6 +108,7 @@ async function main(): Promise<void> {
     stateDirectory: path.join(runtime.stateRoot, "state"),
     managedRoot: runtime.managedRoot,
     homeDirectory: os.homedir(),
+    exposeComputerWorkspace: true,
     githubAccountOwners: parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS),
     onChanged: reloadLocalRuntime,
   });

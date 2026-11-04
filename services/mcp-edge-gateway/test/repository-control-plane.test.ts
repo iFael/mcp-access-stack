@@ -73,6 +73,41 @@ describe("Repository identity and ACL control plane", () => {
     expect((await accounts.revokeDevice(rafael.id, device.id))?.revokedAt).toBeDefined();
   });
 
+  it("reports only announced repository workspaces online while the computer stays online", async () => {
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const user = await accounts.createSingleUserIdentity("Owner");
+    const device = await accounts.registerDevice(user.id, {
+      displayName: "Local computer", platform: "windows",
+    });
+    const validRepo = await accounts.createRepository(user.id, "valid");
+    const missingRepo = await accounts.createRepository(user.id, "missing");
+    await accounts.upsertMaterialization(user.id, device.id, {
+      repositoryId: validRepo.id, workspaceId: "valid", path: "C:/Users/user/valid", platform: "windows",
+    });
+    await accounts.upsertMaterialization(user.id, device.id, {
+      repositoryId: missingRepo.id, workspaceId: "missing", path: "C:/Users/user/missing", platform: "windows",
+    });
+    const control = new EdgeRepositoryControlPlane(accounts, {
+      isDeviceOnline: () => true,
+      isDeviceWorkspaceOnline: (_userId, _deviceId, workspaceId) => workspaceId === "valid",
+      isRemoteRuntimeOnline: () => false,
+    });
+    expect((await control.readRepositoryDetails(user.id, validRepo.id))?.materializations[0]?.status).toBe("online");
+    expect((await control.readRepositoryDetails(user.id, missingRepo.id))?.materializations[0]?.status).toBe("offline");
+    await expect(accounts.registerDevice(user.id, {
+      deviceId: device.id, displayName: "Local computer", platform: "windows",
+    })).resolves.toMatchObject({ id: device.id });
+    await accounts.revokeDevice(user.id, device.id);
+    await expect(accounts.registerDevice(user.id, {
+      deviceId: device.id, displayName: "Local computer", platform: "windows",
+    })).rejects.toThrow("Device is not authorized.");
+    await expect(accounts.registerDevice(user.id, {
+      deviceId: "dev_88888888-8888-4888-8888-888888888888",
+      displayName: "Unknown device", platform: "windows",
+    })).rejects.toThrow("Device is not authorized.");
+  });
+
   it("revokes only the caller device and disconnects its active presence", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);

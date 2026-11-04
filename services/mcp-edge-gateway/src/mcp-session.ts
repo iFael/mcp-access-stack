@@ -178,6 +178,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     this.progressPlans = new ProgressPlans(this.ctx.storage);
     this.repositoryControlPlane = new EdgeRepositoryControlPlane(this.accountStore, {
       isDeviceOnline: (deviceId) => this.isCompanionDeviceOnline(deviceId),
+      isDeviceWorkspaceOnline: (userId, deviceId, workspaceId) =>
+        this.getReadyCompanionsForUser(userId, deviceId).some(({ attachment }) =>
+          attachment.workspaces?.some((workspace) => workspace.workspaceId === workspaceId)),
       isRemoteRuntimeOnline: () => this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) !== null,
       disconnectDevice: (deviceId) => this.disconnectCompanionDevice(deviceId),
     });
@@ -2866,15 +2869,25 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         });
         const workspaceIds = new Set(parsed.workspaces.map((workspace) => workspace.workspaceId));
         for (const materialization of parsed.materializations) {
-          if (!workspaceIds.has(materialization.workspaceId)) {
-            throw new Error("Materialization references an unannounced workspace.");
+          // Repository bindings are optional device resources, not prerequisites
+          // for the authenticated computer, browser or unrelated workspaces.
+          if (!workspaceIds.has(materialization.workspaceId) ||
+              !(await this.accountStore.getRepositoryForUser(attachment.userId, materialization.repositoryId))) {
+            continue;
           }
-          await this.accountStore.upsertMaterialization(attachment.userId, device.id, {
-            repositoryId: materialization.repositoryId,
-            workspaceId: materialization.workspaceId,
-            path: materialization.path,
-            platform: parsed.registration.platform,
-          });
+          try {
+            await this.accountStore.upsertMaterialization(attachment.userId, device.id, {
+              repositoryId: materialization.repositoryId,
+              workspaceId: materialization.workspaceId,
+              path: materialization.path,
+              platform: parsed.registration.platform,
+            });
+          } catch (error) {
+            // A full repository quota affects this binding, not device presence.
+            // Unexpected storage or identity errors must still fail closed.
+            if (error instanceof Error && error.message === "Materialization limit reached.") continue;
+            throw error;
+          }
         }
       } catch {
         webSocket.close(1008, "Companion registration rejected");

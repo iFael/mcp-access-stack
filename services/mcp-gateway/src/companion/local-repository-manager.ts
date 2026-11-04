@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import {
   AppError,
   githubOwnerSchema,
@@ -36,6 +37,7 @@ import {
   type WorkspaceSummary,
 } from "@vs-code-gpt/shared";
 
+const execFileAsync = promisify(execFile);
 const STATE_VERSION = 1 as const;
 const MAX_DISCOVERY_DIRECTORIES = 2_000;
 const DEFAULT_DISCOVERY_DEPTH = 4;
@@ -86,6 +88,8 @@ export interface LocalRepositoryManagerOptions {
   gitExecutable?: string;
   gitEnvironment?: NodeJS.ProcessEnv;
   githubAccountOwners?: readonly string[];
+  exposeComputerWorkspace?: boolean;
+  computerRoots?: readonly string[]; // Test fixture override; production discovers mounted drives.
   onChanged?: () => Promise<void>;
 }
 
@@ -112,6 +116,7 @@ export function withGlobalGitHubRepositoryCreatePolicy(
   return policyFileSchema.parse({
     ...policy,
     workspaces: policy.workspaces.map((workspace) => {
+      if (!workspace.sourceControl || workspace.workspaceKind === "aggregate") return workspace;
       const sourceControl = workspace.sourceControl;
       const accountOwners = [...(sourceControl?.accountOwners ?? [])];
       const seen = new Set(accountOwners.map((owner) => owner.toLowerCase()));
@@ -446,19 +451,83 @@ export class LocalRepositoryManager implements RepositoryExecutor {
   }
 
   async buildPolicy(): Promise<PolicyFile | null> {
-    const repositories: LocalRepositoryRecord[] = [];
+    const repositories: Array<LocalRepositoryRecord & { gitAvailable: boolean }> = [];
     for (const record of this.state.repositories) {
       try {
-        const inspected = await this.inspectRepository(record.path);
-        repositories.push({ ...record, path: inspected.path });
+        const canonical = await realpath(record.path);
+        if (!(await stat(canonical)).isDirectory()) continue;
+        let gitAvailable = false;
+        if (await isGitRepositoryDirectory(canonical)) {
+          try {
+            await this.inspectRepository(canonical);
+            gitAvailable = true;
+          } catch {
+            // Broken Git metadata must not disable files or the device session.
+          }
+        }
+        repositories.push({ ...record, path: canonical, gitAvailable });
       } catch {
-        // Missing materializations remain in state but are not exposed as workspaces.
+        // Unavailable folders stay bound but do not block other workspaces.
       }
     }
-    if (repositories.length === 0) return null;
+    const limits = {
+      maxFileBytes: 8 * 1024 * 1024,
+      maxSearchResults: 500,
+      maxSearchSnippetBytes: 16 * 1024,
+      maxDiffBytes: 4 * 1024 * 1024,
+      maxListedFiles: 20_000,
+      maxDiscoveryDirectories: 2_000,
+      maxDiscoveryEntries: 50_000,
+      maxDiscoveryDurationMs: 30_000,
+    };
+    const allowedShells = this.platform === "win32"
+      ? (["powershell", "cmd", "wsl"] as const)
+      : (["sh", "bash"] as const);
+    const computerRoots = this.options.exposeComputerWorkspace
+      ? this.options.computerRoots === undefined
+        ? await listLocalComputerRoots(this.homeDirectory, this.platform)
+        : [...this.options.computerRoots]
+      : [];
+    const registeredIds = new Set(this.state.repositories.map((repository) => repository.workspaceId));
+    const computerWorkspace = computerRoots.map((rootPath) => {
+      const baseId = `computer-${createHash("sha256").update(
+        `${os.hostname().toLowerCase()}:${this.homeDirectory.toLowerCase()}:${rootPath.toLowerCase()}`,
+      ).digest("hex").slice(0, 12)}`;
+      let id = baseId;
+      while (registeredIds.has(id)) id += "-host";
+      registeredIds.add(id);
+      return {
+        id,
+        name: computerRoots.length === 1 ? "Local computer" : `Local computer (${rootPath})`,
+        rootPath,
+        workspaceKind: "aggregate" as const,
+        enabled: true,
+        permissionProfile: "full-repo-write" as const,
+        confirmationMode: "standard" as const,
+        allowedRoots: ["."],
+        blockedGlobs: [
+          "**/MCP V3/Local/**",
+          "**/AppData/Local/MCP V3/**",
+          "**/.ssh/**",
+          "**/.aws/**",
+          "**/.config/gh/**",
+        ],
+        limits,
+        allowWrites: ["."],
+        allowShell: ["."],
+        allowedShells: [...allowedShells],
+        sourceControl: {
+          capabilities: LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES.filter((capability) =>
+            capability.startsWith("git.")),
+          accountOwners: [],
+          additionalRepositories: [],
+        },
+      };
+    });
+    if (repositories.length === 0 && computerWorkspace.length === 0) return null;
     return withGlobalGitHubRepositoryCreatePolicy({
       version: 1,
-      workspaces: repositories.map((repository) => ({
+      workspaces: [...computerWorkspace, ...repositories.map((repository) => ({
         id: repository.workspaceId,
         name: repository.name,
         rootPath: repository.path,
@@ -468,27 +537,16 @@ export class LocalRepositoryManager implements RepositoryExecutor {
         confirmationMode: "standard" as const,
         allowedRoots: ["."],
         blockedGlobs: [],
-        limits: {
-          maxFileBytes: 8 * 1024 * 1024,
-          maxSearchResults: 500,
-          maxSearchSnippetBytes: 16 * 1024,
-          maxDiffBytes: 4 * 1024 * 1024,
-          maxListedFiles: 20_000,
-          maxDiscoveryDirectories: 2_000,
-          maxDiscoveryEntries: 50_000,
-          maxDiscoveryDurationMs: 30_000,
-        },
+        limits,
         allowWrites: ["."],
         allowShell: ["."],
-        allowedShells: this.platform === "win32"
-          ? ["powershell" as const, "cmd" as const, "wsl" as const]
-          : ["sh" as const, "bash" as const],
-        sourceControl: {
+        allowedShells: [...allowedShells],
+        ...(repository.gitAvailable ? { sourceControl: {
           capabilities: [...LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES],
           accountOwners: [],
           additionalRepositories: [],
-        },
-      })),
+        } } : {}),
+      }))],
     }, this.options.githubAccountOwners ?? []);
   }
 
@@ -789,6 +847,35 @@ function isCanonicalStackRemote(value: string): boolean {
   return /^https:\/\/github\.com\/ifael\/mcp-access-stack(?:\.git)?\/?$/iu.test(remote) ||
     /^git@github\.com:ifael\/mcp-access-stack(?:\.git)?$/iu.test(remote) ||
     /^ssh:\/\/git@github\.com\/ifael\/mcp-access-stack(?:\.git)?\/?$/iu.test(remote);
+}
+
+async function listLocalComputerRoots(homeDirectory: string, platform: NodeJS.Platform): Promise<string[]> {
+  if (platform !== "win32" || process.platform !== "win32") return [homeDirectory];
+
+  // The connected Windows account grants drive access once; repository bindings
+  // are optional metadata, not an allowlist for filesystem or Git operations.
+  const roots = new Set([path.win32.parse(homeDirectory).root]);
+  try {
+    const { stdout } = await execFileAsync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      "(Get-PSDrive -PSProvider FileSystem).Root | ConvertTo-Json -Compress",
+    ], { timeout: 5000, maxBuffer: 4096, windowsHide: true });
+    const decoded: unknown = JSON.parse(stdout);
+    for (const candidate of Array.isArray(decoded) ? decoded : [decoded]) {
+      if (typeof candidate === "string" && /^[A-Z]:\\$/iu.test(candidate)) {
+        roots.add(candidate.toUpperCase());
+      }
+    }
+  } catch {
+    // Drive discovery is optional; never take the authenticated PC offline.
+    console.warn(JSON.stringify({ event: "local_computer_drive_discovery_unavailable" }));
+  }
+
+  const available: string[] = [];
+  for (const root of [...roots].sort()) {
+    if (await directoryExists(root)) available.push(root);
+  }
+  return available.length > 0 ? available : [homeDirectory];
 }
 
 function defaultStateDirectory(platform: NodeJS.Platform): string {
