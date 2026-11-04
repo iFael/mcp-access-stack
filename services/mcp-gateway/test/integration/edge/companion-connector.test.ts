@@ -344,6 +344,58 @@ describe("CompanionConnector end-to-end", () => {
     await withTimeout(runPromise, "connector shutdown");
   }, 20_000);
 
+  it("logs safe OAuth transport codes without revealing exception messages or credentials", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-auth-log-")));
+    temporaryRoots.push(root);
+    const repositories = await LocalRepositoryManager.create({
+      stateDirectory: path.join(root, "state"),
+      managedRoot: path.join(root, "managed"),
+      homeDirectory: root,
+    });
+    const oauth = new DesktopOAuthClient({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      credentialStore: {
+        read: async () => ({
+          clientId: "client-test", scope: "workspaces:read", refreshToken: "DO_NOT_LOG_SECRET",
+        }),
+        write: async () => undefined,
+        clear: async () => undefined,
+      },
+      fetchImpl: async () => {
+        throw Object.assign(new TypeError("DO_NOT_LOG_ERROR_MESSAGE"), {
+          cause: Object.assign(new Error("DO_NOT_LOG_CAUSE"), { code: "ECONNRESET" }),
+        });
+      },
+    });
+    const logs: Record<string, unknown>[] = [];
+    const controller = new AbortController();
+    controllers.push(controller);
+    const connector = new CompanionConnector({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      oauth,
+      internalAssertion: INTERNAL_ASSERTION,
+      localBaseUrl: new URL("http://127.0.0.1:1/"),
+      repositories,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 100,
+      log: (entry) => { logs.push(entry); },
+    });
+    const running = connector.run(controller.signal);
+    await withTimeout(new Promise<void>((resolve) => {
+      const poll = () => {
+        if (logs.some((entry) => entry.event === "local_runtime_auth_failed")) resolve();
+        else setTimeout(poll, 5);
+      };
+      poll();
+    }), "OAuth diagnostic event");
+    controller.abort();
+    await withTimeout(running, "OAuth diagnostic shutdown");
+    expect(logs).toContainEqual({
+      event: "local_runtime_auth_failed", reason: "TypeError", code: "ECONNRESET",
+    });
+    expect(JSON.stringify(logs)).not.toMatch(/DO_NOT_LOG_/u);
+  }, 10_000);
+
   it("treats Edge supersession close code 4000 as terminal and does not reconnect", async () => {
     const temporaryRoot = await realpath(
       await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-superseded-")),
@@ -420,6 +472,7 @@ describe("CompanionConnector end-to-end", () => {
     expect(connectionCount).toBe(1);
     expect(logs).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "local_runtime_superseded" }),
+      expect.objectContaining({ event: "local_runtime_socket_closed", code: 4000, registered: true }),
     ]));
   }, 10_000);
 
