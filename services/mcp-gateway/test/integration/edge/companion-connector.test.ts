@@ -115,6 +115,9 @@ describe("CompanionConnector end-to-end", () => {
     const repository = path.join(temporaryRoot, "project");
     await mkdir(repository, { recursive: true });
     await execFileAsync("git", ["init", repository]);
+    const staleRepository = path.join(temporaryRoot, "stale-project");
+    await mkdir(staleRepository);
+    await execFileAsync("git", ["init", staleRepository]);
 
     const repositories = await LocalRepositoryManager.create({
       stateDirectory: path.join(temporaryRoot, "state"),
@@ -128,7 +131,17 @@ describe("CompanionConnector end-to-end", () => {
       workspaceId: "project",
       remoteUrls: [],
       managed: false,
+    }, {
+      repositoryId: "repo_44444444-4444-4444-8444-444444444444",
+      name: "stale-project",
+      path: staleRepository,
+      workspaceId: "stale-project",
+      remoteUrls: [],
+      managed: false,
     }]);
+    // A formerly valid binding is retained, but no longer passes Git inspection.
+    await rm(path.join(staleRepository, ".git"), { recursive: true });
+    expect(repositories.listBindings()).toHaveLength(2);
 
     let storedCredential: DesktopOAuthRefreshCredential | null = {
       clientId: "client-1",
@@ -265,6 +278,9 @@ describe("CompanionConnector end-to-end", () => {
         }),
       ],
     });
+    expect(ready.workspaces).toHaveLength(1);
+    expect(ready.materializations).toHaveLength(1);
+    expect(repositories.listBindings()).toHaveLength(2);
 
     edgeSocket.send(JSON.stringify({
       type: "companion-registered",
@@ -434,6 +450,7 @@ describe("CompanionConnector end-to-end", () => {
     servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
 
     let connectionCount = 0;
+    let closeRegisteredSocket: (() => void) | undefined;
     edgeWss.on("connection", (socket) => {
       connectionCount += 1;
       socket.send(JSON.stringify({
@@ -448,7 +465,7 @@ describe("CompanionConnector end-to-end", () => {
             protocolVersion: COMPANION_PROTOCOL_VERSION,
             deviceId: DEVICE_ID,
           }));
-          setTimeout(() => socket.close(4000, "device reconnected"), 10);
+          closeRegisteredSocket = () => socket.close(4000, "device reconnected");
         }
       });
     });
@@ -464,7 +481,12 @@ describe("CompanionConnector end-to-end", () => {
       reconnectMaxMs: 20,
       webSocketFactory: (_url, options) =>
         new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options),
-      log: (entry) => { logs.push(entry); },
+      log: (entry) => {
+        logs.push(entry);
+        if (entry.event === "local_runtime_registered") {
+          setImmediate(() => closeRegisteredSocket?.());
+        }
+      },
     });
 
     await withTimeout(connector.run(), "superseded connector shutdown");
