@@ -12,6 +12,9 @@ internal static class Program
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectExtendedLimitInformationClass = 9;
     private static readonly object LogGate = new object();
+    private const long MaxLogBytes = 4L * 1024 * 1024;
+    private const int MaxLogArchives = 3;
+    private static readonly string LaunchId = Guid.NewGuid().ToString("N");
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JobObjectBasicLimitInformation
@@ -95,7 +98,8 @@ internal static class Program
             AppendEvent(
                 options.StandardErrorPath,
                 "native_launcher_starting",
-                "runnerRestartCount=" + options.RunnerRestartCount.ToString() +
+                "pid=" + Process.GetCurrentProcess().Id.ToString() +
+                " runnerRestartCount=" + options.RunnerRestartCount.ToString() +
                 " runnerRestartIntervalSeconds=" + options.RunnerRestartIntervalSeconds.ToString());
             job = CreateKillOnCloseJob();
 
@@ -119,6 +123,8 @@ internal static class Program
 
                 if (exitCode == 0)
                 {
+                    AppendEvent(options.StandardErrorPath, "native_launcher_stopped",
+                        "exitCode=0");
                     return 0;
                 }
 
@@ -185,6 +191,7 @@ internal static class Program
 
         using (Process child = new Process { StartInfo = startInfo, EnableRaisingEvents = true })
         {
+            Stopwatch childLifetime = Stopwatch.StartNew();
             child.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
             {
                 AppendLine(options.StandardOutputPath, eventArgs.Data);
@@ -209,17 +216,27 @@ internal static class Program
             AppendEvent(
                 options.StandardErrorPath,
                 "native_launcher_child_started",
-                child.Id.ToString() + " restartAttempt=" + restartAttempt.ToString());
+                "childPid=" + child.Id.ToString() +
+                " restartAttempt=" + restartAttempt.ToString());
             child.BeginOutputReadLine();
             child.BeginErrorReadLine();
-            child.WaitForExit();
+            while (!child.WaitForExit(60000))
+            {
+                AppendEvent(options.StandardErrorPath, "native_launcher_child_alive",
+                    "childPid=" + child.Id.ToString() +
+                    " elapsedMs=" + childLifetime.ElapsedMilliseconds.ToString());
+            }
+            // Wait for redirected output/error readers after process exit.
             child.WaitForExit();
 
             int exitCode = child.ExitCode;
             AppendEvent(
                 options.StandardErrorPath,
                 "native_launcher_child_exited",
-                exitCode.ToString() + " restartAttempt=" + restartAttempt.ToString());
+                "childPid=" + child.Id.ToString() +
+                " exitCode=" + exitCode.ToString() +
+                " elapsedMs=" + childLifetime.ElapsedMilliseconds.ToString() +
+                " restartAttempt=" + restartAttempt.ToString());
             return exitCode;
         }
     }
@@ -687,9 +704,16 @@ internal static class Program
 
         try
         {
+            // Bound individual child lines as well as the total log retention.
+            if (value.Length > 8192)
+            {
+                value = value.Substring(0, 8192) + " [truncated]";
+            }
             lock (LogGate)
             {
-                File.AppendAllText(path, value + Environment.NewLine, new UTF8Encoding(false));
+                string line = DateTimeOffset.UtcNow.ToString("O") + " " + value + Environment.NewLine;
+                RotateLogIfNeeded(path, Encoding.UTF8.GetByteCount(line));
+                File.AppendAllText(path, line, new UTF8Encoding(false));
             }
         }
         catch (IOException)
@@ -700,6 +724,28 @@ internal static class Program
         }
     }
 
+    private static void RotateLogIfNeeded(string path, int incomingBytes)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length + incomingBytes <= MaxLogBytes)
+        {
+            return;
+        }
+        string oldest = path + "." + MaxLogArchives.ToString();
+        if (File.Exists(oldest))
+        {
+            File.Delete(oldest);
+        }
+        for (int index = MaxLogArchives - 1; index >= 1; index--)
+        {
+            string previous = path + "." + index.ToString();
+            if (File.Exists(previous))
+            {
+                File.Move(previous, path + "." + (index + 1).ToString());
+            }
+        }
+        File.Move(path, path + ".1");
+    }
+
     private static void AppendEvent(string path, string eventName, string detail)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -707,7 +753,7 @@ internal static class Program
             return;
         }
 
-        string line = DateTimeOffset.UtcNow.ToString("O") + " " + eventName;
+        string line = eventName + " launchId=" + LaunchId;
         if (!string.IsNullOrWhiteSpace(detail))
         {
             line += " " + detail.Replace('\r', ' ').Replace('\n', ' ');
