@@ -15,6 +15,7 @@ export function loadCatalogRollout(value) {
       value.origin !== "https://mcp-access-stack.rafaeldamasio77.workers.dev" ||
       !REVISION.test(value.previousRevision ?? "") || !REVISION.test(value.targetRevision ?? "") ||
       value.previousRevision === value.targetRevision ||
+      (value.mode !== undefined && !["catalog", "code-only"].includes(value.mode)) ||
       !Number.isSafeInteger(value.previousToolCount) || value.previousToolCount < 1 ||
       !Number.isSafeInteger(value.targetToolCount) || value.targetToolCount < 1 ||
       !Array.isArray(value.requiredTools) || value.requiredTools.length < 1 ||
@@ -107,6 +108,23 @@ export function verifyHealth(health, phase) {
       (prepared && typeof health.candidateConnectorReady !== "boolean")) deny("HEALTH_CAS_MISMATCH");
   return true;
 }
+// Code-only releases preserve the active tool contract. Never prepare a new
+// contract when merely changing the Worker implementation.
+export function verifyCodeOnlyHealth(status) {
+  if (!record(status) || status.service !== "mcp-edge-gateway" ||
+      status.status !== "ok" || status.controlPlaneReady !== true ||
+      status.executionPlaneReady !== true || status.connectorReady !== true ||
+      status.contractCompatible !== true ||
+      status.activeContractRevision !== CATALOG.targetRevision ||
+      status.expectedContractRevision !== CATALOG.targetRevision ||
+      status.candidateContractRevision !== undefined ||
+      status.runtime?.catalogContractRevision !== CATALOG.targetRevision ||
+      status.runtime?.toolCount !== CATALOG.targetToolCount) {
+    deny("CODE_ONLY_HEALTH_CAS_MISMATCH");
+  }
+  return true;
+}
+
 export function verifyDeploymentReceipt(data, input) {
   const result = data?.result;
   if (data?.success !== true || !record(result) ||
@@ -148,22 +166,22 @@ const sleepDefault = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** "deployed" when an earlier activation of the same code already deployed it and only its
  * preparation failed: the pinned deployment then runs a script identical to the staged one. */
-export async function preflight(input, {compare = compareWorkerVersions, fetchImpl = fetch} = {}) {
+export async function preflight(input, {compare = compareWorkerVersions, fetchImpl = fetch, codeOnly = false} = {}) {
   const first = await provenance(input, compare);
   if (first?.status === "matching_script") {
     verifyProvenance(first, input, "after", input.deployment);
-    verifyHealth(await health(fetchImpl), "deployed");
+    (codeOnly ? verifyCodeOnlyHealth : (value) => verifyHealth(value, "deployed"))(await health(fetchImpl));
     verifyProvenance(await provenance(input, compare), input, "after", input.deployment);
     return "deployed";
   }
   verifyProvenance(first, input, "before");
-  verifyHealth(await health(fetchImpl), "before");
+  (codeOnly ? verifyCodeOnlyHealth : (value) => verifyHealth(value, "before"))(await health(fetchImpl));
   verifyProvenance(await provenance(input, compare), input, "before");
   return "fresh";
 }
 
-export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {
-  if (await preflight(input, {compare, fetchImpl}) === "deployed") {
+export async function deployOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault, codeOnly = false} = {}) {
+  if (await preflight(input, {compare, fetchImpl, codeOnly}) === "deployed") {
     console.error("EDGE_CATALOG_ALREADY_DEPLOYED id=" + input.deployment);
     return input.deployment;
   }
@@ -184,28 +202,28 @@ export async function deployOnce(input, {compare = compareWorkerVersions, fetchI
       }),
       redirect: "error", signal: AbortSignal.timeout(20000),
     });
-  } catch { return reconcileDeployment(input, "TRANSPORT", compare, fetchImpl, sleep); }
+  } catch { return reconcileDeployment(input, "TRANSPORT", compare, fetchImpl, sleep, codeOnly); }
   // Any non-success status can still follow an applied remote mutation. Never POST again;
   // reconcile read-only against Cloudflare and the Edge instead.
   if (![200,201].includes(response.status)) {
     const status = Number.isInteger(response.status) &&
       response.status >= 100 && response.status <= 599 ? response.status : 0;
-    return reconcileDeployment(input, "HTTP_" + status, compare, fetchImpl, sleep);
+    return reconcileDeployment(input, "HTTP_" + status, compare, fetchImpl, sleep, codeOnly);
   }
   let receipt;
   try { receipt = verifyDeploymentReceipt(await json(response), input); }
-  catch { return reconcileDeployment(input, "RECEIPT", compare, fetchImpl, sleep); }
-  if (!await observeDeployment(input, receipt, compare, fetchImpl, sleep)) {
+  catch { return reconcileDeployment(input, "RECEIPT", compare, fetchImpl, sleep, codeOnly); }
+  if (!await observeDeployment(input, receipt, compare, fetchImpl, sleep, codeOnly)) {
     deny("DEPLOYMENT_OUTCOME_UNKNOWN_VERIFY");
   }
   return receipt;
 }
 
-async function observeDeployment(input, receipt, compare, fetchImpl, sleep) {
+async function observeDeployment(input, receipt, compare, fetchImpl, sleep, codeOnly) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       verifyProvenance(await provenance(input, compare), input, "after", receipt);
-      verifyHealth(await health(fetchImpl), "deployed");
+      (codeOnly ? verifyCodeOnlyHealth : (value) => verifyHealth(value, "deployed"))(await health(fetchImpl));
       return true;
     } catch {
       if (attempt < 4) await sleep(1500);
@@ -217,13 +235,13 @@ async function observeDeployment(input, receipt, compare, fetchImpl, sleep) {
 /** The POST outcome is unknown (transport error, non-2xx or unreadable receipt).
  * Read Cloudflare only: accept the new deployment when it is active at 100% on the
  * staged version and differs from the CAS-pinned previous deployment. */
-async function reconcileDeployment(input, cause, compare, fetchImpl, sleep) {
+async function reconcileDeployment(input, cause, compare, fetchImpl, sleep, codeOnly) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const observed = await provenance(input, compare);
       const id = observed?.activeDeploymentId;
       if (UUID.test(id ?? "") && id !== input.deployment) {
-        if (await observeDeployment(input, id, compare, fetchImpl, sleep)) {
+        if (await observeDeployment(input, id, compare, fetchImpl, sleep, codeOnly)) {
           console.error("EDGE_CATALOG_DEPLOYMENT_RECONCILED cause=" + cause + " id=" + id);
           return id;
         }
@@ -251,13 +269,14 @@ async function refusalCode(response) {
 const BUILD_MISMATCH_ATTEMPTS = 20;
 const BUILD_MISMATCH_DELAY_MS = 30000;
 
-export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault} = {}) {
+export async function prepareOnce(input, {compare = compareWorkerVersions, fetchImpl = fetch, sleep = sleepDefault, codeOnly = false} = {}) {
   if (!UUID.test(input.newDeployment ?? "") ||
       typeof input.prepareToken !== "string" || input.prepareToken.length < 43 ||
       input.prepareToken === input.token) deny("PREPARE_INPUT_INVALID");
   verifyProvenance(await provenance(input, compare), input, "after", input.newDeployment);
-  verifyHealth(await health(fetchImpl), "deployed");
+  (codeOnly ? verifyCodeOnlyHealth : (value) => verifyHealth(value, "deployed"))(await health(fetchImpl));
   verifyProvenance(await provenance(input, compare), input, "after", input.newDeployment);
+  if (codeOnly) return true; // No DO mutation when catalog revision is unchanged.
   for (let attempt = 1; ; attempt++) {
     let response;
     try {
@@ -299,16 +318,16 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     requireExactSource(manifest);
     const input = parseInput(process.env, mode);
     if (mode === "preflight") {
-      await preflight(input);
+      await preflight(input, { codeOnly: CATALOG.mode === "code-only" });
       console.log("EDGE_CATALOG_PREFLIGHT_VERIFIED");
     } else if (mode === "deploy") {
-      const receipt = await deployOnce(input);
+      const receipt = await deployOnce(input, { codeOnly: CATALOG.mode === "code-only" });
       if (!process.env.GITHUB_OUTPUT) deny("GITHUB_OUTPUT_MISSING");
       appendFileSync(process.env.GITHUB_OUTPUT, "deployment_id=" + receipt + "\n");
       console.log("EDGE_CATALOG_DEPLOYMENT_VERIFIED id=" + receipt);
     } else {
-      await prepareOnce(input);
-      console.log("EDGE_CATALOG_CANDIDATE_PREPARED operation=" + input.operationId);
+      await prepareOnce(input, { codeOnly: CATALOG.mode === "code-only" });
+      console.log((CATALOG.mode === "code-only" ? "EDGE_CODE_ONLY_CONTRACT_PRESERVED" : "EDGE_CATALOG_CANDIDATE_PREPARED") + " operation=" + input.operationId);
     }
   } catch (error) {
     console.error(error instanceof CatalogActivationRefused ? error.message : "EDGE_CATALOG_UNAVAILABLE");
