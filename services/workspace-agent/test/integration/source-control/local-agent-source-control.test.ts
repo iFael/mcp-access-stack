@@ -237,6 +237,9 @@ function fakeGitHubExecutor(): GitHubExecutor {
       baseSha: SHA_A,
       merged: false as const,
     })),
+    markPullRequestReady: jest.fn<GitHubExecutor["markPullRequestReady"]>(async (input) => ({
+      status: "completed" as const, number: input.pullNumber, headSha: input.expectedPullRequestHeadSha, ready: true as const,
+    })),
     mergePullRequest: jest.fn<GitHubExecutor["mergePullRequest"]>(async (input) => ({
       status: "completed" as const,
       number: input.pullNumber,
@@ -677,6 +680,32 @@ describe("LocalAgent trusted-workspace typed source-control authorization", () =
       ),
     ).resolves.toMatchObject({ status: "completed", number: 7 });
     expect(githubExecutor.createPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("authorizes ready-for-review independently, enforces idempotency and refuses missing capability", async () => {
+    const input = { workspaceId: "test", owner: "octo", repository: "repo",
+      pullNumber: 7, expectedPullRequestHeadSha: SHA_B };
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.pull_request.ready"], confirmationMode: "trusted-workspace",
+    });
+    const first = await (agent as any).githubMarkPullRequestReady(input, { invocationId: "ready-7" });
+    expect(first).toMatchObject({ status: "completed", number: 7, headSha: SHA_B, ready: true });
+    const repeated = await (agent as any).githubMarkPullRequestReady(input, { invocationId: "ready-7" });
+    expect(repeated).toEqual(first);
+    expect(githubExecutor.markPullRequestReady).toHaveBeenCalledTimes(1);
+    await expect((agent as any).githubMarkPullRequestReady({ ...input, expectedPullRequestHeadSha: SHA_C },
+      { invocationId: "ready-7" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("refuses ready-for-review without explicit capability even if PR merge is allowed", async () => {
+    const { agent, githubExecutor } = await setupAgent({
+      capabilities: ["github.pull_request.merge"], confirmationMode: "trusted-workspace",
+    });
+    await expect((agent as any).githubMarkPullRequestReady({
+      workspaceId: "test", owner: "octo", repository: "repo", pullNumber: 7,
+      expectedPullRequestHeadSha: SHA_B,
+    })).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(githubExecutor.markPullRequestReady).not.toHaveBeenCalled();
   });
 
   it("executes authorized repository and pull-request mutations directly with functional preconditions", async () => {

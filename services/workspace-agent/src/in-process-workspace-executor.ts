@@ -288,6 +288,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   closePullRequest(...args: Parameters<GitHubExecutor["closePullRequest"]>) {
     return this.agent.githubClosePullRequest(...args);
   }
+  markPullRequestReady(...args: Parameters<GitHubExecutor["markPullRequestReady"]>) {
+    return this.agent.githubMarkPullRequestReady(...args);
+  }
   mergePullRequest(...args: Parameters<GitHubExecutor["mergePullRequest"]>) {
     return this.agent.githubMergePullRequest(...args);
   }

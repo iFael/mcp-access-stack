@@ -29,6 +29,8 @@ function pullRequestRecord(overrides: Record<string, unknown> = {}) {
     base: { sha: baseSha },
     merged: false,
     merge_commit_sha: null,
+    node_id: "PR_kwTyped7",
+    draft: true,
     ...overrides,
   };
 }
@@ -50,6 +52,7 @@ function client(overrides: Partial<GitHubApiClient> = {}): GitHubApiClient {
     findPullRequests: jest.fn(async () => [pullRequestRecord()]),
     createPullRequest: jest.fn(async () => pullRequestRecord()),
     closePullRequest: jest.fn(async () => pullRequestRecord({ state: "closed" })),
+    markPullRequestReadyForReview: jest.fn(async () => undefined),
     mergePullRequest: jest.fn(async () => ({ sha: mergeSha, merged: true, message: "merged" })),
     ...overrides,
   } as GitHubApiClient;
@@ -416,6 +419,74 @@ describe("GitHubService pull request close", () => {
       expectedPullRequestHeadSha: headSha,
     })).resolves.toMatchObject({ status: "completed", state: "closed", headSha, merged: false });
     expect(getPullRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("GitHubService ready for review", () => {
+  const input = { workspaceId: "repo", owner: "octo", repository: "repo", pullNumber: 7,
+    expectedPullRequestHeadSha: headSha };
+
+  it("validates SHA, marks a draft ready and reads the resulting state", async () => {
+    const getPullRequest = jest.fn<GitHubApiClient["getPullRequest"]>()
+      .mockResolvedValueOnce(pullRequestRecord())
+      .mockResolvedValueOnce(pullRequestRecord({ draft: false }));
+    const markPullRequestReadyForReview = jest.fn<GitHubApiClient["markPullRequestReadyForReview"]>(async () => undefined);
+    const service = new GitHubService(client({ getPullRequest, markPullRequestReadyForReview }));
+    await expect(service.markPullRequestReady(input)).resolves.toEqual({
+      status: "completed", number: 7, headSha, ready: true,
+    });
+    expect(markPullRequestReadyForReview).toHaveBeenCalledWith("PR_kwTyped7", 7, expect.anything());
+    expect(getPullRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("is idempotent when already ready at the same head", async () => {
+    const markPullRequestReadyForReview = jest.fn<GitHubApiClient["markPullRequestReadyForReview"]>();
+    const service = new GitHubService(client({
+      getPullRequest: jest.fn(async () => pullRequestRecord({ draft: false })),
+      markPullRequestReadyForReview,
+    }));
+    await expect(service.markPullRequestReady(input)).resolves.toMatchObject({ ready: true, headSha });
+    expect(markPullRequestReadyForReview).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on head mismatch, closed or merged PR", async () => {
+    const markPullRequestReadyForReview = jest.fn<GitHubApiClient["markPullRequestReadyForReview"]>();
+    for (const [overrides, code] of [
+      [{ head: { sha: "d".repeat(40) } }, "GIT_HEAD_MISMATCH"],
+      [{ state: "closed" }, "INVALID_ARGUMENT"],
+      [{ state: "closed", merged: true }, "INVALID_ARGUMENT"],
+    ] as const) {
+      const service = new GitHubService(client({
+        getPullRequest: jest.fn(async () => pullRequestRecord(overrides)),
+        markPullRequestReadyForReview,
+      }));
+      await expect(service.markPullRequestReady(input)).rejects.toMatchObject({ code });
+    }
+    expect(markPullRequestReadyForReview).not.toHaveBeenCalled();
+  });
+
+  it("reconciles ambiguous transport outcome without repeating mutation", async () => {
+    const getPullRequest = jest.fn<GitHubApiClient["getPullRequest"]>()
+      .mockResolvedValueOnce(pullRequestRecord())
+      .mockResolvedValueOnce(pullRequestRecord({ draft: false }));
+    const markPullRequestReadyForReview = jest.fn<GitHubApiClient["markPullRequestReadyForReview"]>(async () => {
+      throw ambiguousError();
+    });
+    const service = new GitHubService(client({ getPullRequest, markPullRequestReadyForReview }));
+    await expect(service.markPullRequestReady(input)).resolves.toMatchObject({ ready: true });
+    expect(markPullRequestReadyForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails reconciliation when still draft or expected head changes", async () => {
+    for (const [after, code] of [
+      [pullRequestRecord(), "SOURCE_CONTROL_RECONCILIATION_REQUIRED"],
+      [pullRequestRecord({ draft: false, head: { sha: "d".repeat(40) } }), "GIT_HEAD_MISMATCH"],
+    ] as const) {
+      const getPullRequest = jest.fn<GitHubApiClient["getPullRequest"]>()
+        .mockResolvedValueOnce(pullRequestRecord()).mockResolvedValueOnce(after);
+      const service = new GitHubService(client({ getPullRequest, markPullRequestReadyForReview: jest.fn(async () => undefined) }));
+      await expect(service.markPullRequestReady(input)).rejects.toMatchObject({ code });
+    }
   });
 });
 

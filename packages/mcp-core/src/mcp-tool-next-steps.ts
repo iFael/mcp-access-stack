@@ -75,6 +75,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   github_create_repository: "",
   github_get_pull_request: "github_start_commit_checks_watch on its head for CI; github_read for its reviews and comments.",
   github_create_pull_request: "github_start_commit_checks_watch on its head and end your answer; you are woken when CI ends.",
+  github_mark_pull_request_ready: "github_start_commit_checks_watch on the same PR head after it becomes ready.",
   github_close_pull_request: "",
   github_merge_pull_request: "git_sync_branch to bring main up to date.",
   github_read: "nextPage for more; job_logs with a jobId from run_jobs to see why a job failed.",

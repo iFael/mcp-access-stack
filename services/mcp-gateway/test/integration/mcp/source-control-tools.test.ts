@@ -238,6 +238,12 @@ class RecordingSourceControlExecutor {
     });
   }
 
+  async markPullRequestReady(input: any, context?: OperationContext) {
+    this.record("markPullRequestReady", input, context);
+    return this.result({ status: "completed" as const, number: input.pullNumber,
+      headSha: input.expectedPullRequestHeadSha, ready: true as const });
+  }
+
   async mergePullRequest(input: any, context?: OperationContext) {
     this.record("mergePullRequest", input, context);
     return this.result({
@@ -453,6 +459,13 @@ const cases = [
     input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 8, expectedPullRequestHeadSha: shaB, confirmationId: opaqueConfirmationId },
     expectedInput: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 8, expectedPullRequestHeadSha: shaB, confirmationId: opaqueConfirmationId },
     expectedResult: { status: "completed", number: 8, state: "closed", title: "Task 8", url: "https://github.com/octo/app/pull/8", headSha: shaB, baseSha: shaA, merged: false },
+  },
+  {
+    name: "github_mark_pull_request_ready",
+    method: "markPullRequestReady",
+    input: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaB },
+    expectedInput: { workspaceId: "repo", root: "project", owner: "octo", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaB },
+    expectedResult: { status: "completed", number: 7, headSha: shaB, ready: true },
   },
   {
     name: "github_merge_pull_request",

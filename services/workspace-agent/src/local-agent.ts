@@ -131,6 +131,8 @@ import {
   githubReadResultSchema,
   httpGetInputSchema,
   githubGetRepositoryInputSchema,
+  githubMarkPullRequestReadyInputSchema,
+  githubMarkPullRequestReadyResultSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
@@ -168,6 +170,8 @@ import {
   type GitHubWaitCommitChecksWatchResult,
   type GitHubGetPullRequestInput,
   type GitHubGetRepositoryInput,
+  type GitHubMarkPullRequestReadyInput,
+  type GitHubMarkPullRequestReadyResult,
   type GitHubMergePullRequestInput,
   type GitHubMergePullRequestResult,
   type GitHubPullRequestResult,
@@ -188,6 +192,7 @@ import {
   type MutationReceiptStore,
   type SourceControlCapability,
   type SourceControlOperationName,
+  type ConfirmableSourceControlOperationName,
 } from "@vs-code-gpt/shared";
 import { AuditLogger, detachedAuditSink, type AuditSink } from "./audit-log.js";
 import type { ResolvedWorkspace } from "./internal-types.js";
@@ -1834,6 +1839,49 @@ export class LocalAgent {
     );
   }
 
+  async githubMarkPullRequestReady(
+    input: GitHubMarkPullRequestReadyInput,
+    context: OperationContext = {},
+  ): Promise<GitHubMarkPullRequestReadyResult> {
+    return this.runSourceControlValidatedAudited(
+      "githubMarkPullRequestReady",
+      githubMarkPullRequestReadyInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = `${parsed.owner}/${parsed.repository}`;
+        const targetResource = `github:${repository}:pull/${parsed.pullNumber}`;
+        metadata.sourceControlCapability = "github.pull_request.ready";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedPullRequestHeadSha;
+        await this.assertGitHubRepositoryCapability(
+          workspace,
+          "github.pull_request.ready",
+          repository,
+          parsed.root ?? ".",
+          true,
+          activeContext.signal,
+        );
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "github_mark_pull_request_ready",
+          confirmableOperation: "github_mark_pull_request_ready",
+          requireConfirmation: !sourceControlAutonomyEnabled(workspace),
+          capability: "github.pull_request.ready",
+          repository,
+          canonicalRepositoryAlreadyAuthorized: true,
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: githubMarkPullRequestReadyResultSchema,
+          backend: async () => (await this.getGitHubExecutor()).markPullRequestReady(parsed, activeContext),
+          resultSha: (result) => result.status === "completed" ? result.headSha : undefined,
+        });
+      },
+    );
+  }
+
   async githubMergePullRequest(
     input: GitHubMergePullRequestInput,
     context: OperationContext = {},
@@ -2028,14 +2076,7 @@ export class LocalAgent {
     options: {
       workspace: ResolvedWorkspace;
       operation: SourceControlOperationName;
-      confirmableOperation?:
-        | "git_push_branch"
-        | "git_publish_tag"
-        | "github_create_repository"
-        | "github_create_pull_request"
-        | "github_close_pull_request"
-        | "github_merge_pull_request"
-        | "github_issue_write";
+      confirmableOperation?: ConfirmableSourceControlOperationName;
       requireConfirmation?: boolean;
       capability: SourceControlCapability;
       repository?: string;

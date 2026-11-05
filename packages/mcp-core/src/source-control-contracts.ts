@@ -174,6 +174,7 @@ export const sourceControlCapabilities = [
   "github.pull_request.read",
   "github.pull_request.create",
   "github.pull_request.close",
+  "github.pull_request.ready",
   "github.pull_request.merge",
   "github.issue.write",
 ] as const;
@@ -201,6 +202,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_get_pull_request",
   "github_create_pull_request",
   "github_close_pull_request",
+  "github_mark_pull_request_ready",
   "github_merge_pull_request",
   "github_read",
   "github_issue_write",
@@ -213,6 +215,7 @@ export const confirmableSourceControlOperationNameSchema = z.enum([
   "github_create_repository",
   "github_create_pull_request",
   "github_close_pull_request",
+  "github_mark_pull_request_ready",
   "github_merge_pull_request",
   "github_issue_write",
 ]);
@@ -945,6 +948,29 @@ export const githubClosePullRequestResultSchema = z.discriminatedUnion("status",
 export type GitHubClosePullRequestResult = z.infer<
   typeof githubClosePullRequestResultSchema
 >;
+
+export const githubMarkPullRequestReadyInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  owner: githubOwnerSchema,
+  repository: githubRepositoryNameSchema,
+  pullNumber: z.number().int().positive(),
+  expectedPullRequestHeadSha: gitShaSchema,
+  confirmationId: confirmationIdSchema.optional(),
+}).strict();
+export type GitHubMarkPullRequestReadyInput = z.input<typeof githubMarkPullRequestReadyInputSchema>;
+export const githubMarkPullRequestReadyResultSchema = z.discriminatedUnion("status", [
+  sourceControlConfirmationRequiredSchema.extend({
+    operation: z.literal("github_mark_pull_request_ready"),
+  }),
+  z.object({
+    status: z.literal("completed"),
+    number: z.number().int().positive(),
+    headSha: gitShaSchema,
+    ready: z.literal(true),
+  }).strict(),
+]);
+export type GitHubMarkPullRequestReadyResult = z.infer<typeof githubMarkPullRequestReadyResultSchema>;
 
 export const githubMergePullRequestInputSchema = z
   .object({
