@@ -67,6 +67,71 @@ function Write-McpV3UpdateResult {
     }
 }
 
+# The existing five-minute updater task also supervises the already-installed
+# companion. A version check may be skipped for 20 hours, but liveness must not.
+# Never re-enable a disabled task or launch an unexpected executable.
+function Ensure-McpV3LocalCompanionRunning {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallationRoot,
+        [Parameter(Mandatory = $true)][string]$StateRoot,
+        [Parameter(Mandatory = $true)][string]$TaskName,
+        [Parameter(Mandatory = $true)][string]$CurrentUser,
+        [switch]$AllowUnsignedDevelopment
+    )
+
+    $tasks = @(Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop)
+    if ($tasks.Count -ne 1) {
+        throw 'MCP V3 local companion task is missing or ambiguous.'
+    }
+    $task = $tasks[0]
+    $statePath = Get-McpWindowsExecutionNodeStatePath -InstallationRoot $InstallationRoot
+    $releaseState = Read-McpWindowsExecutionNodeState -Path $statePath
+    if ($null -eq $releaseState -or $null -eq $releaseState.active) {
+        throw 'MCP V3 local companion recovery requires an active signed release.'
+    }
+    $releaseId = [string]$releaseState.active.releaseId
+    if ($releaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
+        throw 'MCP V3 local companion recovery release identity is invalid.'
+    }
+    $releaseRoot = [IO.Path]::GetFullPath((Join-Path $InstallationRoot ("releases\$releaseId")))
+    $launcher = [IO.Path]::GetFullPath((Join-Path $releaseRoot 'compat\McpNodeHostLauncher.exe'))
+    $actions = @($task.Actions)
+    if ($actions.Count -ne 1 -or
+        [string]$task.TaskPath -ne '\' -or
+        -not (Test-McpWindowsAccountIdentityEquivalent -Left ([string]$task.Principal.UserId) -Right $CurrentUser) -or
+        [string]$task.Principal.LogonType -notin @('Interactive', 'InteractiveToken') -or
+        [string]$task.Principal.RunLevel -ne 'Limited' -or
+        [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
+        [string]$actions[0].Execute -ne $launcher -or
+        [string]$actions[0].WorkingDirectory -ne $releaseRoot -or
+        -not ([string]$actions[0].Arguments).Contains("MCP_V3_RELEASE_ROOT=$releaseRoot") -or
+        -not ([string]$actions[0].Arguments).Contains("MCP_V3_STATE_ROOT=$StateRoot") -or
+        -not ([string]$actions[0].Arguments).Contains('companion-cli.js')) {
+        throw 'MCP V3 local companion task differs from the active release or owner; refusing recovery.'
+    }
+
+    if ([string]$task.State -eq 'Running') {
+        return 'running'
+    }
+    if (-not [bool]$task.Settings.Enabled -or [string]$task.State -eq 'Disabled') {
+        return 'disabled'
+    }
+    if ([string]$task.State -ne 'Ready') {
+        throw "MCP V3 local companion task is not recoverable in state: $($task.State)"
+    }
+    Assert-McpPublicFile -Path $launcher -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
+    Start-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 250
+        $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
+        if ([string]$task.State -eq 'Running') {
+            return 'restarted'
+        }
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'MCP V3 local companion task did not remain running after recovery.'
+}
+
 try {
     if (Test-Path -LiteralPath $requestPath -PathType Leaf) {
         $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
@@ -85,13 +150,14 @@ try {
         $resultPath = Join-Path $updatesRoot ("result-$operationId.json")
     }
     else {
+        $companionRecovery = Ensure-McpV3LocalCompanionRunning -InstallationRoot $installation -StateRoot $state -TaskName $CompanionTaskName -CurrentUser ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
         $settingsPath = Join-Path $state 'updater\settings.json'
         $autoUpdate = $true
         if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
             $autoUpdate = [bool](Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).autoUpdate
         }
         if (-not $autoUpdate) {
-            [pscustomobject]@{ status = 'idle'; reason = 'no-request-and-auto-update-off' } | ConvertTo-Json -Compress
+            [pscustomobject]@{ status = 'idle'; reason = 'no-request-and-auto-update-off'; companionRecovery = $companionRecovery } | ConvertTo-Json -Compress
             return
         }
         # The task also runs every few minutes to pick up requests; the release
@@ -109,7 +175,7 @@ try {
         }
         $now = [DateTimeOffset]::UtcNow
         if ($null -ne $lastCheck -and $lastCheck -le $now -and ($now - $lastCheck) -lt [TimeSpan]::FromHours(20)) {
-            [pscustomobject]@{ status = 'idle'; reason = 'auto-update-checked-recently' } | ConvertTo-Json -Compress
+            [pscustomobject]@{ status = 'idle'; reason = 'auto-update-checked-recently'; companionRecovery = $companionRecovery } | ConvertTo-Json -Compress
             return
         }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lastCheckPath) | Out-Null
