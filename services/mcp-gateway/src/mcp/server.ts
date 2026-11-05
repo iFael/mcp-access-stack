@@ -21,6 +21,7 @@ import {
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
+import { registerPrimaryPolicyAdminTool, type PrimaryPolicyAdmin } from "./primary-policy-admin-tool.js";
 import { registerCompanionInternalUserMessageTools } from "../companion/internal-user-message-tools.js";
 import {
   registerCompanionInternalRepositoryTools,
@@ -40,6 +41,8 @@ export interface McpServerOptions {
   repositoryExecutor?: RepositoryExecutor | undefined;
   companionRepositoryBinder?: CompanionRepositoryBinder | undefined;
   browser?: BrowserExecutor | undefined;
+  policyAdmin?: PrimaryPolicyAdmin | undefined;
+  authenticatedUserId?: string | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
   /** Each tool call with the ChatGPT conversation that made it (the companion's chat wake). */
@@ -114,6 +117,8 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   if (typeof browserForMessages?.takeUserMessages === "function") {
     registerCompanionInternalUserMessageTools(server, (scope) => browserForMessages.takeUserMessages?.(scope) ?? []);
   }
+
+  registerPrimaryPolicyAdminTool(server, options.policyAdmin, options.authenticatedUserId, securitySchemes);
 
   const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);
   Object.assign(catalog, finalizedCatalog);

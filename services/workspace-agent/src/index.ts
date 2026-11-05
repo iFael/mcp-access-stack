@@ -21,6 +21,7 @@ export {
 export {
   applyPolicyFile,
   validatePolicyFile,
+  ReadyReviewPolicyGrant,
   type PolicyApplyResult,
   type PolicyValidationResult,
 } from "./policy-deployment.js";

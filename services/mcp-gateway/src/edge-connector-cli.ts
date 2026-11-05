@@ -15,7 +15,7 @@ import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
-import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, type LocalAgent} from "@vs-code-gpt/local-agent";
+import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, ReadyReviewPolicyGrant, type LocalAgent} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
 import type { CompanionUpdateRequest, ProgressUpdate, WakeEvent } from "@mcp-access-stack/edge-protocol";
 import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
@@ -55,7 +55,8 @@ async function main(): Promise<void> {
   });
   const internalAssertion = randomBytes(32).toString("base64url");
 
-  const basePolicy = await readPrimaryPolicy(runtime.policyPath);
+  let basePolicy = await readPrimaryPolicy(runtime.policyPath);
+  let effectivePolicy = basePolicy;
   const githubAccountOwners = parseGitHubAccountOwners(process.env.MCP_V3_GITHUB_ACCOUNT_OWNERS);
   const oracleControl = await loadOracleControlBindingFromEnvironment(process.env);
   // What ends here and the agent may be waiting for reaches the user's companions through the Edge.
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
     await reloadable.reload(withGlobalGitHubRepositoryCreatePolicy(
       mergePrimaryPolicies(basePolicy, managedPolicy), githubAccountOwners,
     ));
+    effectivePolicy = basePolicy;
   };
   repositories = await LocalRepositoryManager.create({
     stateDirectory: runtime.repositoryStateDirectory,
@@ -97,6 +99,16 @@ async function main(): Promise<void> {
     onChanged: reloadPrimaryRuntime,
   });
   await reloadPrimaryRuntime();
+  const policyAdmin = new ReadyReviewPolicyGrant(
+    runtime.policyPath,
+    path.join(runtime.runtimeRoot, "policy-ready-grant-audit.jsonl"),
+    () => effectivePolicy.workspaces.some((item) => item.id === "mcp-access-stack" &&
+      (item.sourceControl?.capabilities.includes("github.pull_request.ready") ?? false)),
+    async () => {
+      basePolicy = await readPrimaryPolicy(runtime.policyPath);
+      await reloadPrimaryRuntime();
+    },
+  );
   const sourceOptions=await loadOracleSourceProviderFromEnvironment(process.env,
     config=>reloadable.oracleSourceReadPort(config));
   const sourceConnector=sourceOptions===undefined?undefined:new OracleSourceProviderConnector(sourceOptions);
@@ -135,6 +147,7 @@ async function main(): Promise<void> {
     workspaceExecutor,
     sourceControlExecutor,
     companionRepositoryBinder: repositories,
+    policyAdmin,
     ...(browserPool === undefined
       ? {}
       : {
