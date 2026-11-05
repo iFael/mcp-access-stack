@@ -1,4 +1,5 @@
 import { describe, expect, test } from "@jest/globals";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedWorkspace } from "../../../src/internal-types.js";
 import { decideCommandAuthorization } from "../../../src/shell/confirmation-policy.js";
@@ -36,6 +37,45 @@ function workspace(confirmationMode: "standard" | "trusted-workspace"): Resolved
 }
 
 describe("confirmation policy", () => {
+  test("allows exactly one trusted workspace-local .sh file to regain 755, not outside paths or symlinks", async () => {
+    if (process.platform === "win32") return;
+    const directory = await mkdtemp(path.join(process.cwd(), ".trusted-chmod-test-"));
+    try {
+      const file = path.join(directory, "launch.sh");
+      const relative = path.relative(process.cwd(), file);
+      await writeFile(file, "#!/usr/bin/env bash\n");
+      const options = {
+        workspace: workspace("trusted-workspace"),
+        shell: "sh" as const,
+        logicalCwd: ".",
+        absoluteCwd: process.cwd(),
+        directRisk: { destructive: true, reasons: ["file mode modification"] },
+        currentRequiresConfirmation: true,
+        fallbackReasons: ["file mode modification"],
+      };
+      await expect(decideCommandAuthorization({ ...options,
+        command: `chmod 755 ${relative}`,
+      })).resolves.toEqual({ disposition: "execute", authorization: "trusted-workspace" });
+      await expect(decideCommandAuthorization({ ...options,
+        command: `chmod 777 ${relative}`,
+      })).resolves.toMatchObject({ disposition: "blocked", code: "PERMISSION_DENIED" });
+      await expect(decideCommandAuthorization({ ...options,
+        command: `chmod -R 755 ${relative}`,
+      })).resolves.toMatchObject({ disposition: "blocked", code: "PERMISSION_DENIED" });
+      const linked = path.join(directory, "link.sh");
+      await symlink(file, linked);
+      await expect(decideCommandAuthorization({ ...options,
+        command: `chmod 755 ${path.relative(process.cwd(), linked)}`,
+      })).resolves.toMatchObject({ disposition: "blocked", code: "BLOCKED_PATH" });
+      await expect(decideCommandAuthorization({ ...options,
+        command: "chmod 755 /tmp/untrusted.sh",
+      })).resolves.toMatchObject({ disposition: "blocked", code: "PATH_OUTSIDE_WORKSPACE" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+
   test("keeps standard behavior unchanged for commands not currently requiring confirmation", async () => {
     await expect(
       decideCommandAuthorization({

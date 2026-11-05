@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import * as iconv from "iconv-lite";
 import { afterEach, describe, expect, test } from "@jest/globals";
@@ -19,6 +19,22 @@ afterEach(async () => {
 }, 30_000);
 
 describe("patch file", () => {
+  test("preserves the executable mode of existing shell scripts", async () => {
+    if (process.platform === "win32") return;
+    const { agent, absolutePath } = await createPatchFixture("echo before\n", "utf-8");
+    await chmod(absolutePath, 0o755);
+    const before = await agent.readFile({ workspaceId: "test", path: "legacy.js" });
+    await agent.patchFile({
+      workspaceId: "test",
+      path: "legacy.js",
+      expectedSha256: before.sha256,
+      replacements: [{ oldText: "before", newText: "after" }],
+    });
+    expect((await stat(absolutePath)).mode & 0o777).toBe(0o755);
+    expect((await readFile(absolutePath)).toString("utf8")).toBe("echo after\n");
+  });
+
+
   test("returns read metadata and preserves Windows-1252 with CRLF", async () => {
     const { agent, absolutePath } = await createPatchFixture(
       "function teste() {\r\n  return \"ação\";\r\n}\r\n",
