@@ -701,6 +701,9 @@ try {
         $directMarkerPath = Join-Path $testRoot 'direct-child-started.txt'
         $directStdoutLog = Join-Path $logsRoot 'direct-launcher.stdout.log'
         $directStderrLog = Join-Path $logsRoot 'direct-launcher.stderr.log'
+        New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
+        # Force one real archive rotation before the launcher starts.
+        [IO.File]::WriteAllText($directStderrLog, 'PREVIOUS_RUN_MARKER' + ('x' * (4MB - 64)))
         $directArguments = @(
             '--node', (Quote-TestArgument $nodeUnderTest),
             '--stdout-log', (Quote-TestArgument $directStdoutLog),
@@ -742,8 +745,15 @@ try {
             ''
         }
         if (-not $directStderr.Contains('native_launcher_starting') -or
-            -not $directStderr.Contains('native_launcher_child_started')) {
-            throw 'Direct native launcher did not write the expected startup evidence.'
+            -not $directStderr.Contains('native_launcher_child_started') -or
+            $directStderr -notmatch 'launchId=[a-f0-9]{32}' -or
+            $directStderr -notmatch '(?m)^20\d\d-\d\d-\d\dT') {
+            throw 'Direct native launcher did not write timestamped/correlated startup evidence.'
+        }
+        $archivePath = "$directStderrLog.1"
+        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf) -or
+            [IO.File]::ReadAllText($archivePath).IndexOf('PREVIOUS_RUN_MARKER', [StringComparison]::Ordinal) -lt 0) {
+            throw 'Direct native launcher failed to preserve the previous diagnostic archive.'
         }
 
         Write-Output 'MCP V3 direct native launcher smoke passed.'

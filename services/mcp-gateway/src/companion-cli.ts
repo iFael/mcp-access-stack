@@ -272,6 +272,7 @@ async function main(): Promise<void> {
 
   writeLog({
     event: "mcp_v3_local_started",
+    pid: process.pid,
     platform: process.platform,
     edgeOrigin: runtime.edgeBaseUrl.origin,
     stateRoot: runtime.stateRoot,
@@ -279,11 +280,27 @@ async function main(): Promise<void> {
     workspaceCount: (await repositories.listWorkspaceSummaries()).length,
   });
 
+  // A bounded periodic status shows the last moment the process was alive.
+  // A delayed tick after sleep is evidence of a gap, not proof of its cause.
+  let lastTickMs = Date.now();
+  const diagnostics = setInterval(() => {
+    const now = Date.now();
+    writeLog({
+      event: "mcp_v3_local_liveness",
+      uptimeSeconds: Math.floor(process.uptime()),
+      tickGapMs: Math.max(0, now - lastTickMs),
+      connection: connector?.diagnosticConnectionState ?? "disconnected",
+      workspaceReady: reloadable.ready,
+    });
+    lastTickMs = now;
+  }, 60_000);
+  diagnostics.unref();
   try {
     await assertLoopbackMcpCompatibility(loopback.baseUrl, internalAssertion);
     writeLog({ event: "mcp_v3_local_loopback_ready" });
     await connector.run(controller.signal);
   } finally {
+    clearInterval(diagnostics);
     connector.stop();
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
@@ -416,7 +433,7 @@ async function regularFileExists(filePath: string): Promise<boolean> {
 }
 
 function writeLog(entry: object): void {
-  process.stderr.write(`${JSON.stringify(entry)}\n`);
+  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -425,6 +442,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 void main().catch((error) => {
   const appError = asAppError(error);
-  process.stderr.write(`${JSON.stringify({ event: "mcp_v3_local_failed", error: appError.toJSON() })}\n`);
+  writeLog({ event: "mcp_v3_local_failed", error: appError.toJSON() });
   process.exitCode = 1;
 });

@@ -116,6 +116,13 @@ export class CompanionConnector {
   private edgeTakesCompanionUpdates = false;
   private pendingUpdateStatus = new Map<string, CompanionUpdateStatus>();
   private stopped = false;
+  private registered = false;
+
+  get diagnosticConnectionState(): "registered" | "connecting" | "disconnected" | "stopped" {
+    if (this.stopped) return "stopped";
+    if (this.registered) return "registered";
+    return this.socket && this.socket.readyState < WebSocket.CLOSING ? "connecting" : "disconnected";
+  }
 
   constructor(private readonly options: CompanionConnectorOptions) {
     this.edgeUrl = new URL("/companion", normalizeEdgeOrigin(options.edgeBaseUrl));
@@ -221,6 +228,7 @@ export class CompanionConnector {
 
   stop(): void {
     this.stopped = true;
+    this.registered = false;
     for (const controller of this.activeRequests.values()) controller.abort("companion_stopped");
     this.activeRequests.clear();
     const socket = this.socket;
@@ -256,6 +264,7 @@ export class CompanionConnector {
         ? this.options.webSocketFactory(this.edgeUrl, socketOptions)
         : new WebSocket(this.edgeUrl, socketOptions);
       this.socket = socket;
+      this.registered = false;
       this.edgeTakesUserMessages = false;
       this.edgeTakesProgress = false;
       this.edgeTakesCompanionUpdates = false;
@@ -296,7 +305,10 @@ export class CompanionConnector {
         settled = true;
         clearHeartbeat();
         signal?.removeEventListener("abort", abort);
-        if (this.socket === socket) this.socket = undefined;
+        if (this.socket === socket) {
+          this.socket = undefined;
+          this.registered = false;
+        }
         resolve(protocolReady);
       };
       const abort = () => {
@@ -309,6 +321,7 @@ export class CompanionConnector {
           if (result.protocolReady) protocolReady = true;
           if (result.registered) {
             registered = true;
+            this.registered = true;
             startHeartbeat();
           }
           if (result.heartbeatAckId !== undefined && result.heartbeatAckId === pendingHeartbeatId) {

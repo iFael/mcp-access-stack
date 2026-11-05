@@ -149,8 +149,10 @@ describe("CompanionConnector end-to-end", () => {
         if (entry.event === "local_runtime_registered") registered();
       },
     });
+    expect(connector.diagnosticConnectionState).toBe("disconnected");
     const running = connector.run(controller.signal);
     const socket = await withTimeout(connection, "unaudited device connection");
+    expect(connector.diagnosticConnectionState).toBe("connecting");
     const firstReadyPromise = waitForMessage(socket);
     socket.send(JSON.stringify({
       type: "companion-hello",
@@ -178,6 +180,7 @@ describe("CompanionConnector end-to-end", () => {
       features: [COMPANION_AUDIT_FEATURE],
     }));
     await withTimeout(registeredPromise, "device registration without audit");
+    expect(connector.diagnosticConnectionState).toBe("registered");
     const auditBatch = await withTimeout(auditBatchPromise, "cloud audit delivery");
     expect(auditBatch.type).toBe("companion-audit-batch");
     expect(auditBatch.entries).toEqual([
@@ -211,6 +214,7 @@ describe("CompanionConnector end-to-end", () => {
     ]));
     controller.abort();
     await withTimeout(running, "device shutdown");
+    expect(connector.diagnosticConnectionState).toBe("stopped");
   }, 10_000);
 
 
