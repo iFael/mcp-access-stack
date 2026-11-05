@@ -50,8 +50,10 @@ describe("narrow Oracle ready-for-review policy administration", () => {
       ...policy, sourceControl: undefined,
     });
     expect(await readFile(`${fixture.policyPath}.backup-ready-${operationId}.json`)).toEqual(prior);
-    expect((await stat(fixture.policyPath)).mode & 0o777).toBe(0o600);
-    expect((await stat(`${fixture.policyPath}.backup-ready-${operationId}.json`)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(fixture.policyPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(`${fixture.policyPath}.backup-ready-${operationId}.json`)).mode & 0o777).toBe(0o600);
+    }
     const events = (await readFile(audit, "utf8")).trim().split("\n").map((s) => JSON.parse(s));
     expect(events.map((event) => event.event)).toEqual(["oracle_ready_grant_requested", "oracle_ready_grant_applied"]);
     expect(JSON.stringify(events)).not.toContain("edge-user-1");

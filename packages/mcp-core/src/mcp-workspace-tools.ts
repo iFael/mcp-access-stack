@@ -278,6 +278,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "write_background_task_stdin",
   "read_background_task_output",
   "http_get",
+  "oracle_grant_github_ready_permission",
 ] as const;
 
 type BaseWorkspaceToolName = (typeof BASE_WORKSPACE_TOOL_NAMES)[number];
