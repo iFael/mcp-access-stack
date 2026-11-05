@@ -25,12 +25,14 @@ export type AdminDependencies = {
   authenticate(password: string): Promise<{ userId: string; credentialVersion: string } | null>;
   credentialVersion(): Promise<string>;
   devices(userId: string): Promise<AdminDevice[]>;
+  audit?(userId: string): Promise<unknown[]>;
 };
 
 const COOKIE = "__Host-mcpv3-admin";
 const SESSION_MS = 60 * 60 * 1000;
 const PAGE = "/admin/devices";
 const JSON_PATH = "/admin/devices/data";
+const AUDIT_PATH = "/admin/devices/audit";
 const LOGOUT = "/admin/devices/logout";
 
 export class DeviceAdminDashboard {
@@ -41,13 +43,18 @@ export class DeviceAdminDashboard {
     if (url.pathname === "/admin") {
       return new Response(null, { status: 303, headers: { location: PAGE, "cache-control": "no-store" } });
     }
-    if (![PAGE, JSON_PATH, LOGOUT].includes(url.pathname)) return new Response(null, { status: 404 });
+    if (![PAGE, JSON_PATH, AUDIT_PATH, LOGOUT].includes(url.pathname)) return new Response(null, { status: 404 });
     const session = await this.readSession(request);
     if (url.pathname === JSON_PATH) {
       if (request.method !== "GET") return empty(405);
       if (!session) return json({ error: "authentication_required" }, 401);
       const devices = await this.deps.devices(session.userId);
       return json({ devices }, 200);
+    }
+    if (url.pathname === AUDIT_PATH) {
+      if (request.method !== "GET") return empty(405);
+      if (!session) return json({ error: "authentication_required" }, 401);
+      return json({ events: await this.deps.audit?.(session.userId) ?? [] }, 200);
     }
     if (url.pathname === LOGOUT) {
       if (request.method !== "POST") return empty(405);
@@ -177,7 +184,7 @@ h1{font-size:clamp(27px,4vw,38px);letter-spacing:-.045em;line-height:1.15;margin
 td{padding:16px 12px;border-bottom:1px solid var(--border)}tr:last-child td{border-bottom:0}
 .name{font-weight:600}.small{color:var(--muted);font-size:12px}.status{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:999px;padding:3px 9px;font-size:12px}
 .dot{width:7px;height:7px;border-radius:50%;background:#71717a}.online .dot{background:#34d399}.offline .dot{background:#fbbf24}
-.empty{padding:50px 10px;text-align:center;color:var(--muted)}
+.empty{padding:50px 10px;text-align:center;color:var(--muted)}.audit-section{margin-top:16px}
 .login{max-width:390px;margin:13vh auto 0;padding:30px}.login h1{font-size:25px;margin:22px 0 8px}.login label{display:block;margin:22px 0 7px;font-weight:550}
 .login input{width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;background:#09090b;color:var(--foreground)}
 .login button{width:100%;margin-top:18px;background:#fafafa;color:#09090b;border:0;border-radius:8px;padding:12px;font-weight:650}
@@ -207,7 +214,10 @@ function dashboardPage(): string {
 </section>
 <section class="card"><div class="panel-header"><h2>Seus dispositivos</h2><span class="pill">Somente leitura</span></div><div class="table-wrap">
 <table><thead><tr><th>Computador</th><th>Plataforma</th><th>Status</th><th>Última atividade</th><th>Registrado em</th></tr></thead><tbody id="devices"><tr><td colspan="5" class="empty">Carregando…</td></tr></tbody></table>
-</div></section><footer>Novas máquinas aparecem automaticamente após a primeira autorização. Acesso associado à sua conta MCP V3.</footer></main></div>
+</div></section>
+<section class="card audit-section"><div class="panel-header"><h2>Auditoria na nuvem</h2><span class="pill">Privada por conta</span></div><p id="audit-status" role="status">Carregando registros…</p>
+<div class="table-wrap"><table><thead><tr><th>Recebido</th><th>Dispositivo</th><th>Operação</th><th>Resultado</th><th>Workspace</th></tr></thead><tbody id="audit-events"></tbody></table></div></section>
+<footer>Os registros são enviados à nuvem. Sem conexão, a auditoria pode atrasar ou perder eventos; as permissões das ferramentas continuam independentes.</footer></main></div>
 <script nonce="__CSP_NONCE__">
 (function(){
   const byId=id=>document.getElementById(id);
@@ -237,6 +247,24 @@ function dashboardPage(): string {
         body.appendChild(tr);
       }
       byId("updated").textContent="Atualizado às "+new Date().toLocaleTimeString("pt-BR");
+      const auditResponse=await fetch("/admin/devices/audit",{credentials:"same-origin",cache:"no-store"});
+      if(!auditResponse.ok)throw new Error("audit unavailable");
+      const auditData=await auditResponse.json(),events=Array.isArray(auditData.events)?auditData.events:[];
+      const tbody=byId("audit-events");tbody.replaceChildren();
+      let lost=false;
+      for(const event of events){
+        const row=document.createElement("tr"),entry=event.entry||{};
+        cell(row,when(event.receivedAt),"small");
+        cell(row,devices.find(d=>d.id===event.deviceId)?.displayName||"Computador","small");
+        cell(row,String(entry.operation||"—"));
+        cell(row,String(entry.status||"—"));
+        cell(row,String(entry.workspaceId||"—"),"small");
+        tbody.appendChild(row);
+        if(Number(event.dropped)>0)lost=true;
+      }
+      byId("audit-status").textContent=lost
+        ?"Atenção: alguns eventos foram perdidos durante uma indisponibilidade. As operações continuaram funcionando."
+        :events.length?"Registros armazenados na conta. Eventos recentes podem levar alguns segundos para aparecer.":"Nenhum registro recebido ainda.";
     }catch{byId("updated").textContent="Não foi possível atualizar os dispositivos."}
   }
   byId("refresh").addEventListener("click",refresh);refresh();

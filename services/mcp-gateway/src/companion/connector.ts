@@ -2,8 +2,11 @@ import os from "node:os";
 import {
   BROWSER_LATENCY_ID_HEADER, BROWSER_LATENCY_RELAY_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_PROTOCOL_VERSION,
+  COMPANION_AUDIT_FEATURE,
   PROGRESS_FEATURE,
   COMPANION_UPDATE_FEATURE,
+  WAKE_EVENTS_CAPABILITY,
+  UPDATE_WAKE_CAPABILITY,
   type CompanionUpdateRequest,
   type CompanionUpdateStatus,
   type ProgressUpdate,
@@ -27,6 +30,7 @@ import {
 } from "../edge/internal-trust.js";
 import type { DesktopOAuthClient } from "./desktop-oauth.js";
 import type { LocalRepositoryManager } from "./local-repository-manager.js";
+import type { CloudAuditQueue } from "./cloud-audit-queue.js";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 24 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 8;
@@ -72,6 +76,9 @@ export interface CompanionConnectorOptions {
   internalAssertion: string;
   localBaseUrl: URL;
   repositories: LocalRepositoryManager;
+  auditQueue?: CloudAuditQueue;
+  /** An unaudited workspace backend must never advertise executable capabilities. */
+  workspaceReady?: () => boolean;
   displayName?: string;
   capabilities?: string[];
   maxPayloadBytes?: number;
@@ -218,6 +225,7 @@ export class CompanionConnector {
     this.activeRequests.clear();
     const socket = this.socket;
     this.socket = undefined;
+    this.options.auditQueue?.disconnect();
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, "MCP V3 local runtime shutdown");
   }
 
@@ -315,6 +323,7 @@ export class CompanionConnector {
       });
       socket.on("error", (error) => this.log({ event: "local_runtime_socket_error", reason: errorName(error), ...safeErrorCode(error) }));
       socket.once("close", (code) => {
+        this.options.auditQueue?.disconnect();
         this.log({ event: "local_runtime_socket_closed", code, protocolReady, registered });
         for (const controller of this.activeRequests.values()) controller.abort(`socket_closed_${code}`);
         this.activeRequests.clear();
@@ -360,7 +369,17 @@ export class CompanionConnector {
       if (this.options.pendingUserMessages) this.announceUserMessages(this.options.pendingUserMessages());
       this.flushProgress();
       this.flushCompanionUpdateStatus();
+      if (socket === this.socket && message.features?.includes(COMPANION_AUDIT_FEATURE)) {
+        this.options.auditQueue?.connect((batch) => {
+          if (socket.readyState !== WebSocket.OPEN) return false;
+          try { socket.send(JSON.stringify(batch)); return true; } catch { return false; }
+        });
+      }
       return { protocolReady: true, registered: true };
+    }
+    if (message.type === "companion-audit-ack") {
+      this.options.auditQueue?.acknowledge(message.batchId);
+      return { protocolReady: true };
     }
     if (message.type === "companion-heartbeat-ack") {
       return { protocolReady: true, heartbeatAckId: message.heartbeatId };
@@ -404,15 +423,20 @@ export class CompanionConnector {
   }
 
   private async sendReady(socket: WebSocket): Promise<void> {
-    const summaries = await this.options.repositories.listWorkspaceSummaries();
+    const audited = this.options.workspaceReady?.() ?? true;
+    const summaries = audited ? await this.options.repositories.listWorkspaceSummaries() : [];
     const workspaceIds = new Set(summaries.map((workspace) => workspace.id));
     const deviceId = this.options.repositories.getDeviceId();
     const registration = {
       ...(deviceId === undefined ? {} : { deviceId }),
       displayName: this.options.displayName?.trim() || os.hostname() || "MCP V3 device",
       platform: platformName(process.platform),
-      capabilities: this.options.capabilities ??
-        [...DEFAULT_COMPANION_CAPABILITIES],
+      capabilities: audited
+        ? (this.options.capabilities ?? [...DEFAULT_COMPANION_CAPABILITIES])
+        : (this.options.capabilities ?? [...DEFAULT_COMPANION_CAPABILITIES])
+          .filter((capability) => capability === "browser" ||
+            capability === WAKE_EVENTS_CAPABILITY ||
+            capability === UPDATE_WAKE_CAPABILITY),
     };
     const ready: CompanionReadyMessage = {
       type: "companion-ready",

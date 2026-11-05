@@ -32,6 +32,25 @@ export interface AuditWriteMetrics {
   activeFileBytes: number;
 }
 
+/** Operation telemetry sink. It is not an authorization policy. */
+export interface AuditSink {
+  write(entry: AuditEntry): Promise<AuditWriteMetrics>;
+}
+
+/** Remote telemetry failures must never delay or change the tool result. */
+export function detachedAuditSink(sink: AuditSink): AuditSink {
+  return {
+    write(entry) {
+      void Promise.resolve().then(() => sink.write(entry)).catch(() => {
+        console.warn(JSON.stringify({ event: "cloud_audit_sink_unavailable" }));
+      });
+      return Promise.resolve({
+        appendDurationMs: 0, totalDurationMs: 0, rotated: false, activeFileBytes: 0,
+      });
+    },
+  };
+}
+
 export class AuditLogger {
   private readonly maxFileBytes: number;
   private readonly maxRotatedFiles: number;

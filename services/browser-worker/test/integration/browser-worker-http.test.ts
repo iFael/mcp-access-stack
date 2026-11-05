@@ -5,6 +5,7 @@ import path from "node:path";
 import { AppError } from "@vs-code-gpt/shared";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { BrowserWorkerApplication } from "../../controllers/browser-worker-application.js";
+import { BrowserAuditLogger } from "../../infrastructure/browser-audit-log.js";
 import { BrowserRuntime } from "../../services/browser-runtime.js";
 import type { BrowserWorkerConfig } from "../../config/browser-worker-config.js";
 
@@ -17,6 +18,30 @@ afterEach(async () => {
 });
 
 describe("BrowserWorkerApplication", () => {
+  it("returns successful browser operations even if the server audit file is unavailable", async () => {
+    const audit = jest.spyOn(BrowserAuditLogger.prototype, "write")
+      .mockRejectedValueOnce(new Error("audit unavailable"));
+    const warning = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { baseUrl, token } = await startApplication();
+      const response = await fetch(new URL("/operations", baseUrl), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ operation: "status", input: {} }),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { ok: boolean }).ok).toBe(true);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("browser_audit_write_unavailable"));
+    } finally {
+      audit.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+
   it("reports the versioned live-view capability only for an authenticated headless worker", async () => {
     const runtime = { supportsLiveView: () => true } as unknown as BrowserRuntime;
     const { baseUrl, token } = await startApplication(runtime, { headless: true });

@@ -113,6 +113,22 @@ export class ReloadableLocalAgent {
     return this.current !== null;
   }
 
+  /** Repository bindings require an active validated workspace policy, not audit availability. */
+  protectRepositoryOperations<T extends object>(port: T): T {
+    return new Proxy(port, {
+      get: (target, property) => {
+        const value: unknown = Reflect.get(target, property, target);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          if (!this.ready) {
+            throw new AppError("WORKSPACE_NOT_FOUND", "Repository operations require a validated workspace policy.");
+          }
+          return Reflect.apply(value, target, args);
+        };
+      },
+    });
+  }
+
   /** The LocalAgent the current policy built, for work that outlives one generation. */
   localAgent(): LocalAgent {
     if (!this.currentAgent) throw new AppError("WORKSPACE_NOT_FOUND", "No local MCP V3 repository is materialized on this device.");
@@ -124,15 +140,15 @@ export class ReloadableLocalAgent {
   }
 
   async reload(policy: PolicyFile | null): Promise<void> {
-    if (!policy) {
-      this.currentAgent=null;
-      this.current = null;
-      this.generation += 1;
-      return;
-    }
-    const agent = await LocalAgent.createFromPolicy(policy, this.options);
-    this.currentAgent=agent;
-    this.current = new InProcessWorkspaceExecutor(agent);
+    // Never continue serving an earlier policy if validation or auditing fails.
+    // Increment first so generation-bound calls cannot reuse a revoked agent.
+    this.currentAgent = null;
+    this.current = null;
     this.generation += 1;
+    if (!policy) return;
+
+    const agent = await LocalAgent.createFromPolicy(policy, this.options);
+    this.currentAgent = agent;
+    this.current = new InProcessWorkspaceExecutor(agent);
   }
 }
