@@ -312,4 +312,132 @@ Assert-ContainsNone -Label 'MCP V3 companion runtime' -Source $companion -Tokens
     'local-browser-worker'
 )
 
+# The five-minute updater supervises liveness even when the version check
+# is disabled or postponed. Exercise the real recovery function with mocks;
+# never touch a real Windows Scheduled Task from this test.
+Assert-ContainsAll -Label 'MCP V3 companion recovery' -Source $updateRunner -Tokens @(
+    'Ensure-McpV3LocalCompanionRunning',
+    'Start-ScheduledTask -TaskName $TaskName',
+    'Test-McpWindowsAccountIdentityEquivalent',
+    'companionRecovery = $companionRecovery',
+    "if ([string]`$task.State -eq 'Running')",
+    "if (-not [bool]`$task.Settings.Enabled"
+)
+Assert-ContainsNone -Label 'MCP V3 recovery task changes' -Source $updateRunner -Tokens @(
+    'Register-ScheduledTask',
+    'Enable-ScheduledTask',
+    'Disable-ScheduledTask',
+    'Stop-ScheduledTask'
+)
+$recoveryBeforeDaily = $updateRunner.IndexOf('$companionRecovery = Ensure-McpV3LocalCompanionRunning')
+$dailySkip = $updateRunner.IndexOf("reason = 'auto-update-checked-recently'")
+if ($recoveryBeforeDaily -lt 0 -or $dailySkip -lt $recoveryBeforeDaily) {
+    throw 'Companion recovery must run before the version-check idle path.'
+}
+
+$parseTokens = $null
+$parseErrors = $null
+$runnerAst = [Management.Automation.Language.Parser]::ParseInput($updateRunner, [ref]$parseTokens, [ref]$parseErrors)
+if ($null -ne $parseErrors -and $parseErrors.Count -gt 0) {
+    throw "MCP V3 local updater has a PowerShell syntax error: $($parseErrors[0].Message)"
+}
+$recoveryAst = $runnerAst.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Ensure-McpV3LocalCompanionRunning'
+}, $true)
+if ($null -eq $recoveryAst) {
+    throw 'MCP V3 local companion recovery function is missing.'
+}
+. ([scriptblock]::Create($recoveryAst.Extent.Text))
+
+$script:mockInstallation = [IO.Path]::GetFullPath((Join-Path $root '.mock-companion-recovery'))
+$script:mockStateRoot = Join-Path $script:mockInstallation 'state'
+$script:mockReleaseId = '1.1.0-companion.123'
+$script:mockReleaseRoot = [IO.Path]::GetFullPath((Join-Path $script:mockInstallation ("releases\$($script:mockReleaseId)")))
+$script:mockLauncher = [IO.Path]::GetFullPath((Join-Path $script:mockReleaseRoot 'compat\McpNodeHostLauncher.exe'))
+$script:mockUser = 'CPX\recovery-test'
+$script:mockStarts = 0
+$script:mockVerifications = 0
+$script:mockFailStart = $false
+$script:mockTask = [pscustomobject]@{
+    TaskPath = '\'
+    State = 'Ready'
+    Settings = [pscustomobject]@{ Enabled = $true; MultipleInstances = 'IgnoreNew' }
+    Principal = [pscustomobject]@{ UserId = $script:mockUser; LogonType = 'Interactive'; RunLevel = 'Limited' }
+    Actions = @([pscustomobject]@{
+        Execute = $script:mockLauncher
+        WorkingDirectory = $script:mockReleaseRoot
+        Arguments = "MCP_V3_RELEASE_ROOT=$($script:mockReleaseRoot) MCP_V3_STATE_ROOT=$($script:mockStateRoot) companion-cli.js"
+    })
+}
+function Get-ScheduledTask {
+    param($TaskName, $TaskPath, $ErrorAction)
+    if ($TaskName -ne 'MCP V3 local companion' -or $TaskPath -ne '\') { throw 'Unexpected recovery task.' }
+    return $script:mockTask
+}
+function Start-ScheduledTask {
+    param($TaskName, $TaskPath, $ErrorAction)
+    $script:mockStarts++
+    if ($script:mockFailStart) { throw 'Simulated recovery refusal.' }
+    $script:mockTask.State = 'Running'
+}
+function Test-McpWindowsAccountIdentityEquivalent { param($Left, $Right) return $Left -eq $Right }
+function Get-McpWindowsExecutionNodeStatePath { param($InstallationRoot) return 'mock-release-state' }
+function Read-McpWindowsExecutionNodeState {
+    param($Path)
+    return [pscustomobject]@{ active = [pscustomobject]@{ releaseId = $script:mockReleaseId } }
+}
+function Assert-McpPublicFile { param($Path, [switch]$AllowUnsignedDevelopment) $script:mockVerifications++ }
+
+$recoveryArgs = @{
+    InstallationRoot = $script:mockInstallation
+    StateRoot = $script:mockStateRoot
+    TaskName = 'MCP V3 local companion'
+    CurrentUser = $script:mockUser
+}
+if ((Ensure-McpV3LocalCompanionRunning @recoveryArgs) -ne 'restarted' -or
+    $script:mockStarts -ne 1 -or $script:mockVerifications -ne 1) {
+    throw 'Stopped trusted companion was not recovered exactly once.'
+}
+if ((Ensure-McpV3LocalCompanionRunning @recoveryArgs) -ne 'running' -or $script:mockStarts -ne 1) {
+    throw 'Running companion must not be restarted.'
+}
+$script:mockTask.State = 'Disabled'
+$script:mockTask.Settings.Enabled = $false
+if ((Ensure-McpV3LocalCompanionRunning @recoveryArgs) -ne 'disabled' -or $script:mockStarts -ne 1) {
+    throw 'Intentionally disabled companion must not be started.'
+}
+$script:mockTask.State = 'Ready'
+$script:mockTask.Settings.Enabled = $true
+$script:mockTask.Actions[0].Execute = 'C:\unexpected-launcher.exe'
+try {
+    $null = Ensure-McpV3LocalCompanionRunning @recoveryArgs
+    throw 'Mismatched companion action was allowed.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'differs from the active release') { throw }
+}
+$script:mockTask.Actions[0].Execute = $script:mockLauncher
+$script:mockTask.Principal.UserId = 'CPX\other-user'
+try {
+    $null = Ensure-McpV3LocalCompanionRunning @recoveryArgs
+    throw 'Companion recovery accepted a different owner.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'differs from the active release') { throw }
+}
+$script:mockTask.Principal.UserId = $script:mockUser
+$script:mockFailStart = $true
+try {
+    $null = Ensure-McpV3LocalCompanionRunning @recoveryArgs
+    throw 'Companion recovery suppressed a failed task start.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'Simulated recovery refusal') { throw }
+}
+if ($script:mockStarts -ne 2) {
+    throw 'Companion recovery started a task on an unsafe path.'
+}
+
 Write-Output 'MCP V3 local lifecycle contracts passed.'
