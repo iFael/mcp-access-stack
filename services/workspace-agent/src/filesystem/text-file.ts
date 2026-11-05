@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
@@ -53,7 +53,9 @@ export async function atomicWriteBuffer(
   );
 
   try {
+    const existingMode = (await stat(absolutePath)).mode & 0o777;
     await writeFile(tempPath, content);
+    await chmod(tempPath, existingMode);
     await rename(tempPath, absolutePath);
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);

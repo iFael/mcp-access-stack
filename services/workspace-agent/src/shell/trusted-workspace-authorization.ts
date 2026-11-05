@@ -633,6 +633,16 @@ async function authorizePosixMutation(
   argv: string[],
 ): Promise<TrustedWorkspaceAuthorizationDecision> {
   const security = new PathSecurity(input.workspace);
+  if (executable === "chmod") {
+    // Only restore the standard executable mode on an explicitly named,
+    // workspace-contained shell script. No recursion, globs or symlinks.
+    if (argv.length !== 2 || argv[0] !== "755" ||
+        !argv[1]?.endsWith(".sh") || argv[1].startsWith("-")) {
+      return confirmation(input);
+    }
+    const target = await authorizeExistingMutablePath(input, security, argv[1]);
+    return target?.kind === "file" ? trustedExecute() : confirmation(input);
+  }
   if (executable === "rm") {
     let recurse = false;
     const paths: string[] = [];
