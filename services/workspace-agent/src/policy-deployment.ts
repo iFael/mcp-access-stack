@@ -115,7 +115,7 @@ export class ReadyReviewPolicyGrant {
   }> {
     const state = await lstat(this.policyPath);
     if (!state.isFile() || state.isSymbolicLink() ||
-        (state.mode & 0o777) !== 0o600 ||
+        (process.platform !== "win32" && (state.mode & 0o777) !== 0o600) ||
         (typeof process.getuid === "function" && state.uid !== process.getuid())) {
       throw new AppError("PERMISSION_DENIED", "Oracle policy ownership or mode is not secure.");
     }

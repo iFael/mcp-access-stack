@@ -80,7 +80,7 @@ describe("narrow Oracle ready-for-review policy administration", () => {
     expect(await readFile(fixture.policyPath)).toEqual(prior);
   });
 
-  it("rejects overly permissive policy mode or a symlink", async () => {
+  (process.platform === "win32" ? it.skip : it)("rejects overly permissive policy mode or a symlink", async () => {
     const { fixture, audit, expectedPolicySha256 } = await grantFixture();
     const admin = new ReadyReviewPolicyGrant(fixture.policyPath, audit, () => false, async () => undefined);
     await chmod(fixture.policyPath, 0o644);
