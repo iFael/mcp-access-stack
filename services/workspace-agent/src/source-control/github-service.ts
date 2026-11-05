@@ -12,6 +12,8 @@ import {
   githubMaterializeActionsArtifactResultSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
+  githubMarkPullRequestReadyInputSchema,
+  githubMarkPullRequestReadyResultSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
   githubPullRequestResultSchema,
@@ -35,6 +37,8 @@ import {
   type GitHubIssueWriteResult,
   type GitHubReadInput,
   type GitHubReadResult,
+  type GitHubMarkPullRequestReadyInput,
+  type GitHubMarkPullRequestReadyResult,
   type GitHubMergePullRequestInput,
   type GitHubMergePullRequestResult,
   type GitHubPullRequestResult,
@@ -261,6 +265,62 @@ export class GitHubService implements GitHubExecutor {
         operationContext,
       );
     }
+  }
+
+  async markPullRequestReady(
+    input: GitHubMarkPullRequestReadyInput,
+    context?: OperationContext,
+  ): Promise<GitHubMarkPullRequestReadyResult> {
+    const parsed = githubMarkPullRequestReadyInputSchema.parse(input);
+    const activeContext = context ?? {};
+    const beforeRaw = await this.client.getPullRequest(parsed.owner, parsed.repository,
+      parsed.pullNumber, activeContext);
+    const before = mapPullRequest(beforeRaw);
+    if (before.headSha !== parsed.expectedPullRequestHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "GitHub pull-request head changed before ready-for-review.");
+    }
+    if (before.state !== "open" || before.merged) {
+      throw new AppError("INVALID_ARGUMENT", "Only open unmerged pull requests can become ready for review.");
+    }
+    if (beforeRaw.draft === false) {
+      return githubMarkPullRequestReadyResultSchema.parse({
+        status: "completed", number: before.number, headSha: before.headSha, ready: true,
+      });
+    }
+    const nodeId = beforeRaw.node_id;
+    if (beforeRaw.draft !== true || typeof nodeId !== "string" ||
+        !/^[A-Za-z0-9_=-]{1,255}$/u.test(nodeId)) {
+      throw invalidGitHubResponse();
+    }
+    try {
+      await this.client.markPullRequestReadyForReview(nodeId, parsed.pullNumber, activeContext);
+    } catch (error) {
+      if (!isAmbiguousMutation(error)) throw error;
+    }
+    return this.reconcileReadyForReview(parsed.owner, parsed.repository, parsed.pullNumber,
+      parsed.expectedPullRequestHeadSha, activeContext);
+  }
+
+  private async reconcileReadyForReview(
+    owner: string, repository: string, pullNumber: number,
+    expectedHeadSha: string, context: OperationContext,
+  ): Promise<GitHubMarkPullRequestReadyResult> {
+    let raw;
+    try {
+      raw = await this.client.getPullRequest(owner, repository, pullNumber, context);
+    } catch {
+      throw reconciliationRequired();
+    }
+    const result = mapPullRequest(raw);
+    if (result.headSha !== expectedHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "GitHub pull-request head changed during ready-for-review.");
+    }
+    if (result.state !== "open" || result.merged || raw.draft !== false) {
+      throw reconciliationRequired();
+    }
+    return githubMarkPullRequestReadyResultSchema.parse({
+      status: "completed", number: pullNumber, headSha: result.headSha, ready: true,
+    });
   }
 
   async mergePullRequest(

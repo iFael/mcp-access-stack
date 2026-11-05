@@ -32,6 +32,8 @@ import {
   githubMaterializeActionsArtifactInputSchema,
   githubGetPullRequestInputSchema,
   githubGetRepositoryInputSchema,
+  githubMarkPullRequestReadyInputSchema,
+  githubMarkPullRequestReadyResultSchema,
   githubMergePullRequestInputSchema,
   githubMergePullRequestResultSchema,
   sourceControlCapabilities,
@@ -52,7 +54,7 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly sixteen source-control capabilities", () => {
+  test("publishes exactly seventeen source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
       "git.index.write",
@@ -68,6 +70,7 @@ describe("source-control contracts", () => {
       "github.pull_request.read",
       "github.pull_request.create",
       "github.pull_request.close",
+      "github.pull_request.ready",
       "github.pull_request.merge",
       "github.issue.write",
     ]);
@@ -113,6 +116,7 @@ describe("source-control contracts", () => {
       "github_get_pull_request",
       "github_create_pull_request",
       "github_close_pull_request",
+      "github_mark_pull_request_ready",
       "github_merge_pull_request",
       "github_read",
       "github_issue_write",
@@ -123,9 +127,24 @@ describe("source-control contracts", () => {
       "github_create_repository",
       "github_create_pull_request",
       "github_close_pull_request",
+      "github_mark_pull_request_ready",
       "github_merge_pull_request",
       "github_issue_write",
     ]);
+  });
+
+  test("validates ready-for-review CAS and typed results", () => {
+    const input = { workspaceId: "repo", owner: "acme", repository: "app",
+      pullNumber: 7, expectedPullRequestHeadSha: shaA };
+    expect(githubMarkPullRequestReadyInputSchema.parse(input)).toEqual(input);
+    expect(githubMarkPullRequestReadyInputSchema.safeParse({ ...input, pullNumber: -1 }).success).toBe(false);
+    expect(githubMarkPullRequestReadyInputSchema.safeParse({ ...input, expectedPullRequestHeadSha: "main" }).success).toBe(false);
+    expect(githubMarkPullRequestReadyResultSchema.parse({
+      status: "completed", number: 7, headSha: shaA, ready: true,
+    })).toMatchObject({ ready: true });
+    expect(githubMarkPullRequestReadyResultSchema.safeParse({
+      status: "completed", number: 7, headSha: shaA, ready: false,
+    }).success).toBe(false);
   });
 
   test("restricts published release tags to safe SemVer refs and exact commit hashes", () => {
@@ -662,6 +681,7 @@ describe("source-control contracts", () => {
       ["github_get_pull_request", githubGetPullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 }],
       ["github_create_pull_request", githubCreatePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", title: "Ship", head: "feature/x", base: "main" }],
       ["github_close_pull_request", githubClosePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA }],
+      ["github_mark_pull_request_ready", githubMarkPullRequestReadyInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA }],
       ["github_merge_pull_request", githubMergePullRequestInputSchema, { workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA, mergeMethod: "merge" }],
     ];
 

@@ -7,6 +7,7 @@ import type {
   GitHubMaterializeActionsArtifactInput,
   GitHubGetPullRequestInput,
   GitHubGetRepositoryInput,
+  GitHubMarkPullRequestReadyInput,
   GitHubMergePullRequestInput,
   GitCommitInput,
   GitCreateBranchInput,
@@ -134,7 +135,7 @@ describe("source-control executor ports", () => {
     ]);
   });
 
-  test("keeps GitHubExecutor limited to exactly eight typed methods", async () => {
+  test("keeps GitHubExecutor limited to exactly nine typed methods", async () => {
     const calls: string[] = [];
     const executor: GitHubExecutor = {
       async getRepository(input: GitHubGetRepositoryInput) {
@@ -236,6 +237,11 @@ describe("source-control executor ports", () => {
           merged: false,
         };
       },
+      async markPullRequestReady(input: GitHubMarkPullRequestReadyInput) {
+        calls.push("markPullRequestReady");
+        return { status: "completed" as const, number: input.pullNumber,
+          headSha: input.expectedPullRequestHeadSha, ready: true as const };
+      },
       async mergePullRequest(input: GitHubMergePullRequestInput) {
         calls.push("mergePullRequest");
         return {
@@ -254,6 +260,7 @@ describe("source-control executor ports", () => {
       "getCommitChecks",
       "getPullRequest",
       "getRepository",
+      "markPullRequestReady",
       "materializeActionsArtifact",
       "mergePullRequest",
     ]);
@@ -269,6 +276,7 @@ describe("source-control executor ports", () => {
     await executor.getPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7 });
     await executor.createPullRequest({ workspaceId: "repo", owner: "acme", repository: "app", title: "Feature", head: "feature/x", base: "main" });
     await executor.closePullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA });
+    await executor.markPullRequestReady({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA });
     await executor.mergePullRequest({ workspaceId: "repo", owner: "acme", repository: "app", pullNumber: 7, expectedPullRequestHeadSha: shaA, mergeMethod: "squash" });
 
     expect(calls).toEqual([
@@ -279,6 +287,7 @@ describe("source-control executor ports", () => {
       "getPullRequest",
       "createPullRequest",
       "closePullRequest",
+      "markPullRequestReady",
       "mergePullRequest",
     ]);
   });

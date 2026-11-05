@@ -24,6 +24,8 @@ import type {
   GitHubReadInput,
   GitHubReadResult,
   GitHubGetRepositoryInput,
+  GitHubMarkPullRequestReadyInput,
+  GitHubMarkPullRequestReadyResult,
   GitHubMergePullRequestInput,
   GitHubMergePullRequestResult,
   GitHubPullRequestResult,
@@ -139,6 +141,10 @@ export interface GitHubExecutor {
     input: GitHubClosePullRequestInput,
     context?: OperationContext,
   ): Promise<GitHubClosePullRequestResult>;
+  markPullRequestReady(
+    input: GitHubMarkPullRequestReadyInput,
+    context?: OperationContext,
+  ): Promise<GitHubMarkPullRequestReadyResult>;
   mergePullRequest(
     input: GitHubMergePullRequestInput,
     context?: OperationContext,

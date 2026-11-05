@@ -14569,6 +14569,127 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "github_start_commit_checks_watch on the same PR head after it becomes ready.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Marks an open draft pull request ready for review at the expected head SHA; idempotent when already ready. Next: github_start_commit_checks_watch on the same PR head after it becomes ready.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedPullRequestHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "pullNumber": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "pullNumber",
+        "expectedPullRequestHeadSha"
+      ],
+      "type": "object"
+    },
+    "name": "github_mark_pull_request_ready",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "operation": {
+          "const": "github_mark_pull_request_ready",
+          "type": "string"
+        },
+        "ready": {
+          "const": true,
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "confirmation_required",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "targetResource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Mark GitHub pull request ready for review"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "git_sync_branch to bring main up to date.",
       "securitySchemes": [
         {
@@ -27232,15 +27353,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "71f56e29b2fa196ec226cd97cec97983c2d52ae43ac6f99cb9073942119eaee0",
-  "serverVersion": "0.4.0-catalog.c71f56e29b2fa.sb65bd697da48",
-  "toolCount": 121,
-  "toolSetRevision": "b65bd697da48ad28205a3079de31ce4f2f9083ebf82a3d652c9ceda7ff34a24a"
+  "contractRevision": "9020d4caf42d85ef9d61a55e741e4f7d82572a3fdf51c097214faee6d14a88da",
+  "serverVersion": "0.4.0-catalog.c9020d4caf42d.s99678ec41f61",
+  "toolCount": 122,
+  "toolSetRevision": "99678ec41f61cb3837aa118a84bec91075b692536f0c78bc4f860203832c8e04"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c71f56e29b2fa.sb65bd697da48"
+  "version": "0.4.0-catalog.c9020d4caf42d.s99678ec41f61"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -18,6 +18,7 @@ const cases = [
   ["getPullRequest", "githubGetPullRequest"],
   ["createPullRequest", "githubCreatePullRequest"],
   ["closePullRequest", "githubClosePullRequest"],
+  ["markPullRequestReady", "githubMarkPullRequestReady"],
   ["mergePullRequest", "githubMergePullRequest"],
 ] as const;
 
@@ -36,7 +37,7 @@ describe("source-control workspace executor parity", () => {
     }
   });
 
-  it("InProcessWorkspaceExecutor maps the fourteen source-control ports to LocalAgent typed methods", async () => {
+  it("InProcessWorkspaceExecutor maps the fifteen source-control ports to LocalAgent typed methods", async () => {
     const agent: Record<string, unknown> = {};
     for (const [, agentMethod] of cases) {
       agent[agentMethod] = jest.fn(async (input: unknown, context: unknown) => ({ input, context, agentMethod }));
@@ -54,7 +55,7 @@ describe("source-control workspace executor parity", () => {
     }
   });
 
-  it("SubprocessWorkspaceExecutor delegates the fourteen source-control ports only through its typed fallback", async () => {
+  it("SubprocessWorkspaceExecutor delegates the fifteen source-control ports only through its typed fallback", async () => {
     const fallback: Record<string, unknown> = {};
     for (const [method] of cases) {
       fallback[method] = jest.fn(async (...args: unknown[]) => ({ input: args[0], context: args[method === "materializeActionsArtifact" ? 2 : 1], method }));

@@ -47,6 +47,8 @@ export interface GitHubPullRequestRecord {
   base: { sha: string };
   merged: boolean;
   merge_commit_sha?: string | null;
+  node_id?: string;
+  draft?: boolean;
 }
 
 export interface GitHubMergeRecord {
@@ -180,6 +182,7 @@ export interface GitHubApiClient {
     pullNumber: number,
     context?: OperationContext,
   ): Promise<GitHubPullRequestRecord>;
+  markPullRequestReadyForReview(nodeId: string, pullNumber: number, context?: OperationContext): Promise<void>;
   mergePullRequest(
     owner: string,
     repository: string,
@@ -515,6 +518,39 @@ export class GitHubHttpClient implements GitHubApiClient {
       },
       context,
     );
+  }
+
+  async markPullRequestReadyForReview(
+    nodeId: string,
+    pullNumber: number,
+    context?: OperationContext,
+  ): Promise<void> {
+    // Only GitHub GraphQL supports converting an existing draft PR to ready.
+    const raw = await performGitHubRequest<unknown>(
+      this.#credentialProvider, this.#fetchImpl,
+      {
+        method: "POST",
+        path: "/graphql",
+        body: {
+          query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id number isDraft } } }",
+          variables: { id: nodeId },
+        },
+        mutation: true,
+      }, context,
+    );
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw unavailableError(true);
+    }
+    const response = raw as Record<string, unknown>;
+    if (Array.isArray(response.errors) && response.errors.length > 0) {
+      throw new AppError("INVALID_ARGUMENT", "GitHub rejected the ready-for-review mutation.");
+    }
+    const data = response.data as Record<string, unknown> | undefined;
+    const mutation = data?.markPullRequestReadyForReview as Record<string, unknown> | undefined;
+    const result = mutation?.pullRequest as Record<string, unknown> | undefined;
+    if (!result || result.id !== nodeId || result.number !== pullNumber || result.isDraft !== false) {
+      throw unavailableError(true);
+    }
   }
 
   mergePullRequest(

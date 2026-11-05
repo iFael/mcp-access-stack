@@ -1855,6 +1855,10 @@ class MockSourceControlExecutor {
     this.record("closePullRequest", input, context);
     return { status: "completed" as const, number: input.pullNumber, state: "closed" as const, title: "typed", url: `https://github.com/${input.owner}/${input.repository}/pull/${input.pullNumber}`, headSha: input.expectedPullRequestHeadSha, baseSha: sourceControlShaA, merged: false as const };
   }
+  async markPullRequestReady(input: any, context?: unknown) {
+    this.record("markPullRequestReady", input, context);
+    return { status: "completed" as const, number: input.pullNumber, headSha: input.expectedPullRequestHeadSha, ready: true as const };
+  }
   async mergePullRequest(input: any, context?: unknown) {
     this.record("mergePullRequest", input, context);
     return { status: "completed" as const, number: input.pullNumber, merged: true, mergeSha: sourceControlShaC };
@@ -1894,6 +1898,7 @@ const sourceControlCases = [
   ["github_get_pull_request", "getPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7 }],
   ["github_create_pull_request", "createPullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", title: "typed", head: "feature/task7", base: "main" }],
   ["github_close_pull_request", "closePullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB }],
+  ["github_mark_pull_request_ready", "markPullRequestReady", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB }],
   ["github_merge_pull_request", "mergePullRequest", { workspaceId: "ws", owner: "octo", repository: "repo", pullNumber: 7, expectedPullRequestHeadSha: sourceControlShaB, mergeMethod: "squash" }],
   ["github_read", "githubRead", { workspaceId: "ws", owner: "octo", repository: "repo", kind: "release" }],
   ["github_issue_write", "githubIssueWrite", { workspaceId: "ws", owner: "octo", repository: "repo", action: "comment", number: 7, body: "typed" }],
@@ -1920,13 +1925,14 @@ const expectedSourceControlAnnotations = {
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_close_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_mark_pull_request_ready: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   github_read: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_issue_write: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-three source-control tools inside the 60-tool workspace surface", () => {
+  it("publishes twenty-four source-control tools inside the 61-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1948,13 +1954,14 @@ describe("registerSourceControlTools", () => {
       "github_get_pull_request",
       "github_create_pull_request",
       "github_close_pull_request",
+      "github_mark_pull_request_ready",
       "github_merge_pull_request",
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(23);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(60);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(60);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(61);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(61);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

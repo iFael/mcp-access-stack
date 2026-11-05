@@ -127,6 +127,50 @@ describe("GitHubHttpClient fixed transport", () => {
       operation_id:op,expected_sha:"a".repeat(40),ci_run_id:"40612230756"});
   });
 
+  it("marks a PR ready using authenticated bounded GraphQL", async () => {
+    const fetchImpl = jest.fn(async () => jsonResponse({
+      data: { markPullRequestReadyForReview: { pullRequest: { id: "PR_kwTyped7", number: 7, isDraft: false } } },
+    }));
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+    await client.markPullRequestReadyForReview("PR_kwTyped7", 7);
+    const { url, init } = requestOf(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(url).toBe("https://api.github.com/graphql");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer unit-test-token",
+      "Content-Type": "application/json",
+    });
+    const body = JSON.parse(String(init.body));
+    expect(body.variables).toEqual({ id: "PR_kwTyped7" });
+    expect(body.query).toContain("markPullRequestReadyForReview");
+    expect(body.query).not.toContain("octo");
+  });
+
+  it("rejects GraphQL errors without exposing untrusted error text", async () => {
+    const fetchImpl = jest.fn(async () => jsonResponse({
+      errors: [{ message: "do-not-echo-secret" }],
+    }));
+    const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });
+    await expect(client.markPullRequestReadyForReview("PR_kwTyped7", 7))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(client.markPullRequestReadyForReview("PR_kwTyped7", 7))
+      .rejects.not.toThrow("do-not-echo-secret");
+  });
+
+  it("treats malformed or mismatched GraphQL mutation results as uncertain", async () => {
+    for (const reply of [
+      { data: { markPullRequestReadyForReview: { pullRequest: { id: "PR_other", number: 7, isDraft: false } } } },
+      { data: { markPullRequestReadyForReview: { pullRequest: null } } },
+      {},
+    ]) {
+      const client = new GitHubHttpClient({ credentialProvider,
+        fetchImpl: jest.fn(async () => jsonResponse(reply)) as typeof fetch });
+      await expect(client.markPullRequestReadyForReview("PR_kwTyped7", 7))
+        .rejects.toMatchObject({ details: { outcome: "unknown" } });
+    }
+  });
+
   it("builds only the fixed GitHub API endpoints, methods and headers", async () => {
     const fetchImpl = jest.fn(async () => jsonResponse({ ok: true }));
     const client = new GitHubHttpClient({ credentialProvider, fetchImpl: fetchImpl as typeof fetch });

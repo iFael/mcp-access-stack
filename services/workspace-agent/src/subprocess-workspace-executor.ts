@@ -230,6 +230,9 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   closePullRequest(...args: Parameters<GitHubExecutor["closePullRequest"]>) {
     return this.fallback?.closePullRequest?.(...args) ?? Promise.reject(this.notImplemented("closePullRequest"));
   }
+  markPullRequestReady(...args: Parameters<GitHubExecutor["markPullRequestReady"]>) {
+    return this.fallback?.markPullRequestReady?.(...args) ?? Promise.reject(this.notImplemented("markPullRequestReady"));
+  }
   mergePullRequest(...args: Parameters<GitHubExecutor["mergePullRequest"]>) {
     return this.fallback?.mergePullRequest?.(...args) ?? Promise.reject(this.notImplemented("mergePullRequest"));
   }

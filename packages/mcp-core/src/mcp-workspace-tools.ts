@@ -121,6 +121,8 @@ import {
   githubCreatePullRequestResultSchema,
   githubClosePullRequestInputSchema,
   githubClosePullRequestResultSchema,
+  githubMarkPullRequestReadyInputSchema,
+  githubMarkPullRequestReadyResultSchema,
   githubCreateRepositoryInputSchema,
   githubCreateRepositoryResultSchema,
   githubCommitChecksResultSchema,
@@ -232,6 +234,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "github_get_pull_request",
   "github_create_pull_request",
   "github_close_pull_request",
+  "github_mark_pull_request_ready",
   "github_merge_pull_request",
   "github_read",
   "github_issue_write",
@@ -3001,6 +3004,21 @@ const sourceControlMcpSchemas = {
       message: "Invalid github_close_pull_request MCP result.",
     }),
   },
+  github_mark_pull_request_ready: {
+    input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(),
+      expectedPullRequestHeadSha: mcpSourceControlSha, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
+    output: z.object({
+      status: z.enum(["confirmation_required", "completed"]),
+      ...mcpSourceControlConfirmationFields,
+      operation: z.literal("github_mark_pull_request_ready").optional(),
+      number: z.number().int().positive().optional(),
+      headSha: mcpSourceControlSha.optional(),
+      ready: z.literal(true).optional(),
+    }).strict().refine((value) => githubMarkPullRequestReadyResultSchema.safeParse(value).success, {
+      message: "Invalid github_mark_pull_request_ready MCP result.",
+    }),
+  },
   github_merge_pull_request: {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName, pullNumber: z.number().int().positive(), expectedPullRequestHeadSha: mcpSourceControlSha, mergeMethod: mcpGitHubMergeMethod, confirmationId: mcpSourceControlConfirmationId.optional() }).strict(),
     output: z.object({
@@ -3092,6 +3110,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_get_pull_request: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_create_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_close_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
+  github_mark_pull_request_ready: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_merge_pull_request: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_read: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_issue_write: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
@@ -3745,6 +3764,32 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_mark_pull_request_ready", include)) {
+    server.registerTool(
+      "github_mark_pull_request_ready",
+      {
+        title: "Mark GitHub pull request ready for review",
+        description: "Marks an open draft pull request ready for review at the expected head SHA; idempotent when already ready.",
+        inputSchema: sourceControlMcpSchemas.github_mark_pull_request_ready.input,
+        outputSchema: sourceControlMcpSchemas.github_mark_pull_request_ready.output,
+        annotations: sourceControlAnnotations.github_mark_pull_request_ready,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = githubMarkPullRequestReadyInputSchema.parse(input);
+          const structuredContent = githubMarkPullRequestReadyResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.markPullRequestReady(parsed, context)),
+          );
+          return sourceControlSuccess("GitHub pull-request ready-for-review processed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
   if (shouldInclude("github_merge_pull_request", include)) {
     server.registerTool(
       "github_merge_pull_request",
@@ -3886,6 +3931,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   githubGetPullRequest: "github_get_pull_request",
   githubCreatePullRequest: "github_create_pull_request",
   githubClosePullRequest: "github_close_pull_request",
+  githubMarkPullRequestReady: "github_mark_pull_request_ready",
   githubMergePullRequest: "github_merge_pull_request",
   githubRead: "github_read",
   githubIssueWrite: "github_issue_write",
