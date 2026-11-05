@@ -58,6 +58,44 @@ describe("DeviceAdminDashboard", () => {
     expect((await dashboard.handle(new Request("https://edge.example/admin/unknown"))).status).toBe(404);
   });
 
+  it("accepts a legitimate same-origin browser form even without Origin, without weakening CSRF", async () => {
+    const request = (headers: Record<string, string>) => new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+      body: new URLSearchParams({ owner_password: "correct-owner-password" }),
+    });
+    const { dashboard } = fixture();
+    // The browser's Sec-Fetch-Site header is protected from scripts.
+    const valid = await dashboard.handle(request({
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "navigate",
+    }));
+    expect(valid.status).toBe(303);
+    expect(valid.headers.get("set-cookie")).toContain("HttpOnly");
+
+    const nullOrigin = await fixture().dashboard.handle(request({
+      origin: "null",
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "navigate",
+    }));
+    expect(nullOrigin.status).toBe(303);
+
+    const denied = [
+      {},
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site" },
+      { origin: "https://attacker.example", "sec-fetch-site": "same-origin" },
+      { origin: "https://edge.example", "sec-fetch-site": "cross-site" },
+      { origin: "null", "sec-fetch-site": "cross-site" },
+    ];
+    for (const headers of denied) {
+      const rejected = await fixture().dashboard.handle(request(headers));
+      expect(rejected.status).toBe(403);
+      expect(rejected.headers.get("content-type")).toContain("text/html");
+      expect(await rejected.text()).toContain("Não foi possível validar esta tentativa");
+    }
+  });
+
   it("enforces same-origin POST and throttles invalid logins", async () => {
     const { dashboard, login, values } = fixture();
     expect((await login("correct-owner-password", "https://attacker.example")).status).toBe(403);
@@ -107,6 +145,39 @@ describe("DeviceAdminDashboard", () => {
     expect((await auditData.json() as { events: Array<{ entry: { operation: string } }> }).events[0]?.entry.operation)
       .toBe("readFile");
     expect(calls).toEqual(["owner-a", "audit:owner-a"]);
+  });
+
+  it("redirects an already-authenticated same-origin form and supports safe logout", async () => {
+    const { dashboard, login } = fixture();
+    const first = await login();
+    const sessionCookie = cookies(first);
+    const repeat = await dashboard.handle(new Request(url, {
+      method: "POST",
+      headers: {
+        origin: "https://edge.example",
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: sessionCookie,
+      },
+      body: new URLSearchParams({ owner_password: "correct-owner-password" }),
+    }));
+    expect(repeat.status).toBe(303);
+    expect(repeat.headers.get("location")).toBe("/admin/devices");
+
+    const denied = await dashboard.handle(new Request(url + "/logout", {
+      method: "POST", headers: {
+        cookie: sessionCookie, "sec-fetch-site": "cross-site",
+      },
+    }));
+    expect(denied.status).toBe(403);
+
+    const logout = await dashboard.handle(new Request(url + "/logout", {
+      method: "POST", headers: {
+        cookie: sessionCookie, "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "navigate",
+      },
+    }));
+    expect(logout.status).toBe(303);
+    expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
   it("invalidates sessions on credential rotation, expiry or logout", async () => {

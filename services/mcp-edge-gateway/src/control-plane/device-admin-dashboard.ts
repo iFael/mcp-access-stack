@@ -69,10 +69,13 @@ export class DeviceAdminDashboard {
       return page(session ? dashboardPage() : loginPage(), 200);
     }
     if (request.method !== "POST") return empty(405);
-    if (session || !sameOrigin(request, url) ||
+    if (!sameOrigin(request, url) ||
         !(request.headers.get("content-type") ?? "").startsWith("application/x-www-form-urlencoded")) {
-      return empty(403);
+      return page(loginPage(false, true), 403);
     }
+    if (session) return new Response(null, {
+      status: 303, headers: { location: PAGE, "cache-control": "no-store" },
+    });
     const body = await request.text();
     if (body.length > 4096) return empty(413);
     const ipHash = await hashHex(request.headers.get("cf-connecting-ip") ?? "unknown");
@@ -118,7 +121,15 @@ export class DeviceAdminDashboard {
 }
 
 function sameOrigin(request: Request, url: URL): boolean {
-  return request.headers.get("origin") === url.origin;
+  const origin = request.headers.get("origin");
+  const site = request.headers.get("sec-fetch-site");
+  // Fetch Metadata is browser-controlled. Reject cross-site requests even
+  // when an Origin header appears to match our own host.
+  if (site !== null && site !== "same-origin") return false;
+  if (origin === url.origin) return true;
+  // Some legitimate form navigations omit Origin (or send "null").
+  // Never accept this fallback without affirmative same-origin metadata.
+  return (origin === null || origin === "null") && site === "same-origin";
 }
 function cookie(request: Request): string | undefined {
   return request.headers.get("cookie")?.split(";").map((v) => v.trim())
@@ -192,11 +203,12 @@ footer{margin:30px 0;color:var(--muted);font-size:12px}#error{color:#fca5a5}
 @media(max-width:700px){.shell{padding:22px 14px}.stats{grid-template-columns:1fr}.card{padding:18px}.panel-header{align-items:flex-start;flex-direction:column}}
 `;
 
-function loginPage(invalid = false): string {
+function loginPage(invalid = false, invalidRequest = false): string {
   return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 — Acesso</title>
 <style nonce="__CSP_NONCE__">${CSS}</style><main class="card login"><div class="brand"><span class="mark">M</span>MCP V3</div>
 <h1>Painel de dispositivos</h1><p>Entre com a senha da sua conta MCP V3 para visualizar os computadores conectados.</p>
 ${invalid ? '<p id="error" role="alert">Credenciais não reconhecidas.</p>' : ""}
+${invalidRequest ? '<p id="error" role="alert">Não foi possível validar esta tentativa de login. Recarregue a página e tente novamente.</p>' : ""}
 <form method="post" action="/admin/devices"><label for="password">Senha da conta</label><input id="password" name="owner_password" type="password" autocomplete="current-password" required><button type="submit">Entrar</button></form>
 </main></html>`;
 }
