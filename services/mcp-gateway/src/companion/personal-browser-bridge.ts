@@ -974,10 +974,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.recorder.videoStart(...args);
   }
 
-  videoStop(
+  async videoStop(
     ...args: Parameters<BrowserExecutor["videoStop"]>
   ): ReturnType<BrowserExecutor["videoStop"]> {
-    return this.recorder.videoStop(...args);
+    const result = await this.recorder.videoStop(...args);
+    if (!result.artifactId) return result;
+    const tabs = await this.tabs({}, args[1]);
+    const owned = tabs.tabs.find((tab) => tab.tabId === args[0].tabId && tab.ownership === "mcp");
+    return { ...result, ...(owned?.taskId ? { taskId: owned.taskId } : {}) };
+  }
+
+  readArtifact(input: { artifactId: string; ownerScope?: string; offset: number }) {
+    return this.recorder.readArtifact(input);
   }
 
   async pdf(...args: Parameters<BrowserExecutor["pdf"]>): ReturnType<BrowserExecutor["pdf"]> {

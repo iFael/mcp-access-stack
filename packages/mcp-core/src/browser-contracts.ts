@@ -1482,6 +1482,8 @@ export const browserVideoStopResultSchema = browserArtifactSchema
   .extend({
     tabId: tabIdSchema,
     kind: z.literal("video"),
+    artifactId: z.uuid().optional(),
+    taskId: z.string().min(1).max(128).optional(),
   })
   .strict();
 export type BrowserVideoStopResult = z.infer<

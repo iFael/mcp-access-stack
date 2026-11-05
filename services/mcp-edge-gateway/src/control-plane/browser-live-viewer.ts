@@ -35,6 +35,7 @@ export type BrowserLiveViewerDependencies = {
   registerViewerDevice(userId: string, existingDeviceId?: string): Promise<string>;
   viewerDeviceAuthorized(userId: string, viewerDeviceId: string): Promise<boolean>;
   authorizeSource(userId: string, scope: BrowserViewerScope): Promise<boolean>;
+  artifact?(request: Request, userId: string, scope: BrowserViewerScope, artifactId: string, offset: number): Promise<Response>;
   frame(
     request: Request,
     userId: string,
@@ -63,7 +64,7 @@ export class BrowserLiveViewer {
     const url = new URL(request.url);
     const parsed = parseViewerPath(url.pathname);
     if (!parsed) return new Response(null, { status: 404 });
-    const { scope, isFrame, pagePath } = parsed;
+    const { scope, isFrame, pagePath, artifactId, isArtifactChunk } = parsed;
     const session = await this.readSession(request, scope);
 
     if (isFrame) {
@@ -87,8 +88,22 @@ export class BrowserLiveViewer {
       );
     }
 
+    if (artifactId && isArtifactChunk) {
+      if (request.method !== "GET") return new Response(null, { status: 405 });
+      if (!session) return json({ error: "viewer_auth_required" }, 401);
+      const offsetText = url.searchParams.get("offset") ?? "0";
+      if (!/^(?:0|[1-9][0-9]{0,14})$/u.test(offsetText)) {
+        return json({ error: "invalid_artifact_offset" }, 400);
+      }
+      if (!this.dependencies.artifact) return json({ error: "artifact_unavailable" }, 503);
+      return withPrivateHeaders(await this.dependencies.artifact(
+        request, session.userId, scope, artifactId, Number(offsetText),
+      ));
+    }
+
     if (request.method === "GET") {
       if (session) {
+        if (artifactId) return html(artifactPage(), 200);
         if (!(await this.dependencies.authorizeSource(session.userId, scope))) {
           return new Response(null, { status: 404 });
         }
@@ -141,7 +156,7 @@ export class BrowserLiveViewer {
     }
     await this.storage.delete(throttleKey);
 
-    if (!(await this.dependencies.authorizeSource(identity.userId, scope))) {
+    if (!artifactId && !(await this.dependencies.authorizeSource(identity.userId, scope))) {
       return new Response(null, { status: 404 });
     }
 
@@ -169,7 +184,7 @@ export class BrowserLiveViewer {
     await this.storage.put(activeKey, key);
 
     const headers = new Headers({
-      location: pagePath,
+      location: artifactId ? url.pathname : pagePath,
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
     });
@@ -214,7 +229,7 @@ export class BrowserLiveViewer {
 
 function parseViewerPath(
   pathname: string,
-): { scope: BrowserViewerScope; isFrame: boolean; pagePath: string } | null {
+): { scope: BrowserViewerScope; isFrame: boolean; pagePath: string; artifactId?: string; isArtifactChunk: boolean } | null {
   const raw = pathname.split("/").filter(Boolean);
   let segments: string[];
   try {
@@ -225,7 +240,12 @@ function parseViewerPath(
   if (segments[0] !== "viewer") return null;
 
   const isFrame = segments.at(-1) === "frame";
-  const base = isFrame ? segments.slice(0, -1) : segments;
+  const isArtifactChunk = segments.at(-1) === "chunk" && segments.at(-3) === "artifact";
+  const isArtifactPage = segments.at(-2) === "artifact";
+  const artifactId = isArtifactChunk ? segments.at(-2) : isArtifactPage ? segments.at(-1) : undefined;
+  if (artifactId && !/^[0-9a-f-]{36}$/u.test(artifactId)) return null;
+  const base = isArtifactChunk ? segments.slice(0, -3) : isArtifactPage ? segments.slice(0, -2)
+    : isFrame ? segments.slice(0, -1) : segments;
   if (base[1] === "runtime" && base.length === 6) {
     const [, , runtimeId, browserEpoch, taskId, tabId] = base;
     if (
@@ -250,6 +270,8 @@ function parseViewerPath(
     return {
       scope,
       isFrame,
+      ...(artifactId ? { artifactId } : {}),
+      isArtifactChunk,
       pagePath: `/viewer/runtime/${encodeURIComponent(runtimeId)}/${encodeURIComponent(
         browserEpoch,
       )}/${encodeURIComponent(taskId)}/${encodeURIComponent(tabId)}`,
@@ -277,6 +299,8 @@ function parseViewerPath(
     return {
       scope,
       isFrame,
+      ...(artifactId ? { artifactId } : {}),
+      isArtifactChunk,
       pagePath: `/viewer/device/${encodeURIComponent(deviceId)}/${encodeURIComponent(
         taskId,
       )}/${encodeURIComponent(tabId)}`,
@@ -310,6 +334,41 @@ function loginPage(error = ""): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>body{font:16px system-ui;background:#171923;color:#f8f8ff;margin:3rem auto;max-width:24rem;padding:1rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.7rem;margin-top:.3rem}button{padding:.7rem 1rem}</style><h1>Browser live viewer</h1><p>Sign in to view this agent tab.</p>${error ? `<p role="alert">${error}</p>` : ""}<form method="post"><label>Access password<input name="owner_password" type="password" autocomplete="current-password" required></label><button type="submit">View tab</button></form></html>`;
 }
 
+function artifactPage(): string {
+  return `<!doctype html><html lang="en"><meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MCP V3 media preview</title>
+  <style>body{font:16px system-ui;background:#171923;color:#f8f8ff;margin:2rem auto;max-width:60rem;padding:1rem}
+  video,img{max-width:100%;max-height:70vh;display:none;margin:1rem auto}
+  a{color:#91bbff}p{overflow-wrap:anywhere}</style>
+  <h1>Browser media preview</h1><p id="status">Loading recording…</p>
+  <video id="video" controls playsinline></video><img id="image" alt="Animated preview">
+  <p><a id="download" hidden>Download recording</a></p>
+  <script>(async()=>{const status=document.getElementById('status'),link=document.getElementById('download');
+    try{let offset=0,mime='',filename='',parts=[];
+      for(;;){const reply=await fetch(location.pathname+'/chunk?offset='+offset,{cache:'no-store'});
+        if(!reply.ok)throw new Error('Recording unavailable or expired');
+        const chunk=await reply.json();
+        if(chunk.offset!==offset||!Number.isSafeInteger(chunk.nextOffset)||
+          chunk.nextOffset<=offset||chunk.nextOffset>chunk.sizeBytes||
+          typeof chunk.contentBase64!=='string')throw new Error('Invalid recording chunk');
+        if(!mime){mime=chunk.mimeType;filename=chunk.filename;}
+        const raw=atob(chunk.contentBase64);
+        const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+        if(bytes.byteLength!==chunk.nextOffset-offset)throw new Error('Incomplete recording chunk');
+        parts.push(bytes);offset=chunk.nextOffset;
+        status.textContent='Loading '+Math.round(offset*100/chunk.sizeBytes)+'%';
+        if(offset===chunk.sizeBytes)break;
+      }
+      const object=URL.createObjectURL(new Blob(parts,{type:mime}));
+      const preview=document.getElementById(mime==='image/gif'?'image':'video');
+      preview.src=object;preview.style.display='block';
+      link.href=object;link.download=filename;link.hidden=false;
+      status.textContent='Recording ready';
+    }catch{status.textContent='Unable to load recording. It may have expired or the runtime is offline.'}
+  })();</script></html>`;
+}
+
 function viewerPage(): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>html,body{margin:0;background:#111;color:#eee;font:14px system-ui}header{padding:.6rem 1rem;background:#222}main{height:calc(100vh - 3rem);display:grid;place-items:center}img{max-width:100vw;max-height:calc(100vh - 3rem);object-fit:contain}</style><header>Agent browser · read only <span id="status">Connecting…</span></header><main><img id="frame" alt="Live agent browser tab" draggable="false"></main><script>let seq=0,generation=0;const image=document.getElementById('frame'),status=document.getElementById('status');const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));async function poll(run){while(run===generation){try{const result=await fetch(location.pathname+'/frame?afterSeq='+seq,{cache:'no-store'});if(run!==generation)break;if(result.status===404||result.status===401){status.textContent='View ended';break}if(result.status===204){await pause(250);continue}if(result.ok){const frame=await result.json();if(frame.seq>seq){seq=frame.seq;image.src='data:image/jpeg;base64,'+frame.data;status.textContent='Live'}}else{status.textContent='Reconnecting…';await pause(1000)}}catch{status.textContent='Reconnecting…';await pause(1000)}}}document.addEventListener('visibilitychange',()=>{generation++;if(!document.hidden)poll(generation)});if(!document.hidden)poll(generation);</script></html>`;
 }
@@ -321,7 +380,7 @@ function html(body: string, status: number): Response {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'none'; connect-src 'self'; img-src data: blob:; media-src blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },

@@ -2,6 +2,28 @@ import { describe, expect, it } from "@jest/globals";
 import { addBrowserViewerLinks } from "../src/control-plane/browser-viewer-links.js";
 
 describe("browser viewer links", () => {
+  it("adds a video artifact link without exposing a local path", () => {
+    const response = {
+      result: {
+        content: [] as Array<{ type: string; text: string }>,
+        structuredContent: {
+          action: "stop",
+          tabId: "tab-1",
+          taskId: "task-1",
+          kind: "video",
+          artifactId: "11111111-1111-4111-8111-111111111111",
+          path: "/private/server/recording.mp4",
+        },
+      },
+    };
+    expect(addBrowserViewerLinks(response, "https://edge.example/", {
+      kind: "device", deviceId: "dev_11111111-1111-4111-8111-111111111111",
+    })).toBe(1);
+    expect(response.result.structuredContent).toHaveProperty("viewerUrl",
+      "https://edge.example/viewer/device/dev_11111111-1111-4111-8111-111111111111/task-1/tab-1/artifact/11111111-1111-4111-8111-111111111111");
+    expect(response.result.content[0]?.text).not.toContain("/private/server");
+  });
+
   it("adds credential-free links only to owned task tabs", () => {
     const sourceRuntime =
       "rt_11111111-1111-4111-8111-111111111111";

@@ -6,6 +6,7 @@ import {
   type BrowserExecutor,
   type OperationContext,
 } from "@vs-code-gpt/shared";
+import { BrowserArtifactRegistry, type BrowserArtifactChunk } from "@vs-code-gpt/shared/browser-artifact-registry";
 import {
   exportBrowserVideo,
   requireBrowserVideoEncoder,
@@ -79,6 +80,7 @@ interface Recording {
  * the last consumer stops.
  */
 export class PersonalBrowserRecorder {
+  private readonly artifacts: BrowserArtifactRegistry;
   private readonly byTab = new Map<string, Recording>();
   private readonly byId = new Map<string, Recording>();
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -86,7 +88,13 @@ export class PersonalBrowserRecorder {
   constructor(
     private readonly artifactsRoot: string,
     private readonly control: PersonalRecordingControl,
-  ) {}
+  ) {
+    this.artifacts = new BrowserArtifactRegistry(path.join(artifactsRoot, "videos"));
+  }
+
+  readArtifact(input: { artifactId: string; ownerScope?: string; offset: number }): Promise<BrowserArtifactChunk> {
+    return this.artifacts.read(input);
+  }
 
   isActive(tabId: string, kind: "video" | "trace"): boolean {
     return this.byTab.get(tabId)?.[kind] !== undefined;
@@ -139,7 +147,14 @@ export class PersonalBrowserRecorder {
         }
         const sizeBytes = video.format === "webm" ? webmBytes :
           await exportBrowserVideo(webmPath, video.path, video.format, MAX_RECORDING_BYTES);
+        const artifactId = await this.artifacts.register({
+          path: video.path,
+          ...(context?.ownerScope ? { ownerScope: context.ownerScope } : {}),
+          mimeType: video.format === "gif" ? "image/gif"
+            : video.format === "mp4" ? "video/mp4" : "video/webm",
+        });
         return { tabId: input.tabId, kind: "video" as const, path: video.path, sizeBytes,
+          ...(artifactId ? { artifactId } : {}),
           createdAt: new Date(stoppedAt).toISOString() };
       } finally {
         if (webmPath !== video.path) await rm(webmPath, { force: true }).catch(() => undefined);

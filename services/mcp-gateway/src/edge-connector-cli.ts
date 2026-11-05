@@ -139,6 +139,8 @@ async function main(): Promise<void> {
       ? {}
       : {
           browser: browserPool,
+          browserArtifactChunk: (input: { artifactId: string; offset: number }, context: { ownerScope: string }) =>
+            browserPool.readArtifact(input, context),
           browserLiveFrame: (
             input: {
               taskId: string;

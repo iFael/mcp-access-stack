@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
@@ -16,6 +16,52 @@ afterEach(async () => {
 });
 
 describe("ScopedBrowserWorkerPool", () => {
+  it("preserves completed media for the owner after the final Browser Worker is retired", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-media-"));
+    temporaryRoots.push(root);
+    const close = jest.fn(async () => undefined);
+    let workerRoot = "";
+    const startWorker = jest.fn(async (options: { stateRoot: string }) => {
+      workerRoot = options.stateRoot;
+      const storage = path.join(workerRoot, "direct", "artifacts");
+      await mkdir(storage, { recursive: true, mode: 0o700 });
+      const output = path.join(storage, "preview.mp4");
+      await writeFile(output, Buffer.from("verified-video-content"));
+      return {
+        client: {
+          open: jest.fn(async () => ({ tab: { taskId: "task-media", tabId: "tab-media" } })),
+          videoStop: jest.fn(async () => ({
+            tabId: "tab-media", kind: "video", path: output,
+            createdAt: new Date().toISOString(), sizeBytes: 22,
+          })),
+          finishTask: jest.fn(async () => ({
+            taskId: "task-media", completed: true, closedTabs: 1,
+            closedTabIds: ["tab-media"], browserClosed: true,
+          })),
+        } as unknown as BrowserExecutor,
+        close,
+      };
+    });
+    const pool = await ScopedBrowserWorkerPool.create({
+      releaseRoot: root, stateRoot: path.join(root, "state"), startWorker: startWorker as never,
+    });
+    const owner = { ownerScope: "user:alice" };
+    await pool.open({ url: "https://example.test" } as never, owner);
+    const video = await pool.videoStop({ tabId: "tab-media" }, owner);
+    expect(video.artifactId).toMatch(/^[a-f0-9-]{36}$/);
+    await pool.finishTask({ taskId: "task-media" }, owner);
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(access(workerRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    const chunk = await pool.readArtifact({ artifactId: video.artifactId!, offset: 0 }, owner);
+    expect(chunk.mimeType).toBe("video/mp4");
+    expect(Buffer.from(chunk.contentBase64, "base64").toString()).toBe("verified-video-content");
+    expect(JSON.stringify(chunk)).not.toContain(workerRoot);
+    await expect(pool.readArtifact({ artifactId: video.artifactId!, offset: 0 },
+      { ownerScope: "user:bob" })).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+    await pool.close();
+  });
+
+
   it("keeps idle status and tabs process-free", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-idle-"));
     temporaryRoots.push(root);

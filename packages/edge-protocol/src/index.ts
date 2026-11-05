@@ -142,7 +142,7 @@ export function isAllowedEdgeRequest(method: string, path: string): method is Ed
   if (pathname === "/authorize") {
     return normalizedMethod === "GET" || normalizedMethod === "POST";
   }
-  if (pathname === "/_viewer/frame") {
+  if (pathname === "/_viewer/frame" || pathname === "/_viewer/artifact") {
     return normalizedMethod === "GET";
   }
   if (

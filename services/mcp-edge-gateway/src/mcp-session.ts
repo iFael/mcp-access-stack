@@ -842,6 +842,37 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         (await this.accountStore.getActiveDeviceForUser(userId, deviceId)) !== null,
       authorizeSource: (userId, scope) =>
         this.authorizeBrowserViewerSource(userId, scope),
+      artifact: async (viewerRequest, userId, scope, artifactId, offset) => {
+        let socket: WebSocket | undefined;
+        let protocolVersion: typeof EDGE_PROTOCOL_VERSION | typeof COMPANION_PROTOCOL_VERSION;
+        if (scope.kind === "runtime") {
+          const current = await this.getCurrentPrimaryBrowserAffinity();
+          if (!current || current.runtimeId !== scope.runtimeId || current.browserEpoch !== scope.browserEpoch) {
+            return jsonResponse({ error: "browser_offline" }, 503);
+          }
+          socket = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION) ?? undefined;
+          protocolVersion = EDGE_PROTOCOL_VERSION;
+        } else {
+          const selected = this.getReadyCompanionsForUser(userId).find(
+            ({ attachment }) => attachment.deviceId === scope.deviceId,
+          );
+          socket = selected?.webSocket;
+          protocolVersion = COMPANION_PROTOCOL_VERSION;
+        }
+        if (!socket) return jsonResponse({ error: "browser_offline" }, 503);
+        const target = new URL(viewerRequest.url);
+        target.pathname = "/_viewer/artifact";
+        target.search = new URLSearchParams({ artifactId, offset: String(offset) }).toString();
+        return this.relayAuthenticatedRequestTo(
+          new Request(target, { method: "GET", signal: viewerRequest.signal }),
+          "",
+          { subject: `viewer:${userId}`, scopes: ["workspaces:read"], ownerScope: "owner", userId },
+          socket,
+          protocolVersion,
+          undefined,
+          15_000,
+        );
+      },
       frame: async (viewerRequest, userId, scope, afterSeq) => {
         let targetSocket: WebSocket | undefined;
         let protocolVersion:
@@ -1586,7 +1617,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         ]);
       }
     }
-    if (selected.target.attachment.capabilities?.includes("browser-live-view-v1")) {
+    if (invocation.name === "browser_video" || selected.target.attachment.capabilities?.includes("browser-live-view-v1")) {
       return this.attachBrowserViewerLinks(response, {
         kind: "device",
         deviceId: selectedDeviceId,

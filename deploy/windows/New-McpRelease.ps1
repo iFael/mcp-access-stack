@@ -264,6 +264,60 @@ try {
     if ($LASTEXITCODE -ne 0 -or (($gitVersion | Out-String) -notmatch 'git version 2\.55\.0\.windows\.3')) {
         throw 'Bundled MinGit failed version verification.'
     }
+    # Bundle an immutable full FFmpeg for GIF/H.264 browser previews.
+    $ffmpegRelease = 'autobuild-2026-11-03-12-50'
+    $ffmpegAsset = 'ffmpeg-N-128352-gec887b13a8-win64-gpl.zip'
+    $ffmpegBaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegRelease"
+    $ffmpegChecksumPath = Join-Path $staging '.ffmpeg-checksums.sha256'
+    $ffmpegUnpacked = Join-Path $staging '.ffmpeg-unpacked'
+    try {
+        Invoke-WebRequest -Uri "$ffmpegBaseUrl/checksums.sha256" -OutFile $ffmpegChecksumPath -UseBasicParsing
+        $expectedChecksumManifestSha = 'a48ca149c424241395907ce66d0ec7337cf62ef6dc0ca58706a4249897bfebcb'
+        $manifestSha = (Get-FileHash -LiteralPath $ffmpegChecksumPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($manifestSha -ne $expectedChecksumManifestSha) {
+            throw 'FFmpeg upstream checksum manifest failed SHA-256 verification.'
+        }
+        $ffmpegEntry = @(Get-Content -LiteralPath $ffmpegChecksumPath | Where-Object { $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [Regex]::Escape($ffmpegAsset) + '$') })
+        if ($ffmpegEntry.Count -ne 1) { throw 'FFmpeg release checksum entry is missing or ambiguous.' }
+        $ffmpegSha = ($ffmpegEntry[0] -split '\s+')[0].ToLowerInvariant()
+        Install-VerifiedZipArchive -Uri "$ffmpegBaseUrl/$ffmpegAsset" -Sha256 $ffmpegSha -Destination $ffmpegUnpacked -Label 'FFmpeg GPL static Windows build'
+        $ffmpegCandidates = @(Get-ChildItem -LiteralPath $ffmpegUnpacked -Recurse -File -Filter 'ffmpeg.exe')
+        if ($ffmpegCandidates.Count -ne 1) { throw 'Verified FFmpeg archive lacks exactly one ffmpeg.exe.' }
+        $mediaRoot = Join-Path $staging 'runtime\media'
+        New-Item -ItemType Directory -Path $mediaRoot -Force | Out-Null
+        $bundledFfmpeg = Join-Path $mediaRoot 'ffmpeg.exe'
+        Copy-Item -LiteralPath $ffmpegCandidates[0].FullName -Destination $bundledFfmpeg
+        $ffmpegLicenses = @(Get-ChildItem -LiteralPath $ffmpegUnpacked -Recurse -File -Filter 'LICENSE.txt')
+        if ($ffmpegLicenses.Count -ne 1) { throw 'Verified FFmpeg archive lacks a single license file.' }
+        Copy-Item -LiteralPath $ffmpegLicenses[0].FullName -Destination (Join-Path $mediaRoot 'LICENSE.ffmpeg.txt')
+        $ffmpegEncoders = @(& $bundledFfmpeg -hide_banner -encoders)
+        if ($LASTEXITCODE -ne 0 -or
+            (($ffmpegEncoders | Out-String) -notmatch '(?m)^\s*V\S*\s+libx264\s') -or
+            (($ffmpegEncoders | Out-String) -notmatch '(?m)^\s*V\S*\s+gif\s')) {
+            throw 'Bundled FFmpeg lacks required GIF or libx264 encoders.'
+        }
+        $probe = Join-Path $staging '.ffmpeg-probe.mp4'
+        try {
+            & $bundledFfmpeg -nostdin -hide_banner -loglevel error -f lavfi -i 'testsrc2=s=160x90:r=10:d=0.5' -an -c:v libx264 -pix_fmt yuv420p -y $probe
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $probe -PathType Leaf)) {
+                throw 'Bundled FFmpeg failed a real H.264 encoding smoke test.'
+            }
+            $gifProbe = Join-Path $staging '.ffmpeg-probe.gif'
+            & $bundledFfmpeg -nostdin -hide_banner -loglevel error -f lavfi -i 'testsrc2=s=160x90:r=10:d=0.5' -an -c:v gif -y $gifProbe
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $gifProbe -PathType Leaf)) {
+                throw 'Bundled FFmpeg failed a real GIF encoding smoke test.'
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $gifProbe -Force -ErrorAction SilentlyContinue
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $ffmpegChecksumPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $ffmpegUnpacked -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     $fileHashes = @(
         Get-ChildItem -LiteralPath $staging -Recurse -File |
             Where-Object {

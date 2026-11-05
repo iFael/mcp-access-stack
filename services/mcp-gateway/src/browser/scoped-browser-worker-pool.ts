@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, realpath, rm, unlink } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
+import { BrowserArtifactRegistry, type BrowserArtifactChunk } from "@vs-code-gpt/shared/browser-artifact-registry";
 import {
   AppError,
   type BrowserExecutor,
@@ -46,11 +48,16 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   private readonly pendingReleases = new Set<string>();
   private readonly tabTaskScopes = new Map<string, Set<string>>();
   private readonly scopesRoot: string;
+  private readonly mediaRoot: string;
+  private readonly media: BrowserArtifactRegistry;
   private readonly maxScopes: number;
+  private mediaSweep: ReturnType<typeof setInterval> | undefined;
   private closed = false;
 
   private constructor(private readonly options: ScopedBrowserWorkerPoolOptions) {
     this.scopesRoot = path.join(path.resolve(options.stateRoot), "browser-scopes");
+    this.mediaRoot = path.join(path.resolve(options.stateRoot), "browser-media");
+    this.media = new BrowserArtifactRegistry(this.mediaRoot, true);
     this.maxScopes = options.maxScopes ?? DEFAULT_MAX_SCOPES;
   }
 
@@ -60,12 +67,17 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     const pool = new ScopedBrowserWorkerPool(options);
     await rm(pool.scopesRoot, { recursive: true, force: true });
     await mkdir(pool.scopesRoot, { recursive: true, mode: 0o700 });
+    await rm(pool.mediaRoot, { recursive: true, force: true });
+    await mkdir(pool.mediaRoot, { recursive: true, mode: 0o700 });
+    pool.mediaSweep = setInterval(() => { void pool.media.sweep().catch(() => undefined); }, 60_000);
+    pool.mediaSweep.unref();
     return pool;
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.mediaSweep) clearInterval(this.mediaSweep);
     const workers = [...this.workers.values()];
     const retirements = [...this.retiringWorkers.values()];
     this.workers.clear();
@@ -81,6 +93,7 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
       ...retirements,
     ]);
     await rm(this.scopesRoot, { recursive: true, force: true });
+    await rm(this.mediaRoot, { recursive: true, force: true });
   }
 
   async status(
@@ -356,10 +369,38 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     return this.invoke(args[1], (client) => client.videoStart(...args));
   }
 
-  videoStop(
+  async videoStop(
     ...args: Parameters<BrowserExecutor["videoStop"]>
   ): ReturnType<BrowserExecutor["videoStop"]> {
-    return this.invoke(args[1], (client) => client.videoStop(...args));
+    const ownerScope = args[1]?.ownerScope?.trim();
+    const result = await this.invoke(args[1], (client) => client.videoStop(...args));
+    if (!ownerScope) return result;
+    const allowedRoot = await realpath(path.join(this.scopesRoot, scopeDirectoryName(ownerScope)));
+    const source = await realpath(result.path);
+    const relative = path.relative(allowedRoot, source);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new AppError("BLOCKED_PATH", "Browser video is not under the authorized browser runtime.");
+    }
+    const extension = path.extname(source).toLowerCase();
+    if (![".webm", ".gif", ".mp4"].includes(extension)) {
+      throw new AppError("INVALID_ARGUMENT", "Browser video returned an unsupported format.");
+    }
+    const target = path.join(this.mediaRoot, `${randomUUID()}${extension}`);
+    await copyFile(source, target, fsConstants.COPYFILE_EXCL);
+    try {
+      await chmod(target, 0o600);
+      const artifactId = await this.media.register({
+        path: target,
+        ownerScope,
+        mimeType: extension === ".gif" ? "image/gif"
+          : extension === ".mp4" ? "video/mp4" : "video/webm",
+      });
+      if (!artifactId) throw new AppError("AUTHENTICATION_REQUIRED", "Artifact owner was not authenticated.");
+      return { ...result, artifactId };
+    } catch (error) {
+      await unlink(target).catch(() => undefined);
+      throw error;
+    }
   }
 
   pdf(...args: Parameters<BrowserExecutor["pdf"]>): ReturnType<BrowserExecutor["pdf"]> {
@@ -370,6 +411,11 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     ...args: Parameters<BrowserExecutor["diagnostics"]>
   ): ReturnType<BrowserExecutor["diagnostics"]> {
     return this.invoke(args[1], (client) => client.diagnostics(...args));
+  }
+
+  async readArtifact(input: { artifactId: string; offset: number },
+    context: { ownerScope: string }): Promise<BrowserArtifactChunk> {
+    return this.media.read({ ...input, ownerScope: context.ownerScope });
   }
 
   async readLiveFrame(

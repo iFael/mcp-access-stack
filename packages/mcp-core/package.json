@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./browser-artifact-registry": {
+      "types": "./dist/browser-artifact-registry.d.ts",
+      "import": "./dist/browser-artifact-registry.js"
+    },
     "./browser-video-export": {
       "types": "./dist/browser-video-export.d.ts",
       "import": "./dist/browser-video-export.js"

@@ -1,3 +1,4 @@
+import type { BrowserArtifactChunk } from "@vs-code-gpt/shared/browser-artifact-registry";
 import type {
   BrowserExecutor,
   RepositoryExecutor,
@@ -51,6 +52,7 @@ export interface GatewayApplication {
 export interface GatewayApplicationDependencies {
   logger?: Logger;
   browser?: BrowserExecutor;
+  browserArtifactChunk?: (input: { artifactId: string; offset: number }, context: { ownerScope: string }) => Promise<BrowserArtifactChunk>;
   browserLiveFrame?: (
     input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
     context: { ownerScope: string },
@@ -170,6 +172,28 @@ export function createGatewayApplication(
         }
       },
     );
+  }
+
+  if (edgeTrustedAuthMiddleware && dependencies.browserArtifactChunk) {
+    app.get("/_viewer/artifact", edgeTrustedAuthMiddleware, async (request: AuthenticatedRequest, response) => {
+      const userId = request.auth?.extra?.userId;
+      const artifactId = typeof request.query.artifactId === "string" ? request.query.artifactId : "";
+      const offset = typeof request.query.offset === "string" ? request.query.offset : "0";
+      if (typeof userId !== "string" || !userId ||
+          !/^[0-9a-f-]{36}$/u.test(artifactId) ||
+          !/^(?:0|[1-9][0-9]{0,14})$/u.test(offset)) {
+        response.status(400).json({ error: "invalid_artifact_request" });
+        return;
+      }
+      try {
+        response.json(await dependencies.browserArtifactChunk!(
+          { artifactId, offset: Number(offset) },
+          { ownerScope: `user:${userId}` },
+        ));
+      } catch {
+        response.status(404).json({ error: "artifact_unavailable" });
+      }
+    });
   }
 
   app.use(config.mcpPath, createMcpRequestLifecycleMiddleware(logger));

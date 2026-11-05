@@ -16,6 +16,22 @@ export function addBrowserViewerLinks(
     return 0;
   }
   const structured = body.result.structuredContent;
+  const artifactId = structured.artifactId;
+  const artifactTaskId = structured.taskId;
+  const artifactTabId = structured.tabId;
+  if (structured.action === "stop" && typeof artifactId === "string" &&
+      /^[0-9a-f-]{36}$/u.test(artifactId) && typeof artifactTaskId === "string" &&
+      typeof artifactTabId === "string" && artifactTaskId.length <= 128 && artifactTabId.length <= 128) {
+    const prefix = source.kind === "runtime"
+      ? `/viewer/runtime/${encodeURIComponent(source.runtimeId)}/${encodeURIComponent(source.browserEpoch)}`
+      : `/viewer/device/${encodeURIComponent(source.deviceId)}`;
+    const route = `${prefix}/${encodeURIComponent(artifactTaskId)}/${encodeURIComponent(artifactTabId)}/artifact/${artifactId}`;
+    structured.viewerUrl = new URL(route, publicBaseUrl).href;
+    if (Array.isArray(body.result.content)) body.result.content.push({
+      type: "text", text: `Video preview: ${structured.viewerUrl}`,
+    });
+    return 1;
+  }
   const tabs = Array.isArray(structured.tabs)
     ? structured.tabs
     : isRecord(structured.tab)

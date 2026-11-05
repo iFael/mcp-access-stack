@@ -125,6 +125,8 @@ else
   native_lib_dir="$source_root/runtime/native-libs/usr/lib/x86_64-linux-gnu"
   native_font_dir="$source_root/runtime/native-libs/usr/share/fonts"
   native_manifest="$source_root/runtime/native-libs/packages.v1.tsv"
+  [[ -x "$source_root/runtime/media/ffmpeg" ]] || fail "Prepared release is missing the full FFmpeg executable."
+  [[ -s "$source_root/runtime/media/LICENSE.ffmpeg.txt" ]] || fail "Prepared release is missing the FFmpeg license."
   [[ -d "$native_lib_dir" ]] || fail 'Prepared release is missing the Browser native library bundle.'
   [[ -d "$native_font_dir" ]] || fail 'Prepared release is missing the Browser font bundle.'
   [[ -n "$(find "$native_font_dir" -type f -name '*.ttf' -print -quit)" ]] ||

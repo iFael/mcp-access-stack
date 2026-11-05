@@ -31,7 +31,7 @@ source_root="$(readlink -f -- "$source_root")"
 # service account may not be able to read (find then fails on exit).
 cd /
 
-for command in node npx apt dpkg-deb ldd mktemp readlink sha256sum; do
+for command in node npx apt dpkg-deb ldd mktemp readlink sha256sum curl tar install; do
   command -v "$command" >/dev/null 2>&1 || fail "Required command was not found: $command"
 done
 
@@ -156,6 +156,53 @@ if (await page.title() !== "MCP V3 Browser Runtime") {
 await browser.close();
 NODE
 )
+
+# Full static FFmpeg for GIF/H.264 previews. Use an immutable upstream build.
+media_release='autobuild-2026-11-03-12-50'
+media_asset='ffmpeg-N-128352-gec887b13a8-linux64-gpl.tar.xz'
+media_url="https://github.com/BtbN/FFmpeg-Builds/releases/download/$media_release"
+media_checksum_file="$tmp/ffmpeg-checksums.sha256"
+media_archive="$tmp/$media_asset"
+curl --fail --location --retry 2 --connect-timeout 20 --max-time 240 \
+  --output "$media_checksum_file" "$media_url/checksums.sha256" ||
+  fail 'Unable to download pinned FFmpeg checksum manifest.'
+media_checksum_actual="$(sha256sum "$media_checksum_file" | cut -d' ' -f1)"
+[[ "$media_checksum_actual" == 'a48ca149c424241395907ce66d0ec7337cf62ef6dc0ca58706a4249897bfebcb' ]] ||
+  fail 'Pinned FFmpeg checksum manifest does not match its known digest.'
+media_sha="$(awk -v name="$media_asset" '$2 == name || $2 == "*" name { print $1 }' "$media_checksum_file")"
+[[ "$media_sha" =~ ^[a-f0-9]{64}$ ]] || fail 'FFmpeg archive checksum is missing or ambiguous.'
+curl --fail --location --retry 2 --connect-timeout 20 --max-time 300 \
+  --output "$media_archive" "$media_url/$media_asset" ||
+  fail 'Unable to download pinned FFmpeg media archive.'
+[[ "$(sha256sum "$media_archive" | cut -d' ' -f1)" == "$media_sha" ]] ||
+  fail 'FFmpeg media archive checksum mismatch.'
+media_entry="$(tar -tJf "$media_archive" | grep -E '^[^/]+/bin/ffmpeg$' || true)"
+[[ -n "$media_entry" && "$media_entry" != *$'\n'* ]] ||
+  fail 'Pinned FFmpeg archive must contain exactly one bin/ffmpeg.'
+media_root="$source_root/runtime/media"
+mkdir -p "$media_root"
+tar -xJOf "$media_archive" "$media_entry" > "$tmp/ffmpeg"
+install -m 0755 "$tmp/ffmpeg" "$media_root/ffmpeg"
+media_license="${media_entry%/bin/ffmpeg}/LICENSE.txt"
+tar -xJOf "$media_archive" "$media_license" > "$media_root/LICENSE.ffmpeg.txt" ||
+  fail 'Pinned FFmpeg archive lacks the applicable GPL license.'
+[[ -s "$media_root/LICENSE.ffmpeg.txt" ]] || fail 'FFmpeg GPL license is empty.'
+media_encoders="$("$media_root/ffmpeg" -hide_banner -encoders 2>/dev/null)" ||
+  fail 'Pinned FFmpeg failed to list video encoders.'
+grep -Eq '^[[:space:]]*V[^[:space:]]*[[:space:]]+libx264[[:space:]]' <<<"$media_encoders" ||
+  fail 'Pinned FFmpeg lacks libx264 encoder.'
+grep -Eq '^[[:space:]]*V[^[:space:]]*[[:space:]]+gif[[:space:]]' <<<"$media_encoders" ||
+  fail 'Pinned FFmpeg lacks GIF encoder.'
+"$media_root/ffmpeg" -nostdin -hide_banner -loglevel error -f lavfi \
+  -i 'testsrc2=s=160x90:r=10:d=0.5' -an -c:v libx264 -pix_fmt yuv420p \
+  -y "$tmp/ffmpeg-probe.mp4" ||
+  fail 'Pinned FFmpeg failed an actual H.264 encoding smoke test.'
+[[ -s "$tmp/ffmpeg-probe.mp4" ]] || fail 'Pinned FFmpeg produced an empty test MP4.'
+"$media_root/ffmpeg" -nostdin -hide_banner -loglevel error -f lavfi \
+  -i 'testsrc2=s=160x90:r=10:d=0.5' -an -c:v gif \
+  -y "$tmp/ffmpeg-probe.gif" ||
+  fail 'Pinned FFmpeg failed an actual GIF encoding smoke test.'
+[[ -s "$tmp/ffmpeg-probe.gif" ]] || fail 'Pinned FFmpeg produced an empty test GIF.'
 
 printf 'status=prepared\n'
 printf 'nativeLibPath=%s\n' "$libdir"

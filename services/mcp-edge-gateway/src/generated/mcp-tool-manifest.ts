@@ -26970,6 +26970,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "const": true,
           "type": "boolean"
         },
+        "artifactId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
         "createdAt": {
           "format": "date-time",
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
@@ -26990,6 +26995,11 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "integer"
         },
         "tabId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "taskId": {
           "maxLength": 128,
           "minLength": 1,
           "type": "string"
@@ -27240,15 +27250,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "315912202691014a57ed5dfcb1be9e2cf8d9a5272101d0c01ea6537de3e60bba",
-  "serverVersion": "0.4.0-catalog.c315912202691.sb65bd697da48",
+  "contractRevision": "50fcfb623c789ab8a1124d054854e71729773c4b275ad5271b417fe5370e5549",
+  "serverVersion": "0.4.0-catalog.c50fcfb623c78.sb65bd697da48",
   "toolCount": 121,
   "toolSetRevision": "b65bd697da48ad28205a3079de31ce4f2f9083ebf82a3d652c9ceda7ff34a24a"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c315912202691.sb65bd697da48"
+  "version": "0.4.0-catalog.c50fcfb623c78.sb65bd697da48"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

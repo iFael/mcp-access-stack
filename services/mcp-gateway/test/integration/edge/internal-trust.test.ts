@@ -214,6 +214,54 @@ describe("embedded Gateway edge-trusted mode", () => {
     }
   });
 
+  it("serves bounded media chunks only to a verified Edge identity", async () => {
+    const seen: unknown[] = [];
+    const artifactId = "11111111-1111-4111-8111-111111111111";
+    const gateway = createGatewayApplication(makeGatewayConfig(), {
+      logger: silentLogger(),
+      workspaceExecutor: createTestExecutor(),
+      sourceControlExecutor: createTestExecutor(),
+      workspaceReady: () => true,
+      edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
+      browserArtifactChunk: async (input, context) => {
+        seen.push({ input, context });
+        return {
+          artifactId, filename: "demo.mp4", mimeType: "video/mp4",
+          sizeBytes: 3, offset: 0, nextOffset: 3,
+          contentBase64: "YWJj",
+        };
+      },
+    });
+    const http = await listenGateway(gateway.app);
+    try {
+      const target = new URL(`/_viewer/artifact?artifactId=${artifactId}&offset=0`, http.url);
+      expect((await fetch(target)).status).toBe(401);
+      const viewerPrincipal = { ...PRINCIPAL, userId: "usr_11111111-1111-4111-8111-111111111111" };
+      const response = await fetch(target, {
+        headers: {
+          "x-mcp-edge-internal-assertion": INTERNAL_ASSERTION,
+          "x-mcp-edge-principal": Buffer.from(JSON.stringify(viewerPrincipal), "utf8").toString("base64url"),
+        },
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        artifactId, contentBase64: "YWJj", offset: 0, nextOffset: 3,
+      });
+      expect(seen).toEqual([{
+        input: { artifactId, offset: 0 },
+        context: { ownerScope: `user:${viewerPrincipal.userId}` },
+      }]);
+      expect((await fetch(new URL("/_viewer/artifact?artifactId=not-an-id", http.url), {
+        headers: {
+          "x-mcp-edge-internal-assertion": INTERNAL_ASSERTION,
+          "x-mcp-edge-principal": Buffer.from(JSON.stringify(viewerPrincipal), "utf8").toString("base64url"),
+        },
+      })).status).toBe(400);
+    } finally {
+      await http.close();
+    }
+  });
+
   it("accepts a sanitized principal only with the connector-owned assertion", async () => {
     const config = makeGatewayConfig();
     const gateway = createGatewayApplication(config, {

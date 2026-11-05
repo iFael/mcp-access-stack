@@ -243,6 +243,8 @@ const browserVideoToolResultSchema = z
     kind: z.literal("video").optional(),
     sizeBytes: c.browserArtifactSchema.shape.sizeBytes.optional(),
     createdAt: c.browserArtifactSchema.shape.createdAt.optional(),
+    artifactId: c.browserVideoStopResultSchema.shape.artifactId,
+    taskId: c.browserVideoStopResultSchema.shape.taskId,
   })
   .strict()
   .superRefine((result, context) => {
@@ -250,7 +252,7 @@ const browserVideoToolResultSchema = z
       requireDefinedFields(result, ["active"], context, "video start");
       rejectDefinedFields(
         result,
-        ["kind", "sizeBytes", "createdAt"],
+        ["kind", "sizeBytes", "createdAt", "artifactId", "taskId"],
         context,
         "video start",
       );

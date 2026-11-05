@@ -112,6 +112,8 @@ required_files=(
   "deploy/linux/Update-McpAccessStack.sh"
   "deploy/linux/Prepare-McpBrowserRuntime.sh"
   "runtime/native-libs/packages.v1.tsv"
+  "runtime/media/ffmpeg"
+  "runtime/media/LICENSE.ffmpeg.txt"
   "deploy/linux/Start-McpAccessStackCutover.sh"
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
   "deploy/linux/mcp-access-stack-edge-connector.service"

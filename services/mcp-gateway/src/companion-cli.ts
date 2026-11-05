@@ -175,6 +175,8 @@ async function main(): Promise<void> {
       : {
           browser,
         }),
+    ...(personalBrowser === undefined ? {} : { browserArtifactChunk: (input: { artifactId: string; offset: number }, context: { ownerScope: string }) =>
+      personalBrowser.readArtifact({ ...input, ownerScope: context.ownerScope }) }),
     workspaceReady: () => true,
     edgeTrust: { internalAssertion },
     onConversationCall: (call) => conversations.noteCall(call),
@@ -366,6 +368,7 @@ function configureBundledRuntimeTools(
   environment: NodeJS.ProcessEnv,
 ): void {
   if (process.platform !== "win32") return;
+  environment.MCP_BROWSER_MEDIA_FFMPEG_PATH = path.join(releaseRoot, "runtime", "media", "ffmpeg.exe");
   const bundledGit = path.join(releaseRoot, "runtime", "git", "cmd");
   const pathKey = Object.keys(environment)
     .find((key) => key.toLowerCase() === "path") ?? "PATH";

@@ -188,6 +188,7 @@ export MCP_CONNECTOR_TOKEN_FILE="$connector_token_file"
 export VS_CODE_GPT_POLICY_PATH="$policy_path"
 export VS_CODE_GPT_STACK_ROOT="$project_root"
 export MCP_RELEASE_ROOT="$release_root"
+export MCP_BROWSER_MEDIA_FFMPEG_PATH="$release_root/runtime/media/ffmpeg"
 if $browser_runtime_ready; then
   export PLAYWRIGHT_BROWSERS_PATH='0'
   export LD_LIBRARY_PATH="$native_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

@@ -33,6 +33,11 @@ function fixture() {
       headers: { "content-type": "application/json" },
     }),
   );
+  const artifact = jest.fn(async () => new Response(JSON.stringify({
+    artifactId: "11111111-1111-4111-8111-111111111111",
+    mimeType: "video/mp4", sizeBytes: 12, offset: 0, nextOffset: 12,
+    filename: "demo.mp4", contentBase64: "dmlkZW8tdGVzdC0x",
+  }), { headers: { "content-type": "application/json" } }));
   const viewer = new BrowserLiveViewer(storage, {
     authenticate: async (password) =>
       password === "shared"
@@ -46,11 +51,13 @@ function fixture() {
       deviceId === "viewer-device-1",
     authorizeSource: access,
     frame,
+    artifact,
   });
   return {
     viewer,
     access,
     frame,
+    artifact,
     records,
     revokeDevice: () => {
       deviceAuthorized = false;
@@ -82,6 +89,32 @@ function cookieHeader(response: Response): string {
 }
 
 describe("BrowserLiveViewer", () => {
+  it("serves authenticated media chunks after an MCP tab closes, without exposing server paths", async () => {
+    const { viewer, access, artifact } = fixture();
+    const url = base + "/artifact/11111111-1111-4111-8111-111111111111";
+    access.mockResolvedValue(false); // The page/tab has ended.
+    const loginPage = await viewer.handle(new Request(url));
+    expect(loginPage.status).toBe(200);
+    expect((await loginPage.text())).toContain("Access password");
+    const signedIn = await viewer.handle(loginRequest(url));
+    expect(signedIn.status).toBe(303);
+    expect(signedIn.headers.get("location")).toBe(new URL(url).pathname);
+    const cookie = cookieHeader(signedIn);
+    const preview = await viewer.handle(new Request(url, { headers: { cookie } }));
+    expect(preview.status).toBe(200);
+    expect((await preview.text())).toContain("Download recording");
+    expect((await viewer.handle(new Request(url + "/chunk?offset=0"))).status).toBe(401);
+    const response = await viewer.handle(new Request(url + "/chunk?offset=0", { headers: { cookie } }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(artifact).toHaveBeenCalledWith(expect.any(Request), "user-a", expect.objectContaining({
+      taskId: "task-1", tabId: "tab-1",
+    }), "11111111-1111-4111-8111-111111111111", 0);
+    const other = base.replace("/tab-1", "/tab-2") + "/artifact/11111111-1111-4111-8111-111111111111/chunk";
+    expect((await viewer.handle(new Request(other, { headers: { cookie } }))).status).toBe(401);
+  });
+
+
   it("keeps separate session cookies for two live tabs", async () => {
     const { viewer } = fixture();
     const second =

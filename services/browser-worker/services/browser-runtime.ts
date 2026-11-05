@@ -1918,13 +1918,11 @@ export class BrowserRuntime implements BrowserExecutor {
     }
   }
 
-  async videoStop(
-    input: BrowserVideoStopInput,
-  ): Promise<BrowserVideoStopResult> {
+  async videoStop(input: BrowserVideoStopInput): Promise<BrowserVideoStopResult> {
     const tab = await this.selectAdvancedTab(input.tabId, "videoStop", false);
     const result = { tabId: tab.tabId, ...(await this.advancedDiagnostics.videoStop()) };
     this.activeVideoTasks.delete(this.diagnosticActivityId(tab.tabId));
-    return result;
+    return { ...result, ...(tab.taskId ? { taskId: tab.taskId } : {}) };
   }
 
   async pdf(input: BrowserPdfInput): Promise<BrowserPdfResult> {
