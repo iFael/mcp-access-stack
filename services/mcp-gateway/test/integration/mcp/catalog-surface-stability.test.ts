@@ -48,12 +48,12 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(122);
+      expect(listed.tools).toHaveLength(123);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "sync_repository", "list_devices", "revoke_device"]),
+        expect.arrayContaining(["patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "sync_repository", "list_devices", "revoke_device"]),
       );
       expect(metadata).toMatchObject({
-        toolCount: 122,
+        toolCount: 123,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);
@@ -64,6 +64,84 @@ describe("MCP public catalog stability", () => {
     } finally {
       await client.close().catch(() => undefined);
       await server.close().catch(() => undefined);
+    }
+  });
+
+  it("binds privileged Oracle policy administration to a trusted server principal only", async () => {
+    const executor = createTestExecutor();
+    const inspect = jest.fn(async () => ({
+      status: "not_granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "github.pull_request.ready" as const, policySha256: "a".repeat(64),
+      effective: false, backupCreated: false,
+    }));
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "github.pull_request.ready" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
+    const server = createMcpServer({
+      workspaceExecutor: executor, sourceControlExecutor: executor,
+      policyAdmin: { inspect, grant },
+      authenticatedUserId: "edge-owner-1",
+    });
+    const client = new Client({ name: "policy-admin-test", version: "0.0.0" }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const read = await client.callTool({ name: "oracle_grant_github_ready_permission", arguments: { action: "inspect" } });
+      expect(read.structuredContent).toMatchObject({ status: "not_granted", effective: false });
+      const operationId = "b6ed7ef2-f66a-47d2-832e-e5cd1d50ba48";
+      const granted = await client.callTool({
+        name: "oracle_grant_github_ready_permission",
+        arguments: { action: "grant", expectedPolicySha256: "a".repeat(64), operationId },
+      });
+      expect(granted.structuredContent).toMatchObject({ status: "granted", effective: true });
+      expect(grant).toHaveBeenCalledWith({
+        expectedPolicySha256: "a".repeat(64), operationId, actor: "edge-owner-1",
+      });
+      const invalid = await client.callTool({
+        name: "oracle_grant_github_ready_permission",
+        arguments: { action: "grant", expectedPolicySha256: "a".repeat(64),
+          operationId, policyPath: "/etc/other-policy.json" },
+      });
+      expect(invalid.isError).toBe(true);
+      expect(grant).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses Oracle policy administration when no trusted principal was injected", async () => {
+    const executor = createTestExecutor();
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "github.pull_request.ready" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
+    const server = createMcpServer({
+      workspaceExecutor: executor, sourceControlExecutor: executor,
+      policyAdmin: {
+        inspect: async () => ({ status: "not_granted" as const,
+          workspaceId: "mcp-access-stack" as const, capability: "github.pull_request.ready" as const,
+          policySha256: "a".repeat(64), effective: false, backupCreated: false }),
+        grant,
+      },
+    });
+    const client = new Client({ name: "policy-unauthenticated", version: "0.0.0" }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const result = await client.callTool({
+        name: "oracle_grant_github_ready_permission",
+        arguments: { action: "grant", expectedPolicySha256: "a".repeat(64),
+          operationId: "b6ed7ef2-f66a-47d2-832e-e5cd1d50ba48" },
+      });
+      expect(result.isError).toBe(true);
+      expect(grant).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 
@@ -115,7 +193,7 @@ describe("MCP public catalog stability", () => {
         client.connect(clientTransport),
       ]);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(122);
+      expect(listed.tools).toHaveLength(123);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL)).toBe(false);
 

@@ -20,6 +20,7 @@ import type { GatewayConfig } from "./config.js";
 import { BrowserWorkerClient } from "./browser/client.js";
 import { createLogger } from "./logger.js";
 import { createMcpServer } from "./mcp/server.js";
+import type { PrimaryPolicyAdmin } from "./mcp/primary-policy-admin-tool.js";
 import { tryHandleLegacyBrowserFastPath } from "./mcp/browser-legacy-fast-path.js";
 import {  McpOperationRegistry,
   createGatewayOperationContextFactory,
@@ -65,6 +66,7 @@ export interface GatewayApplicationDependencies {
   sourceControlExecutor?: SourceControlExecutor;
   repositoryExecutor?: RepositoryExecutor;
   companionRepositoryBinder?: CompanionRepositoryBinder;
+  policyAdmin?: PrimaryPolicyAdmin;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
   /** Each tool call with the ChatGPT conversation that made it (the companion's chat wake). */
@@ -250,6 +252,9 @@ export function createGatewayApplication(
     const server = createMcpServer({
       workspaceExecutor,
       sourceControlExecutor,
+      ...(dependencies.policyAdmin === undefined ? {} : { policyAdmin: dependencies.policyAdmin }),
+      ...(request.auth?.extra?.ownerScope === "owner" && typeof authenticatedUserId === "string"
+        ? { authenticatedUserId } : {}),
       ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),
       ...(dependencies.companionRepositoryBinder === undefined ? {} : { companionRepositoryBinder: dependencies.companionRepositoryBinder }),
       ...(browser === undefined ? {} : { browser }),

@@ -1932,7 +1932,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-four source-control tools inside the 61-tool workspace surface", () => {
+  it("publishes twenty-four source-control tools inside the 62-tool workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_stage_paths",
@@ -1960,8 +1960,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(61);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(61);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(62);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(62);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{
