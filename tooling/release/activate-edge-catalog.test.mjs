@@ -63,6 +63,15 @@ const prepared = () => ({
   candidateContractRevision: CATALOG.targetRevision, candidateConnectorReady: false,
 });
 
+test("release rollout is pinned to the generated MCP catalog", () => {
+  assert.ok(manifest.includes(`"contractRevision": "${CATALOG.targetRevision}"`),
+    "Rollout must target the generated contract revision before a connector release.");
+  assert.ok(manifest.includes(`"toolCount": ${CATALOG.targetToolCount}`),
+    "Rollout must target the generated tool count before a connector release.");
+  assert.ok(CATALOG.requiredTools.includes("github_mark_pull_request_ready"),
+    "Ready-for-review must be covered by the Edge rollout.");
+});
+
 test("rollout config is strict and the source must match its target catalog", () => {
   assert.equal(loadCatalogRollout({ ...CATALOG }).targetRevision, CATALOG.targetRevision);
   for (const delta of [
@@ -281,7 +290,7 @@ test("candidate preparation names the Edge refusal and retries only an old-build
 
 
 test("code-only mode keeps the existing tool contract and never prepares the Durable Object", async () => {
-  assert.equal(CATALOG.mode, "code-only");
+  // Keep the code-only compatibility test independent of this release's catalog rollout mode.
   assert.equal(loadCatalogRollout({ ...CATALOG, mode: "code-only" }).mode, "code-only");
   assert.throws(() => loadCatalogRollout({ ...CATALOG, mode: "bypass" }),
     /EDGE_CATALOG_ROLLOUT_CONFIG_INVALID/u);
