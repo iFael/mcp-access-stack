@@ -1,10 +1,10 @@
 {
   "worker": "mcp-access-stack",
-  "mode": "code-only",
+  "mode": "catalog",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "6642581e73cedfe88e6de15c886e78a36f846e5f2cace1d10e7e0a985bcf440d",
+  "previousRevision": "71f56e29b2fa196ec226cd97cec97983c2d52ae43ac6f99cb9073942119eaee0",
   "previousToolCount": 121,
-  "targetRevision": "71f56e29b2fa196ec226cd97cec97983c2d52ae43ac6f99cb9073942119eaee0",
-  "targetToolCount": 121,
-  "requiredTools": ["get_operation_guide", "release_orchestrator", "mcp_update", "github_workflow_operation", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "github_read", "github_issue_write", "http_get"]
+  "targetRevision": "9020d4caf42d85ef9d61a55e741e4f7d82572a3fdf51c097214faee6d14a88da",
+  "targetToolCount": 122,
+  "requiredTools": ["get_operation_guide", "release_orchestrator", "mcp_update", "github_workflow_operation", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "github_read", "github_issue_write", "github_mark_pull_request_ready", "http_get"]
 }
