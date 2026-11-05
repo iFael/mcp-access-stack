@@ -220,7 +220,7 @@ internal static class Program
                 " restartAttempt=" + restartAttempt.ToString());
             child.BeginOutputReadLine();
             child.BeginErrorReadLine();
-            while (!child.WaitForExit(60_000))
+            while (!child.WaitForExit(60000))
             {
                 AppendEvent(options.StandardErrorPath, "native_launcher_child_alive",
                     "childPid=" + child.Id.ToString() +
