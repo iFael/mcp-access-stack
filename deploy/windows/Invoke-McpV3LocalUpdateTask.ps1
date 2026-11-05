@@ -75,7 +75,8 @@ function Ensure-McpV3LocalCompanionRunning {
         [Parameter(Mandatory = $true)][string]$InstallationRoot,
         [Parameter(Mandatory = $true)][string]$StateRoot,
         [Parameter(Mandatory = $true)][string]$TaskName,
-        [Parameter(Mandatory = $true)][string]$CurrentUser
+        [Parameter(Mandatory = $true)][string]$CurrentUser,
+        [switch]$AllowUnsignedDevelopment
     )
 
     $tasks = @(Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop)
@@ -149,7 +150,7 @@ try {
         $resultPath = Join-Path $updatesRoot ("result-$operationId.json")
     }
     else {
-        $companionRecovery = Ensure-McpV3LocalCompanionRunning -InstallationRoot $installation -StateRoot $state -TaskName $CompanionTaskName -CurrentUser ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+        $companionRecovery = Ensure-McpV3LocalCompanionRunning -InstallationRoot $installation -StateRoot $state -TaskName $CompanionTaskName -CurrentUser ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -AllowUnsignedDevelopment:$AllowUnsignedDevelopment
         $settingsPath = Join-Path $state 'updater\settings.json'
         $autoUpdate = $true
         if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
