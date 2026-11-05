@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import {
-  CATALOG, loadCatalogRollout, requireExactSource, parseInput, verifyProvenance, verifyHealth,
+  CATALOG, loadCatalogRollout, requireExactSource, parseInput, verifyProvenance, verifyHealth, verifyCodeOnlyHealth,
   verifyDeploymentReceipt, verifyPrepareReceipt, preflight, deployOnce, prepareOnce,
 } from "./activate-edge-catalog.mjs";
 
@@ -277,6 +277,55 @@ test("candidate preparation names the Edge refusal and retries only an old-build
     }}),
     /EDGE_CATALOG_PREPARE_OUTCOME_UNKNOWN_HTTP_409_build_contract_mismatch/);
   assert.equal(stuck,20);
+});
+
+
+test("code-only mode keeps the existing tool contract and never prepares the Durable Object", async () => {
+  assert.equal(CATALOG.mode, "code-only");
+  assert.equal(loadCatalogRollout({ ...CATALOG, mode: "code-only" }).mode, "code-only");
+  assert.throws(() => loadCatalogRollout({ ...CATALOG, mode: "bypass" }),
+    /EDGE_CATALOG_ROLLOUT_CONFIG_INVALID/u);
+  const live = {
+    ...health("deployed"),
+    activeContractRevision: CATALOG.targetRevision,
+    expectedContractRevision: CATALOG.targetRevision,
+    runtime: {
+      catalogContractRevision: CATALOG.targetRevision,
+      toolCount: CATALOG.targetToolCount,
+    },
+  };
+  assert.equal(verifyCodeOnlyHealth(live), true);
+  for (const mutation of [
+    { activeContractRevision: CATALOG.previousRevision },
+    { expectedContractRevision: CATALOG.previousRevision },
+    { candidateContractRevision: CATALOG.targetRevision },
+    { contractCompatible: false },
+    { connectorReady: false },
+    { controlPlaneReady: false },
+    { executionPlaneReady: false },
+    { runtime: { ...live.runtime, toolCount: CATALOG.targetToolCount + 1 } },
+  ]) {
+    assert.throws(() => verifyCodeOnlyHealth({ ...live, ...mutation }),
+      /EDGE_CATALOG_CODE_ONLY_HEALTH_CAS_MISMATCH/u);
+  }
+  let posts = 0;
+  const fetchImpl = async (url, request) => {
+    if (request.method === "GET") return response(live);
+    posts++;
+    assert.match(String(url), /\/deployments$/u);
+    return response(deployed(), 201);
+  };
+  let reads = 0;
+  const compare = async () => ++reads <= 2 ? provenance() : provenance("after");
+  assert.equal(await deployOnce(input, { compare, fetchImpl, codeOnly: true, sleep: async () => {} }), RECEIPT);
+  assert.equal(posts, 1);
+  assert.equal(await prepareOnce(input, { compare: async () => provenance("after"), fetchImpl, codeOnly: true }), true);
+  assert.equal(posts, 1, "code-only must not send a contract preparation POST");
+  await assert.rejects(preflight(input, {
+    compare: async () => provenance(),
+    fetchImpl: async () => response({ ...live, candidateContractRevision: CATALOG.targetRevision }),
+    codeOnly: true,
+  }), /EDGE_CATALOG_CODE_ONLY_HEALTH_CAS_MISMATCH/u);
 });
 
 test("workflow isolates CI/Stage identity, Environment and Cloudflare mutation", async () => {

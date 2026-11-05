@@ -1,5 +1,6 @@
 {
   "worker": "mcp-access-stack",
+  "mode": "code-only",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
   "previousRevision": "6642581e73cedfe88e6de15c886e78a36f846e5f2cace1d10e7e0a985bcf440d",
   "previousToolCount": 121,
