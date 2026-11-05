@@ -37,6 +37,42 @@ export type CompanionMaterializationAnnouncement = {
   path: string;
 };
 
+
+/** Cloud-only, account-scoped operational audit. Device-provided user IDs are forbidden. */
+export const COMPANION_AUDIT_FEATURE = "auditV1" as const;
+export type CompanionAuditEntry = {
+  timestamp: string;
+  operation: string;
+  workspaceId: string;
+  durationMs: number;
+  status: "allowed" | "denied" | "error";
+  correlationId?: string;
+  permissionProfile?: string;
+  path?: string;
+  queryHash?: string;
+  queryLength?: number;
+  sourceControlCapability?: string;
+  targetResource?: string;
+  expectedSha?: string;
+  resultSha?: string;
+  idempotencyOutcome?: string;
+  resultSize?: number;
+  reason?: string;
+  lifecycle?: unknown;
+};
+export type CompanionAuditBatchMessage = {
+  type: "companion-audit-batch";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  batchId: string;
+  entries: CompanionAuditEntry[];
+  dropped: number;
+};
+export type CompanionAuditAckMessage = {
+  type: "companion-audit-ack";
+  protocolVersion: typeof COMPANION_PROTOCOL_VERSION;
+  batchId: string;
+};
+
 export type CompanionRegistration = {
   deviceId?: string;
   displayName: string;
@@ -50,7 +86,7 @@ export type CompanionHelloMessage = {
 };
 
 // Optional protocol features the Edge offers; an older peer ignores them.
-export const COMPANION_EDGE_FEATURES = ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE] as const;
+export const COMPANION_EDGE_FEATURES = ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE, COMPANION_AUDIT_FEATURE] as const;
 export type CompanionEdgeFeature = (typeof COMPANION_EDGE_FEATURES)[number];
 
 export type CompanionRegisteredMessage = {
@@ -144,6 +180,7 @@ export type CompanionUpdateStatusMessage = {
 };
 
 export type EdgeToCompanionMessage =
+  | CompanionAuditAckMessage
   | CompanionWakeEventMessage
   | CompanionUpdateRequestMessage
   | CompanionHelloMessage
@@ -153,6 +190,7 @@ export type EdgeToCompanionMessage =
   | CompanionHttpCancelMessage;
 
 export type CompanionToEdgeMessage =
+  | CompanionAuditBatchMessage
   | CompanionReadyMessage
   | CompanionHeartbeatMessage
   | CompanionUserMessagesMessage
@@ -174,6 +212,17 @@ export function parseCompanionToEdgeMessage(value: string): CompanionToEdgeMessa
       registration,
       workspaces,
       materializations,
+    };
+  }
+  if (parsed.type === "companion-audit-batch") {
+    if (!isHeartbeatId(parsed.batchId) || !Array.isArray(parsed.entries) ||
+        parsed.entries.length < 1 || parsed.entries.length > 16 ||
+        typeof parsed.dropped !== "number" || !Number.isSafeInteger(parsed.dropped) || parsed.dropped < 0) return null;
+    const entries = parsed.entries.map(parseCompanionAuditEntry);
+    if (entries.some((entry) => entry === null)) return null;
+    return {
+      type: "companion-audit-batch", protocolVersion: COMPANION_PROTOCOL_VERSION,
+      batchId: parsed.batchId, entries: entries as CompanionAuditEntry[], dropped: parsed.dropped,
     };
   }
   if (parsed.type === "companion-heartbeat") {
@@ -240,6 +289,10 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
     const request = parseCompanionUpdateRequest(parsed.request);
     return request ? { type: "companion-update-request", protocolVersion: COMPANION_PROTOCOL_VERSION, request } : null;
   }
+  if (parsed.type === "companion-audit-ack") {
+    if (!isHeartbeatId(parsed.batchId)) return null;
+    return { type: "companion-audit-ack", protocolVersion: COMPANION_PROTOCOL_VERSION, batchId: parsed.batchId };
+  }
   if (parsed.type === "companion-heartbeat-ack") {
     if (!isHeartbeatId(parsed.heartbeatId)) return null;
     return {
@@ -274,6 +327,42 @@ export function parseEdgeToCompanionMessage(value: string): EdgeToCompanionMessa
     body: parsed.body,
     principal,
   };
+}
+
+
+export function parseCompanionAuditEntry(value: unknown): CompanionAuditEntry | null {
+  if (!isRecord(value) || typeof value.timestamp !== "string" ||
+      value.timestamp.length > 40 || Number.isNaN(Date.parse(value.timestamp)) ||
+      typeof value.operation !== "string" || value.operation.length < 1 || value.operation.length > 100 ||
+      typeof value.workspaceId !== "string" || value.workspaceId.length < 1 || value.workspaceId.length > 200 ||
+      !["allowed", "denied", "error"].includes(String(value.status)) ||
+      typeof value.durationMs !== "number" || !Number.isFinite(value.durationMs) ||
+      value.durationMs < 0 || value.durationMs > 86_400_000 ||
+      JSON.stringify(value).length > 8_192) return null;
+  const textKeys = ["correlationId", "permissionProfile", "path", "queryHash",
+    "sourceControlCapability", "targetResource", "expectedSha", "resultSha",
+    "idempotencyOutcome", "reason"] as const;
+  const numberKeys = ["queryLength", "resultSize"] as const;
+  const normalized: Record<string, unknown> = {
+    timestamp: value.timestamp, operation: value.operation, workspaceId: value.workspaceId,
+    status: value.status, durationMs: value.durationMs,
+  };
+  for (const key of textKeys) {
+    const item = value[key];
+    if (item !== undefined) {
+      if (typeof item !== "string" || item.length > (key === "path" ? 4096 : 256)) return null;
+      normalized[key] = item;
+    }
+  }
+  for (const key of numberKeys) {
+    const item = value[key];
+    if (item !== undefined) {
+      if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 0) return null;
+      normalized[key] = item;
+    }
+  }
+  // Lifecycle data is not uploaded: it can contain uncontrolled nested metadata.
+  return normalized as CompanionAuditEntry;
 }
 
 function parseRegistration(value: unknown): CompanionRegistration | null {

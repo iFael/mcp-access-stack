@@ -6,9 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { COMPANION_PROTOCOL_VERSION } from "@mcp-access-stack/edge-protocol";
+import { COMPANION_PROTOCOL_VERSION, COMPANION_AUDIT_FEATURE } from "@mcp-access-stack/edge-protocol";
 import WebSocket, { WebSocketServer } from "ws";
 import { CompanionConnector } from "../../../src/companion/connector.js";
+import { CloudAuditQueue } from "../../../src/companion/cloud-audit-queue.js";
 import {
   DesktopOAuthClient,
   type DesktopOAuthCredentialStore,
@@ -107,6 +108,112 @@ afterEach(async () => {
 });
 
 describe("CompanionConnector end-to-end", () => {
+  it("registers the device and browser without an audited workspace, then reannounces after recovery", async () => {
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "mcp-v3-audit-isolation-")));
+    temporaryRoots.push(dir);
+    const repositories = await LocalRepositoryManager.create({
+      stateDirectory: path.join(dir, "state"),
+      managedRoot: path.join(dir, "managed"),
+      homeDirectory: dir,
+      exposeComputerWorkspace: true,
+      computerRoots: [dir],
+    });
+    let workspaceReady = false;
+    const cloudAudit = new CloudAuditQueue();
+    const oauth = {
+      getAccessToken: async () => ({ accessToken: "test-access-token" }),
+    } as unknown as DesktopOAuthClient;
+    const edgeHttp = createServer();
+    const edgeWss = new WebSocketServer({ server: edgeHttp, path: "/companion" });
+    const edgePort = await listen(edgeHttp);
+    servers.push({ close: () => stopWebSocketServer(edgeWss, edgeHttp) });
+    const connection = new Promise<WebSocket>((resolve) => edgeWss.once("connection", resolve));
+    let registered!: () => void;
+    const registeredPromise = new Promise<void>((resolve) => { registered = resolve; });
+    const controller = new AbortController();
+    controllers.push(controller);
+    const connector = new CompanionConnector({
+      edgeBaseUrl: new URL("https://edge.example/"),
+      oauth,
+      internalAssertion: INTERNAL_ASSERTION,
+      localBaseUrl: new URL("http://127.0.0.1:1/"),
+      repositories,
+      auditQueue: cloudAudit,
+      workspaceReady: () => workspaceReady,
+      capabilities: ["files", "terminal", "git", "browser", "elevation"],
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+      webSocketFactory: (_url, options) =>
+        new WebSocket(`ws://127.0.0.1:${edgePort}/companion`, options),
+      log: (entry) => {
+        if (entry.event === "local_runtime_registered") registered();
+      },
+    });
+    const running = connector.run(controller.signal);
+    const socket = await withTimeout(connection, "unaudited device connection");
+    const firstReadyPromise = waitForMessage(socket);
+    socket.send(JSON.stringify({
+      type: "companion-hello",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+    }));
+    const first = await withTimeout(firstReadyPromise, "device-only registration");
+    expect(first.type).toBe("companion-ready");
+    expect(first.workspaces).toEqual([]);
+    expect(first.materializations).toEqual([]);
+    expect(first.registration).toMatchObject({ capabilities: ["browser"] });
+
+    await cloudAudit.write({
+      timestamp: "2026-11-04T20:00:00.000Z",
+      operation: "listWorkspaces",
+      workspaceId: "computer",
+      durationMs: 1,
+      status: "allowed",
+    });
+    expect(cloudAudit.status.pending).toBe(1);
+    const auditBatchPromise = waitForMessage(socket);
+    socket.send(JSON.stringify({
+      type: "companion-registered",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      deviceId: DEVICE_ID,
+      features: [COMPANION_AUDIT_FEATURE],
+    }));
+    await withTimeout(registeredPromise, "device registration without audit");
+    const auditBatch = await withTimeout(auditBatchPromise, "cloud audit delivery");
+    expect(auditBatch.type).toBe("companion-audit-batch");
+    expect(auditBatch.entries).toEqual([
+      expect.objectContaining({ operation: "listWorkspaces", status: "allowed" }),
+    ]);
+    socket.send(JSON.stringify({
+      type: "companion-audit-ack",
+      protocolVersion: COMPANION_PROTOCOL_VERSION,
+      batchId: auditBatch.batchId,
+    }));
+    await withTimeout(new Promise<void>((resolve) => {
+      const inspect = () => {
+        if (cloudAudit.status.pending === 0) resolve();
+        else setTimeout(inspect, 5);
+      };
+      inspect();
+    }), "cloud audit acknowledgment");
+    expect(cloudAudit.status.pending).toBe(0);
+    expect(repositories.getDeviceId()).toBe(DEVICE_ID);
+
+    workspaceReady = true;
+    const recoveredReadyPromise = waitForMessage(socket);
+    await connector.announceState();
+    const recovered = await withTimeout(recoveredReadyPromise, "recovered audited workspace");
+    expect(recovered.type).toBe("companion-ready");
+    expect(recovered.registration).toMatchObject({
+      capabilities: ["files", "terminal", "git", "browser", "elevation"],
+    });
+    expect(recovered.workspaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ workspaceKind: "aggregate", name: "Local computer" }),
+    ]));
+    controller.abort();
+    await withTimeout(running, "device shutdown");
+  }, 10_000);
+
+
   it("authenticates, announces repositories, persists device registration, relays MCP and cancels in-flight work", async () => {
     const temporaryRoot = await realpath(
       await mkdtemp(path.join(os.tmpdir(), "mcp-v3-companion-e2e-")),

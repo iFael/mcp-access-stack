@@ -189,7 +189,7 @@ import {
   type SourceControlCapability,
   type SourceControlOperationName,
 } from "@vs-code-gpt/shared";
-import { AuditLogger } from "./audit-log.js";
+import { AuditLogger, detachedAuditSink, type AuditSink } from "./audit-log.js";
 import type { ResolvedWorkspace } from "./internal-types.js";
 import { FileService } from "./filesystem/service.js";
 import { GitService } from "./git/service.js";
@@ -277,6 +277,8 @@ export interface LocalAgentOptions {
   elevationBroker?: ElevationBroker;
   /** Host-owned control capability: absent unless explicitly enrolled. */
   oracleControl?: OracleControlCallerBinding;
+  /** An authenticated companion may send operational telemetry to the cloud. */
+  auditSink?: AuditSink;
 }
 
 function backgroundTaskAccess(
@@ -312,7 +314,7 @@ export class LocalAgent {
 
   private constructor(
     private readonly registry: WorkspaceRegistry,
-    private readonly audit: AuditLogger,
+    private readonly audit: AuditSink,
     options: LocalAgentOptions = {},
   ) {
     this.shellService = new ShellService(
@@ -390,7 +392,9 @@ export class LocalAgent {
     registry: WorkspaceRegistry,
     options: LocalAgentOptions,
   ): Promise<LocalAgent> {
-    const audit = await AuditLogger.create(registry.all());
+    const audit = options.auditSink === undefined
+      ? await AuditLogger.create(registry.all())
+      : detachedAuditSink(options.auditSink);
     const agent = new LocalAgent(registry, audit, options);
     await agent.githubChecksWatchManager.recover();
     return agent;

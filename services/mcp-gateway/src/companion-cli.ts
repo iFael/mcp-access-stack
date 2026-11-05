@@ -8,6 +8,7 @@ import { CompanionUpdateRunner, createLocalAgentReleasePort, WindowsElevationBro
 import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
+import { CloudAuditQueue } from "./companion/cloud-audit-queue.js";
 import { COMPANION_UPDATE_CAPABILITY, UPDATE_WAKE_CAPABILITY, WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
@@ -88,7 +89,24 @@ async function main(): Promise<void> {
       events.flatMap((event) => (event.kind === "message" ? [event.messageId] : []))),
     log: writeLog,
   });
+  const cloudAudit = new CloudAuditQueue((status) => {
+    writeLog({
+      event: "mcp_v3_cloud_audit_status",
+      state: status.state,
+      pending: status.pending,
+      dropped: status.dropped,
+    });
+    if (status.state !== "restored") {
+      notifier?.({
+        title: "MCP V3 — auditoria na nuvem",
+        body: status.state === "records_lost"
+          ? "Os registros excederam a fila temporária. Algumas operações não foram registradas na nuvem. O MCP continua funcionando."
+          : "A auditoria está temporariamente indisponível. O MCP continua funcionando; os registros aguardam em memória.",
+      });
+    }
+  });
   const reloadable = new ReloadableLocalAgent({
+    auditSink: cloudAudit,
     ...(elevationBroker === undefined ? {} : { elevationBroker }),
     onBackgroundTaskFinished: (event) => chatWake.queue({ kind: "task", taskId: event.taskId, workspaceId: event.workspaceId,
       state: event.state, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
@@ -100,7 +118,15 @@ async function main(): Promise<void> {
   let repositories!: LocalRepositoryManager;
 
   const reloadLocalRuntime = async (): Promise<void> => {
-    await reloadable.reload(await repositories.buildPolicy());
+    try {
+      await reloadable.reload(await repositories.buildPolicy());
+    } catch (error) {
+      const failure = asAppError(error);
+      if (failure.code !== "AUDIT_FAILED") throw error;
+      // Authentication and the personal browser must remain usable.
+      // The LocalAgent has already revoked every executable workspace.
+      writeLog({ event: "mcp_v3_local_workspace_audit_unavailable", code: failure.code });
+    }
     await connector?.announceState();
   };
 
@@ -130,7 +156,7 @@ async function main(): Promise<void> {
       writeLog({ event: "mcp_v3_local_stack_root_unavailable" });
     }
   }
-  await reloadable.reload(await repositories.buildPolicy());
+  await reloadLocalRuntime();
 
   if (process.platform === "win32") {
     try {
@@ -166,17 +192,19 @@ async function main(): Promise<void> {
     TRUST_PROXY: "0",
   });
 
+  // Repository discovery/binding requires a validated active workspace policy.
+  const auditedRepositories = reloadable.protectRepositoryOperations(repositories);
   const gateway = createGatewayApplication(gatewayConfig, {
     workspaceExecutor: reloadable.workspaceExecutor,
     sourceControlExecutor: reloadable.sourceControlExecutor,
-    repositoryExecutor: repositories,
-    companionRepositoryBinder: repositories,
+    repositoryExecutor: auditedRepositories,
+    companionRepositoryBinder: auditedRepositories,
     ...(browser === undefined
       ? {}
       : {
           browser,
         }),
-    workspaceReady: () => true,
+    workspaceReady: () => reloadable.ready,
     edgeTrust: { internalAssertion },
     onConversationCall: (call) => conversations.noteCall(call),
   });
@@ -215,6 +243,8 @@ async function main(): Promise<void> {
     internalAssertion,
     localBaseUrl: loopback.baseUrl,
     repositories,
+    auditQueue: cloudAudit,
+    workspaceReady: () => reloadable.ready,
     capabilities,
     ...(runtime.displayName === undefined ? {} : { displayName: runtime.displayName }),
     log: writeLog,

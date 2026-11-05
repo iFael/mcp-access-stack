@@ -227,7 +227,9 @@ export class BrowserWorkerApplication {
         operationUnits,
         ...observableScope(this.telemetry, parsedInput, parsedResult),
       });
-      await this.audit.write({
+      // The browser operation has succeeded. A diagnostic write failure must
+      // never turn that success into a false error response.
+      void this.audit.write({
         timestamp: new Date().toISOString(),
         operation: activeOperation,
         ...(tabId === undefined ? {} : { tabId }),
@@ -235,6 +237,8 @@ export class BrowserWorkerApplication {
         durationMs,
         queueWaitMs: queued.queueWaitMs,
         operationUnits,
+      }).catch(() => {
+        console.warn(JSON.stringify({ event: "browser_audit_write_unavailable" }));
       });
       await this.telemetry.flush();
       return json(response, 200, responseBody);

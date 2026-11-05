@@ -125,6 +125,90 @@ const OLD_EPOCH = "44444444-4444-4444-8444-444444444444";
 const NEW_EPOCH = "55555555-5555-4555-8555-555555555555";
 
 describe("McpSession companion registration isolation", () => {
+
+  it("acknowledges cloud audit only after authenticated storage and never writes to another owner", async () => {
+    const { EdgeAccountStore } = await import("../src/control-plane/account-store.js");
+    const { CloudAuditStore } = await import("../src/control-plane/cloud-audit-store.js");
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const owner = await accounts.createSingleUserIdentity("Audit owner");
+    const outsider = { id: "usr_77777777-7777-4777-8777-777777777777" };
+    const device = await accounts.registerDevice(owner.id, { displayName: "PC", platform: "windows" });
+    let attachment: Record<string, unknown> = {
+      role: "companion", ready: true, protocolVersion: 1, userId: owner.id, deviceId: device.id,
+    };
+    const sent: string[] = [];
+    const socket = {
+      readyState: 1,
+      send: jest.fn((value: string) => { sent.push(value); }),
+      close: jest.fn(),
+      serializeAttachment: jest.fn((v: Record<string, unknown>) => { attachment = v; }),
+      deserializeAttachment: jest.fn(() => attachment),
+    };
+    const session = await createSession(storage, [socket]);
+    const message = JSON.stringify({
+      type: "companion-audit-batch", protocolVersion: 1, batchId: "batch-123", dropped: 0,
+      entries: [{
+        timestamp: "2026-11-04T20:00:00.000Z",
+        operation: "runCommand", workspaceId: "computer", durationMs: 10, status: "allowed",
+      }],
+    });
+    const handler = (raw: string) => (session as unknown as {
+      handleCompanionMessage(socket: unknown, message: string, attachment: unknown): Promise<void>;
+    }).handleCompanionMessage(socket, raw, attachment);
+    await handler(message);
+    await handler(message);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(sent.map((x) => JSON.parse(x) as { type: string })).toEqual([
+      expect.objectContaining({ type: "companion-audit-ack", batchId: "batch-123" }),
+      expect.objectContaining({ type: "companion-audit-ack", batchId: "batch-123" }),
+    ]);
+    expect(await new CloudAuditStore(storage).latest(owner.id)).toHaveLength(1);
+    expect(await new CloudAuditStore(storage).latest(outsider.id)).toEqual([]);
+
+    // Revocation remains an identity gate, independent of telemetry availability.
+    await accounts.revokeDevice(owner.id, device.id);
+    sent.length = 0;
+    await handler(message);
+    expect(socket.close).toHaveBeenCalledWith(1008, "Device no longer authorized");
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not disconnect the companion if cloud audit persistence fails", async () => {
+    const { EdgeAccountStore } = await import("../src/control-plane/account-store.js");
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const owner = await accounts.createSingleUserIdentity("Cloud outage owner");
+    const device = await accounts.registerDevice(owner.id, { displayName: "PC", platform: "windows" });
+    const attachment = {
+      role: "companion", ready: true, protocolVersion: 1, userId: owner.id, deviceId: device.id,
+    };
+    const socket = {
+      readyState: 1,
+      send: jest.fn(),
+      close: jest.fn(),
+      deserializeAttachment: jest.fn(() => attachment),
+    };
+    const original = storage.put.bind(storage);
+    jest.spyOn(storage, "put").mockImplementation(async (key, value) => {
+      if (typeof key === "string" && key.startsWith("cloud-audit:v1:")) throw new Error("cloud down");
+      return original(key, value);
+    });
+    const session = await createSession(storage, [socket]);
+    await (session as unknown as {
+      handleCompanionMessage(socket: unknown, message: string, attachment: unknown): Promise<void>;
+    }).handleCompanionMessage(socket, JSON.stringify({
+      type: "companion-audit-batch", protocolVersion: 1, batchId: "failed-batch", dropped: 0,
+      entries: [{
+        timestamp: "2026-11-04T20:00:00.000Z",
+        operation: "readFile", workspaceId: "computer", durationMs: 1, status: "allowed",
+      }],
+    }), attachment);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.send).not.toHaveBeenCalled(); // No ACK: client retries.
+  });
+
+
   it("keeps the device ready when individual repository bindings are stale or unauthorized", async () => {
     const { EdgeAccountStore } = await import("../src/control-plane/account-store.js");
     const { COMPANION_PROTOCOL_VERSION } = await import("@mcp-access-stack/edge-protocol");

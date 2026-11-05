@@ -16,6 +16,12 @@ function fixture() {
       ? { userId: "owner-a", credentialVersion }
       : null,
     credentialVersion: async () => credentialVersion,
+    audit: async (userId) => {
+      calls.push("audit:" + userId);
+      return [{ deviceId: "dev_11111111-1111-4111-8111-111111111111",
+        entry: { operation: "readFile", workspaceId: "computer", status: "allowed" },
+        receivedAt: "2026-11-04T22:00:00.000Z", dropped: 0 }];
+    },
     devices: async (userId) => {
       calls.push(userId);
       return [{
@@ -46,6 +52,7 @@ describe("DeviceAdminDashboard", () => {
     expect(login.status).toBe(200);
     expect(await login.text()).toContain("Senha da conta");
     expect((await dashboard.handle(new Request(url + "/data"))).status).toBe(401);
+    expect((await dashboard.handle(new Request(url + "/audit"))).status).toBe(401);
     expect(calls).toEqual([]);
     expect((await dashboard.handle(new Request(url + "/logout", { method: "GET" }))).status).toBe(405);
     expect((await dashboard.handle(new Request("https://edge.example/admin/unknown"))).status).toBe(404);
@@ -93,7 +100,13 @@ describe("DeviceAdminDashboard", () => {
     expect(data.headers.get("cache-control")).toBe("no-store");
     expect((await data.json() as { devices: Array<{ displayName: string }> }).devices[0]?.displayName)
       .toBe("<img src=x onerror=alert(1)>");
-    expect(calls).toEqual(["owner-a"]);
+    const auditData = await dashboard.handle(new Request(url + "/audit", {
+      headers: { cookie: cookies(response) },
+    }));
+    expect(auditData.status).toBe(200);
+    expect((await auditData.json() as { events: Array<{ entry: { operation: string } }> }).events[0]?.entry.operation)
+      .toBe("readFile");
+    expect(calls).toEqual(["owner-a", "audit:owner-a"]);
   });
 
   it("invalidates sessions on credential rotation, expiry or logout", async () => {

@@ -6,6 +6,7 @@ import {
   COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL,
   COMPANION_INTERNAL_TOOL_PREFIX,
   COMPANION_PROTOCOL_VERSION,
+  COMPANION_AUDIT_FEATURE,
   WAKE_EVENTS_CAPABILITY,
   WAKE_EVENTS_FEATURE,
   PROGRESS_FEATURE,
@@ -42,6 +43,7 @@ import {
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
+import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
 import { ProgressPlans } from "./control-plane/progress-card.js";
 import {
   EXPECTED_MCP_CONTRACT_REVISION,
@@ -833,6 +835,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return jsonResponse({ error: "admin_requires_owner_accounts" }, 503);
     }
     const dashboard = new DeviceAdminDashboard(this.ctx.storage, {
+      audit: (userId) => new CloudAuditStore(this.ctx.storage).latest(userId),
       authenticate: (password) => ownerOAuth.authenticateViewer(password),
       credentialVersion: () => ownerOAuth.viewerCredentialVersion(),
       devices: async (userId) => (await this.accountStore.listDevices(userId)).map((device) => ({
@@ -2860,6 +2863,32 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-audit-batch") {
+      // The account is taken solely from the verified companion session;
+      // no device-provided user scope is ever trusted.
+      if (!attachment.ready || !attachment.deviceId) {
+        webSocket.close(1008, "Audit message before device registration");
+        return;
+      }
+      if (!(await this.accountStore.getActiveDeviceForUser(attachment.userId, attachment.deviceId))) {
+        webSocket.close(1008, "Device no longer authorized");
+        return;
+      }
+      try {
+        await new CloudAuditStore(this.ctx.storage).append(
+          attachment.userId, attachment.deviceId, parsed,
+        );
+        webSocket.send(JSON.stringify({
+          type: "companion-audit-ack",
+          protocolVersion: COMPANION_PROTOCOL_VERSION,
+          batchId: parsed.batchId,
+        }));
+      } catch {
+        // No ACK: the companion retries in memory. Audit storage failure
+        // cannot terminate device presence or independent tool execution.
+      }
+      return;
+    }
     if (parsed.type === "companion-heartbeat") {
       if (!attachment.ready || !attachment.deviceId) {
         webSocket.close(1008, "Companion heartbeat before registration");
@@ -2953,7 +2982,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         type: "companion-registered",
         protocolVersion: COMPANION_PROTOCOL_VERSION,
         deviceId: device.id,
-        features: ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE],
+        features: ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE, COMPANION_AUDIT_FEATURE],
       }));
       return;
     }
