@@ -703,6 +703,7 @@ describe("registerBrowserTools", () => {
       action: "start",
       tabId: "tab-1",
       filename: "video.webm",
+      format: "gif",
       width: 800,
       height: 600,
     })).resolves.toMatchObject({
@@ -715,6 +716,7 @@ describe("registerBrowserTools", () => {
     expect(executor.videoStart).toHaveBeenCalledWith({
       tabId: "tab-1",
       filename: "video.webm",
+      format: "gif",
       width: 800,
       height: 600,
     });
@@ -844,6 +846,14 @@ describe("registerBrowserTools", () => {
       filename: "unexpected.webm",
     });
     expect(invalidVideo.isError).toBe(true);
+    const invalidFormat = await callTool(server, "browser_video", {
+      action: "start", tabId: "tab-1", format: "avi",
+    });
+    expect(invalidFormat.isError).toBe(true);
+    const invalidStopFormat = await callTool(server, "browser_video", {
+      action: "stop", tabId: "tab-1", format: "gif",
+    });
+    expect(invalidStopFormat.isError).toBe(true);
     expect(executor.videoStop).not.toHaveBeenCalled();
   });
 });

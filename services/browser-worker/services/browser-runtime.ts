@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -467,7 +467,8 @@ export class BrowserRuntime implements BrowserExecutor {
       console: advancedEnabled,
       network: advancedEnabled,
       trace: advancedEnabled,
-      video: advancedEnabled && advanced.ffmpegAvailable,
+      video: connected && advancedDriver !== undefined && advanced.ffmpegAvailable &&
+        (modeAllowsAdvanced || this.session.mode === "interactive"),
       pdf: advancedEnabled,
       diagnostics: advancedEnabled,
     };
@@ -1663,7 +1664,19 @@ export class BrowserRuntime implements BrowserExecutor {
       ...(input.scale ? { scale: input.scale } : {}),
     });
     const metadata = await stat(absolutePath);
-    return { tabId: tab.tabId, path: absolutePath, sizeBytes: metadata.size };
+    const result: BrowserScreenshotResult = {
+      tabId: tab.tabId, path: absolutePath, sizeBytes: metadata.size,
+    };
+    // Reserve envelope overhead so base64 screenshots cannot exceed the worker payload limit.
+    const maxInlineBytes = Math.min(1_000_000, Math.floor(this.config.maxPayloadBytes * 0.6));
+    if (metadata.size <= maxInlineBytes) {
+      result.imageContent = {
+        type: "image",
+        mimeType: "image/png",
+        data: (await readFile(absolutePath)).toString("base64"),
+      };
+    }
+    return result;
   }
 
   async goBack(input: BrowserTabActionInput): Promise<BrowserTabResult> {

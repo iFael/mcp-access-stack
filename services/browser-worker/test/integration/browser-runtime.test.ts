@@ -1579,6 +1579,41 @@ describe("BrowserRuntime Playwright layer", () => {
   });
 
 
+  it("returns small screenshots inline without inlining oversized private artifacts", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    const config = makeConfig(directory);
+    let bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9YV4TzoAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const originalScreenshot = fake.takeScreenshot.bind(fake);
+    fake.takeScreenshot = async (input) => {
+      const output = path.join(config.privateDirectory, input.filename);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, bytes);
+      return originalScreenshot(input);
+    };
+    const runtime = await BrowserRuntime.create(config, () => fake);
+    await runtime.connect({});
+    const [tab] = (await runtime.tabs({})).tabs;
+    if (!tab) throw new Error("Expected an MCP-owned tab.");
+
+    const small = await runtime.screenshot({ tabId: tab.tabId });
+    expect(small.sizeBytes).toBe(bytes.length);
+    expect(small.imageContent).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: bytes.toString("base64"),
+    });
+
+    bytes = Buffer.alloc(700_000); // Base64 would exceed this worker's 1 MiB payload limit.
+    const large = await runtime.screenshot({ tabId: tab.tabId });
+    expect(large.sizeBytes).toBe(bytes.length);
+    expect(large.imageContent).toBeUndefined();
+    expect(large.path).toContain(config.privateDirectory);
+  });
+
   it("routes public diagnostics through the owned direct tab", async () => {
     const directory = await makeTemporaryDirectory();
     const fake = new FakeBrowserDriver();
@@ -1661,6 +1696,21 @@ describe("BrowserRuntime Playwright layer", () => {
       code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
     });
     expect(fake.advancedCalls).toEqual([]);
+  });
+
+  it("records an MCP-owned tab in interactive mode without enabling diagnostic tracing", async () => {
+    const directory = await makeTemporaryDirectory();
+    const fake = new FakeBrowserDriver();
+    const runtime = await BrowserRuntime.create(makeConfig(directory), () => fake);
+    await runtime.connect({});
+    const [tab] = (await runtime.tabs({})).tabs;
+    if (!tab) throw new Error("Expected an MCP-owned tab.");
+    await expect(runtime.videoStart({ tabId: tab.tabId })).resolves.toMatchObject({ active: true });
+    await expect(runtime.videoStop({ tabId: tab.tabId })).resolves.toMatchObject({ kind: "video" });
+    await expect(runtime.traceStart({ tabId: tab.tabId })).rejects.toMatchObject({
+      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    });
+    expect(fake.advancedCalls).toEqual(["videoStart", "videoStop"]);
   });
 
   it("allows basic sanitized observability in interactive mode without opening detailed diagnostics", async () => {

@@ -77,6 +77,7 @@ export class BrowserDiagnosticService {
   async videoStart(input: BrowserVideoStartInput): Promise<VideoStartResult> {
     const result = await this.advancedDriver().startVideo({
       ...(input.filename === undefined ? {} : { filename: input.filename }),
+      ...(input.format === undefined ? {} : { format: input.format }),
       ...(input.width === undefined ? {} : { width: input.width }),
       ...(input.height === undefined ? {} : { height: input.height }),
     });

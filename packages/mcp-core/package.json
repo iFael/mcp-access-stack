@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./browser-video-export": {
+      "types": "./dist/browser-video-export.d.ts",
+      "import": "./dist/browser-video-export.js"
     }
   },
   "scripts": {

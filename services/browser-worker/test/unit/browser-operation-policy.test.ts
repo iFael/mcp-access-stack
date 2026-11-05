@@ -48,6 +48,12 @@ describe("browser operation policy", () => {
     ).toThrow(expect.objectContaining({
       code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
     }));
+    for (const operation of ["videoStart", "videoStop"] as const) {
+      expect(() => assertBrowserOperationAllowed(operation, "interactive", advancedDriver)).not.toThrow();
+      expect(() => assertBrowserOperationAllowed(operation, "efficient", advancedDriver)).toThrow(
+        expect.objectContaining({ code: "BROWSER_OPERATION_MODE_UNSUPPORTED" }),
+      );
+    }
     expect(() =>
       assertBrowserOperationAllowed("traceStart", "interactive", advancedDriver),
     ).toThrow(expect.objectContaining({

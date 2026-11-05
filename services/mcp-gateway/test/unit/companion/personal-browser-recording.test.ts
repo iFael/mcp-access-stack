@@ -186,6 +186,27 @@ describe("personal browser recording", () => {
     });
   });
 
+  it("rejects unsupported GIF/MP4 before starting a personal Chrome capture", async () => {
+    const root = await temporaryRoot();
+    const recorder = new PersonalBrowserRecorder(root, {
+      start: async () => { throw new Error("Chrome capture must not start"); },
+      stop: async () => { throw new Error("Chrome capture must not stop"); },
+    });
+    const previous = process.env.MCP_BROWSER_MEDIA_FFMPEG_PATH;
+    process.env.MCP_BROWSER_MEDIA_FFMPEG_PATH = path.join(root, "not-installed");
+    try {
+      for (const format of ["gif", "mp4"] as const) {
+        await expect(recorder.videoStart({ tabId: "personal:7", format }))
+          .rejects.toMatchObject({ code: "BROWSER_CAPABILITY_UNSUPPORTED" });
+        expect(recorder.isActive("personal:7", "video")).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.MCP_BROWSER_MEDIA_FFMPEG_PATH;
+      else process.env.MCP_BROWSER_MEDIA_FFMPEG_PATH = previous;
+      await recorder.close();
+    }
+  });
+
   it("shares one Chrome recording between a trace and a video and stops it with the last of them", async () => {
     const root = await temporaryRoot();
     const calls: Array<[string, Record<string, unknown>]> = [];
