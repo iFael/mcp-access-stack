@@ -526,6 +526,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
         "github.pull_request.read",
         "github.pull_request.create",
         "github.pull_request.close",
+        "github.pull_request.ready",
         "github.pull_request.merge",
         "github.issue.write",
       ],
