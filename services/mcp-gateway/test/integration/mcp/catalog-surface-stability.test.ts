@@ -74,7 +74,7 @@ describe("MCP public catalog stability", () => {
       capability: "github.pull_request.ready" as const, policySha256: "a".repeat(64),
       effective: false, backupCreated: false,
     }));
-    const grant = jest.fn(async () => ({
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
       status: "granted" as const, workspaceId: "mcp-access-stack" as const,
       capability: "github.pull_request.ready" as const, policySha256: "b".repeat(64),
       effective: true, backupCreated: true,
@@ -114,7 +114,11 @@ describe("MCP public catalog stability", () => {
 
   it("refuses Oracle policy administration when no trusted principal was injected", async () => {
     const executor = createTestExecutor();
-    const grant = jest.fn();
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "github.pull_request.ready" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
     const server = createMcpServer({
       workspaceExecutor: executor, sourceControlExecutor: executor,
       policyAdmin: {
