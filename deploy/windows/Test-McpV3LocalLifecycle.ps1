@@ -428,6 +428,15 @@ catch {
     if ($_.Exception.Message -notmatch 'differs from the active release') { throw }
 }
 $script:mockTask.Principal.UserId = $script:mockUser
+$script:mockTask.TaskPath = '\Unexpected\'
+try {
+    $null = Ensure-McpV3LocalCompanionRunning @recoveryArgs
+    throw 'Companion recovery accepted a task outside the expected root path.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'differs from the active release') { throw }
+}
+$script:mockTask.TaskPath = '\'
 $script:mockFailStart = $true
 try {
     $null = Ensure-McpV3LocalCompanionRunning @recoveryArgs
