@@ -89,19 +89,16 @@ describe("ChatWake per conversation", () => {
 });
 
 describe("ConversationBook", () => {
-  it("still knows the update's conversation after the companion restarts", async () => {
+  it("remembers an exact host chat ID across companion restarts", async () => {
     const file = path.join(await mkdtemp(path.join(os.tmpdir(), "book-")), "state", "conversation-book.json");
-    let now = 1_000;
-    const open = async () => [{ conversationId: "title:Publicar MAIN", answering: true }];
-    const before = new ConversationBook({ openConversations: open, file, now: () => now });
-    before.noteCall({ session: "session-a", ids: ["upd_1"] });
-    now += 6_000;
-    before.noteCall({ session: "session-a", ids: [] });
+    const id = "6720f1c2-0a1b-4c5d-8e9f-123456789abc";
+    const open = async () => [{ conversationId: "id:" + id, answering: true }];
+    const before = new ConversationBook({ openConversations: open, file });
+    before.noteCall({ session: "id:" + id, ids: ["upd_1"] });
     const update = { kind: "update", updateId: "upd_1", workspaceId: "w", state: "succeeded" } as const;
-    await until(() => before.conversationOf(update) !== undefined);
-
-    const after = new ConversationBook({ openConversations: open, file, now: () => now });
-    expect(after.conversationOf(update)).toBe("title:Publicar MAIN");
+    expect(before.conversationOf(update)).toBe("id:" + id);
+    const after = new ConversationBook({ openConversations: open, file });
+    expect(after.conversationOf(update)).toBe("id:" + id);
   });
 
   it("files a card message under the one conversation the app shows, with nothing learned yet", async () => {
@@ -116,49 +113,48 @@ describe("ConversationBook", () => {
     expect(book.conversationOf({ kind: "message", messageId: "msg_2", text: "oi", taskId: "t1" })).toBeUndefined();
   });
 
-  it("learns a conversation once two looks while its call arrives agree, and unlearns it when one disagrees", async () => {
-    let open: OpenConversation[] = [
-      { conversationId: "title:Conversa A", answering: true },
-    ];
-    let now = 1_000;
+  it("never learns Chat B as the origin of Chat A's task from the foreground window", async () => {
     let looks = 0;
-    const book = new ConversationBook({ openConversations: async () => { looks += 1; return open; }, now: () => now });
-    const taskA = { kind: "task", taskId: "task-a", state: "succeeded" } as const;
-    book.noteCall({ session: "session-a", ids: ["task-a"] });
-    await until(() => looks === 1);
-    // One look is not enough: another conversation may be answering in the background.
-    expect(book.conversationOf(taskA)).toBeUndefined();
-    now += 1_000;
-    book.noteCall({ session: "session-a", ids: [] });
-    expect(looks).toBe(1);
-    now += 5_000;
-    book.noteCall({ session: "session-a", ids: [] });
-    await until(() => book.conversationOf(taskA) !== undefined);
-    expect(book.conversationOf(taskA)).toBe("title:Conversa A");
-    // Alone in the last hours, the conversation also owns what no call named.
-    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBe("title:Conversa A");
+    const book = new ConversationBook({
+      openConversations: async () => { looks++; return [{ conversationId: "title:Chat B", answering: true }]; },
+    });
+    const task = { kind: "task", taskId: "task-A", workspaceId: "project-A", state: "succeeded" } as const;
+    book.noteCall({ session: "v1/opaque-session-of-A", ids: ["task-A"] });
+    book.noteCall({ session: "v1/opaque-session-of-A", ids: [] });
+    book.noteCall({ session: "v1/opaque-session-of-A", ids: [] });
+    expect(book.conversationOf(task)).toBeUndefined();
+    expect(looks).toBe(0);
+    expect(book.conversationOf({ kind: "task", taskId: "unrelated", state: "succeeded" })).toBeUndefined();
+  });
 
-    // Known, it is looked at again only after a minute; a look that disagrees unlearns it.
-    open = [{ conversationId: "title:Conversa B", answering: true }];
-    now += 10_000;
-    book.noteCall({ session: "session-a", ids: [] });
-    expect(looks).toBe(2);
-    now += 60_000;
-    book.noteCall({ session: "session-a", ids: [] });
-    await until(() => looks === 3);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(book.conversationOf(taskA)).toBeUndefined();
+  it("does not trust a legacy persisted title binding from another chat", async () => {
+    const file = path.join(await mkdtemp(path.join(os.tmpdir(), "book-legacy-")), "conversation-book.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(file, JSON.stringify({
+      sessionOfId: [["task-A", "v1/opaque-session-of-A"]],
+      conversationOfSession: [["v1/opaque-session-of-A", "title:Chat B"]],
+      lastSeen: [["v1/opaque-session-of-A", "title:Chat B"]],
+    }));
+    const book = new ConversationBook({ file, openConversations: async () => [{ conversationId: "title:Chat B", answering: false }] });
+    expect(book.conversationOf({ kind: "task", taskId: "task-A", state: "succeeded" })).toBeUndefined();
+  });
 
-    // Two conversations answering: nothing is learned.
-    open = [{ conversationId: "title:Conversa A", answering: true }, { conversationId: "title:Conversa C", answering: true }];
-    now += 10_000;
-    book.noteCall({ session: "session-b", ids: ["task-b"] });
-    now += 10_000;
-    book.noteCall({ session: "session-b", ids: [] });
-    await until(() => looks === 5);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(book.conversationOf({ kind: "task", taskId: "task-b", state: "succeeded" })).toBeUndefined();
-    expect(book.conversationOf({ kind: "update", updateId: "upd_x", workspaceId: "w", state: "succeeded" })).toBeUndefined();
+  it("keeps a task in the queue rather than sending to a different active project", async () => {
+    const delivered: string[] = [];
+    const book = new ConversationBook({ openConversations: async () => [{ conversationId: "title:Chat B", answering: true }] });
+    book.noteCall({ session: "v1/opaque-session-of-A", ids: ["task-A"] });
+    const app: ChatWakeTarget = { name: "app", deliver: async (_text, id) => {
+      if (id === "title:Chat B") delivered.push("Chat B");
+      return { outcome: id === "title:Chat B" ? "sent" : "elsewhere" };
+    } };
+    const wake = new ChatWake({ targets: () => [app], conversationOf: (event) => book.conversationOf(event),
+      spacingMs: 1, retryMs: 60_000 });
+    try {
+      wake.queue({ kind: "task", taskId: "task-A", workspaceId: "project-A", state: "succeeded" });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(delivered).toHaveLength(0);
+      expect(wake.status().recent).toHaveLength(0);
+    } finally { wake.close(); }
   });
 
   it("parses what the app shows without writing", () => {
@@ -371,15 +367,28 @@ describe("the ChatGPT app for Windows", () => {
         return child;
       }) as never,
     })!;
-    await expect(app.deliver("[MCP V3, aviso]")).resolves.toEqual({ outcome: "sent" });
+    await expect(app.deliver("[MCP V3, aviso]", "id:6720f1c2-0a1b-4c5d-8e9f-123456789abc")).resolves.toEqual({ outcome: "sent" });
     const [call] = calls;
     expect(call!.args).toEqual(["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File",
       path.join(directory, "chat-wake-app.ps1")]);
     expect(call!.args.join(" ")).not.toContain("aviso");
-    expect(call!.options).toMatchObject({ windowsHide: true, env: expect.objectContaining({ MCP_V3_WAKE_TEXT: "[MCP V3, aviso]" }) });
+    expect(call!.options).toMatchObject({ windowsHide: true, env: expect.objectContaining({ MCP_V3_WAKE_TEXT: "[MCP V3, aviso]", MCP_V3_WAKE_CONVERSATION: "id:6720f1c2-0a1b-4c5d-8e9f-123456789abc" }) });
     const script = await readFile(path.join(directory, "chat-wake-app.ps1"), "utf8");
     expect(script).toContain("$env:MCP_V3_WAKE_TEXT");
     expect(script).not.toMatch(/SendKeys|Clipboard/u);
+  });
+
+  it("refuses to send when only a title or no verified chat ID is supplied", async () => {
+    let spawned = 0;
+    const app = createDesktopChatAppTarget({
+      scriptDirectory: path.join(os.tmpdir(), "unused-wake-script"),
+      spawnProcess: (() => { spawned++; throw new Error("must not spawn"); }) as never,
+    })!;
+    await expect(app.deliver("notice")).resolves.toEqual({ outcome: "elsewhere", detail: "unverified-conversation-id" });
+    await expect(app.deliver("notice", "title:Chat B")).resolves.toEqual({ outcome: "elsewhere", detail: "unverified-conversation-id" });
+    await expect(app.deliver("notice", "id:invalid")).resolves.toEqual({ outcome: "elsewhere", detail: "unverified-conversation-id" });
+    expect(spawned).toBe(0);
+    expect(DESKTOP_CHAT_APP_SCRIPT).toContain("unverified-conversation-id");
   });
 
   (process.platform === "win32" ? it : it.skip)("is a script Windows PowerShell parses", () => {
