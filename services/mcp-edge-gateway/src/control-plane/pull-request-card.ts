@@ -3,10 +3,10 @@
 // branches, lines added and removed, the files it changes and how its CI is
 // doing. Links open the pull request on GitHub.
 
-import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v5.html";
+export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v6.html";
 
 export const PULL_REQUEST_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -40,13 +40,14 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
 <section>
   <button class="btn" id="open" type="button">Abrir no GitHub</button>
 </section>
+<script>${CARD_MCP_APPS_SCRIPT}</script>
 <script>
 (function () {
   ${CARD_THEME_SCRIPT}
   var SHOWN = 8;
   var expanded = false;
   function open(href) {
-    var bridge = window.openai;
+    var bridge = (window.mcpV3Card || window.openai);
     if (bridge && typeof bridge.openExternal === "function") bridge.openExternal({ href: href });
     else window.open(href, "_blank", "noopener");
   }
@@ -72,7 +73,7 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
   }
   function render() {
     applyTheme();
-    var pr = (window.openai && window.openai.toolOutput) || {};
+    var pr = ((window.mcpV3Card || window.openai) && (window.mcpV3Card || window.openai).toolOutput) || {};
     if (typeof pr.number !== "number") return;
     var o = pr.overview || null;
     document.getElementById("title").textContent = "#" + pr.number + " " + (pr.title || "");
@@ -128,7 +129,7 @@ export const PULL_REQUEST_CARD_HTML = `<!doctype html>
   }
   document.getElementById("more").addEventListener("click", function () { expanded = true; render(); });
   document.getElementById("open").addEventListener("click", function () {
-    var pr = (window.openai && window.openai.toolOutput) || {};
+    var pr = ((window.mcpV3Card || window.openai) && (window.mcpV3Card || window.openai).toolOutput) || {};
     if (typeof pr.url === "string") open(pr.url);
   });
   window.addEventListener("openai:set_globals", render);

@@ -1,3 +1,90 @@
+// Minimal MCP Apps JSON-RPC bridge, shared by all three self-contained HTML cards.
+// No external scripts: the resource is sandboxed and must work without network access.
+// window.openai remains available for hosts using the older ChatGPT widget bridge.
+export const CARD_MCP_APPS_SCRIPT = `
+(function () {
+  var nextId = 0;
+  var pending = new Map();
+  var nativeReady = false;
+  var nativeInput = null;
+  var nativeOutput = null;
+  var hostContext = {};
+  function post(message) { window.parent.postMessage(message, "*"); }
+  function request(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = "mcp-v3-card-" + (++nextId);
+      pending.set(id, { resolve: resolve, reject: reject });
+      post({ jsonrpc: "2.0", id: id, method: method, params: params });
+    });
+  }
+  function legacy() { return window.openai || {}; }
+  function changed() { window.dispatchEvent(new Event("openai:set_globals")); }
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    var message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (typeof message.id === "string" && pending.has(message.id)) {
+      var waiting = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) waiting.reject(new Error(message.error.message || "MCP Apps request failed"));
+      else waiting.resolve(message.result);
+      return;
+    }
+    if (message.method === "ui/notifications/tool-input") {
+      nativeInput = message.params && message.params.arguments || null;
+      changed();
+    } else if (message.method === "ui/notifications/tool-result") {
+      nativeOutput = message.params && message.params.structuredContent || null;
+      changed();
+    } else if (message.method === "ui/notifications/host-context-changed") {
+      Object.assign(hostContext, message.params || {});
+      changed();
+    }
+  });
+  window.mcpV3Card = {
+    get toolInput() { return nativeInput || legacy().toolInput || {}; },
+    get toolOutput() { return nativeOutput || legacy().toolOutput || {}; },
+    get theme() { return hostContext.theme || legacy().theme; },
+    get widgetState() { return legacy().widgetState; },
+    get displayMode() { return hostContext.displayMode || legacy().displayMode; },
+    setWidgetState: function (value) {
+      if (typeof legacy().setWidgetState === "function") return legacy().setWidgetState(value);
+    },
+    callTool: function (name, args) {
+      if (nativeReady) return request("tools/call", { name: name, arguments: args });
+      if (typeof legacy().callTool === "function") return legacy().callTool(name, args);
+      return Promise.reject(new Error("MCP Apps host is not ready"));
+    },
+    openExternal: function (options) {
+      if (nativeReady) return request("ui/open-link", { url: options.href });
+      if (typeof legacy().openExternal === "function") return legacy().openExternal(options);
+      return window.open(options.href, "_blank", "noopener");
+    },
+    requestDisplayMode: function (options) {
+      if (nativeReady) return request("ui/request-display-mode", options);
+      if (typeof legacy().requestDisplayMode === "function") return legacy().requestDisplayMode(options);
+      return Promise.reject(new Error("MCP Apps host is not ready"));
+    },
+    notifyIntrinsicHeight: function (height) {
+      if (typeof legacy().notifyIntrinsicHeight === "function") legacy().notifyIntrinsicHeight(height);
+    }
+  };
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    appInfo: { name: "mcp-v3-card", version: "1.0.0" },
+    appCapabilities: {}
+  }).then(function (result) {
+    hostContext = result && result.hostContext || {};
+    nativeReady = true;
+    post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    changed();
+  }).catch(function () {
+    // Older hosts still supply window.openai. They do not implement ui/initialize.
+    changed();
+  });
+})();
+`;
+
 // What every MCP V3 card in the ChatGPT conversation shares, so they read as
 // one set: the colors in light and dark, a header with the title on the left
 // and small chips on the right, muted secondary lines and quiet lists.
@@ -52,11 +139,12 @@ export const CARD_FIT_SCRIPT = `
     var height = Math.ceil(document.body.getBoundingClientRect().height);
     // A card ChatGPT hides for a moment measures 0; told so, ChatGPT would keep it at 0.
     if (height < 1) return;
-    var bridge = window.openai && typeof window.openai.notifyIntrinsicHeight === "function";
+    var api = window.mcpV3Card || window.openai;
+    var bridge = api && typeof api.notifyIntrinsicHeight === "function";
     // ChatGPT can hand the card its bridge after the first look, so it is told again then.
     if (height === last && (told || !bridge)) return;
     last = height;
-    try { if (bridge) { window.openai.notifyIntrinsicHeight(height); told = true; } } catch (e) {}
+    try { if (bridge) { api.notifyIntrinsicHeight(height); told = true; } } catch (e) {}
     try { window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: height } }, "*"); } catch (e) {}
   }
   if (window.ResizeObserver) new ResizeObserver(fit).observe(document.body);
@@ -68,11 +156,12 @@ export const CARD_FIT_SCRIPT = `
 
 export const CARD_THEME_SCRIPT = `
   function applyTheme() {
-    var theme = window.openai && window.openai.theme;
+    var api = window.mcpV3Card || window.openai;
+    var theme = api && api.theme;
     if (theme === "dark" || theme === "light") document.documentElement.setAttribute("data-theme", theme);
     var pin = document.getElementById("pin");
     if (pin) {
-      var bridge = window.openai;
+      var bridge = window.mcpV3Card || window.openai;
       pin.hidden = !bridge || typeof bridge.requestDisplayMode !== "function";
       pin.textContent = bridge && bridge.displayMode === "pip" ? "Soltar" : "Fixar";
     }
@@ -80,7 +169,7 @@ export const CARD_THEME_SCRIPT = `
   // Fixar keeps the card floating at the top of the chat while it scrolls (ChatGPT's picture-in-picture).
   document.addEventListener("click", function (event) {
     if (!event.target || event.target.id !== "pin") return;
-    var bridge = window.openai;
+    var bridge = window.mcpV3Card || window.openai;
     if (!bridge || typeof bridge.requestDisplayMode !== "function") return;
     Promise.resolve(bridge.requestDisplayMode({ mode: bridge.displayMode === "pip" ? "inline" : "pip" }))
       .then(applyTheme, applyTheme);

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
+import { runInNewContext, Script } from "node:vm";
+import { CARD_MCP_APPS_SCRIPT } from "../src/control-plane/card-style.js";
 import { ProgressPlans, PROGRESS_CARD_URI } from "../src/control-plane/progress-card.js";
 import { PULL_REQUEST_CARD_URI } from "../src/control-plane/pull-request-card.js";
 import { USER_MESSAGES_CARD_URI, uiResourcesForManifest } from "../src/control-plane/user-messages-card.js";
@@ -166,12 +168,12 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
-    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v9.html");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v10.html");
     expect(resources[0]!.text).not.toContain('id="talk"');
     expect(resources[0]!.text).not.toContain('<textarea');
     expect(resources[0]!.text).not.toContain('id="send"');
     expect(resources[0]!.text).not.toContain("browser_user_reply");
-    expect(resources[0]!.text).not.toContain("setWidgetState");
+    expect(resources[0]!.text).toContain("ui/notifications/initialized");
     expect(resources[0]!.text).toContain("veja abaixo");
     expect(resources[0]!.text).not.toContain('id="pin"');
     expect(resources[1]!.text).toContain("Abrir no GitHub");
@@ -203,7 +205,7 @@ describe("the chat cards the Edge serves", () => {
 
   it("tells in the reply card whether the agent has each message yet", () => {
     const [card] = uiResourcesForManifest([{ name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } }]);
-    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v10.html");
+    expect(card!.uri).toBe("ui://mcp-v3/user-messages-v11.html");
     expect(card!.text).toContain("Encaminhada às");
     expect(card!.text).not.toContain("✓ Entregue às");
     expect(card!.text).toContain("aguardando o agente");
@@ -222,6 +224,75 @@ describe("the chat cards the Edge serves", () => {
     ]);
     for (const resource of resources) expect(resource.text).toContain("notifyIntrinsicHeight");
     expect(resources[2]!._meta).toMatchObject({ ui: { prefersBorder: false }, "openai/widgetPrefersBorder": false });
+  });
+
+  it("initializes MCP Apps before using native tool input and result", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const listeners = new Map<string, (event: { source?: object; data?: Record<string, unknown> }) => void>();
+    const parent = { postMessage: (message: Record<string, unknown>) => { sent.push(message); } };
+    const window = {
+      parent,
+      openai: { toolOutput: { legacy: true }, toolInput: { legacy: true }, callTool: () => Promise.resolve("legacy") },
+      addEventListener: (name: string, listener: (event: { source?: object; data?: Record<string, unknown> }) => void) => {
+        listeners.set(name, listener);
+      },
+      dispatchEvent: () => {},
+    };
+    runInNewContext(CARD_MCP_APPS_SCRIPT, { window, Event: class { constructor(public type: string) {} } });
+    const bridge = (window as typeof window & { mcpV3Card: {
+      toolInput: Record<string, unknown>; toolOutput: Record<string, unknown>; theme: string;
+      callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+    } }).mcpV3Card;
+    expect(bridge.toolOutput).toEqual({ legacy: true });
+    expect(await bridge.callTool("test", {})).toBe("legacy");
+
+    const initialize = sent[0]!;
+    expect(initialize).toMatchObject({ jsonrpc: "2.0", method: "ui/initialize", params: {
+      protocolVersion: "2026-01-26", appInfo: { name: "mcp-v3-card" }, appCapabilities: {},
+    } });
+    const onMessage = listeners.get("message")!;
+    onMessage({ source: {}, data: { jsonrpc: "2.0", method: "ui/notifications/tool-result",
+      params: { structuredContent: { foreign: true } } } });
+    expect(bridge.toolOutput).toEqual({ legacy: true });
+
+    onMessage({ source: parent, data: { jsonrpc: "2.0", id: initialize.id, result: {
+      hostContext: { theme: "dark" },
+    } } });
+    await Promise.resolve();
+    expect(sent[1]).toMatchObject({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+    expect(bridge.theme).toBe("dark");
+
+    onMessage({ source: parent, data: { jsonrpc: "2.0", method: "ui/notifications/tool-input",
+      params: { arguments: { taskId: "task-1" } } } });
+    onMessage({ source: parent, data: { jsonrpc: "2.0", method: "ui/notifications/tool-result",
+      params: { structuredContent: { planId: "plan-1", steps: [] } } } });
+    expect(bridge.toolInput).toEqual({ taskId: "task-1" });
+    expect(bridge.toolOutput).toEqual({ planId: "plan-1", steps: [] });
+
+    const requested = bridge.callTool("browser_progress_read", { planId: "plan-1" });
+    expect(sent[2]).toMatchObject({ method: "tools/call", params: {
+      name: "browser_progress_read", arguments: { planId: "plan-1" },
+    } });
+    onMessage({ source: parent, data: { jsonrpc: "2.0", id: sent[2]!.id, result: {
+      structuredContent: { steps: [{ text: "ready" }] },
+    } } });
+    expect(await requested).toEqual({ structuredContent: { steps: [{ text: "ready" }] } });
+  });
+
+  it("embeds standalone valid scripts and retains the legacy card appearance", () => {
+    const resources = uiResourcesForManifest([
+      { name: "browser_progress", _meta: { ui: { resourceUri: PROGRESS_CARD_URI } } },
+      { name: "github_get_pull_request", _meta: { ui: { resourceUri: PULL_REQUEST_CARD_URI } } },
+      { name: "browser_user_messages", _meta: { ui: { resourceUri: USER_MESSAGES_CARD_URI } } },
+    ]);
+    for (const resource of resources) {
+      expect(resource.text).toContain("ui/initialize");
+      expect(resource.text).toContain("ui/notifications/initialized");
+      expect(resource.text).toContain("window.openai");
+      const scripts = Array.from(resource.text.matchAll(/<script>([\s\S]*?)<\/script>/g), (match) => match[1]!);
+      expect(scripts).toHaveLength(3);
+      for (const script of scripts) expect(() => new Script(script)).not.toThrow();
+    }
   });
 
   it("serves the current cards under the previous addresses while an update is under way", () => {
