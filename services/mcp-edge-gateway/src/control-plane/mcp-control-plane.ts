@@ -1,7 +1,7 @@
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 import { EdgeAuthenticationError, type EdgeAuthenticator } from "./auth.js";
 import { attachNextStep, nextStepsOf } from "./next-step.js";
-import { uiResourcesForManifest } from "./user-messages-card.js";
+import { uiResourceForRead, uiResourcesForManifest } from "./user-messages-card.js";
 
 const MCP_TOOL_CATALOG_META_KEY = "io.github.ifael/mcp-tool-catalog";
 const AGENT_UNAVAILABLE_ERROR_CODE = -32001;
@@ -144,7 +144,7 @@ export function createMcpControlPlane(options: EdgeMcpControlPlaneOptions): Edge
 
       if (uiResources.length > 0 && parsed.method === "resources/read") {
         const uri = isRecord(parsed.params) ? parsed.params.uri : undefined;
-        const resource = uiResources.find((candidate) => candidate.uri === uri);
+        const resource = uiResourceForRead(uiResources, uri);
         if (!resource) return jsonRpcError(parsed.id, -32002, "Resource not found");
         return jsonRpcResult(parsed.id, {
           contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text, _meta: resource._meta }],

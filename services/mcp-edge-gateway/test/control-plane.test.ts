@@ -6,6 +6,8 @@ import {
   type EdgeExecutionTransport,
 } from "../src/control-plane/mcp-control-plane.js";
 import { MCP_APP_MIME_TYPE, USER_MESSAGES_CARD_URI } from "../src/control-plane/user-messages-card.js";
+import { PROGRESS_CARD_URI } from "../src/control-plane/progress-card.js";
+import { PULL_REQUEST_CARD_URI } from "../src/control-plane/pull-request-card.js";
 import type { AuthenticatedEdgePrincipal } from "@mcp-access-stack/edge-protocol";
 
 const principal: AuthenticatedEdgePrincipal = {
@@ -425,6 +427,41 @@ describe("Edge MCP control plane reply card", () => {
     })]);
     expect(await (await controlPlane.handle(mcpRequest(jsonRpc(5, "resources/read", { uri: "ui://other.html" })))).json())
       .toMatchObject({ error: { code: -32002 } });
+    expect(execution.forwardedCalls).toHaveLength(0);
+  });
+
+  it("reads previous card URIs referenced by existing conversations after a catalog upgrade", async () => {
+    const execution = new FakeExecutionTransport();
+    const currentCards = [
+      ...withCard,
+      { name: "browser_progress", _meta: { ui: { resourceUri: PROGRESS_CARD_URI } } },
+      { name: "github_get_pull_request", _meta: { ui: { resourceUri: PULL_REQUEST_CARD_URI } } },
+    ];
+    const controlPlane = createMcpControlPlane({
+      authenticator: { authenticate: async () => principal },
+      execution,
+      manifest: currentCards,
+      catalogMetadata,
+      serverIdentity,
+    });
+
+    const listed = await (await controlPlane.handle(mcpRequest(jsonRpc(6, "resources/list", {})))).json() as {
+      result: { resources: Array<{ uri: string }> };
+    };
+    expect(listed.result.resources.map((r) => r.uri)).toEqual([
+      USER_MESSAGES_CARD_URI, PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI,
+    ]);
+    for (const uri of ["ui://mcp-v3/user-messages-v10.html",
+      "ui://mcp-v3/progress-v9.html", "ui://mcp-v3/pull-request-v5.html"]) {
+      const read = await (await controlPlane.handle(mcpRequest(jsonRpc(7, "resources/read", { uri })))).json() as {
+        result?: { contents: Array<{ uri: string; mimeType: string; text: string }> };
+        error?: { code: number };
+      };
+      expect(read.error).toBeUndefined();
+      expect(read.result?.contents).toEqual([expect.objectContaining({
+        uri, mimeType: MCP_APP_MIME_TYPE, text: expect.stringContaining("ui/initialize"),
+      })]);
+    }
     expect(execution.forwardedCalls).toHaveLength(0);
   });
 
