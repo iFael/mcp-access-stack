@@ -429,11 +429,13 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     const newWorkspaceId = "cloud-project-remote-deadbeef";
     const renamedInput = { ...input, workspaceId: newWorkspaceId };
     const dryRun = await manager.materializeRepositoryFromCloud(renamedInput, undefined, true);
-    expect(dryRun).toMatchObject({ path: materialized.path, workspaceId: newWorkspaceId });
+    expect(dryRun.workspaceId).toBe(newWorkspaceId);
+    expect(await realpath(dryRun.path)).toBe(await realpath(materialized.path));
     expect(manager.listBindings()[0]?.workspaceId).toBe(materialized.workspaceId);
 
     const rebound = await manager.materializeRepositoryFromCloud(renamedInput);
-    expect(rebound).toMatchObject({ path: materialized.path, workspaceId: newWorkspaceId });
+    expect(rebound.workspaceId).toBe(newWorkspaceId);
+    expect(await realpath(rebound.path)).toBe(await realpath(materialized.path));
     expect(manager.listBindings()).toHaveLength(1);
     expect(manager.listBindings()[0]?.workspaceId).toBe(newWorkspaceId);
     await expect(readFile(path.join(materialized.path, "uncommitted.txt"), "utf8"))
