@@ -343,6 +343,12 @@ export class LocalRepositoryManager implements RepositoryExecutor {
     );
     if (existing && await directoryExists(existing.path)) {
       await this.inspectRepository(existing.path, signal);
+      if (input.workspaceId && input.workspaceId !== existing.workspaceId) {
+        const [rebound] = await this.bindRepositories(
+          [{ ...existing, workspaceId: input.workspaceId }], signal, dryRun,
+        );
+        return rebound!;
+      }
       return { ...existing, remoteUrls: [...existing.remoteUrls] };
     }
     if (existing && !existing.managed) {

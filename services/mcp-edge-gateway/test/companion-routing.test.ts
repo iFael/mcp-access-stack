@@ -166,6 +166,23 @@ describe("companion routing", () => {
     expect(companion).toMatch(/^mcp-access-stack-local-[a-f0-9]{8}$/u);
   });
 
+  it("keeps Windows ciclo stable and deterministically reallocates only the legacy remote id", () => {
+    // The Windows materialization remains reserved even when its device is offline.
+    const reserved = new Set(["ciclo"]);
+    const identity = "rt_11111111-1111-4111-8111-111111111111:repo_cacd044a-ba77-4d94-b483-b63c60391f0a";
+    const repaired = selectAvailableRuntimeWorkspaceId("ciclo", identity, reserved, "remote");
+    expect(repaired).toMatch(/^ciclo-remote-[a-f0-9]{8}$/u);
+    expect(selectAvailableRuntimeWorkspaceId("ciclo", identity, reserved, "remote")).toBe(repaired);
+    expect(selectWorkspaceRuntime(
+      [{ target: "windows", deviceId: "dev-win", workspaceIds: ["ciclo"] }],
+      "ciclo", new Set([repaired]),
+    )).toMatchObject({ kind: "companion", candidate: { target: "windows" } });
+    expect(selectWorkspaceRuntime(
+      [{ target: "windows", deviceId: "dev-win", workspaceIds: ["ciclo"] }],
+      repaired, new Set([repaired]),
+    )).toEqual({ kind: "primary" });
+  });
+
   it("routes a workspace to one companion when primary does not own it", () => {
     expect(selectWorkspaceRuntime(
       candidates,
