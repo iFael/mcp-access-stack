@@ -10,11 +10,29 @@ export const CARD_MCP_APPS_SCRIPT = `
   var nativeOutput = null;
   var hostContext = {};
   function post(message) { window.parent.postMessage(message, "*"); }
+  function note(state) {
+    if (window.console && typeof window.console.info === "function") window.console.info("[mcp-v3-card] " + state);
+  }
   function request(method, params) {
     return new Promise(function (resolve, reject) {
       var id = "mcp-v3-card-" + (++nextId);
-      pending.set(id, { resolve: resolve, reject: reject });
-      post({ jsonrpc: "2.0", id: id, method: method, params: params });
+      var waiting = { resolve: resolve, reject: reject };
+      var message = { jsonrpc: "2.0", id: id, method: method, params: params };
+      pending.set(id, waiting);
+      post(message);
+      if (method === "ui/initialize") {
+        note("init-sent");
+        // A dynamically loaded iframe may post before the host starts listening.
+        // Retry only this idempotent handshake, not tool calls or mutations.
+        [200, 600, 1200, 2200].forEach(function (delay) {
+          window.setTimeout(function () {
+            if (pending.get(id) === waiting) {
+              if (delay === 2200) note("init-retry-final");
+              post(message);
+            }
+          }, delay);
+        });
+      }
     });
   }
   function legacy() { return window.openai || {}; }
@@ -76,6 +94,7 @@ export const CARD_MCP_APPS_SCRIPT = `
   }).then(function (result) {
     hostContext = result && result.hostContext || {};
     nativeReady = true;
+    note("init-acknowledged");
     post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
     changed();
   }).catch(function () {

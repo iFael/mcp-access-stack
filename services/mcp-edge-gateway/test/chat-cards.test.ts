@@ -237,6 +237,7 @@ describe("the chat cards the Edge serves", () => {
         listeners.set(name, listener);
       },
       dispatchEvent: () => {},
+      setTimeout: () => 0,
     };
     runInNewContext(CARD_MCP_APPS_SCRIPT, { window, Event: class { constructor(public type: string) {} } });
     const bridge = (window as typeof window & { mcpV3Card: {
@@ -277,6 +278,55 @@ describe("the chat cards the Edge serves", () => {
       structuredContent: { steps: [{ text: "ready" }] },
     } } });
     expect(await requested).toEqual({ structuredContent: { steps: [{ text: "ready" }] } });
+  });
+
+  it("recovers when the host begins listening after the iframe sends ui/initialize", async () => {
+    const sent: Array<{ method: string; id?: string }> = [];
+    const retries: Array<{ callback: () => void; delay: number }> = [];
+    let hostListening = false;
+    let receive: ((event: { source: object; data: Record<string, unknown> }) => void) | undefined;
+    const parent = {
+      postMessage(message: { method: string; id?: string }) {
+        sent.push(message);
+        if (hostListening && message.method === "ui/initialize") {
+          receive?.({ source: parent, data: {
+            jsonrpc: "2.0", id: message.id, result: { hostContext: { theme: "dark" } },
+          } });
+        }
+      },
+    };
+    const window = {
+      parent,
+      openai: {},
+      addEventListener: (name: string, handler: typeof receive) => {
+        if (name === "message") receive = handler;
+      },
+      dispatchEvent: () => {},
+      setTimeout: (callback: () => void, delay: number) => {
+        retries.push({ callback, delay });
+        return retries.length;
+      },
+    };
+    runInNewContext(CARD_MCP_APPS_SCRIPT, {
+      window, Event: class { constructor(public type: string) {} },
+    });
+    expect(sent.map((message) => message.method)).toEqual(["ui/initialize"]);
+    expect(retries.length).toBeGreaterThan(0);
+    expect(retries.length).toBeLessThanOrEqual(5);
+    expect(retries[0]!.delay).toBeGreaterThan(0);
+
+    // The initial postMessage was dropped: the parent created its transport later.
+    hostListening = true;
+    retries[0]!.callback();
+    await Promise.resolve();
+    expect(sent.map((message) => message.method)).toEqual([
+      "ui/initialize", "ui/initialize", "ui/notifications/initialized",
+    ]);
+    expect(sent[1]!.id).toBe(sent[0]!.id);
+
+    // Once the host acknowledges, outstanding timers may not resend.
+    for (const retry of retries.slice(1)) retry.callback();
+    expect(sent.filter((message) => message.method === "ui/initialize")).toHaveLength(2);
   });
 
   it("embeds standalone valid scripts and retains the legacy card appearance", () => {
