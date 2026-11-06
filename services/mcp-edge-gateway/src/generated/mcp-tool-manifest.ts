@@ -2339,7 +2339,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v9.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v10.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2351,7 +2351,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v9.html"
+        "resourceUri": "ui://mcp-v3/progress-v10.html"
       }
     },
     "annotations": {
@@ -14043,7 +14043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_start_commit_checks_watch on its head for CI; github_read for its reviews and comments.",
-      "openai/outputTemplate": "ui://mcp-v3/pull-request-v5.html",
+      "openai/outputTemplate": "ui://mcp-v3/pull-request-v6.html",
       "openai/toolInvocation/invoked": "PR",
       "openai/toolInvocation/invoking": "Lendo a PR",
       "securitySchemes": [
@@ -14055,7 +14055,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/pull-request-v5.html"
+        "resourceUri": "ui://mcp-v3/pull-request-v6.html"
       }
     },
     "annotations": {
@@ -25666,7 +25666,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
-      "openai/outputTemplate": "ui://mcp-v3/user-messages-v10.html",
+      "openai/outputTemplate": "ui://mcp-v3/user-messages-v11.html",
       "openai/toolInvocation/invoked": "Conversa com a tarefa",
       "openai/toolInvocation/invoking": "Abrindo a conversa com a tarefa",
       "openai/widgetAccessible": true,
@@ -25679,7 +25679,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/user-messages-v10.html"
+        "resourceUri": "ui://mcp-v3/user-messages-v11.html"
       }
     },
     "annotations": {
@@ -25874,7 +25874,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v9.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v10.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "openai/widgetAccessible": true,
@@ -25887,7 +25887,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v9.html"
+        "resourceUri": "ui://mcp-v3/progress-v10.html"
       }
     },
     "annotations": {
@@ -27423,15 +27423,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "0841b949b193d75481fe3cb487fa04b09c9255a9516df6df6238246415dc63c1",
-  "serverVersion": "0.4.0-catalog.c0841b949b193.s02b46608e455",
+  "contractRevision": "b5f0a58ad66f313bbeb3d894f498675e475806e8f5daacec7d4039db4f27b7a6",
+  "serverVersion": "0.4.0-catalog.cb5f0a58ad66f.s02b46608e455",
   "toolCount": 123,
   "toolSetRevision": "02b46608e455032249a5003f13ed848161b8c25d0534018df93e3db4b4e48249"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c0841b949b193.s02b46608e455"
+  "version": "0.4.0-catalog.cb5f0a58ad66f.s02b46608e455"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -4,11 +4,11 @@
 // inbox as the extension popup, and reaches the agent with its next call.
 // Only tools whose _meta.ui.resourceUri names this card make the Edge serve it.
 
-import { CARD_BASE_CSS, CARD_FIT_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import { PROGRESS_CARD_RESOURCE, PROGRESS_CARD_URI } from "./progress-card.js";
 import { PULL_REQUEST_CARD_RESOURCE, PULL_REQUEST_CARD_URI } from "./pull-request-card.js";
 
-export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v10.html";
+export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v11.html";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export interface EdgeUiResource {
@@ -77,9 +77,10 @@ ${CARD_BASE_CSS}
   <p class="status" id="status"></p>
 </div>
 <p class="status" id="unavailable" hidden>Este app não deixa o cartão enviar mensagens. Responda pelo ícone da extensão MCP V3 no Chrome.</p>
+<script>${CARD_MCP_APPS_SCRIPT}</script>
 <script>
 (function () {
-  var bridge = window.openai;
+  var bridge = window.mcpV3Card || window.openai;
   var text = document.getElementById("text");
   var send = document.getElementById("send");
   var status = document.getElementById("status");
@@ -318,6 +319,9 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/user-messages-v8.html": USER_MESSAGES_CARD_URI,
   "ui://mcp-v3/progress-v6.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/progress-v8.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/progress-v9.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/pull-request-v5.html": PULL_REQUEST_CARD_URI,
+  "ui://mcp-v3/user-messages-v10.html": USER_MESSAGES_CARD_URI,
 };
 
 /** The cards the manifest's tools point at and the Edge knows how to serve. */

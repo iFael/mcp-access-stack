@@ -10,10 +10,10 @@
 // card again at the end of an answer; its older copies fold into one line.
 
 import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
-import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT } from "./card-style.js";
+import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v9.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v10.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -50,6 +50,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
 <body>
 <div class="head"><h1 id="title">Etapas</h1><div class="chips"><span class="chip" id="count" hidden></span></div></div>
 <ul id="steps"></ul>
+<script>${CARD_MCP_APPS_SCRIPT}</script>
 <script>
 (function () {
   ${CARD_THEME_SCRIPT}
@@ -63,14 +64,14 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   var latest = null;
   function data() {
     if (latest) return latest;
-    var bridge = window.openai || {};
+    var bridge = (window.mcpV3Card || window.openai) || {};
     var out = bridge.toolOutput;
     if (out && Array.isArray(out.steps)) return out;
     return bridge.toolInput || {};
   }
   // The agent changes the plan with browser_progress_update; the card reads it again.
   function refresh() {
-    var bridge = window.openai;
+    var bridge = (window.mcpV3Card || window.openai);
     var out = bridge && bridge.toolOutput;
     // browser_progress answers with the plan; mcp_update with the update that moves it.
     var planId = out && (out.planId || (out.update && out.update.planId));
@@ -90,7 +91,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     return Math.floor(minutes / 60) + " h " + (minutes % 60) + " min";
   }
   function openLink(event) {
-    var bridge = window.openai;
+    var bridge = (window.mcpV3Card || window.openai);
     if (bridge && typeof bridge.openExternal === "function") {
       event.preventDefault();
       bridge.openExternal({ href: event.currentTarget.href });
@@ -104,7 +105,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     steps.forEach(function (step) { if (step && (step.state === "done" || step.state === "skipped")) done += 1; });
     var title = typeof value.title === "string" && value.title.trim() ? value.title : "Etapas";
     // A copy shown earlier in the chat folds into one line; the latest one is below.
-    var mine = window.openai && window.openai.toolOutput && window.openai.toolOutput.shownAt;
+    var mine = (window.mcpV3Card || window.openai) && (window.mcpV3Card || window.openai).toolOutput && (window.mcpV3Card || window.openai).toolOutput.shownAt;
     var folded = Boolean(latest && mine && latest.shownAt && latest.shownAt !== mine);
     document.body.className = folded ? "folded" : "";
     document.getElementById("title").textContent = folded ? title + ", " + done + "/" + steps.length + ", veja abaixo" : title;
