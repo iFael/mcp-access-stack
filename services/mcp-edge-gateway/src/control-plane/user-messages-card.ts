@@ -342,6 +342,16 @@ export function uiResourcesForManifest(
   });
 }
 
+/** Read legacy card links held by existing chats without advertising old URIs. */
+export function uiResourceForRead(resources: readonly EdgeUiResource[], uri: unknown): EdgeUiResource | undefined {
+  if (typeof uri !== "string") return undefined;
+  const direct = resources.find((resource) => resource.uri === uri);
+  if (direct) return direct;
+  const currentUri = Object.hasOwn(PREVIOUS_URIS, uri) ? PREVIOUS_URIS[uri] : undefined;
+  const current = resources.find((resource) => resource.uri === currentUri);
+  return current ? { ...current, uri } : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
