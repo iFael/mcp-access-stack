@@ -96,8 +96,10 @@ public static class McpV3Front {
     "title:$title"
   }
   $want = [string]$env:MCP_V3_WAKE_CONVERSATION
+  if ($env:MCP_V3_WAKE_INSPECT -ne '1' -and $want -notmatch '^id:[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+    Done @{ outcome = 'elsewhere'; detail = 'unverified-conversation-id' }
+  }
   function Assert-Conversation($state) {
-    if (-not $want) { return }
     if ((Conversation-Of $state) -cne $want) { Done @{ outcome = 'elsewhere'; detail = 'other-conversation' } }
   }
   $s = Read-State
@@ -176,10 +178,17 @@ export function createDesktopChatAppTarget(options: DesktopChatAppOptions): Chat
   const timeoutMs = options.timeoutMs ?? 30_000;
   return {
     name: "app",
-    deliver: async (text, conversationId) => parseDesktopChatAppResult(await runScript({
-      MCP_V3_WAKE_TEXT: text,
-      ...(conversationId === undefined ? {} : { MCP_V3_WAKE_CONVERSATION: conversationId }),
-    })),
+    deliver: async (text, conversationId) => {
+      // A title is not a stable identity, and no destination is not an
+      // authorization to inject a user turn into whichever chat is open.
+      if (!conversationId || !/^id:[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$/u.test(conversationId)) {
+        return { outcome: "elsewhere", detail: "unverified-conversation-id" };
+      }
+      return parseDesktopChatAppResult(await runScript({
+        MCP_V3_WAKE_TEXT: text,
+        MCP_V3_WAKE_CONVERSATION: conversationId,
+      }));
+    },
     openConversations: async () => parseDesktopChatAppInspect(await runScript({ MCP_V3_WAKE_INSPECT: "1" })),
   };
 
