@@ -423,6 +423,22 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     const again = await manager.materializeRepositoryFromCloud(input);
     expect(again.path).toBe(materialized.path);
     expect(manager.listBindings()).toHaveLength(1);
+
+    // Rebinding an existing runtime must never clone again or discard local changes.
+    await writeFile(path.join(materialized.path, "uncommitted.txt"), "preserve me\n");
+    const newWorkspaceId = "cloud-project-remote-deadbeef";
+    const renamedInput = { ...input, workspaceId: newWorkspaceId };
+    const dryRun = await manager.materializeRepositoryFromCloud(renamedInput, undefined, true);
+    expect(dryRun).toMatchObject({ path: materialized.path, workspaceId: newWorkspaceId });
+    expect(manager.listBindings()[0]?.workspaceId).toBe(materialized.workspaceId);
+
+    const rebound = await manager.materializeRepositoryFromCloud(renamedInput);
+    expect(rebound).toMatchObject({ path: materialized.path, workspaceId: newWorkspaceId });
+    expect(manager.listBindings()).toHaveLength(1);
+    expect(manager.listBindings()[0]?.workspaceId).toBe(newWorkspaceId);
+    await expect(readFile(path.join(materialized.path, "uncommitted.txt"), "utf8"))
+      .resolves.toBe("preserve me\n");
+    expect((await manager.materializeRepositoryFromCloud(renamedInput)).workspaceId).toBe(newWorkspaceId);
   }, 15_000);
 
   it("rejects unsafe Git transports for cloud materialization", async () => {

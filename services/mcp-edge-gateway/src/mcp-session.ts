@@ -1851,6 +1851,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       );
     }
     const reservedWorkspaceIds = new Set(primaryWorkspaceIds);
+    for (const materialization of await this.listStoredMaterializations(principal.userId)) {
+      if (materialization.deviceId !== deviceId) reservedWorkspaceIds.add(materialization.workspaceId);
+    }
     for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
       if (candidate.deviceId === deviceId) continue;
       for (const workspaceId of candidate.workspaceIds) reservedWorkspaceIds.add(workspaceId);
@@ -2244,32 +2247,26 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
     const previous = existingForRuntime[0] ?? null;
 
-    let workspaceId = previous?.workspaceId;
-    if (!workspaceId) {
-      const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(
-        request,
-        principal,
-      );
-      if (primaryWorkspaceIds === null) {
-        return mcpToolError(
-          body,
-          "WORKSPACE_ROUTE_UNRESOLVED",
-          "Remote workspace ownership could not be verified.",
-        );
-      }
-      const reservedWorkspaceIds = new Set(primaryWorkspaceIds);
-      for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
-        for (const candidateWorkspaceId of candidate.workspaceIds) {
-          reservedWorkspaceIds.add(candidateWorkspaceId);
-        }
-      }
-      workspaceId = selectAvailableRuntimeWorkspaceId(
-        targetName || access.repository.name,
-        `${runtimeId}:${repositoryId}`,
-        reservedWorkspaceIds,
-        "remote",
-      );
+    const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(request, principal);
+    if (primaryWorkspaceIds === null) {
+      return mcpToolError(body, "WORKSPACE_ROUTE_UNRESOLVED", "Remote workspace ownership could not be verified.");
     }
+    // Exclude only this materialization, never a matching ID owned by another runtime.
+    const reservedWorkspaceIds = new Set(
+      [...primaryWorkspaceIds].filter((id) => id !== previous?.workspaceId),
+    );
+    for (const materialization of await this.listStoredMaterializations(principal.userId)) {
+      if (materialization.id !== previous?.id) reservedWorkspaceIds.add(materialization.workspaceId);
+    }
+    for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
+      for (const id of candidate.workspaceIds) reservedWorkspaceIds.add(id);
+    }
+    const workspaceId = selectAvailableRuntimeWorkspaceId(
+      previous?.workspaceId ?? (targetName || access.repository.name),
+      `${runtimeId}:${repositoryId}`,
+      reservedWorkspaceIds,
+      "remote",
+    );
 
     const internalArguments = {
       repositoryId,
@@ -2321,6 +2318,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           principal.userId,
           runtimeId,
           {
+            ...(previous ? { id: previous.id } : {}),
             repositoryId,
             workspaceId: planned.workspaceId,
             path: planned.path,
@@ -2386,16 +2384,17 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         try {
           await this.ctx.storage.transaction(async (transaction) => {
             const transactionalStore = new EdgeAccountStore(transaction);
-            if (previousForPlannedWorkspace) {
+            const original = previous ?? previousForPlannedWorkspace;
+            if (original) {
               await transactionalStore.upsertRuntimeMaterialization(
                 principal.userId,
                 runtimeId,
                 {
-                  id: previousForPlannedWorkspace.id,
-                  repositoryId: previousForPlannedWorkspace.repositoryId,
-                  workspaceId: previousForPlannedWorkspace.workspaceId,
-                  path: previousForPlannedWorkspace.path,
-                  platform: previousForPlannedWorkspace.platform,
+                  id: original.id,
+                  repositoryId: original.repositoryId,
+                  workspaceId: original.workspaceId,
+                  path: original.path,
+                  platform: original.platform,
                 },
               );
               return;
@@ -2540,13 +2539,52 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       selected.webSocket,
       COMPANION_PROTOCOL_VERSION,
     );
-    const planned = await readInternalMaterializationResponse(prepareResponse);
+    let planned = await readInternalMaterializationResponse(prepareResponse);
     if (!planned || planned.repositoryId !== repositoryId) {
       return mcpToolError(
         body,
         "REPOSITORY_MATERIALIZATION_FAILED",
         "Local repository materialization validation failed.",
       );
+    }
+
+    const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(request, principal);
+    if (primaryWorkspaceIds === null) {
+      return mcpToolError(body, "WORKSPACE_ROUTE_UNRESOLVED", "Local workspace ownership could not be verified.");
+    }
+    const reservedWorkspaceIds = new Set(primaryWorkspaceIds);
+    for (const materialization of await this.listStoredMaterializations(principal.userId)) {
+      if (materialization.id !== previous?.id) reservedWorkspaceIds.add(materialization.workspaceId);
+    }
+    for (const candidate of this.getCompanionRouteCandidates(principal.userId)) {
+      if (candidate.deviceId !== deviceId) {
+        for (const id of candidate.workspaceIds) reservedWorkspaceIds.add(id);
+      }
+    }
+    if (reservedWorkspaceIds.has(planned.workspaceId)) {
+      const uniqueId = selectAvailableCompanionWorkspaceId(
+        planned.workspaceId, `${deviceId}:${repositoryId}`, reservedWorkspaceIds,
+      );
+      const correctedRequest = {
+        ...prepareRequest,
+        id: `edge-materialize-unique-prepare-${crypto.randomUUID()}`,
+        params: {
+          ...prepareRequest.params,
+          arguments: { ...internalArguments, workspaceId: uniqueId, dryRun: true },
+        },
+      };
+      const correctedResponse = await this.relayAuthenticatedRequestTo(
+        request, JSON.stringify(correctedRequest), principal,
+        selected.webSocket, COMPANION_PROTOCOL_VERSION,
+      );
+      const corrected = await readInternalMaterializationResponse(correctedResponse);
+      if (!corrected || corrected.repositoryId !== repositoryId ||
+          corrected.workspaceId !== uniqueId ||
+          companionPathKey(corrected.path, selected.attachment.platform) !==
+            companionPathKey(planned.path, selected.attachment.platform)) {
+        return mcpToolError(body, "REPOSITORY_MATERIALIZATION_FAILED", "Local workspace id reallocation failed validation.");
+      }
+      planned = corrected;
     }
 
     const previousForPlannedWorkspace = (await this.accountStore.listMaterializations(
@@ -2564,6 +2602,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           principal.userId,
           deviceId,
           {
+            ...(previous ? { id: previous.id } : {}),
             repositoryId,
             workspaceId: planned.workspaceId,
             path: planned.path,
@@ -2630,16 +2669,17 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         try {
           await this.ctx.storage.transaction(async (transaction) => {
             const transactionalStore = new EdgeAccountStore(transaction);
-            if (previousForPlannedWorkspace) {
+            const original = previous ?? previousForPlannedWorkspace;
+            if (original) {
               await transactionalStore.upsertMaterialization(
                 principal.userId,
                 deviceId,
                 {
-                  id: previousForPlannedWorkspace.id,
-                  repositoryId: previousForPlannedWorkspace.repositoryId,
-                  workspaceId: previousForPlannedWorkspace.workspaceId,
-                  path: previousForPlannedWorkspace.path,
-                  platform: previousForPlannedWorkspace.platform,
+                  id: original.id,
+                  repositoryId: original.repositoryId,
+                  workspaceId: original.workspaceId,
+                  path: original.path,
+                  platform: original.platform,
                 },
               );
               return;
@@ -2735,6 +2775,14 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     return mcpToolSuccess(body, {
       workspaces: [...merged.values()].sort((left, right) => left.id.localeCompare(right.id)),
     });
+  }
+
+  private async listStoredMaterializations(userId: string): Promise<StoredMaterialization[]> {
+    const materializations: StoredMaterialization[] = [];
+    for (const { repository } of await this.accountStore.listRepositories(userId)) {
+      materializations.push(...await this.accountStore.listMaterializations(userId, repository.id));
+    }
+    return materializations;
   }
 
   private async getOrCreatePrimaryRuntimeId(): Promise<string> {

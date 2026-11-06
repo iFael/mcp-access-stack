@@ -315,6 +315,32 @@ describe("Repository identity and ACL control plane", () => {
     ]);
   });
 
+  it("repairs legacy Windows/Linux workspace id collisions without replacing either materialization", async () => {
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const user = await accounts.createSingleUserIdentity("Owner");
+    const device = await accounts.registerDevice(user.id, { displayName: "Windows", platform: "windows" });
+    const repository = await accounts.createRepository(user.id, "ciclo");
+    const remoteRuntime = "rt_11111111-1111-4111-8111-111111111111";
+    const local = await accounts.upsertMaterialization(user.id, device.id, {
+      repositoryId: repository.id, workspaceId: "ciclo", path: "C:/Project/ciclo", platform: "windows",
+    });
+    const remote = await accounts.upsertRuntimeMaterialization(user.id, remoteRuntime, {
+      repositoryId: repository.id, workspaceId: "ciclo", path: "/var/lib/repositories/ciclo", platform: "linux",
+    });
+    expect(await accounts.listMaterializations(user.id, repository.id)).toHaveLength(2);
+
+    const corrected = await accounts.upsertRuntimeMaterialization(user.id, remoteRuntime, {
+      id: remote.id, repositoryId: repository.id, workspaceId: "ciclo-remote-deadbeef",
+      path: remote.path, platform: "linux",
+    });
+    expect(corrected.id).toBe(remote.id);
+    expect(await accounts.listMaterializations(user.id, repository.id)).toEqual([
+      expect.objectContaining({ id: local.id, deviceId: device.id, workspaceId: "ciclo", path: local.path }),
+      expect.objectContaining({ id: remote.id, runtimeId: remoteRuntime, workspaceId: "ciclo-remote-deadbeef", path: remote.path }),
+    ]);
+  });
+
   it("keeps one materialization per device/workspace and supports exact rollback removal", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);
