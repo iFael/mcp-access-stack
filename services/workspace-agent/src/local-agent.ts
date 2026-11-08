@@ -29,6 +29,9 @@ import {
   oracleListInstancesInputSchema,
   type OracleListInstancesInput,
   type OracleListInstancesResult,
+  oracleDiskAuditInputSchema,
+  type OracleDiskAuditInput,
+  type OracleDiskAuditResult,
   serviceStartInputSchema,
   writeFileInputSchema,
   searchFilesInputSchema,
@@ -206,6 +209,7 @@ import { ShellService } from "./shell/service.js";
 import type { ElevationBroker } from "./shell/elevation-broker.js";
 import { LinuxServiceControlService } from "./service-control/service.js";
 import { OracleInstanceInventoryService } from "./oracle/oracle-instance-inventory.js";
+import { OracleDiskAuditService } from "./oracle/oracle-disk-audit.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import {
   BackgroundTaskManager,
@@ -793,6 +797,18 @@ export class LocalAgent {
       (parsed) => ({ targetResource: "oci:instances", query: parsed.scope }),
       (_workspace, parsed, activeContext) =>
         new OracleInstanceInventoryService().list(parsed, activeContext.signal),
+    );
+  }
+
+  async oracleDiskAudit(
+    input: OracleDiskAuditInput,
+    context: OperationContext = {},
+  ): Promise<OracleDiskAuditResult> {
+    return this.runValidatedAudited(
+      "oracleDiskAudit", "read", oracleDiskAuditInputSchema, input, context,
+      (parsed) => ({ targetResource: "oracle:host-disk", query: `${parsed.group}:${parsed.start}` }),
+      (_workspace, parsed, activeContext) =>
+        new OracleDiskAuditService().audit(parsed, activeContext.signal),
     );
   }
 

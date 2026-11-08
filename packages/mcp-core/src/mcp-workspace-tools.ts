@@ -89,6 +89,7 @@ import {
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
+import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema } from "./oracle-disk-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -261,6 +262,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "prune_releases",
   "service_get_status",
   "oracle_list_instances",
+  "oracle_disk_audit",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -1563,6 +1565,43 @@ export function registerWorkspaceTools(
             content: [{ type: "text", text: structuredContent.status === "ready"
               ? `OCI read completed for ${structuredContent.scope}: ${structuredContent.instances.length} instance(s).`
               : `OCI inventory unavailable: ${structuredContent.diagnostic ?? "unknown"}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("oracle_disk_audit", include)) {
+    server.registerTool(
+      "oracle_disk_audit",
+      {
+        title: "Audit Oracle host disk with scoped administrator access",
+        description: "Read-only, root-owned disk audit of fixed Oracle Linux paths via a dedicated sudoers permission. " +
+          "Accepts only a fixed group, offset and bounded page size. No arbitrary commands, file contents, mutations or shell elevation. " +
+          "Returns explicit unavailable/permission_required statuses if host policy is not installed.",
+        inputSchema: oracleDiskAuditInputSchema,
+        outputSchema: oracleDiskAuditResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = oracleDiskAuditResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory, extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.oracleDiskAudit(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "ready"
+              ? `Disk page ${structuredContent.group} at ${structuredContent.start}: ${structuredContent.targets.length} measured target(s) or explicit errors.`
+              : `Disk audit unavailable: ${structuredContent.diagnostic ?? "unknown"}.` }],
             structuredContent,
           };
         } catch (error) {
@@ -3938,6 +3977,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   deleteFile: "delete_file",
   getReleaseState: "get_release_state",
   oracleListInstances: "oracle_list_instances",
+  oracleDiskAudit: "oracle_disk_audit",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",

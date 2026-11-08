@@ -8,6 +8,7 @@ const execute = promisify(execFile);
 const ROOTS = Object.freeze({
   releases: "/var/lib/mcp-access-stack/releases",
   worktrees: "/srv/mcp-access-stack/.worktrees",
+  root: "/",
 });
 const SYSTEM_PATHS = Object.freeze([
   "/usr", "/opt", "/var/cache", "/var/log", "/var/lib/apt",
@@ -28,7 +29,7 @@ export function parseArgs(args) {
     seen.add(match[1]);
     const [, key, value] = match;
     if (key === "group") {
-      if (!["system", "releases", "worktrees"].includes(value)) {
+      if (!["system", "releases", "worktrees", "root"].includes(value)) {
         throw new Error("Unknown audit group.");
       }
       group = value;
@@ -40,7 +41,7 @@ export function parseArgs(args) {
       else limit = number;
     }
   }
-  const maximum = group === "system" ? 1 : MAX_PER_CALL;
+  const maximum = group === "system" || group === "root" ? 1 : MAX_PER_CALL;
   limit ??= maximum;
   if (limit < 1 || limit > maximum) throw new Error(`Limit must be between 1 and ${maximum}.`);
   return { group, start, limit };
@@ -60,7 +61,7 @@ export function classifyDuError(error) {
 async function diskSize(absolutePath, timeoutMs, run = execute) {
   try {
     const info = await lstat(absolutePath);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
+    if (info.isSymbolicLink() || !(info.isDirectory() || info.isFile())) {
       return { path: absolutePath, status: "not_physical_directory" };
     }
     const { stdout } = await run("du", ["-sx", "-B1", "--", absolutePath], {
@@ -87,7 +88,7 @@ export async function audit(options, dependencies = {}) {
   if (root) {
     try {
       const entries = await (dependencies.readdir ?? readdir)(root, { withFileTypes: true });
-      targets = entries.filter(entry => entry.isDirectory())
+      targets = entries.filter(entry => entry.isDirectory() || (group === "root" && entry.isFile()))
         .map(entry => path.join(root, entry.name)).sort();
     } catch (error) {
       return { group, complete: false, error: error?.code ?? "READ_ERROR", targets: [] };
@@ -112,7 +113,8 @@ export async function audit(options, dependencies = {}) {
     }
   } catch { /* Total is optional; no invented value. */ }
   const measured = [];
-  const perTargetTimeoutMs = group === "system" ? SYSTEM_TIMEOUT_MS : CHILD_TIMEOUT_MS;
+  const perTargetTimeoutMs = group === "system" || group === "root"
+    ? SYSTEM_TIMEOUT_MS : CHILD_TIMEOUT_MS;
   for (const target of part) measured.push(await disk(target, perTargetTimeoutMs));
   return {
     group, start, count: targets.length, nextStart: start + part.length < targets.length
@@ -125,11 +127,36 @@ export async function audit(options, dependencies = {}) {
   };
 }
 
+export function parsePrivilegedInput(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).sort().join(",") !== "group,limit,start" ||
+      typeof value.group !== "string" ||
+      !Number.isSafeInteger(value.start) || value.start < 0 ||
+      !Number.isSafeInteger(value.limit) || value.limit < 1) {
+    throw new Error("Invalid privileged audit input.");
+  }
+  return parseArgs([
+    `--group=${value.group}`, `--start=${value.start}`, `--limit=${value.limit}`,
+  ]);
+}
+
+async function readPrivilegedInput() {
+  let payload = "";
+  for await (const chunk of process.stdin) {
+    payload += chunk.toString("utf8");
+    if (Buffer.byteLength(payload) > 256) throw new Error("Audit input exceeds limit.");
+  }
+  return parsePrivilegedInput(JSON.parse(payload));
+}
+
 const isEntrypoint = process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isEntrypoint) {
   try {
-    const result = await audit(parseArgs(process.argv.slice(2)));
+    const args = process.argv.slice(2);
+    const options = args.length === 1 && args[0] === "--privileged-stdin"
+      ? await readPrivilegedInput() : parseArgs(args);
+    const result = await audit(options);
     process.stdout.write(JSON.stringify(result) + "\n");
     if (result.error) process.exitCode = 2;
   } catch (error) {
