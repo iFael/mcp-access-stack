@@ -3528,7 +3528,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "root",
             "system",
             "releases",
-            "worktrees"
+            "worktrees",
+            "var",
+            "varlib",
+            "varmcp",
+            "srv",
+            "srvmcp",
+            "usr"
           ],
           "type": "string"
         },
@@ -3614,7 +3620,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "root",
             "system",
             "releases",
-            "worktrees"
+            "worktrees",
+            "var",
+            "varlib",
+            "varmcp",
+            "srv",
+            "srvmcp",
+            "usr"
           ],
           "type": "string"
         },
@@ -3708,6 +3720,87 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Audit Oracle host disk with scoped administrator access"
+  },
+  {
+    "_meta": {
+      "io.github.ifael/next-step": "bootstrap_required means a trusted host-root bootstrap is still necessary; do not use sudo via run_command. If installed, call oracle_disk_audit and reconcile page results.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Inspect root bootstrap and audit installation, or install only the pinned disk-audit module after an independently provisioned root-owned bootstrap. Fixed paths, fixed source SHA-256, no arbitrary commands, no shell elevation and no claim of root privileges before bootstrap. Next: bootstrap_required means a trusted host-root bootstrap is still necessary; do not use sudo via run_command. If installed, call oracle_disk_audit and reconcile page results.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "oracle_disk_audit_provision",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "auditPresent": {
+          "type": "boolean"
+        },
+        "bootstrapPresent": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "enum": [
+            "linux_only",
+            "host_root_bootstrap_required",
+            "source_hash_mismatch",
+            "invalid_install_receipt",
+            "installed_files_unverified",
+            "root_policy_denied",
+            "inspect_before_retry"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "pinnedSourceSha256": {
+          "const": "c922695d1e2c02521619e4e472c3e4fc696f51c4f6c01f78164a564ad9fd8aa3",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "bootstrap_required",
+            "ready",
+            "installed",
+            "already_installed",
+            "permission_required",
+            "unavailable",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "bootstrapPresent",
+        "auditPresent",
+        "pinnedSourceSha256"
+      ],
+      "type": "object"
+    },
+    "title": "Provision the fixed Oracle disk auditor through a trusted host-root bootstrap"
   },
   {
     "_meta": {
@@ -27807,15 +27900,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "60112f08df913a4ce268baf3ea617b77a0cc73a4d106a264328fe5cbfde0c732",
-  "serverVersion": "0.4.0-catalog.c60112f08df91.s4db156faf322",
-  "toolCount": 125,
-  "toolSetRevision": "4db156faf322379d91dbed670314dedeff56aab0ac78fb684012603ee1ef3117"
+  "contractRevision": "c380d895be4005ed105f02c93e7803de869f0e82fbaf1b1d2df8e14cca625e17",
+  "serverVersion": "0.4.0-catalog.cc380d895be40.s74fa28bd717d",
+  "toolCount": 126,
+  "toolSetRevision": "74fa28bd717d67f54e011fc18d177f655feb2e3332ebe0b303307a13b526f067"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c60112f08df91.s4db156faf322"
+  "version": "0.4.0-catalog.cc380d895be40.s74fa28bd717d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

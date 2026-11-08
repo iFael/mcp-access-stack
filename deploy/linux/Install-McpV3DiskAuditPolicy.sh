@@ -47,4 +47,12 @@ mv -f -- "$stage_wrapper" /usr/local/libexec/mcp-v3-disk-audit
 mv -f -- "$stage_policy" /etc/sudoers.d/mcp-v3-disk-audit
 trap - EXIT
 visudo -cf /etc/sudoers.d/mcp-v3-disk-audit >/dev/null
+# The root-owned completion marker is written LAST; partial installs never read as ready.
+marker_stage="$(mktemp /usr/local/libexec/.mcp-v3-disk-audit-ready.XXXXXX)"
+trap 'rm -f -- "$marker_stage"' EXIT
+printf '%s\n' "$expected_sha" > "$marker_stage"
+chown root:root "$marker_stage"
+chmod 0644 "$marker_stage"
+mv -f -- "$marker_stage" /usr/local/libexec/mcp-v3-disk-audit.ready
+trap - EXIT
 printf '{"status":"installed","capability":"disk-audit-read-only"}\n'

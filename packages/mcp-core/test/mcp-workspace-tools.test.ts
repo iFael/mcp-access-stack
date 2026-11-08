@@ -164,6 +164,18 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleDiskAuditProvision(
+    input: import("@vs-code-gpt/shared").OracleDiskAuditProvisionInput,
+  ): Promise<import("@vs-code-gpt/shared").OracleDiskAuditProvisionResult> {
+    this.calls.push("oracleDiskAuditProvision");
+    return {
+      status: "bootstrap_required", bootstrapPresent: false, auditPresent: false,
+      pinnedSourceSha256: "c922695d1e2c02521619e4e472c3e4fc696f51c4f6c01f78164a564ad9fd8aa3",
+      ...(input.action === "install" ? { operationId: input.operationId } : {}),
+      diagnostic: "host_root_bootstrap_required",
+    };
+  }
+
   async oracleDiskAudit(
     input: import("@vs-code-gpt/shared").OracleDiskAuditInput,
   ): Promise<import("@vs-code-gpt/shared").OracleDiskAuditResult> {
@@ -626,6 +638,30 @@ describe("registerWorkspaceTools", () => {
       targets: [{ allocatedBytes: 512 }],
     });
     expect(executor.calls).toEqual(["oracleDiskAudit"]);
+  });
+
+  it("exposes root provisioning as an explicit non-read-only scoped tool", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["oracle_disk_audit_provision"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+    const tools = registeredTools(server);
+    expect(tools["oracle_disk_audit_provision"]?.annotations).toMatchObject({
+      readOnlyHint: false, destructiveHint: false, idempotentHint: true,
+    });
+    const result = await tools["oracle_disk_audit_provision"]!.handler(
+      { workspaceId: "mcp-access-stack", action: "inspect" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.structuredContent).toMatchObject({
+      status: "bootstrap_required", bootstrapPresent: false,
+    });
+    expect(executor.calls).toEqual(["oracleDiskAuditProvision"]);
   });
 
   it("exposes a read-only Oracle inventory tool and rejects Windows or command inputs", async () => {
@@ -2036,8 +2072,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(64);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(64);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(65);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(65);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

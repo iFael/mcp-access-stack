@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
-import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema } from "./oracle-disk-contracts.js";
+import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
 import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
@@ -930,6 +930,7 @@ export const relayOperations = [
   "getReleaseState",
   "oracleListInstances",
   "oracleDiskAudit",
+  "oracleDiskAuditProvision",
   "oracleReleaseAdvance",
   "mcpUpdate",
   "prepareRelease",
@@ -1012,6 +1013,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("oracleListInstances"), input: oracleListInstancesInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("oracleDiskAudit"), input: oracleDiskAuditInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("oracleDiskAuditProvision"), input: oracleDiskAuditProvisionInputSchema }).strict(),
   z.object({...relayRequestBase,operation:z.literal("oracleReleaseAdvance"),
     input:oracleReleaseAdvanceInputSchema}).strict(),
   z.object({...relayRequestBase,operation:z.literal("mcpUpdate"),input:mcpUpdateInputSchema}).strict(),
@@ -1191,6 +1193,7 @@ export const relayResultSchemas = {
   getReleaseState: getReleaseStateResultSchema,
   oracleListInstances: oracleListInstancesResultSchema,
   oracleDiskAudit: oracleDiskAuditResultSchema,
+  oracleDiskAuditProvision: oracleDiskAuditProvisionResultSchema,
   oracleReleaseAdvance:oracleReleaseAdvanceResultSchema,
   mcpUpdate:mcpUpdateResultSchema,
   prepareRelease: prepareReleaseResultSchema,

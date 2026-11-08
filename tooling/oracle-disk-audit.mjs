@@ -9,6 +9,12 @@ const ROOTS = Object.freeze({
   releases: "/var/lib/mcp-access-stack/releases",
   worktrees: "/srv/mcp-access-stack/.worktrees",
   root: "/",
+  var: "/var",
+  varlib: "/var/lib",
+  varmcp: "/var/lib/mcp-access-stack",
+  srv: "/srv",
+  srvmcp: "/srv/mcp-access-stack",
+  usr: "/usr",
 });
 const SYSTEM_PATHS = Object.freeze([
   "/usr", "/opt", "/var/cache", "/var/log", "/var/lib/apt",
@@ -29,7 +35,7 @@ export function parseArgs(args) {
     seen.add(match[1]);
     const [, key, value] = match;
     if (key === "group") {
-      if (!["system", "releases", "worktrees", "root"].includes(value)) {
+      if (!["system", "releases", "worktrees", "root", "var", "varlib", "varmcp", "srv", "srvmcp", "usr"].includes(value)) {
         throw new Error("Unknown audit group.");
       }
       group = value;

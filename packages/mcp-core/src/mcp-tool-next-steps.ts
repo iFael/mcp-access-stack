@@ -54,6 +54,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   prune_releases: "check the plan, then call it again with the plan to delete.",
   oracle_list_instances: "",
   oracle_disk_audit: "If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
+  oracle_disk_audit_provision: "bootstrap_required means a trusted host-root bootstrap is still necessary; do not use sudo via run_command. If installed, call oracle_disk_audit and reconcile page results.",
   service_get_status: "service_start only when it is inactive and should run.",
   service_start: "service_get_status to see it running.",
 
