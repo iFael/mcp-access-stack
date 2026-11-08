@@ -66,6 +66,11 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("mcpUpdate"));
   }
 
+  oracleListInstances(...args: Parameters<WorkspaceExecutor["oracleListInstances"]>) {
+    return this.fallback?.oracleListInstances(...args) ??
+      Promise.reject(this.notImplemented("oracleListInstances"));
+  }
+
   getReleaseState(...args: Parameters<WorkspaceExecutor["getReleaseState"]>) {
     return this.fallback?.getReleaseState(...args) ??
       Promise.reject(this.notImplemented("getReleaseState"));

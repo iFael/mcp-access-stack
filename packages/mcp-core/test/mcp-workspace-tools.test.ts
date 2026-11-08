@@ -164,6 +164,17 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleListInstances(
+    input: import("@vs-code-gpt/shared").OracleListInstancesInput,
+  ): Promise<import("@vs-code-gpt/shared").OracleListInstancesResult> {
+    this.calls.push("oracleListInstances");
+    return {
+      status: "ready", authentication: "instance_principal", scope: input.scope,
+      complete: true, region: "sa-saopaulo-1", compartmentId: "ocid1.compartment.oc1..demo",
+      instances: [],
+    };
+  }
+
   async oracleReleaseAdvance(
     input:import("@vs-code-gpt/shared").OracleReleaseAdvanceInput,
   ):Promise<import("@vs-code-gpt/shared").OracleReleaseAdvanceResult>{
@@ -578,6 +589,34 @@ describe("registerWorkspaceTools", () => {
       "read_file",
       "start_background_task",
     ]);
+  });
+
+  it("exposes a read-only Oracle inventory tool and rejects Windows or command inputs", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["oracle_list_instances"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+    const tools = registeredTools(server);
+    expect(tools["oracle_list_instances"]?.annotations).toMatchObject({
+      readOnlyHint: true, destructiveHint: false, idempotentHint: true,
+    });
+    const result = await tools["oracle_list_instances"]!.handler(
+      { workspaceId: "mcp-access-stack", scope: "current_compartment" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.structuredContent).toMatchObject({
+      status: "ready", authentication: "instance_principal",
+      complete: true, instances: [],
+    });
+    expect(executor.calls).toEqual(["oracleListInstances"]);
+    // The MCP SDK validates the published input schema before invoking the
+    // handler. Direct unit calls bypass that SDK boundary.
+    expect(executor.calls).toEqual(["oracleListInstances"]);
   });
 
   it("publishes bounded managed-service status and start tools", async () => {
@@ -1960,8 +1999,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(62);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(62);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(63);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(63);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

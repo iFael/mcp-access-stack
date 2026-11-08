@@ -26,6 +26,9 @@ import {
   runWorkspaceValidationInputSchema,
   runCommandInputSchema,
   serviceGetStatusInputSchema,
+  oracleListInstancesInputSchema,
+  type OracleListInstancesInput,
+  type OracleListInstancesResult,
   serviceStartInputSchema,
   writeFileInputSchema,
   searchFilesInputSchema,
@@ -202,6 +205,7 @@ import { CommandConfirmationRegistry } from "./shell/confirmation.js";
 import { ShellService } from "./shell/service.js";
 import type { ElevationBroker } from "./shell/elevation-broker.js";
 import { LinuxServiceControlService } from "./service-control/service.js";
+import { OracleInstanceInventoryService } from "./oracle/oracle-instance-inventory.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import {
   BackgroundTaskManager,
@@ -777,6 +781,18 @@ export class LocalAgent {
       (parsed) => (parsed.cwd === undefined ? {} : { path: parsed.cwd }),
       (workspace, parsed, activeContext) =>
         this.shellService.runCommand(workspace, parsed, activeContext),
+    );
+  }
+
+  async oracleListInstances(
+    input: OracleListInstancesInput,
+    context: OperationContext = {},
+  ): Promise<OracleListInstancesResult> {
+    return this.runValidatedAudited(
+      "oracleListInstances", "read", oracleListInstancesInputSchema, input, context,
+      (parsed) => ({ targetResource: "oci:instances", query: parsed.scope }),
+      (_workspace, parsed, activeContext) =>
+        new OracleInstanceInventoryService().list(parsed, activeContext.signal),
     );
   }
 

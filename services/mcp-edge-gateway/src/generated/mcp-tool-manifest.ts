@@ -3327,6 +3327,177 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read-only OCI instance inventory from the MCP V3 Oracle Linux execution node, without a PC or Oracle console login. Uses the node's instance principal (never a user API key). Current-compartment scope is bounded to its region; accessible-tenancy scope requires IAM access to region subscriptions and compartments. Permission and identity failures are explicit; cannot start, stop or resize VMs.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "default": "current_compartment",
+          "enum": [
+            "current_compartment",
+            "accessible_tenancy"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "oracle_list_instances",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "authentication": {
+          "const": "instance_principal",
+          "type": "string"
+        },
+        "compartmentId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "enum": [
+            "identity_unavailable",
+            "tenancy_discovery_unavailable",
+            "oci_cli_unavailable",
+            "instance_read_required",
+            "compartment_inspect_required",
+            "region_subscription_read_required",
+            "oci_request_unavailable"
+          ],
+          "type": "string"
+        },
+        "instances": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "availabilityDomain": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "compartmentId": {
+                "pattern": "^ocid1\\.compartment\\.|^ocid1\\.tenancy\\.",
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^ocid1\\.instance\\.",
+                "type": "string"
+              },
+              "memoryGb": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "name": {
+                "maxLength": 255,
+                "type": "string"
+              },
+              "ocpus": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "region": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "shape": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "state": {
+                "maxLength": 64,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "state",
+              "shape",
+              "region",
+              "compartmentId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 500,
+          "type": "array"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "enum": [
+            "current_compartment",
+            "accessible_tenancy"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "permission_denied",
+            "unavailable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "authentication",
+        "scope",
+        "complete",
+        "region",
+        "compartmentId",
+        "instances"
+      ],
+      "type": "object"
+    },
+    "title": "List Oracle Cloud instances"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "service_start only when it is inactive and should run.",
       "securitySchemes": [
         {
@@ -27423,15 +27594,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "b5f0a58ad66f313bbeb3d894f498675e475806e8f5daacec7d4039db4f27b7a6",
-  "serverVersion": "0.4.0-catalog.cb5f0a58ad66f.s02b46608e455",
-  "toolCount": 123,
-  "toolSetRevision": "02b46608e455032249a5003f13ed848161b8c25d0534018df93e3db4b4e48249"
+  "contractRevision": "26cafe12a795149f0c49c3816c9ff1f273f84cf85ae3d07f429f606cc4ff13a5",
+  "serverVersion": "0.4.0-catalog.c26cafe12a795.s8318387d802f",
+  "toolCount": 124,
+  "toolSetRevision": "8318387d802f938032a2fe8ac01a0ecac49d3c3af3fa1e06d1857fa1a2cac2ed"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cb5f0a58ad66f.s02b46608e455"
+  "version": "0.4.0-catalog.c26cafe12a795.s8318387d802f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -88,6 +88,7 @@ import {
   promoteReleaseResultSchema,
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
+import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -259,6 +260,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "promote_release",
   "prune_releases",
   "service_get_status",
+  "oracle_list_instances",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -1521,6 +1523,46 @@ export function registerWorkspaceTools(
             content: [{ type: "text", text: structuredContent.status === "planned"
               ? "Prune plan validated without filesystem mutation."
               : "Requested obsolete release artifacts removed and receipt persisted." }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("oracle_list_instances", include)) {
+    server.registerTool(
+      "oracle_list_instances",
+      {
+        title: "List Oracle Cloud instances",
+        description:
+          "Read-only OCI instance inventory from the MCP V3 Oracle Linux execution node, without a PC or Oracle console login. " +
+          "Uses the node's instance principal (never a user API key). Current-compartment scope is bounded to its region; " +
+          "accessible-tenancy scope requires IAM access to region subscriptions and compartments. " +
+          "Permission and identity failures are explicit; cannot start, stop or resize VMs.",
+        inputSchema: oracleListInstancesInputSchema,
+        outputSchema: oracleListInstancesResultSchema,
+        annotations: toolAnnotations,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = oracleListInstancesResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory,
+              extra,
+              MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.oracleListInstances(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: structuredContent.status === "ready"
+              ? `OCI read completed for ${structuredContent.scope}: ${structuredContent.instances.length} instance(s).`
+              : `OCI inventory unavailable: ${structuredContent.diagnostic ?? "unknown"}.` }],
             structuredContent,
           };
         } catch (error) {
@@ -3895,6 +3937,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   patchFile: "patch_file",
   deleteFile: "delete_file",
   getReleaseState: "get_release_state",
+  oracleListInstances: "oracle_list_instances",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",

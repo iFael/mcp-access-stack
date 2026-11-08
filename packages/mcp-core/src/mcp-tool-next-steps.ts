@@ -52,6 +52,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   prepare_release: "end your answer and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
   promote_release: "get_release_state until the candidate is empty (the swap may restart the connection).",
   prune_releases: "check the plan, then call it again with the plan to delete.",
+  oracle_list_instances: "",
   service_get_status: "service_start only when it is inactive and should run.",
   service_start: "service_get_status to see it running.",
 

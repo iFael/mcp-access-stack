@@ -111,6 +111,13 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.mcpUpdate(input,context);
   }
 
+  oracleListInstances(
+    input: import("@vs-code-gpt/shared").OracleListInstancesInput,
+    context?: OperationContext,
+  ): Promise<import("@vs-code-gpt/shared").OracleListInstancesResult> {
+    return this.agent.oracleListInstances(input, context);
+  }
+
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

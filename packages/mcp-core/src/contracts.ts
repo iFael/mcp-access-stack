@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
@@ -926,6 +927,7 @@ export const relayOperations = [
   "patchFile",
   "deleteFile",
   "getReleaseState",
+  "oracleListInstances",
   "oracleReleaseAdvance",
   "mcpUpdate",
   "prepareRelease",
@@ -1006,6 +1008,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     operation: z.literal("getReleaseState"),
     input: getReleaseStateInputSchema,
   }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("oracleListInstances"), input: oracleListInstancesInputSchema }).strict(),
   z.object({...relayRequestBase,operation:z.literal("oracleReleaseAdvance"),
     input:oracleReleaseAdvanceInputSchema}).strict(),
   z.object({...relayRequestBase,operation:z.literal("mcpUpdate"),input:mcpUpdateInputSchema}).strict(),
@@ -1183,6 +1186,7 @@ export const relayResultSchemas = {
   patchFile: patchFileResultSchema,
   deleteFile: deleteFileResultSchema,
   getReleaseState: getReleaseStateResultSchema,
+  oracleListInstances: oracleListInstancesResultSchema,
   oracleReleaseAdvance:oracleReleaseAdvanceResultSchema,
   mcpUpdate:mcpUpdateResultSchema,
   prepareRelease: prepareReleaseResultSchema,
