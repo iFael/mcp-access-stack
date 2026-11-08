@@ -15,6 +15,7 @@ export * from "./errors.js";
 export * from "./mcp-browser-tools.js";
 export * from "./mcp-operation-context.js";
 export * from "./oracle-instance-contracts.js";
+export * from "./oracle-disk-contracts.js";
 export * from "./mcp-repository-tools.js";
 export * from "./mcp-tool-catalog.js";
 export * from "./mcp-tool-publication.js";

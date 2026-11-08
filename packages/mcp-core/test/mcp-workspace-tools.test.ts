@@ -164,6 +164,18 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleDiskAudit(
+    input: import("@vs-code-gpt/shared").OracleDiskAuditInput,
+  ): Promise<import("@vs-code-gpt/shared").OracleDiskAuditResult> {
+    this.calls.push("oracleDiskAudit");
+    return {
+      status: "ready", privileged: true, group: input.group, start: input.start,
+      count: 1, nextStart: null, complete: true, filesystem: null,
+      targets: [{ path: "/opt", status: "measured", allocatedBytes: 512 }],
+      measuredBytes: 512, warning: "Bounded read.",
+    };
+  }
+
   async oracleListInstances(
     input: import("@vs-code-gpt/shared").OracleListInstancesInput,
   ): Promise<import("@vs-code-gpt/shared").OracleListInstancesResult> {
@@ -589,6 +601,31 @@ describe("registerWorkspaceTools", () => {
       "read_file",
       "start_background_task",
     ]);
+  });
+
+  it("publishes the scoped read-only Oracle disk audit tool", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    registerWorkspaceTools(server, executor, {
+      includeTools: ["oracle_disk_audit"],
+      securitySchemes: [{ type: "noauth" }],
+    });
+    const tools = registeredTools(server);
+    expect(tools["oracle_disk_audit"]?.annotations).toMatchObject({
+      readOnlyHint: true, destructiveHint: false, idempotentHint: true,
+    });
+    const result = await tools["oracle_disk_audit"]!.handler(
+      { workspaceId: "mcp-access-stack", group: "root", start: 0, limit: 1 },
+      { signal: new AbortController().signal },
+    );
+    expect(result.structuredContent).toMatchObject({
+      status: "ready", privileged: true, group: "root",
+      targets: [{ allocatedBytes: 512 }],
+    });
+    expect(executor.calls).toEqual(["oracleDiskAudit"]);
   });
 
   it("exposes a read-only Oracle inventory tool and rejects Windows or command inputs", async () => {
@@ -1999,8 +2036,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(63);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(63);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(64);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(64);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

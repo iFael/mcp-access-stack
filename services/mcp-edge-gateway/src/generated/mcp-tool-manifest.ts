@@ -3498,6 +3498,219 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read-only, root-owned disk audit of fixed Oracle Linux paths via a dedicated sudoers permission. Accepts only a fixed group, offset and bounded page size. No arbitrary commands, file contents, mutations or shell elevation. Returns explicit unavailable/permission_required statuses if host policy is not installed. Next: If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "default": "root",
+          "enum": [
+            "root",
+            "system",
+            "releases",
+            "worktrees"
+          ],
+          "type": "string"
+        },
+        "limit": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "start": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "oracle_disk_audit",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "diagnostic": {
+          "enum": [
+            "helper_missing",
+            "sudo_permission_required",
+            "execution_failed",
+            "invalid_response"
+          ],
+          "type": "string"
+        },
+        "filesystem": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "availableBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "totalBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "usedBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "totalBytes",
+                "usedBytes",
+                "availableBytes"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "group": {
+          "enum": [
+            "root",
+            "system",
+            "releases",
+            "worktrees"
+          ],
+          "type": "string"
+        },
+        "measuredBytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nextStart": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privileged": {
+          "type": "boolean"
+        },
+        "start": {
+          "maximum": 10000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "permission_required",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "allocatedBytes": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "maxLength": 4096,
+                "pattern": "^\\/.*",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "measured",
+                  "permission_denied",
+                  "timed_out",
+                  "missing",
+                  "failed",
+                  "invalid_output",
+                  "not_physical_directory"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 3,
+          "type": "array"
+        },
+        "warning": {
+          "maxLength": 250,
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "privileged",
+        "group",
+        "start",
+        "count",
+        "nextStart",
+        "complete",
+        "filesystem",
+        "targets",
+        "measuredBytes",
+        "warning"
+      ],
+      "type": "object"
+    },
+    "title": "Audit Oracle host disk with scoped administrator access"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "service_start only when it is inactive and should run.",
       "securitySchemes": [
         {
@@ -27594,15 +27807,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "26cafe12a795149f0c49c3816c9ff1f273f84cf85ae3d07f429f606cc4ff13a5",
-  "serverVersion": "0.4.0-catalog.c26cafe12a795.s8318387d802f",
-  "toolCount": 124,
-  "toolSetRevision": "8318387d802f938032a2fe8ac01a0ecac49d3c3af3fa1e06d1857fa1a2cac2ed"
+  "contractRevision": "60112f08df913a4ce268baf3ea617b77a0cc73a4d106a264328fe5cbfde0c732",
+  "serverVersion": "0.4.0-catalog.c60112f08df91.s4db156faf322",
+  "toolCount": 125,
+  "toolSetRevision": "4db156faf322379d91dbed670314dedeff56aab0ac78fb684012603ee1ef3117"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c26cafe12a795.s8318387d802f"
+  "version": "0.4.0-catalog.c60112f08df91.s4db156faf322"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

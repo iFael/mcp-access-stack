@@ -24,6 +24,7 @@ import type {
   PromoteReleaseResult,
 } from "./release-lifecycle-contracts.js";
 import type { OracleListInstancesInput, OracleListInstancesResult } from "./oracle-instance-contracts.js";
+import type { OracleDiskAuditInput, OracleDiskAuditResult } from "./oracle-disk-contracts.js";
 import type { PruneReleasesInput, PruneReleasesResult } from "./release-prune-contracts.js";
 import type {OracleReleaseAdvanceInput,OracleReleaseAdvanceResult} from "./release-orchestrator-contracts.js";
 import type {
@@ -97,6 +98,7 @@ export interface WorkspaceExecutor {
     input: OracleListInstancesInput,
     context?: OperationContext,
   ): Promise<OracleListInstancesResult>;
+  oracleDiskAudit(input: OracleDiskAuditInput, context?: OperationContext): Promise<OracleDiskAuditResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

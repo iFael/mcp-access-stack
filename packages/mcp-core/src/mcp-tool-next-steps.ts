@@ -53,6 +53,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   promote_release: "get_release_state until the candidate is empty (the swap may restart the connection).",
   prune_releases: "check the plan, then call it again with the plan to delete.",
   oracle_list_instances: "",
+  oracle_disk_audit: "If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
   service_get_status: "service_start only when it is inactive and should run.",
   service_start: "service_get_status to see it running.",
 
