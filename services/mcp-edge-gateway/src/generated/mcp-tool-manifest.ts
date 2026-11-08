@@ -3723,7 +3723,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "bootstrap_required means a trusted host-root bootstrap is still necessary; do not use sudo via run_command. If installed, call oracle_disk_audit and reconcile page results.",
+      "io.github.ifael/next-step": "If the root bootstrap is absent, it must be installed by an authorized host administrator; never use sudo via run_command. After provisioning, call oracle_disk_audit and reconcile its pages.",
       "securitySchemes": [
         {
           "scopes": [
@@ -3739,7 +3739,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Inspect root bootstrap and audit installation, or install only the pinned disk-audit module after an independently provisioned root-owned bootstrap. Fixed paths, fixed source SHA-256, no arbitrary commands, no shell elevation and no claim of root privileges before bootstrap. Next: bootstrap_required means a trusted host-root bootstrap is still necessary; do not use sudo via run_command. If installed, call oracle_disk_audit and reconcile page results.",
+    "description": "Inspect root bootstrap and audit installation, or install only the pinned disk-audit module after an independently provisioned root-owned bootstrap. Fixed paths, fixed source SHA-256, no arbitrary commands, no shell elevation and no claim of root privileges before bootstrap. Next: If the root bootstrap is absent, it must be installed by an authorized host administrator; never use sudo via run_command. After provisioning, call oracle_disk_audit and reconcile its pages.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -27900,15 +27900,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "c380d895be4005ed105f02c93e7803de869f0e82fbaf1b1d2df8e14cca625e17",
-  "serverVersion": "0.4.0-catalog.cc380d895be40.s74fa28bd717d",
+  "contractRevision": "2ec07f985830a5a4c7a191b85f0769f9c1d312ed2fd7004f1c5eda2d77bfd258",
+  "serverVersion": "0.4.0-catalog.c2ec07f985830.s74fa28bd717d",
   "toolCount": 126,
   "toolSetRevision": "74fa28bd717d67f54e011fc18d177f655feb2e3332ebe0b303307a13b526f067"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cc380d895be40.s74fa28bd717d"
+  "version": "0.4.0-catalog.c2ec07f985830.s74fa28bd717d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

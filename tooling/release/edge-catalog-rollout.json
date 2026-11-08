@@ -4,7 +4,7 @@
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
   "previousRevision": "60112f08df913a4ce268baf3ea617b77a0cc73a4d106a264328fe5cbfde0c732",
   "previousToolCount": 125,
-  "targetRevision": "c380d895be4005ed105f02c93e7803de869f0e82fbaf1b1d2df8e14cca625e17",
+  "targetRevision": "2ec07f985830a5a4c7a191b85f0769f9c1d312ed2fd7004f1c5eda2d77bfd258",
   "targetToolCount": 126,
   "requiredTools": ["get_operation_guide", "release_orchestrator", "mcp_update", "github_workflow_operation", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "github_read", "github_issue_write", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_list_instances", "oracle_disk_audit", "oracle_disk_audit_provision", "http_get"]
 }
