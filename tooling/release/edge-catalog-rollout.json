@@ -1,10 +1,10 @@
 {
   "worker": "mcp-access-stack",
-  "mode": "code-only",
+  "mode": "catalog",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "0841b949b193d75481fe3cb487fa04b09c9255a9516df6df6238246415dc63c1",
+  "previousRevision": "b5f0a58ad66f313bbeb3d894f498675e475806e8f5daacec7d4039db4f27b7a6",
   "previousToolCount": 123,
-  "targetRevision": "b5f0a58ad66f313bbeb3d894f498675e475806e8f5daacec7d4039db4f27b7a6",
-  "targetToolCount": 123,
-  "requiredTools": ["get_operation_guide", "release_orchestrator", "mcp_update", "github_workflow_operation", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "github_read", "github_issue_write", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "http_get"]
+  "targetRevision": "26cafe12a795149f0c49c3816c9ff1f273f84cf85ae3d07f429f606cc4ff13a5",
+  "targetToolCount": 124,
+  "requiredTools": ["get_operation_guide", "release_orchestrator", "mcp_update", "github_workflow_operation", "browser_plan", "browser_user_messages", "browser_user_reply", "browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "github_read", "github_issue_write", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_list_instances", "http_get"]
 }

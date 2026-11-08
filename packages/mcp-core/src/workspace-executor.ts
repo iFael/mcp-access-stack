@@ -23,6 +23,7 @@ import type {
   PromoteReleaseInput,
   PromoteReleaseResult,
 } from "./release-lifecycle-contracts.js";
+import type { OracleListInstancesInput, OracleListInstancesResult } from "./oracle-instance-contracts.js";
 import type { PruneReleasesInput, PruneReleasesResult } from "./release-prune-contracts.js";
 import type {OracleReleaseAdvanceInput,OracleReleaseAdvanceResult} from "./release-orchestrator-contracts.js";
 import type {
@@ -92,6 +93,10 @@ export interface WorkspaceExecutor {
   deleteFile(input: DeleteFileInput, context?: OperationContext): Promise<DeleteFileResult>;
   oracleReleaseAdvance(input:OracleReleaseAdvanceInput,context?:OperationContext):Promise<OracleReleaseAdvanceResult>;
   mcpUpdate(input:import("./mcp-update-contracts.js").McpUpdateInput,context?:OperationContext):Promise<import("./mcp-update-contracts.js").McpUpdateResult>;
+  oracleListInstances(
+    input: OracleListInstancesInput,
+    context?: OperationContext,
+  ): Promise<OracleListInstancesResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,
