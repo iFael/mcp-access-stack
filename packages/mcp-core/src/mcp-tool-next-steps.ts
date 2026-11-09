@@ -93,6 +93,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   discover_local_repositories: "import_repositories for the ones to register.",
   import_repositories: "list_workspaces to work in them.",
   materialize_repository: "list_workspaces, then get_workspace_context.",
+  relocate_repository_materialization: "validate first; apply only after confirming the exact materialization and target folder, then get_repository and list_workspaces to verify both routes.",
   sync_repository: "get_workspace_context to work in it.",
   list_devices: "revoke_device only for a device the user names.",
   revoke_device: "",

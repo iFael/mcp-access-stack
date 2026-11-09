@@ -13,6 +13,7 @@ export const COMPANION_PROTOCOL_VERSION = 1 as const;
 export const COMPANION_INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_" as const;
 export const COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}bind_repositories` as const;
 export const COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}materialize_repository` as const;
+export const COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}relocate_repository_materialization` as const;
 // The Edge takes the user's popup messages from the companion for a call it
 // relayed elsewhere (Oracle), so they reach the agent whatever tool it called.
 export const COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL = `${COMPANION_INTERNAL_TOOL_PREFIX}take_user_messages` as const;
