@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile, spawn } from "node:child_process";
@@ -149,6 +149,7 @@ export class LocalRepositoryManager implements RepositoryExecutor {
   private readonly gitExecutable: string;
   private readonly statePath: string;
   private state: LocalRepositoryState = { version: STATE_VERSION, repositories: [] };
+  private readonly relocatingRepositories = new Set<string>();
 
   private constructor(private readonly options: LocalRepositoryManagerOptions) {
     this.platform = options.platform ?? process.platform;
@@ -210,6 +211,142 @@ export class LocalRepositoryManager implements RepositoryExecutor {
       workspaceId: repository.workspaceId,
       path: repository.path,
     }));
+  }
+
+
+  /**
+   * Rename a bound repository in-place, never clone or delete its working tree.
+   * Edge coordinates cloud identity and global workspace ID uniqueness.
+   */
+  async relocateRepositoryBinding(
+    input: {
+      repositoryId: string;
+      expectedWorkspaceId: string;
+      expectedPath: string;
+      targetWorkspaceId: string;
+      targetDirectoryName?: string;
+    },
+    signal?: AbortSignal,
+    dryRun = true,
+  ): Promise<{
+    repositoryId: string;
+    before: { workspaceId: string; path: string };
+    after: { workspaceId: string; path: string };
+  }> {
+    if (this.relocatingRepositories.has(input.repositoryId)) {
+      throw new AppError("AGENT_BUSY", "A relocation for this repository is already in progress.");
+    }
+    this.relocatingRepositories.add(input.repositoryId);
+    try {
+      throwIfAborted(signal);
+      const previous = this.state;
+      const current = previous.repositories.find((record) => record.repositoryId === input.repositoryId);
+      if (!current || current.workspaceId !== input.expectedWorkspaceId ||
+          !samePath(current.path, input.expectedPath, this.platform)) {
+        throw new AppError("EXECUTION_STATE_INVALID", "Repository materialization no longer matches the expected workspace and path.");
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(input.targetWorkspaceId) ||
+          previous.repositories.some((record) =>
+            record.repositoryId !== input.repositoryId && record.workspaceId === input.targetWorkspaceId)) {
+        throw new AppError("INVALID_ARGUMENT", "Target workspace ID is invalid or already in use.");
+      }
+
+      const directoryName = input.targetDirectoryName;
+      if (directoryName !== undefined && (
+        directoryName !== directoryName.trim() || directoryName.length === 0 || directoryName.length > 100 ||
+        directoryName === "." || directoryName === ".." || /[<>:"/\\|?*\u0000-\u001f]/u.test(directoryName) ||
+        /[. ]$/u.test(directoryName) ||
+        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(directoryName)
+      )) {
+        throw new AppError("INVALID_ARGUMENT", "Target directory name is invalid.");
+      }
+      const targetPath = directoryName === undefined
+        ? current.path
+        : path.join(path.dirname(current.path), directoryName);
+      const moving = !samePath(current.path, targetPath, this.platform);
+      if (directoryName !== undefined && !moving && targetPath !== current.path) {
+        throw new AppError("INVALID_ARGUMENT", "Case-only directory renames are not supported.");
+      }
+      if (!moving && input.targetWorkspaceId === current.workspaceId) {
+        throw new AppError("INVALID_ARGUMENT", "No workspace or directory change was requested.");
+      }
+
+      const canonical = await realpath(current.path);
+      if (!samePath(canonical, current.path, this.platform)) {
+        throw new AppError("INVALID_PATH", "A repository materialization cannot be relocated through a symlink.");
+      }
+      await this.inspectRepository(current.path, signal);
+      if (moving) {
+        // Git linked worktrees contain a .git file with an absolute gitdir pointer.
+        // Moving them requires git-worktree surgery and is deliberately unsupported.
+        const gitDir = await lstat(path.join(current.path, ".git"));
+        if (!gitDir.isDirectory()) {
+          throw new AppError("CAPABILITY_UNSUPPORTED", "Linked Git worktrees cannot be moved by this operation.");
+        }
+        try {
+          await lstat(targetPath);
+          throw new AppError("INVALID_PATH", "Destination directory already exists.");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+
+      const before = { workspaceId: current.workspaceId, path: current.path };
+      const after = { workspaceId: input.targetWorkspaceId, path: targetPath };
+      const result = { repositoryId: input.repositoryId, before, after };
+      if (dryRun) return result;
+
+      throwIfAborted(signal);
+      let renamed = false;
+      let stateChanged = false;
+      const next = {
+        ...previous,
+        repositories: sortRecords(previous.repositories.map((record) =>
+          record.repositoryId === input.repositoryId
+            ? { ...record, workspaceId: after.workspaceId, path: after.path }
+            : record)),
+      };
+      try {
+        if (moving) {
+          await rename(current.path, targetPath);
+          renamed = true;
+        }
+        this.state = next;
+        stateChanged = true;
+        await this.persist();
+        await this.options.onChanged?.();
+        return result;
+      } catch (error) {
+        let recoveryError: unknown;
+        if (renamed) {
+          try { await rename(targetPath, current.path); }
+          catch (failure) { recoveryError = failure; }
+        }
+        if (recoveryError === undefined) {
+          if (stateChanged) {
+            this.state = previous;
+            try {
+              await this.persist();
+              await this.options.onChanged?.();
+            } catch (failure) { recoveryError = failure; }
+          }
+        }
+        if (recoveryError !== undefined) {
+          // Keep the registry pointing at the actual tree rather than an absent path
+          // if the physical rollback fails. Report the incomplete operation explicitly.
+          if (renamed && await directoryExists(targetPath)) {
+            this.state = next;
+            await this.persist().catch(() => undefined);
+          }
+          throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+            "Repository relocation failed and restoration of its original state was incomplete.",
+            { cause: recoveryError });
+        }
+        throw error;
+      }
+    } finally {
+      this.relocatingRepositories.delete(input.repositoryId);
+    }
   }
 
   async bindRepositories(

@@ -11471,6 +11471,149 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "validate first; apply only after confirming the exact materialization and target folder, then get_repository and list_workspaces to verify both routes.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Validates or safely renames an existing companion repository folder and its workspace ID without copying or recreating Git. Defaults to validation; apply requires exact current materialization ID, workspace ID and path. Run through MCP V3 Edge coordination only. Next: validate first; apply only after confirming the exact materialization and target folder, then get_repository and list_workspaces to verify both routes.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedPath": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedWorkspaceId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "materializationId": {
+          "pattern": "^mat_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "mode": {
+          "default": "validate",
+          "enum": [
+            "validate",
+            "apply"
+          ],
+          "type": "string"
+        },
+        "repositoryId": {
+          "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "targetDirectoryName": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "targetWorkspaceId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "materializationId",
+        "expectedWorkspaceId",
+        "expectedPath",
+        "targetWorkspaceId"
+      ],
+      "type": "object"
+    },
+    "name": "relocate_repository_materialization",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "workspaceId": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspaceId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "before": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "workspaceId": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspaceId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "materializationId": {
+          "pattern": "^mat_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "repositoryId": {
+          "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "validated",
+            "completed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "repositoryId",
+        "materializationId",
+        "before",
+        "after"
+      ],
+      "type": "object"
+    },
+    "title": "Relocate repository materialization"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "get_workspace_context to work in it.",
       "securitySchemes": [
         {
@@ -27900,15 +28043,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "2ec07f985830a5a4c7a191b85f0769f9c1d312ed2fd7004f1c5eda2d77bfd258",
-  "serverVersion": "0.4.0-catalog.c2ec07f985830.s74fa28bd717d",
-  "toolCount": 126,
-  "toolSetRevision": "74fa28bd717d67f54e011fc18d177f655feb2e3332ebe0b303307a13b526f067"
+  "contractRevision": "5393c8c52dd2b0ea1a88eb56828793ff53d7634228f06d0e197927b0db5baa3d",
+  "serverVersion": "0.4.0-catalog.c5393c8c52dd2.s5bf74813279e",
+  "toolCount": 127,
+  "toolSetRevision": "5bf74813279eb36562d8bd6a01f8687c06120961e97f5ce85826d5d34ee883e0"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c2ec07f985830.s74fa28bd717d"
+  "version": "0.4.0-catalog.c5393c8c52dd2.s5bf74813279e"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

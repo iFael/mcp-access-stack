@@ -16,6 +16,7 @@ export const MCP_REPOSITORY_TOOL_NAMES = [
   "discover_local_repositories",
   "import_repositories",
   "materialize_repository",
+  "relocate_repository_materialization",
   "sync_repository",
   "list_devices",
   "revoke_device",

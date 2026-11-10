@@ -140,6 +140,35 @@ export const materializeRepositoryInputSchema = z.object({
 });
 export type MaterializeRepositoryInput = z.infer<typeof materializeRepositoryInputSchema>;
 
+
+export const relocateRepositoryMaterializationInputSchema = z.object({
+  repositoryId: repositoryIdSchema,
+  materializationId: materializationIdSchema,
+  expectedWorkspaceId: z.string().min(1).max(200),
+  expectedPath: z.string().min(1).max(4096),
+  targetWorkspaceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u),
+  targetDirectoryName: z.string().trim().min(1).max(100).optional(),
+  mode: z.enum(["validate", "apply"]).default("validate"),
+}).strict().refine(
+  (input) => input.targetDirectoryName !== undefined || input.targetWorkspaceId !== input.expectedWorkspaceId,
+  "Specify a different workspaceId or a destination directory name.",
+);
+export type RelocateRepositoryMaterializationInput = z.infer<typeof relocateRepositoryMaterializationInputSchema>;
+
+const materializationLocationSchema = z.object({
+  workspaceId: z.string().min(1).max(200),
+  path: z.string().min(1).max(4096),
+}).strict();
+
+export const relocateRepositoryMaterializationResultSchema = z.object({
+  status: z.enum(["validated", "completed"]),
+  repositoryId: repositoryIdSchema,
+  materializationId: materializationIdSchema,
+  before: materializationLocationSchema,
+  after: materializationLocationSchema,
+}).strict();
+export type RelocateRepositoryMaterializationResult = z.infer<typeof relocateRepositoryMaterializationResultSchema>;
+
 export const syncRepositoryInputSchema = z.object({
   deviceId: deviceIdSchema.optional(),
   repositoryId: repositoryIdSchema,
