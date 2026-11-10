@@ -341,6 +341,52 @@ describe("Repository identity and ACL control plane", () => {
     ]);
   });
 
+  it("preserves companion materialization and repository IDs after renaming a Windows directory", async () => {
+    const storage = new MemoryStorage();
+    const accounts = new EdgeAccountStore(storage);
+    const owner = await accounts.createSingleUserIdentity("Owner");
+    const device = await accounts.registerDevice(owner.id, { displayName: "PC", platform: "windows" });
+    const repository = await accounts.createRepository(owner.id, "ciclo");
+    const original = await accounts.upsertMaterialization(owner.id, device.id, {
+      repositoryId: repository.id, workspaceId: "ciclo",
+      path: "C:/Project/ciclo", platform: "windows",
+    });
+    const remote = await accounts.upsertRuntimeMaterialization(
+      owner.id, "rt_11111111-1111-4111-8111-111111111111", {
+        repositoryId: repository.id, workspaceId: "ciclo-remote-dc724897",
+        path: "/var/lib/repositories/ciclo", platform: "linux",
+      },
+    );
+
+    const renamed = await accounts.upsertMaterialization(owner.id, device.id, {
+      id: original.id,
+      repositoryId: repository.id,
+      workspaceId: "recontei-app",
+      path: "C:/Project/Recontei App",
+      platform: "windows",
+    });
+    expect(renamed.id).toBe(original.id);
+    const all = await accounts.listMaterializations(owner.id, repository.id);
+    expect(all).toHaveLength(2);
+    expect(all).toEqual([
+      expect.objectContaining({
+        id: original.id, repositoryId: repository.id,
+        workspaceId: "recontei-app", path: "C:/Project/Recontei App",
+      }),
+      expect.objectContaining({
+        id: remote.id, workspaceId: "ciclo-remote-dc724897",
+        path: "/var/lib/repositories/ciclo",
+      }),
+    ]);
+    // Re-announcement uses the already reserved workspace and reuses its ID.
+    const replay = await accounts.upsertMaterialization(owner.id, device.id, {
+      repositoryId: repository.id, workspaceId: "recontei-app",
+      path: "C:/Project/Recontei App", platform: "windows",
+    });
+    expect(replay.id).toBe(original.id);
+    expect(await accounts.listMaterializations(owner.id, repository.id)).toHaveLength(2);
+  });
+
   it("keeps one materialization per device/workspace and supports exact rollback removal", async () => {
     const storage = new MemoryStorage();
     const accounts = new EdgeAccountStore(storage);

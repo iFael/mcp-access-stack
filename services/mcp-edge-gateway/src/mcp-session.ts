@@ -3,6 +3,7 @@ import {
   BROWSER_LATENCY_ID_HEADER, browserLatencyOperation, createBrowserLatencyRecorder, latencyId,
   COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL,
   COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+  COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL,
   COMPANION_INTERNAL_TAKE_USER_MESSAGES_TOOL,
   COMPANION_INTERNAL_TOOL_PREFIX,
   COMPANION_PROTOCOL_VERSION,
@@ -1381,6 +1382,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       );
     }
 
+    if (invocation.name === "relocate_repository_materialization") {
+      return this.relocateRepositoryOnCompanion(
+        request, body, { ...principal, userId: principal.userId }, invocation,
+      );
+    }
+
     if (invocation.name === "materialize_repository") {
       const targetRuntime = typeof invocation.arguments.targetRuntime === "string"
         ? invocation.arguments.targetRuntime
@@ -2440,6 +2447,169 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         message,
       );
     }
+  }
+
+  private async relocateRepositoryOnCompanion(
+    request: Request,
+    body: unknown,
+    principal: AuthenticatedEdgePrincipal & { userId: string },
+    invocation: { id: string | number | null; name: string; arguments: Record<string, unknown> },
+  ): Promise<Response> {
+    const args = invocation.arguments;
+    const repositoryId = typeof args.repositoryId === "string" ? args.repositoryId : "";
+    const materializationId = typeof args.materializationId === "string" ? args.materializationId : "";
+    const expectedWorkspaceId = typeof args.expectedWorkspaceId === "string" ? args.expectedWorkspaceId : "";
+    const expectedPath = typeof args.expectedPath === "string" ? args.expectedPath : "";
+    const targetWorkspaceId = typeof args.targetWorkspaceId === "string" ? args.targetWorkspaceId : "";
+    const targetDirectoryName = typeof args.targetDirectoryName === "string" ? args.targetDirectoryName : undefined;
+    const mode = args.mode === undefined ? "validate" : args.mode;
+    if (!/^repo_[0-9a-f-]{36}$/iu.test(repositoryId) ||
+        !/^mat_[0-9a-f-]{36}$/iu.test(materializationId) ||
+        !expectedWorkspaceId || !expectedPath ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(targetWorkspaceId) ||
+        (targetDirectoryName !== undefined && (targetDirectoryName.length > 100 || !targetDirectoryName.trim())) ||
+        (mode !== "validate" && mode !== "apply")) {
+      return mcpToolError(body, "INVALID_ARGUMENT", "Relocation arguments are invalid.");
+    }
+
+    const access = await this.accountStore.getRepositoryForUser(principal.userId, repositoryId);
+    if (!access || access.role === "viewer") {
+      return mcpToolError(body, "REPOSITORY_NOT_FOUND", "Repository is not writable by this user.");
+    }
+    const currentMaterializations = await this.accountStore.listMaterializations(principal.userId, repositoryId);
+    const existing = currentMaterializations.find((value) => value.id === materializationId);
+    if (!existing?.deviceId) {
+      return mcpToolError(body, "MATERIALIZATION_NOT_FOUND", "Selected materialization is not a companion-owned repository.");
+    }
+    if (currentMaterializations.filter((value) => value.deviceId === existing.deviceId).length !== 1) {
+      return mcpToolError(body, "MATERIALIZATION_AMBIGUOUS", "Repository has multiple materializations on this device.");
+    }
+    if (existing.workspaceId !== expectedWorkspaceId ||
+        companionPathKey(existing.path, existing.platform) !== companionPathKey(expectedPath, existing.platform)) {
+      return mcpToolError(body, "EXECUTION_STATE_INVALID", "Materialization no longer matches the supplied workspace and path.");
+    }
+    const selected = this.getReadyCompanionsForUser(principal.userId, existing.deviceId)[0];
+    if (!selected || !selected.attachment.workspaces?.some((value) => value.workspaceId === expectedWorkspaceId)) {
+      return mcpToolError(body, "AGENT_UNAVAILABLE", "Selected materialization is not online on its registered device.");
+    }
+
+    const primaryWorkspaceIds = await this.ensurePrimaryWorkspaceIds(request, principal);
+    if (primaryWorkspaceIds === null) {
+      return mcpToolError(body, "WORKSPACE_ROUTE_UNRESOLVED", "Primary workspace IDs could not be verified.");
+    }
+    const reserved = new Set(primaryWorkspaceIds);
+    for (const value of await this.listStoredMaterializations(principal.userId)) {
+      if (value.id !== materializationId) reserved.add(value.workspaceId);
+    }
+    for (const device of this.getCompanionRouteCandidates(principal.userId)) {
+      for (const id of device.workspaceIds) {
+        if (device.deviceId !== existing.deviceId || id !== existing.workspaceId) reserved.add(id);
+      }
+    }
+    if (targetWorkspaceId !== expectedWorkspaceId && reserved.has(targetWorkspaceId)) {
+      return mcpToolError(body, "WORKSPACE_ID_COLLISION", "Target workspace ID is already allocated to another runtime.");
+    }
+
+    const internalArgs = {
+      repositoryId, expectedWorkspaceId, expectedPath, targetWorkspaceId,
+      ...(targetDirectoryName === undefined ? {} : { targetDirectoryName }),
+    };
+    const invokeLocal = async (input: Record<string, unknown>) => {
+      const relay = {
+        jsonrpc: "2.0",
+        id: "edge-relocate-" + crypto.randomUUID(),
+        method: "tools/call",
+        params: {
+          name: COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL,
+          arguments: input,
+        },
+      };
+      return readInternalRelocationResponse(await this.relayAuthenticatedRequestTo(
+        request, JSON.stringify(relay), principal, selected.webSocket, COMPANION_PROTOCOL_VERSION,
+      ));
+    };
+    const planned = await invokeLocal({ ...internalArgs, dryRun: true });
+    if (!planned || planned.repositoryId !== repositoryId ||
+        planned.before.workspaceId !== expectedWorkspaceId ||
+        companionPathKey(planned.before.path, existing.platform) !== companionPathKey(expectedPath, existing.platform) ||
+        planned.after.workspaceId !== targetWorkspaceId) {
+      return mcpToolError(body, "REPOSITORY_RELOCATION_FAILED", "Companion relocation validation failed.");
+    }
+    const result = { repositoryId, materializationId, before: planned.before, after: planned.after };
+    if (mode === "validate") return mcpToolSuccess(body, { ...result, status: "validated" });
+
+    try {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const store = new EdgeAccountStore(transaction);
+        const current = (await store.listMaterializations(principal.userId, repositoryId))
+          .find((value) => value.id === materializationId);
+        if (!current || current.deviceId !== existing.deviceId ||
+            current.workspaceId !== expectedWorkspaceId ||
+            companionPathKey(current.path, existing.platform) !== companionPathKey(expectedPath, existing.platform)) {
+          throw new Error("Repository materialization changed during relocation.");
+        }
+        for (const { repository } of await store.listRepositories(principal.userId)) {
+          for (const other of await store.listMaterializations(principal.userId, repository.id)) {
+            if (other.id !== materializationId && other.workspaceId === targetWorkspaceId) {
+              throw new Error("Target workspace ID was allocated during relocation.");
+            }
+          }
+        }
+        await store.upsertMaterialization(principal.userId, existing.deviceId!, {
+          id: materializationId,
+          repositoryId,
+          workspaceId: planned.after.workspaceId,
+          path: planned.after.path,
+          platform: existing.platform,
+        });
+      });
+    } catch (error) {
+      return mcpToolError(body, "REPOSITORY_RELOCATION_FAILED",
+        error instanceof Error ? error.message : "Cloud relocation validation failed.");
+    }
+
+    // Cloud identity is reserved before moving the local folder. Its ID is
+    // reused on companion re-announcement.
+    const applied = await invokeLocal({ ...internalArgs, dryRun: false }).catch(() => null);
+    if (applied && applied.repositoryId === repositoryId &&
+        applied.before.workspaceId === planned.before.workspaceId &&
+        companionPathKey(applied.before.path, existing.platform) === companionPathKey(planned.before.path, existing.platform) &&
+        applied.after.workspaceId === planned.after.workspaceId &&
+        companionPathKey(applied.after.path, existing.platform) === companionPathKey(planned.after.path, existing.platform)) {
+      return mcpToolSuccess(body, { ...result, status: "completed" });
+    }
+
+    // A closed socket is not evidence that the rename failed. Only restore
+    // cloud metadata after proving the original local directory still exists.
+    const originalStillPresent = await invokeLocal({ ...internalArgs, dryRun: true }).catch(() => null);
+    if (originalStillPresent &&
+        originalStillPresent.before.workspaceId === expectedWorkspaceId &&
+        companionPathKey(originalStillPresent.before.path, existing.platform) === companionPathKey(expectedPath, existing.platform)) {
+      try {
+        await this.ctx.storage.transaction(async (transaction) => {
+          const store = new EdgeAccountStore(transaction);
+          const current = (await store.listMaterializations(principal.userId, repositoryId))
+            .find((value) => value.id === materializationId);
+          if (!current || current.deviceId !== existing.deviceId ||
+              current.workspaceId !== planned.after.workspaceId ||
+              companionPathKey(current.path, existing.platform) !== companionPathKey(planned.after.path, existing.platform)) {
+            throw new Error("Cloud materialization changed; automatic restoration was stopped.");
+          }
+          await store.upsertMaterialization(principal.userId, existing.deviceId!, {
+            id: materializationId,
+            repositoryId,
+            workspaceId: existing.workspaceId,
+            path: existing.path,
+            platform: existing.platform,
+          });
+        });
+        return mcpToolError(body, "REPOSITORY_RELOCATION_FAILED", "Local rename failed; cloud identity restored.");
+      } catch {
+        // Concurrent change or storage failure: preserve state for inspection.
+      }
+    }
+    return mcpToolError(body, "SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+      "Relocation outcome cannot be confirmed. Inspect get_repository and the device directory before retrying.");
   }
 
   private async materializeRepositoryOnCompanion(
@@ -3561,6 +3731,25 @@ async function readInternalMaterializationResponse(
     repositoryId: value.repositoryId,
     workspaceId: value.workspaceId,
     path: value.path,
+  };
+}
+
+type InternalRelocationResult = {
+  repositoryId: string;
+  before: { workspaceId: string; path: string };
+  after: { workspaceId: string; path: string };
+};
+
+async function readInternalRelocationResponse(response: Response): Promise<InternalRelocationResult | null> {
+  const value = await readMcpStructuredContent(response);
+  if (!value || typeof value.repositoryId !== "string" ||
+      !isRecord(value.before) || !isRecord(value.after) ||
+      typeof value.before.workspaceId !== "string" || typeof value.before.path !== "string" ||
+      typeof value.after.workspaceId !== "string" || typeof value.after.path !== "string") return null;
+  return {
+    repositoryId: value.repositoryId,
+    before: { workspaceId: value.before.workspaceId, path: value.before.path },
+    after: { workspaceId: value.after.workspaceId, path: value.after.path },
   };
 }
 

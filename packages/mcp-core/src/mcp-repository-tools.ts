@@ -21,6 +21,8 @@ import {
   repositoryDetailsSchema,
   revokeDeviceInputSchema,
   revokeDeviceResultSchema,
+  relocateRepositoryMaterializationInputSchema,
+  relocateRepositoryMaterializationResultSchema,
   syncRepositoryInputSchema,
   syncRepositoryResultSchema,
 } from "./repository-contracts.js";
@@ -117,6 +119,19 @@ export function registerRepositoryTools(
     annotations: annotations,
     ...(meta ? { _meta: meta } : {}),
   }, async (input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.materializeRepository(input, context), materializeRepositoryResultSchema));
+
+  // Coordinated by the Edge, which validates ownership, cross-runtime uniqueness
+  // and cloud CAS before invoking the private companion relocation operation.
+  server.registerTool("relocate_repository_materialization", {
+    title: "Relocate repository materialization",
+    description: "Validates or safely renames an existing companion repository folder and its workspace ID without copying or recreating Git. Defaults to validation; apply requires exact current materialization ID, workspace ID and path. Run through MCP V3 Edge coordination only.",
+    inputSchema: relocateRepositoryMaterializationInputSchema,
+    outputSchema: relocateRepositoryMaterializationResultSchema,
+    annotations: { ...annotations, destructiveHint: true },
+    ...(meta ? { _meta: meta } : {}),
+  }, async (_input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS,
+    async () => { throw new AppError("CAPABILITY_UNSUPPORTED", "Materialization relocation requires Edge-coordinated routing."); },
+    relocateRepositoryMaterializationResultSchema));
 
   server.registerTool("sync_repository", {
     title: "Synchronize repository",

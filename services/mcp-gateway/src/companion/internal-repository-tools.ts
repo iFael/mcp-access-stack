@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL,
   COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL,
+  COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL,
 } from "@mcp-access-stack/edge-protocol";
 import { repositoryIdSchema } from "@vs-code-gpt/shared";
 import { z } from "zod";
@@ -44,9 +45,40 @@ const materializeRepositoryResultSchema = z.object({
   materialization: boundRepositorySchema,
 }).strict();
 
+const relocationLocationSchema = z.object({
+  workspaceId: z.string().min(1).max(200),
+  path: z.string().min(1).max(4096),
+}).strict();
+
+const relocateRepositoryInputSchema = z.object({
+  repositoryId: repositoryIdSchema,
+  expectedWorkspaceId: z.string().min(1).max(200),
+  expectedPath: z.string().min(1).max(4096),
+  targetWorkspaceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u),
+  targetDirectoryName: z.string().min(1).max(100).optional(),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+const relocateRepositoryResultSchema = z.object({
+  repositoryId: repositoryIdSchema,
+  before: relocationLocationSchema,
+  after: relocationLocationSchema,
+}).strict();
+
 export type CompanionRepositoryBinding = z.infer<typeof repositoryBindingSchema>;
 
 export interface CompanionRepositoryBinder {
+  relocateRepositoryBinding?(
+    input: {
+      repositoryId: string;
+      expectedWorkspaceId: string;
+      expectedPath: string;
+      targetWorkspaceId: string;
+      targetDirectoryName?: string;
+    },
+    signal?: AbortSignal,
+    dryRun?: boolean,
+  ): Promise<z.infer<typeof relocateRepositoryResultSchema>>;
   bindRepositories(
     bindings: CompanionRepositoryBinding[],
     signal?: AbortSignal,
@@ -114,6 +146,43 @@ export function registerCompanionInternalRepositoryTools(
       const structuredContent = bindRepositoriesResultSchema.parse({
         bound: bound.map(toBoundRepository),
       });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }],
+        structuredContent,
+      };
+    },
+  );
+
+  server.registerTool(
+    COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL,
+    {
+      title: "MCP V3 internal repository relocation",
+      description: "Edge-coordinated validated rename of an existing local repository binding.",
+      inputSchema: relocateRepositoryInputSchema,
+      outputSchema: relocateRepositoryResultSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input, extra) => {
+      if (!binder.relocateRepositoryBinding) {
+        throw new Error("This companion does not support repository relocation.");
+      }
+      const relocation = await binder.relocateRepositoryBinding(
+        {
+          repositoryId: input.repositoryId,
+          expectedWorkspaceId: input.expectedWorkspaceId,
+          expectedPath: input.expectedPath,
+          targetWorkspaceId: input.targetWorkspaceId,
+          ...(input.targetDirectoryName === undefined ? {} : { targetDirectoryName: input.targetDirectoryName }),
+        },
+        extra.signal,
+        input.dryRun,
+      );
+      const structuredContent = relocateRepositoryResultSchema.parse(relocation);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }],
         structuredContent,
