@@ -40,6 +40,22 @@ async function processReferences(releaseRoot) {
   return stdout.includes(releaseRoot + path.sep);
 }
 
+async function linuxMountpoints() {
+  const lines = (await readFile("/proc/self/mountinfo", "utf8")).split("\n").filter(Boolean);
+  return lines.map(line => {
+    const mount = line.split(" ")[4];
+    if (!mount || !mount.startsWith("/")) abort();
+    return mount.replace(/\\([0-7]{3})/gu, (_, octal) =>
+      String.fromCharCode(parseInt(octal, 8)));
+  });
+}
+async function oracleProcessReferences(releaseRoot) {
+  const {stdout} = await execFile("/usr/bin/ps", ["-eo", "args="], {
+    timeout:10_000, maxBuffer:2*1024*1024, encoding:"utf8",
+  });
+  return stdout.includes(releaseRoot + path.sep);
+}
+
 /**
  * Internal shared retention executor for the signed local installers.
  * Always keep active, previous and candidate. No caller-supplied paths to delete.
@@ -47,8 +63,12 @@ async function processReferences(releaseRoot) {
  */
 export async function pruneLocalReleases({
   installationRoot, previousReleaseId, activeReleaseId, expectedPlanSha256,
-  dryRun = true, processCheck = processReferences,
+  dryRun = true, processCheck, distribution = "local",
 }) {
+  if (distribution !== "local" && distribution !== "oracle") abort();
+  const oracle = distribution === "oracle";
+  if (oracle && process.platform !== "linux") abort();
+  const checkProcess = processCheck ?? (oracle ? oracleProcessReferences : processReferences);
   if (!validRelease(activeReleaseId) || !validRelease(previousReleaseId)
     || activeReleaseId === previousReleaseId) abort();
   const root = path.resolve(installationRoot);
@@ -60,6 +80,7 @@ export async function pruneLocalReleases({
   const stateFile = path.join(stateRoot, "lifecycle-state.v1.json");
   let candidate = null, stateSha = null;
   const stateInfo = await lstat(stateFile).catch(e => e?.code === "ENOENT" ? null : Promise.reject(e));
+  if (oracle && !stateInfo) abort();
   if (stateInfo) {
     if (!stateInfo.isFile() || stateInfo.isSymbolicLink()) abort();
     const raw = await readFile(stateFile);
@@ -73,27 +94,35 @@ export async function pruneLocalReleases({
     const target = await realpath(path.join(root, "current"));
     if (!same(target, path.join(releases, activeReleaseId))) abort();
   }
+  if (oracle) {
+    if (candidate !== null ||
+        !same(await realpath(path.join(root, "current")),
+          path.join(releases, activeReleaseId))) abort();
+    const children = await readdir(root, {withFileTypes:true});
+    if (children.some(child => child.isSymbolicLink() && child.name !== "current")) abort();
+  }
+  const manifestName = oracle ? "linux-release-manifest.json" : "mcp-v3-local-manifest.json";
   const protectedIds = new Set([activeReleaseId, previousReleaseId, candidate].filter(Boolean));
   const allNames = [];
   for (const entry of await readdir(releases, { withFileTypes: true })) {
     if (!validRelease(entry.name) || protectedIds.has(entry.name)) continue;
     if (!entry.isDirectory() || entry.isSymbolicLink()) abort();
-    const marker = path.join(releases, entry.name, "mcp-v3-local-manifest.json");
+    const marker = path.join(releases, entry.name, manifestName);
     const proof = await lstat(marker).catch(e => e?.code === "ENOENT" ? null : Promise.reject(e));
     if (!proof) continue; // Historical or foreign release: never infer ownership.
     if (!proof.isFile() || proof.isSymbolicLink()) abort();
     const metadata = JSON.parse(await readFile(marker, "utf8"));
-    if (metadata.releaseId !== entry.name) abort();
+    if (metadata.releaseId !== entry.name || (oracle && metadata.platform !== "linux-x64")) abort();
     allNames.push(entry.name);
   }
   allNames.sort();
   const names = allNames.slice(0, 5);
-  const planSha256 = digest(JSON.stringify({activeReleaseId,previousReleaseId,candidate,stateSha,allNames}));
+  const planSha256 = digest(JSON.stringify({activeReleaseId,previousReleaseId,candidate,stateSha,allNames,...(oracle ? {distribution} : {})}));
   const plan = { status:"planned", stateSha256:stateSha, planSha256, names };
   if (dryRun) return plan;
   if (!expectedPlanSha256 || expectedPlanSha256 !== planSha256) abort();
   if (names.length === 0) return {...plan,status:"completed"};
-  const lockFile = path.join(stateRoot, "local-release-prune.lock");
+  const lockFile = path.join(stateRoot, oracle ? "release-prune.lock" : "local-release-prune.lock");
   const lock = await open(lockFile, "wx", 0o600);
   const operationId = randomUUID();
   let complete = false;
@@ -106,15 +135,15 @@ export async function pruneLocalReleases({
       const info = await lstat(candidateRoot);
       if (!info.isDirectory() || info.isSymbolicLink() || info.dev !== parentInfo.dev ||
           !same(await realpath(candidateRoot), candidateRoot)) abort();
-      const manifest = path.join(candidateRoot, "mcp-v3-local-manifest.json");
+      const manifest = path.join(candidateRoot, manifestName);
       const proof = await lstat(manifest);
       if (!proof.isFile() || proof.isSymbolicLink()) abort();
       const meta = JSON.parse(await readFile(manifest, "utf8"));
-      if (meta.releaseId !== name) abort();
+      if (meta.releaseId !== name || (oracle && meta.platform !== "linux-x64")) abort();
       const current = [];
       for (const entry of await readdir(releases, { withFileTypes:true })) {
         if (!validRelease(entry.name) || protectedIds.has(entry.name)) continue;
-        const marker = path.join(releases, entry.name, "mcp-v3-local-manifest.json");
+        const marker = path.join(releases, entry.name, manifestName);
         const found = await lstat(marker).catch(e => e?.code === "ENOENT" ? null : Promise.reject(e));
         if (found) current.push(entry.name);
       }
@@ -123,7 +152,14 @@ export async function pruneLocalReleases({
       if (stateSha !== null && digest(await readFile(stateFile)) !== stateSha) abort();
       if (stateSha === null && !same(await realpath(path.join(root, "current")),
         path.join(releases, activeReleaseId))) abort();
-      if (await processCheck(candidateRoot)) abort();
+      if (oracle) {
+        if (!same(await realpath(path.join(root, "current")),
+            path.join(releases, activeReleaseId))) abort();
+        const mounts = await linuxMountpoints();
+        if (mounts.some(mount => mount === candidateRoot ||
+            mount.startsWith(candidateRoot + path.sep))) abort();
+      }
+      if (await checkProcess(candidateRoot)) abort();
       const quarantine = path.join(releases, ".local-prune-" + operationId + "-" + i);
       await rename(candidateRoot, quarantine);
       await rm(quarantine, { recursive: true, force: false, maxRetries:0 });
@@ -156,18 +192,20 @@ export async function drainLocalReleases(options, maxBatches = 20) {
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   try {
-    const drain = process.argv[2] === "--drain";
+    const oracle = process.argv[2] === "--oracle-drain";
+    const drain = process.argv[2] === "--drain" || oracle;
     const [root, active, previous, planSha] = process.argv.slice(drain ? 3 : 2);
     if (drain ? process.argv.length !== 6 :
       (process.argv.length !== 5 && process.argv.length !== 6)) abort();
-    const input = {installationRoot:root,activeReleaseId:active,previousReleaseId:previous};
+    const input = {installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+      ...(oracle ? {distribution:"oracle"} : {})};
     const result = drain
       ? await drainLocalReleases(input)
       : await pruneLocalReleases({...input,
           ...(planSha ? {dryRun:false,expectedPlanSha256:planSha} : {})});
     process.stdout.write(JSON.stringify(result) + "\n");
   } catch {
-    process.stderr.write("LOCAL_RETENTION_REFUSED\n");
+    process.stderr.write(process.argv[2] === "--oracle-drain" ? "ORACLE_RETENTION_REFUSED\n" : "LOCAL_RETENTION_REFUSED\n");
     process.exitCode = 1;
   }
 }

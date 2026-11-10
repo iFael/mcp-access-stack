@@ -107,6 +107,9 @@ if grep -Fq '$excluded=$Excluded -contains $id' "$root/deploy/linux/Invoke-McpAc
   echo 'case-insensitive Excluded shadowing regression detected' >&2
   exit 1
 fi
+grep -Fq -- '--oracle-drain' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq 'deploy/common/prune-mcp-v3-local.mjs' "$root/deploy/linux/Update-McpAccessStack.sh"
+grep -Fq 'deploy/common/prune-mcp-v3-local.mjs' "$root/deploy/linux/Install-McpAccessStack.sh"
 grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"
 grep -Fq 'ExecStart=%h/current/deploy/linux/Start-McpEdgeConnector.sh --from-environment' "$unit"
 grep -Fq 'Restart=always' "$unit"
