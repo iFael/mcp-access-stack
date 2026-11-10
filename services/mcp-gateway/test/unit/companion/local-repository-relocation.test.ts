@@ -77,6 +77,25 @@ describe("native repository materialization relocation", () => {
     ]);
   });
 
+  it("refreshes only a materialization display name, retaining its Git path and workspace ID", async () => {
+    const { folder, manager, options } = await fixture();
+    const request = {
+      repositoryId, name: "ciclo", remoteUrls: [],
+      workspaceId: "ciclo", targetName: "Recontei App",
+    };
+    const preview = await manager.materializeRepositoryFromCloud(request, undefined, true);
+    expect(preview).toMatchObject({ name: "Recontei App", workspaceId: "ciclo", path: folder });
+    expect(manager.listBindings()[0]?.name).toBe("ciclo");
+    const updated = await manager.materializeRepositoryFromCloud(request, undefined, false);
+    expect(updated.name).toBe("Recontei App");
+    expect(updated.path).toBe(folder);
+    expect(updated.workspaceId).toBe("ciclo");
+    const reloaded = await LocalRepositoryManager.create(options);
+    expect(reloaded.listBindings()[0]).toMatchObject({
+      repositoryId, workspaceId: "ciclo", path: folder, name: "Recontei App",
+    });
+  });
+
   it("rejects conflicting workspace IDs, existing directories, invalid names and a stale source without changing files", async () => {
     const { root, folder, manager } = await fixture();
     const second = path.join(root, "second");

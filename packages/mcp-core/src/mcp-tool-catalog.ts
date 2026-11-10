@@ -13,6 +13,7 @@ export const MCP_REPOSITORY_TOOL_NAMES = [
   "list_repositories",
   "get_repository",
   "create_repository",
+  "rename_repository",
   "discover_local_repositories",
   "import_repositories",
   "materialize_repository",

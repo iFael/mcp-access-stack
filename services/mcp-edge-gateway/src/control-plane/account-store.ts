@@ -346,6 +346,40 @@ export class EdgeAccountStore {
     return repository;
   }
 
+  async renameOwnedRepository(
+    userId: string,
+    repositoryId: string,
+    expectedName: string,
+    targetName: string,
+    dryRun = true,
+  ): Promise<{ before: StoredRepository; after: StoredRepository }> {
+    const normalizedName = normalizeRepositoryName(targetName);
+    if (!normalizedName || targetName !== targetName.trim()) {
+      throw new Error("Target repository name is invalid.");
+    }
+    const apply = async (storage: AccountStorage) => {
+      const store = new EdgeAccountStore(storage);
+      const access = await store.getRepositoryForUser(userId, repositoryId);
+      if (!access || access.role !== "owner") {
+        throw new Error("Repository is not owned by this user.");
+      }
+      const before = access.repository;
+      if (before.name !== expectedName) {
+        throw new Error("Repository name has changed; inspect its current identity.");
+      }
+      const existing = await store.listRepositories(userId);
+      if (existing.some(({ repository }) => repository.id !== repositoryId && repository.normalizedName === normalizedName)) {
+        throw new Error("A repository with this name already exists.");
+      }
+      const after = { ...before, name: targetName, normalizedName, updatedAt: new Date().toISOString() };
+      if (!dryRun && after.name !== before.name) await storage.put(repositoryKey(repositoryId), after);
+      return { before, after };
+    };
+    if (dryRun) return apply(this.storage);
+    const transaction = storageTransaction(this.storage);
+    return transaction ? transaction(apply) : apply(this.storage);
+  }
+
   async findMaterializationByDevicePath(
     userId: string,
     deviceId: string,
