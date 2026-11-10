@@ -115,3 +115,65 @@ test("rejects a candidate symlink without following it",async t=>{
   await assert.rejects(pruneLocalReleases(base), /LOCAL_RETENTION_PRECHECK_FAILED/u);
   assert.equal((await lstat(external)).isDirectory(),true);
 });
+
+async function oracleFixture(t) {
+  const root = await fixture(t, true);
+  await symlink(path.join(root,"releases",active),path.join(root,"current"),"dir");
+  for (const name of [active,previous,...old]) {
+    const directory=path.join(root,"releases",name);
+    await rm(path.join(directory,"mcp-v3-local-manifest.json"));
+    await writeFile(path.join(directory,"linux-release-manifest.json"),
+      JSON.stringify({releaseId:name,platform:"linux-x64"}));
+  }
+  return root;
+}
+
+test("Oracle retention drains signed Linux releases, retains active and rollback",
+  {skip:process.platform!=="linux"},async t=>{
+  const root=await oracleFixture(t);
+  const foreign="1.1.0-beta.80";
+  await mkdir(path.join(root,"releases",foreign));
+  const input={installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+    distribution:"oracle",processCheck:async()=>false};
+  const plan=await pruneLocalReleases(input);
+  assert.deepEqual(plan.names,old);
+  const result=await drainLocalReleases(input);
+  assert.deepEqual(result,{status:"completed",removedCount:2,batches:1});
+  assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
+    [active,previous,foreign].sort());
+  await assert.rejects(lstat(path.join(root,"state","release-prune.lock")));
+});
+
+test("Oracle retention refuses active candidate or mismatched current symlink",
+  {skip:process.platform!=="linux"},async t=>{
+  const root=await oracleFixture(t);
+  const input={installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+    distribution:"oracle",processCheck:async()=>false};
+  const state=path.join(root,"state","lifecycle-state.v1.json");
+  await writeFile(state,JSON.stringify({active:{releaseId:active},previous:{releaseId:previous},
+    candidate:{releaseId:old[0]}}));
+  await assert.rejects(pruneLocalReleases(input),/LOCAL_RETENTION_PRECHECK_FAILED/u);
+  await writeFile(state,JSON.stringify({active:{releaseId:active},previous:{releaseId:previous},
+    candidate:null}));
+  await rm(path.join(root,"current"));
+  await symlink(path.join(root,"releases",previous),path.join(root,"current"),"dir");
+  await assert.rejects(pruneLocalReleases(input),/LOCAL_RETENTION_PRECHECK_FAILED/u);
+  assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
+    [active,previous,...old].sort());
+});
+
+test("Oracle retention respects the native release-prune lock and manifest proof",
+  {skip:process.platform!=="linux"},async t=>{
+  const root=await oracleFixture(t);
+  const input={installationRoot:root,activeReleaseId:active,previousReleaseId:previous,
+    distribution:"oracle",processCheck:async()=>false};
+  const lock=path.join(root,"state","release-prune.lock");
+  await writeFile(lock,"unreconciled");
+  await assert.rejects(drainLocalReleases(input),{code:"EEXIST"});
+  await rm(lock);
+  await writeFile(path.join(root,"releases",old[0],"linux-release-manifest.json"),
+    JSON.stringify({releaseId:old[0],platform:"win32"}));
+  await assert.rejects(pruneLocalReleases(input),/LOCAL_RETENTION_PRECHECK_FAILED/u);
+  assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
+    [active,previous,...old].sort());
+});

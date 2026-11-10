@@ -282,6 +282,30 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Unable to secure canonical Edge Connector environment file.' }
   $connectorEnvRewritten=$true
 
+  # Only after the final health gate. Retention cannot roll back a healthy release.
+  $retentionStatus='deferred'
+  $retentionRemovedCount=0
+  try {
+    $retentionScript=Join-Path $candidateReleaseRoot 'deploy/common/prune-mcp-v3-local.mjs'
+    $retentionNode='/usr/local/bin/node'
+    if (-not (Test-Path -LiteralPath $retentionScript -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $retentionNode -PathType Leaf)) {
+      throw 'Oracle retention prerequisites are missing.'
+    }
+    $retentionOutput=@(& $retentionNode $retentionScript --oracle-drain $installationRoot $releaseId $previousReleaseId)
+    if ($LASTEXITCODE -ne 0) { throw 'Oracle retention requires reconciliation.' }
+    $retentionReceipt=($retentionOutput -join '')|ConvertFrom-Json
+    if ([string]$retentionReceipt.status -ne 'completed') {
+      throw 'Oracle retention completion was not verified.'
+    }
+    $retentionStatus='completed'
+    $retentionRemovedCount=[int]$retentionReceipt.removedCount
+  }
+  catch {
+    $retentionStatus='deferred'
+  }
+  [Console]::Error.WriteLine("Oracle retention status=$retentionStatus removedCount=$retentionRemovedCount")
+
   $result=[ordered]@{schemaVersion=1;requestId=$requestId;releaseId=$releaseId;status='passed';startedAt=$startedAt;completedAt=[DateTimeOffset]::UtcNow.ToString('O');ownershipMode='edge-only';edgeTask=$edgeTaskName;browserTask=$null;healthGate=[ordered]@{status='passed';connectorInstanceId=[string]$final.connectorInstanceId;catalogContractRevision=[string]$final.catalogContractRevision;executionPlaneReady=[bool]$final.executionPlaneReady;connectorReady=[bool]$final.connectorReady;contractCompatible=[bool]$final.contractCompatible};contractPromotion=[ordered]@{required=[bool]$promotionRequired;status=[string]$promotion.status;activeContractRevision=[string]$final.activeContractRevision;requestError=Optional $promotion 'requestError'};recoveryConfig=$recoveryConfigPath}
   Write-JsonAtomic $ResultPath $result
   exit 0

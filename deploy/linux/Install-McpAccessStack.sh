@@ -114,6 +114,7 @@ required_files=(
   "runtime/native-libs/packages.v1.tsv"
   "deploy/linux/Start-McpAccessStackCutover.sh"
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+  "deploy/common/prune-mcp-v3-local.mjs"
   "deploy/linux/mcp-access-stack-edge-connector.service"
 )
 for required in "${required_files[@]}"; do
@@ -197,6 +198,7 @@ const files = [
   "runtime/native-libs/packages.v1.tsv",
   "deploy/linux/Start-McpAccessStackCutover.sh",
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1",
+  "deploy/common/prune-mcp-v3-local.mjs",
   "deploy/linux/mcp-access-stack-edge-connector.service",
 ];
 const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");

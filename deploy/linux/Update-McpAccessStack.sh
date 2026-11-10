@@ -131,7 +131,7 @@ else
     fail 'Prepared release Browser font bundle contains no TrueType fonts.'
   [[ -s "$native_manifest" ]] || fail 'Prepared release is missing the Browser native package manifest.'
 
-  for required in     "services/mcp-gateway/dist/edge-connector-cli.js"     "services/browser-worker/dist/server.js"     "services/workspace-agent/dist/index.js"     "packages/mcp-core/dist/index.js"     "packages/edge-protocol/dist/index.js"     "deploy/linux/Start-McpEdgeConnector.sh"     "deploy/linux/Install-McpAccessStack.sh"     "deploy/linux/Update-McpAccessStack.sh"     "deploy/linux/Prepare-McpBrowserRuntime.sh"     "deploy/linux/Start-McpAccessStackCutover.sh"     "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"; do
+  for required in     "services/mcp-gateway/dist/edge-connector-cli.js"     "services/browser-worker/dist/server.js"     "services/workspace-agent/dist/index.js"     "packages/mcp-core/dist/index.js"     "packages/edge-protocol/dist/index.js"     "deploy/linux/Start-McpEdgeConnector.sh"     "deploy/linux/Install-McpAccessStack.sh"     "deploy/linux/Update-McpAccessStack.sh"     "deploy/linux/Prepare-McpBrowserRuntime.sh"     "deploy/linux/Start-McpAccessStackCutover.sh"     "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"     "deploy/common/prune-mcp-v3-local.mjs"; do
     [[ -f "$source_root/$required" ]] || fail "Built release is missing required runtime file: $required"
   done
 
@@ -161,6 +161,7 @@ const files = [
   "runtime/native-libs/packages.v1.tsv",
   "deploy/linux/Start-McpAccessStackCutover.sh",
   "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1",
+  "deploy/common/prune-mcp-v3-local.mjs",
   "deploy/linux/mcp-access-stack-edge-connector.service",
 ];
 const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
