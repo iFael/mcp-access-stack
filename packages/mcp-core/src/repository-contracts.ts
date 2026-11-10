@@ -107,6 +107,22 @@ export const createRepositoryInputSchema = z.object({
 }).strict();
 export type CreateRepositoryInput = z.infer<typeof createRepositoryInputSchema>;
 
+export const renameRepositoryInputSchema = z.object({
+  repositoryId: repositoryIdSchema,
+  expectedName: z.string().min(1).max(200),
+  targetName: z.string().trim().min(1).max(200),
+  mode: z.enum(["validate", "apply"]).default("validate"),
+}).strict();
+export type RenameRepositoryInput = z.infer<typeof renameRepositoryInputSchema>;
+
+export const renameRepositoryResultSchema = z.object({
+  status: z.enum(["validated", "completed"]),
+  repositoryId: repositoryIdSchema,
+  before: z.object({ name: z.string().min(1).max(200) }).strict(),
+  after: z.object({ name: z.string().min(1).max(200) }).strict(),
+}).strict();
+export type RenameRepositoryResult = z.infer<typeof renameRepositoryResultSchema>;
+
 export const discoverLocalRepositoriesInputSchema = z.object({
   deviceId: deviceIdSchema.optional(),
   root: z.string().min(1).max(4096),
