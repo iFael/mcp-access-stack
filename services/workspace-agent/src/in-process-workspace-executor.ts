@@ -125,6 +125,13 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.oracleDiskAudit(input, context);
   }
 
+  oracleDiskAuditProvision(
+    input: import("@vs-code-gpt/shared").OracleDiskAuditProvisionInput,
+    context?: OperationContext,
+  ): Promise<import("@vs-code-gpt/shared").OracleDiskAuditProvisionResult> {
+    return this.agent.oracleDiskAuditProvision(input, context);
+  }
+
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

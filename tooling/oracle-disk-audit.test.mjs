@@ -40,6 +40,14 @@ test("root-page enumerates physical root files without symlinks", async () => {
   assert.equal(result.complete, false);
 });
 
+test("walks fixed large-directory boundaries without arbitrary path injection", () => {
+  for (const group of ["var", "varlib", "varmcp", "srv", "srvmcp", "usr"]) {
+    assert.deepEqual(parseArgs([`--group=${group}`, "--start=4", "--limit=3"]),
+      { group, start: 4, limit: 3 });
+  }
+  assert.throws(() => parseArgs(["--group=/var/lib/mcp-access-stack"]));
+});
+
 test("reports inaccessible paths without claiming completeness or inventing byte counts", async () => {
   const result = await audit({ group: "releases", start: 0, limit: 2 }, {
     readdir: async () => [

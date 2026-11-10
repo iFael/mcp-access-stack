@@ -89,7 +89,7 @@ import {
 } from "./release-lifecycle-contracts.js";
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
-import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema } from "./oracle-disk-contracts.js";
+import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -263,6 +263,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "service_get_status",
   "oracle_list_instances",
   "oracle_disk_audit",
+  "oracle_disk_audit_provision",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -1602,6 +1603,42 @@ export function registerWorkspaceTools(
             content: [{ type: "text", text: structuredContent.status === "ready"
               ? `Disk page ${structuredContent.group} at ${structuredContent.start}: ${structuredContent.targets.length} measured target(s) or explicit errors.`
               : `Disk audit unavailable: ${structuredContent.diagnostic ?? "unknown"}.` }],
+            structuredContent,
+          };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("oracle_disk_audit_provision", include)) {
+    server.registerTool(
+      "oracle_disk_audit_provision",
+      {
+        title: "Provision the fixed Oracle disk auditor through a trusted host-root bootstrap",
+        description: "Inspect root bootstrap and audit installation, or install only the pinned disk-audit module after an independently provisioned root-owned bootstrap. " +
+          "Fixed paths, fixed source SHA-256, no arbitrary commands, no shell elevation and no claim of root privileges before bootstrap.",
+        inputSchema: oracleDiskAuditProvisionInputSchema,
+        outputSchema: oracleDiskAuditProvisionResultSchema,
+        annotations: {
+          readOnlyHint: false, destructiveHint: false,
+          idempotentHint: true, openWorldHint: false,
+        },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = oracleDiskAuditProvisionResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.oracleDiskAuditProvision(input, context),
+            ),
+          );
+          return {
+            content: [{ type: "text", text: `Oracle disk provision: ${structuredContent.status}.` }],
             structuredContent,
           };
         } catch (error) {
@@ -3978,6 +4015,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   getReleaseState: "get_release_state",
   oracleListInstances: "oracle_list_instances",
   oracleDiskAudit: "oracle_disk_audit",
+  oracleDiskAuditProvision: "oracle_disk_audit_provision",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",
