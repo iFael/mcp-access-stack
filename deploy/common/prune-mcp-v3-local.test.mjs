@@ -138,10 +138,33 @@ test("Oracle retention drains signed Linux releases, retains active and rollback
   const plan=await pruneLocalReleases(input);
   assert.deepEqual(plan.names,old);
   const result=await drainLocalReleases(input);
-  assert.deepEqual(result,{status:"completed",removedCount:2,batches:1});
+  assert.deepEqual(result,{status:"completed",removedCount:2,batches:1,
+    removedReleases:old});
+  assert.deepEqual(await drainLocalReleases(input),
+    {status:"completed",removedCount:0,batches:0,removedReleases:[]});
   assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
     [active,previous,foreign].sort());
   await assert.rejects(lstat(path.join(root,"state","release-prune.lock")));
+});
+
+test("Oracle retention reports every deleted release across batches",
+  {skip:process.platform!=="linux"},async t=>{
+  const root=await oracleFixture(t);
+  const extra=Array.from({length:9},(_,i)=>"1.1.0-beta."+String(60+i));
+  for(const name of extra){
+    const dir=path.join(root,"releases",name);
+    await mkdir(dir);
+    await writeFile(path.join(dir,"linux-release-manifest.json"),
+      JSON.stringify({releaseId:name,platform:"linux-x64"}));
+  }
+  const result=await drainLocalReleases({installationRoot:root,activeReleaseId:active,
+    previousReleaseId:previous,distribution:"oracle",processCheck:async()=>false});
+  assert.equal(result.status,"completed");
+  assert.equal(result.removedCount,11);
+  assert.equal(result.batches,3);
+  assert.deepEqual(result.removedReleases,[...extra,...old]);
+  assert.deepEqual((await readdir(path.join(root,"releases"))).sort(),
+    [active,previous].sort());
 });
 
 test("Oracle retention refuses active candidate or mismatched current symlink",

@@ -284,7 +284,8 @@ try {
 
   # Only after the final health gate. Retention cannot roll back a healthy release.
   $retentionStatus='deferred'
-  $retentionRemovedCount=0
+  $retentionRemovedCount=$null
+  $retentionRemovedReleases=$null
   try {
     $retentionScript=Join-Path $candidateReleaseRoot 'deploy/common/prune-mcp-v3-local.mjs'
     $retentionNode='/usr/local/bin/node'
@@ -295,14 +296,38 @@ try {
     $retentionOutput=@(& $retentionNode $retentionScript --oracle-drain $installationRoot $releaseId $previousReleaseId)
     if ($LASTEXITCODE -ne 0) { throw 'Oracle retention requires reconciliation.' }
     $retentionReceipt=($retentionOutput -join '')|ConvertFrom-Json
-    if ([string]$retentionReceipt.status -ne 'completed') {
+    if ([string]$retentionReceipt.status -ne 'completed' -or
+        $null -eq $retentionReceipt.PSObject.Properties['removedReleases']) {
       throw 'Oracle retention completion was not verified.'
     }
+    $retentionNames=@($retentionReceipt.removedReleases)
+    if ($retentionNames.Count -ne [int]$retentionReceipt.removedCount -or $retentionNames.Count -gt 100) {
+      throw 'Oracle retention count does not match the deleted releases.'
+    }
+    foreach ($name in $retentionNames) {
+      if ([string]$name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
+        throw 'Oracle retention returned an invalid release identifier.'
+      }
+    }
     $retentionStatus='completed'
-    $retentionRemovedCount=[int]$retentionReceipt.removedCount
+    $retentionRemovedCount=$retentionNames.Count
+    $retentionRemovedReleases=$retentionNames
   }
   catch {
     $retentionStatus='deferred'
+    $retentionRemovedCount=$null
+    $retentionRemovedReleases=$null
+  }
+  # Independent audit receipt: failure to persist it must not roll back a healthy cutover.
+  try {
+    $retentionAudit=[ordered]@{
+      schemaVersion=1;requestId=$requestId;releaseId=$releaseId;previousReleaseId=$previousReleaseId
+      status=$retentionStatus;removedCount=$retentionRemovedCount
+      removedReleases=$retentionRemovedReleases;completedAt=[DateTimeOffset]::UtcNow.ToString('O')
+    }
+    Write-JsonAtomic (Join-Path $runRoot 'retention-result.json') $retentionAudit
+  } catch {
+    [Console]::Error.WriteLine('Oracle retention audit receipt could not be persisted.')
   }
   [Console]::Error.WriteLine("Oracle retention status=$retentionStatus removedCount=$retentionRemovedCount")
 
