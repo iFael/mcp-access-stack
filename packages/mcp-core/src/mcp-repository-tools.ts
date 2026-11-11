@@ -3,6 +3,8 @@ import { AppError, asAppError } from "./errors.js";
 import { withToolOperationContext, type ToolOperationContextFactory } from "./mcp-operation-context.js";
 import {
   createRepositoryInputSchema,
+  renameRepositoryInputSchema,
+  renameRepositoryResultSchema,
   currentUserSchema,
   discoverLocalRepositoriesInputSchema,
   discoverLocalRepositoriesResultSchema,
@@ -92,6 +94,18 @@ export function registerRepositoryTools(
     annotations: annotations,
     ...(meta ? { _meta: meta } : {}),
   }, async (input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.createRepository(input, context), repositoryDetailsSchema));
+
+  // The Edge owns repository identity. Do not mutate companion state or Git here.
+  server.registerTool("rename_repository", {
+    title: "Rename repository identity",
+    description: "Validates or renames an owned MCP V3 repository's logical name in the Edge catalog, preserving repository and materialization IDs, paths and Git. Defaults to validation. Workspace display names and Git remotes are separate.",
+    inputSchema: renameRepositoryInputSchema,
+    outputSchema: renameRepositoryResultSchema,
+    annotations: { ...annotations, destructiveHint: false },
+    ...(meta ? { _meta: meta } : {}),
+  }, async (_input, extra) => invoke(options, extra, QUICK_OPERATION_TIMEOUT_MS,
+    async () => { throw new AppError("CAPABILITY_UNSUPPORTED", "Repository identity rename requires Edge coordination."); },
+    renameRepositoryResultSchema));
 
   server.registerTool("discover_local_repositories", {
     title: "Discover local repositories",

@@ -91,6 +91,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   list_repositories: "get_repository for one; materialize_repository to work in it.",
   get_repository: "materialize_repository or sync_repository to work in it.",
   create_repository: "materialize_repository.",
+  rename_repository: "after apply, get_repository and list_workspaces; update existing materialization display names separately if needed.",
   discover_local_repositories: "import_repositories for the ones to register.",
   import_repositories: "list_workspaces to work in them.",
   materialize_repository: "list_workspaces, then get_workspace_context.",

@@ -38,6 +38,7 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
       case "list_repositories": return this.listRepositories(request.id, userId);
       case "get_repository": return this.getRepository(request.id, userId, request.arguments);
       case "create_repository": return this.createRepository(request.id, userId, request.arguments);
+      case "rename_repository": return this.renameRepository(request.id, userId, request.arguments);
       case "list_devices": return this.listDevices(request.id, userId);
       case "revoke_device": return this.revokeDevice(request.id, userId, request.arguments);
       default: return toolError(request.id, "METHOD_NOT_FOUND", "Repository operation is not supported.");
@@ -95,6 +96,26 @@ export class EdgeRepositoryControlPlane implements EdgeLocalMcpToolHandler {
     if (!name) return toolError(id, "INVALID_ARGUMENT", "Repository name is required.");
     const repository = await this.accounts.createRepository(userId, name);
     return toolSuccess(id, { ...repositorySummary(repository, "owner"), materializations: [] });
+  }
+
+  private async renameRepository(id: JsonRpcId, userId: string, args: Record<string, unknown>): Promise<Response> {
+    const repositoryId = readIdArg(args, "repositoryId", "repo_");
+    const expectedName = typeof args.expectedName === "string" ? args.expectedName : "";
+    const targetName = typeof args.targetName === "string" ? args.targetName : "";
+    const mode = args.mode === undefined ? "validate" : args.mode;
+    if (!expectedName || !targetName || targetName.length > 200 ||
+        (mode !== "validate" && mode !== "apply")) {
+      return toolError(id, "INVALID_ARGUMENT", "Repository rename arguments are invalid.");
+    }
+    const { before, after } = await this.accounts.renameOwnedRepository(
+      userId, repositoryId, expectedName, targetName, mode !== "apply",
+    );
+    return toolSuccess(id, {
+      status: mode === "apply" ? "completed" : "validated",
+      repositoryId,
+      before: { name: before.name },
+      after: { name: after.name },
+    });
   }
 
   private async listDevices(id: JsonRpcId, userId: string): Promise<Response> {
@@ -156,6 +177,7 @@ const CLOUD_REPOSITORY_TOOLS = new Set([
   "list_repositories",
   "get_repository",
   "create_repository",
+  "rename_repository",
   "list_devices",
   "revoke_device",
 ]);
