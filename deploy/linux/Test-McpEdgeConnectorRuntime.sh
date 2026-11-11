@@ -108,6 +108,8 @@ if grep -Fq '$excluded=$Excluded -contains $id' "$root/deploy/linux/Invoke-McpAc
   exit 1
 fi
 grep -Fq -- '--oracle-drain' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq "Join-Path \$runRoot 'retention-result.json'" "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
+grep -Fq 'removedReleases=' "$root/deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"
 grep -Fq 'deploy/common/prune-mcp-v3-local.mjs' "$root/deploy/linux/Update-McpAccessStack.sh"
 grep -Fq 'deploy/common/prune-mcp-v3-local.mjs' "$root/deploy/linux/Install-McpAccessStack.sh"
 grep -Fq 'EnvironmentFile=%h/edge-connector.env' "$unit"

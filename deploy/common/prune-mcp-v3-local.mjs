@@ -175,10 +175,12 @@ export async function pruneLocalReleases({
 export async function drainLocalReleases(options, maxBatches = 20) {
   if (!Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > 20) abort();
   let removedCount = 0;
+  const removedReleases = options.distribution === "oracle" ? [] : null;
   for (let index = 0; index < maxBatches; index++) {
     const preview = await pruneLocalReleases({...options,dryRun:true});
     if (preview.names.length === 0) {
-      return {status:"completed",removedCount,batches:index};
+      const outcome = {status:"completed",removedCount,batches:index};
+      return removedReleases === null ? outcome : {...outcome,removedReleases};
     }
     const result = await pruneLocalReleases({...options,dryRun:false,
       expectedPlanSha256:preview.planSha256});
@@ -186,6 +188,7 @@ export async function drainLocalReleases(options, maxBatches = 20) {
         result.planSha256 !== preview.planSha256 ||
         result.names.length !== preview.names.length) abort();
     removedCount += result.names.length;
+    if (removedReleases !== null) removedReleases.push(...result.names);
   }
   throw new Error("LOCAL_RETENTION_BATCH_LIMIT");
 }
