@@ -17,6 +17,7 @@ describe("Central Memory Edge repository authorization",()=>{
     const acl=(id:string,repositoryId:string)=>accounts.getRepositoryForUser(id,repositoryId);
     expect(await authorizeCentralMemory("memory_context",args(repo.id),user.id,acl)).toBeNull();
     expect(await authorizeCentralMemory("memory_update",args(repo.id),user.id,acl)).toBeNull();
+    expect(await authorizeCentralMemory("memory_recovery_export",args(repo.id),user.id,acl)).toBeNull();
     expect(await authorizeCentralMemory("memory_context",args(repo.id),undefined,acl))
       .toBe("IDENTITY_REQUIRED");
     expect(await authorizeCentralMemory("memory_update",args(repo.id),
@@ -47,5 +48,10 @@ describe("Central Memory Edge repository authorization",()=>{
       "usr_22222222-2222-4222-8222-222222222222",allowed)).toBeNull();
     expect(await authorizeCentralMemory("memory_update",args("repo_example"),
       "usr_22222222-2222-4222-8222-222222222222",allowed)).toBe("PERMISSION_DENIED");
+    expect(await authorizeCentralMemory("memory_recovery_export",args("repo_example"),
+      "usr_22222222-2222-4222-8222-222222222222",allowed)).toBe("PERMISSION_DENIED");
+    const editor=async()=>({role:"editor" as const});
+    expect(await authorizeCentralMemory("memory_recovery_export",args("repo_example"),
+      "usr_22222222-2222-4222-8222-222222222222",editor)).toBe("PERMISSION_DENIED");
   });
 });

@@ -46,6 +46,14 @@ describe("public central-memory tools",()=>{
     const list=await client.listTools();
     expect(list.tools.map(tool=>tool.name)).toContain("memory_context");
     expect(list.tools.map(tool=>tool.name)).toContain("memory_update");
+    expect(list.tools.map(tool=>tool.name)).toContain("memory_recovery_export");
+    const recovery=await client.callTool({name:"memory_recovery_export",arguments:{
+      workspaceId:"mcp-access-stack",repositoryId:repo,kind:"events",
+    }});
+    expect(recovery.isError).toBe(true);
+    expect(recovery.content).toEqual(expect.arrayContaining([expect.objectContaining({
+      text:"MEMORY_RECOVERY_EDGE_ONLY",
+    })]));
     const created=await client.callTool({name:"memory_update",arguments:updateArgs});
     if(created.isError) throw new Error(JSON.stringify(created));
     expect(created.structuredContent).toMatchObject({record:{revision:1,kind:"decision"},replayed:false});

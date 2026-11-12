@@ -1,5 +1,5 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
 class MemoryStorage implements CloudAuditStorage {
@@ -41,6 +41,21 @@ const record=(changes:Partial<RecoveryRecord>={}):RecoveryRecord=>({
 });
 
 describe("Cloudflare off-host central memory recovery",()=>{
+  it("exports hash-chained events without using Oracle after its loss",async()=>{
+    const storage=new MemoryStorage(),writer=new CentralMemoryRecovery(storage);
+    await writer.append(user,repo,"memory:update:0001",0,record());
+    const output=await exportCentralMemoryRecovery(storage,user,repo,{
+      kind:"events",offset:0,limit:1,
+    });
+    expect(output).toMatchObject({kind:"events",repositoryId:repo,totalEvents:1,
+      truncated:false,events:[{record:{title:"Single Oracle authority"}}]});
+    expect(output.archiveDigest).toMatch(/^[a-f0-9]{64}$/u);
+    await expect(exportCentralMemoryRecovery(storage,another,repo,{kind:"events"}))
+      .rejects.toThrow("MEMORY_RECOVERY_ARCHIVE_INCOMPLETE");
+    await expect(exportCentralMemoryRecovery(storage,user,repo,{kind:"events",limit:6}))
+      .rejects.toThrow("MEMORY_RECOVERY_INPUT_INVALID");
+  });
+
   it("mirrors trusted native tool checkpoints without repeating a completed release",async()=>{
     const storage=new MemoryStorage();
     const key="io.github.ifael/mcp-memory-checkpoint";

@@ -1,4 +1,5 @@
 import type { CloudAuditStorage } from "./cloud-audit-store.js";
+import { CentralMemoryLegacyArchive } from "./central-memory-legacy-archive.js";
 
 const USER_ID=/^usr_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const REPO_ID=/^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -107,6 +108,44 @@ export async function markNativeCheckpointDeferred(response:Response):Promise<Re
   headers.set("content-type","application/json; charset=utf-8");
   headers.set("cache-control","no-store");
   return new Response(JSON.stringify(body),{status:response.status,headers});
+}
+
+
+/** A read-only recovery export. Owner ACL is enforced by the Edge caller. */
+export async function exportCentralMemoryRecovery(
+  storage:RecoveryStorage,userId:string,repositoryId:string,
+  input:{kind:"legacy"|"events";surface?:"oracle"|"windows";filename?:string;
+    offset?:number;maxChars?:number;limit?:number},
+):Promise<Record<string,unknown>>{
+  if(!USER_ID.test(userId)||!REPO_ID.test(repositoryId)) bad("INPUT_INVALID");
+  if(input.kind==="legacy"){
+    if(!["oracle","windows"].includes(input.surface??"")||
+      typeof input.filename!=="string"||
+      !["CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
+        "NEXT_STEPS.md","PROJECT_CONTEXT.md"].includes(input.filename))bad("INPUT_INVALID");
+    const offset=input.offset??0,maxChars=input.maxChars??8000;
+    if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(maxChars)||
+      maxChars<1||maxChars>12000)bad("INPUT_INVALID");
+    const archive=await new CentralMemoryLegacyArchive(storage).exportVerified(userId,repositoryId);
+    const source=archive.documents.find(d=>d.surface===input.surface&&d.filename===input.filename);
+    if(!source)bad("LEGACY_MISSING");
+    const start=Math.min(source.content.length,offset),end=Math.min(start+maxChars,source.content.length);
+    return {kind:"legacy",repositoryId,importHash:archive.importHash,
+      totalBytes:archive.totalBytes,surface:source.surface,filename:source.filename,
+      contentSha256:source.contentSha256,offset:start,totalChars:source.content.length,
+      text:source.content.slice(start,end),truncated:end<source.content.length};
+  }
+  if(input.kind==="events"){
+    const offset=input.offset??0,limit=input.limit??5;
+    if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||
+      limit<1||limit>5)bad("INPUT_INVALID");
+    const archive=await new CentralMemoryRecovery(storage).exportVerified(userId,repositoryId);
+    return {kind:"events",repositoryId,archiveDigest:archive.archiveDigest,
+      totalEvents:archive.events.length,offset,
+      events:archive.events.slice(offset,offset+limit),
+      truncated:offset+limit<archive.events.length};
+  }
+  bad("INPUT_INVALID");
 }
 
 export interface RecoveryRecord {

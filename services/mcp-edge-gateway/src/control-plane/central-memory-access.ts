@@ -11,7 +11,7 @@ type MembershipLookup = (userId: string, repositoryId: string) =>
 
 /** The Edge validates repository membership before any memory call reaches Oracle. */
 export async function authorizeCentralMemory(
-  action: "memory_context" | "memory_update",
+  action: "memory_context" | "memory_update" | "memory_recovery_export",
   args: Record<string, unknown>,
   userId: string | undefined,
   membership: MembershipLookup,
@@ -22,6 +22,7 @@ export async function authorizeCentralMemory(
   if (!repositoryId) return "REPOSITORY_NOT_FOUND";
   const access = await membership(userId,repositoryId);
   if (!access) return "REPOSITORY_NOT_FOUND";
+  if (action === "memory_recovery_export" && access.role !== "owner") return "PERMISSION_DENIED";
   if (action === "memory_update" && access.role === "viewer") return "PERMISSION_DENIED";
   // The historical .codex import is only for the MCP V3 repo. Do not let an
   // unrelated project bind itself as the system-memory source of truth.

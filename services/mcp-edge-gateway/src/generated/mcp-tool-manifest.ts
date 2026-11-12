@@ -28153,6 +28153,160 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "OWNER ONLY: read the off-host recovery archive from the existing Edge Durable Object, even when Oracle is offline. Export historical source chunks or hash-chained revision events for independent disaster recovery. These are NOT live memory and never authorize restoring or deleting data.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "enum": [
+            "CURRENT_TASK.md",
+            "DECISIONS.md",
+            "HANDOFF.md",
+            "KNOWN_ISSUES.md",
+            "NEXT_STEPS.md",
+            "PROJECT_CONTEXT.md"
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "legacy",
+            "events"
+          ],
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxChars": {
+          "maximum": 12000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repositoryId": {
+          "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "surface": {
+          "enum": [
+            "oracle",
+            "windows"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "repositoryId",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "name": "memory_recovery_export",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "archiveDigest": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string"
+        },
+        "events": {
+          "items": {},
+          "type": "array"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "importHash": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "legacy",
+            "events"
+          ],
+          "type": "string"
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "repositoryId": {
+          "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "surface": {
+          "enum": [
+            "oracle",
+            "windows"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "totalBytes": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "totalChars": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "totalEvents": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "repositoryId"
+      ],
+      "type": "object"
+    },
+    "title": "Export verified MCP V3 recovery copy"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "verify relevant claims against current Git, CI and runtime evidence; use memory_update with CAS after a user decision or meaningful checkpoint.",
       "securitySchemes": [
         {
@@ -28770,15 +28924,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "4b9ab8751ed8f169df49dacec5309f44fa40c5d79c9eb24357cd9e50b649b78b",
-  "serverVersion": "0.4.0-catalog.c4b9ab8751ed8.sfa0ad3a6b4d2",
-  "toolCount": 130,
-  "toolSetRevision": "fa0ad3a6b4d25652a10056a11d65af7c8b0ca6274a388857688e1ef0d10ae560"
+  "contractRevision": "eecc77d7e7d54bed661000c6386e4fbb70bd478dd289b6a733e9cdaec2aee45d",
+  "serverVersion": "0.4.0-catalog.ceecc77d7e7d5.s3ad895657bc2",
+  "toolCount": 131,
+  "toolSetRevision": "3ad895657bc2a0c890c4427e9f292886c515a59ef5e7cc40b592cbcb20137756"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c4b9ab8751ed8.sfa0ad3a6b4d2"
+  "version": "0.4.0-catalog.ceecc77d7e7d5.s3ad895657bc2"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

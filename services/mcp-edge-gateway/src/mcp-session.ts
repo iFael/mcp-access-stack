@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery } from "./control-plane/central-memory-recovery.js";
 import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
 import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
@@ -1420,6 +1420,44 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   ): Promise<Response | null> {
     const invocation = readMcpToolInvocation(body);
     if (!invocation) return null;
+
+    // Disaster recovery is deliberately read-only and served by Edge, not Oracle.
+    // The archive cannot be exported by repository editors or viewers.
+    if(invocation.name==="memory_recovery_export"){
+      const refusal=await authorizeCentralMemory(
+        "memory_recovery_export",invocation.arguments,principal.userId,
+        (userId,repositoryId)=>this.accountStore.getRepositoryForUser(userId,repositoryId),
+      );
+      if(refusal)return mcpToolError(body,refusal,"Recovery requires repository ownership.");
+      // authorizeCentralMemory established the user and nonblank repository.
+      const ownerId=principal.userId!;
+      const repositoryId=invocation.arguments.repositoryId as string;
+      const kind=invocation.arguments.kind;
+      if(kind!=="legacy"&&kind!=="events")return mcpToolError(body,"INVALID_ARGUMENT","Invalid archive kind.");
+      const args=invocation.arguments;
+      if((args.surface!==undefined&&args.surface!=="oracle"&&args.surface!=="windows")||
+        (args.filename!==undefined&&typeof args.filename!=="string")||
+        (args.offset!==undefined&&(!Number.isSafeInteger(args.offset)||Number(args.offset)<0))||
+        (args.maxChars!==undefined&&(!Number.isSafeInteger(args.maxChars)||Number(args.maxChars)<1))||
+        (args.limit!==undefined&&(!Number.isSafeInteger(args.limit)||Number(args.limit)<1))){
+        return mcpToolError(body,"INVALID_ARGUMENT","Invalid recovery parameters.");
+      }
+      try{
+        const result=await exportCentralMemoryRecovery(
+          this.ctx.storage,ownerId,repositoryId,{
+            kind,
+            ...(typeof args.surface==="string"?{surface:args.surface as "oracle"|"windows"}:{}),
+            ...(typeof args.filename==="string"?{filename:args.filename}:{}),
+            ...(typeof args.offset==="number"?{offset:args.offset}:{}),
+            ...(typeof args.maxChars==="number"?{maxChars:args.maxChars}:{}),
+            ...(typeof args.limit==="number"?{limit:args.limit}:{}),
+          },
+        );
+        return mcpToolSuccess(body,result);
+      }catch{
+        return mcpToolError(body,"MEMORY_RECOVERY_UNAVAILABLE","Verified off-host archive unavailable.");
+      }
+    }
 
     // Central memory has one Oracle authority and the Edge owns repository ACLs.
     if (invocation.name === "memory_context" || invocation.name === "memory_update") {
