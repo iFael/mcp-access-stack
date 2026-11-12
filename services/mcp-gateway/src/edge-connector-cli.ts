@@ -11,6 +11,7 @@ import {
   type PolicyFile,
 } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
+import { CentralMemoryStore } from "./memory/central-memory.js";
 import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
   const connectorInstanceId = randomUUID();
   const processStartedAt = new Date().toISOString();
   const runtime = loadConnectorRuntimeConfig(process.env);
+  const memoryStore = CentralMemoryStore.open(path.join(runtime.runtimeRoot,"central-memory","memory.sqlite"),runtime.releaseRoot);
   const connectorToken = await readConnectorToken(runtime.tokenFile);
   const gatewayConfig = loadGatewayConfig({
     ...process.env,
@@ -147,6 +149,7 @@ async function main(): Promise<void> {
     workspaceExecutor,
     sourceControlExecutor,
     companionRepositoryBinder: repositories,
+    memoryStore,
     policyAdmin,
     ...(browserPool === undefined
       ? {}
@@ -243,6 +246,7 @@ async function main(): Promise<void> {
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
     await browserPool?.close();
+    memoryStore.close();
     writeLog({ event: "edge_connector_process_stopped" });
   }
 }

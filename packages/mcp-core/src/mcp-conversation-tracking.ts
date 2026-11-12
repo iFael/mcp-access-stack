@@ -11,6 +11,15 @@ export interface McpConversationCall {
 }
 
 export type OnConversationCall = (call: McpConversationCall) => void;
+/** Trusted, typed native tool response. Never forward unfiltered tool arguments. */
+export interface McpCompletedToolCall {
+  tool:string;
+  input:unknown;
+  structured:unknown;
+}
+export type OnCompletedToolCall = (call:McpCompletedToolCall) =>
+  Promise<Record<string,unknown>|null>|Record<string,unknown>|null;
+export const MCP_MEMORY_CHECKPOINT_META_KEY="io.github.ifael/mcp-memory-checkpoint";
 
 // Edge-to-companion operations never come from a conversation.
 const INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_";
@@ -23,7 +32,9 @@ const SESSION_KEYS = ["openai/session", "sessionId"] as const;
  * ended) goes back to that conversation and no other. Install before any tool
  * is registered.
  */
-export function installConversationTracking(server: McpServer, onCall: OnConversationCall): void {
+export function installConversationTracking(
+  server: McpServer, onCall?: OnConversationCall, onCompleted?: OnCompletedToolCall,
+): void {
   const original = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
   (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool =
     (name: unknown, config: unknown, handler: unknown) => {
@@ -35,12 +46,30 @@ export function installConversationTracking(server: McpServer, onCall: OnConvers
         const extra = asRecord(args.length > 1 ? args[1] : args[0]);
         const session = conversationSession(extra._meta);
         const result = await run(...args);
-        if (session !== undefined) {
-          const input = args.length > 1 ? args[0] : undefined;
+        const input = args.length > 1 ? args[0] : undefined;
+        if (session !== undefined && onCall !== undefined) {
           try {
             onCall({ session, tool: name, ids: namedIds(input, result.structuredContent) });
           } catch {
             // The call still answers; only its conversation is not remembered.
+          }
+        }
+        if (onCompleted !== undefined && result.isError !== true) {
+          try {
+            const checkpoint = await onCompleted({
+              tool:name,input,structured:result.structuredContent,
+            });
+            if(checkpoint !== null) {
+              return {...result,_meta:{
+                ...asRecord(result._meta),[MCP_MEMORY_CHECKPOINT_META_KEY]:checkpoint,
+              }};
+            }
+          } catch {
+            // The native operation has already finished. Do not imply it failed
+            // and cause an unsafe retry of a non-idempotent operation.
+            return {...result,_meta:{
+              ...asRecord(result._meta),"io.github.ifael/mcp-memory-warning":"checkpoint_deferred",
+            }};
           }
         }
         return result;

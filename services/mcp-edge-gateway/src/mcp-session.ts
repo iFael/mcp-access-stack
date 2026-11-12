@@ -43,6 +43,10 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
+import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
+import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
+import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
+import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
 import { ProgressPlans } from "./control-plane/progress-card.js";
@@ -1317,13 +1321,49 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       principal,
       unavailableResponse,
     );
-    if (companionResponse) return companionResponse;
+    if (companionResponse) return this.appendCentralMemoryOnWorkspaceContext(
+      request,body,principal,companionResponse,
+    );
     const primaryResponse = await this.relayAuthenticatedRequest(
       request,
       JSON.stringify(body),
       principal,
       unavailableResponse,
     );
+    if (principal.userId && invocation?.name === "memory_update") {
+      try {
+        if(invocation.arguments.action==="activate_legacy"){
+          // Edge preflight already verified its durable recovery copy.
+        }else if(invocation.arguments.action==="import_legacy"){
+          await mirrorLegacyImportResponse(
+            this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+          );
+        }else{
+          await mirrorMemoryUpdateResponse(
+            this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+          );
+        }
+      } catch {
+        // The Oracle commit may already be durable. Never report a successful
+        // backup or repeat with a new ID; reissue the SAME operationId.
+        return mcpToolError(body, "MEMORY_RECOVERY_PENDING",
+          "Oracle may have committed; retry the same operationId to reconcile the off-host recovery copy.");
+      }
+    }
+    if(principal.userId && invocation &&
+      (invocation.name==="mcp_update" || invocation.name==="github_merge_pull_request")){
+      try{
+        await mirrorNativeCheckpointResponse(
+          this.ctx.storage,principal.userId,invocation.name,primaryResponse,
+          async repositoryId=>{
+            const access=await this.accountStore.getRepositoryForUser(principal.userId!,repositoryId);
+            return !!access && access.role!=="viewer";
+          },
+        );
+      }catch{
+        return markNativeCheckpointDeferred(primaryResponse);
+      }
+    }
     if (principal.userId && invocation?.name.startsWith("browser_")) {
       await this.recordPrimaryBrowserAffinity(
         principal.userId,
@@ -1339,7 +1379,40 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         });
       }
     }
-    return primaryResponse;
+    return this.appendCentralMemoryOnWorkspaceContext(request,body,principal,primaryResponse);
+  }
+
+  private async appendCentralMemoryOnWorkspaceContext(
+    request:Request,body:unknown,principal:AuthenticatedEdgePrincipal,response:Response,
+  ):Promise<Response>{
+    const invocation=readMcpToolInvocation(body);
+    if(!principal.userId||invocation?.name!=="get_workspace_context"||
+      typeof invocation.arguments.workspaceId!=="string"||!response.ok)return response;
+    try{
+      const repositories=await this.accountStore.listRepositories(principal.userId);
+      const repositoryId=await findMemoryRepositoryId(
+        invocation.arguments.workspaceId,repositories,
+        id=>this.accountStore.listMaterializations(principal.userId!,id),
+      );
+      if(!repositoryId)return response;
+      const memoryBody=JSON.stringify({
+        jsonrpc:"2.0",id:"edge-memory-context-"+crypto.randomUUID(),
+        method:"tools/call",params:{name:"memory_context",arguments:{
+          workspaceId:"mcp-access-stack",repositoryId,limit:8,
+        }},
+      });
+      const memoryResponse=await this.relayAuthenticatedRequest(
+        request,memoryBody,principal,
+      );
+      const data=await readMcpStructuredContent(memoryResponse);
+      if(data?.legacyStatus==="imported")return response;
+      const note=memoryContextMessage(repositoryId,data?.records);
+      return note?appendMemoryContextText(response,note):response;
+    }catch{
+      // Existing workspace access keeps working during memory unavailability.
+      // The unavailable memory is not an empty or verified project context.
+      return response;
+    }
   }
 
   private async tryRelayCompanionMcpRequest(
@@ -1350,6 +1423,70 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   ): Promise<Response | null> {
     const invocation = readMcpToolInvocation(body);
     if (!invocation) return null;
+
+    // Disaster recovery is deliberately read-only and served by Edge, not Oracle.
+    // The archive cannot be exported by repository editors or viewers.
+    if(invocation.name==="memory_recovery_export"){
+      const refusal=await authorizeCentralMemory(
+        "memory_recovery_export",invocation.arguments,principal.userId,
+        (userId,repositoryId)=>this.accountStore.getRepositoryForUser(userId,repositoryId),
+      );
+      if(refusal)return mcpToolError(body,refusal,"Recovery requires repository ownership.");
+      // authorizeCentralMemory established the user and nonblank repository.
+      const ownerId=principal.userId!;
+      const repositoryId=invocation.arguments.repositoryId as string;
+      const kind=invocation.arguments.kind;
+      if(kind!=="legacy"&&kind!=="events")return mcpToolError(body,"INVALID_ARGUMENT","Invalid archive kind.");
+      const args=invocation.arguments;
+      if((args.surface!==undefined&&args.surface!=="oracle"&&args.surface!=="windows")||
+        (args.filename!==undefined&&typeof args.filename!=="string")||
+        (args.offset!==undefined&&(!Number.isSafeInteger(args.offset)||Number(args.offset)<0))||
+        (args.maxChars!==undefined&&(!Number.isSafeInteger(args.maxChars)||Number(args.maxChars)<1))||
+        (args.limit!==undefined&&(!Number.isSafeInteger(args.limit)||Number(args.limit)<1))){
+        return mcpToolError(body,"INVALID_ARGUMENT","Invalid recovery parameters.");
+      }
+      try{
+        const result=await exportCentralMemoryRecovery(
+          this.ctx.storage,ownerId,repositoryId,{
+            kind,
+            ...(typeof args.surface==="string"?{surface:args.surface as "oracle"|"windows"}:{}),
+            ...(typeof args.filename==="string"?{filename:args.filename}:{}),
+            ...(typeof args.offset==="number"?{offset:args.offset}:{}),
+            ...(typeof args.maxChars==="number"?{maxChars:args.maxChars}:{}),
+            ...(typeof args.limit==="number"?{limit:args.limit}:{}),
+          },
+        );
+        return mcpToolSuccess(body,result);
+      }catch{
+        return mcpToolError(body,"MEMORY_RECOVERY_UNAVAILABLE","Verified off-host archive unavailable.");
+      }
+    }
+
+    // Central memory has one Oracle authority and the Edge owns repository ACLs.
+    if (invocation.name === "memory_context" || invocation.name === "memory_update") {
+      const refusal = await authorizeCentralMemory(
+        invocation.name,
+        invocation.arguments,
+        principal.userId,
+        (userId,repositoryId) => this.accountStore.getRepositoryForUser(userId,repositoryId),
+      );
+      if (refusal) return mcpToolError(body, refusal, "Central memory access denied.");
+      if(invocation.name==="memory_update"&&invocation.arguments.action==="activate_legacy"){
+        try{
+          const userId=principal.userId!;
+          const repositoryId=invocation.arguments.repositoryId as string;
+          await verifyLegacyCutoverRecovery(
+            this.ctx.storage,userId,repositoryId,
+            invocation.arguments.importHash as string,
+            invocation.arguments.archiveDigest as string,
+          );
+        }catch{
+          return mcpToolError(body,"MEMORY_CUTOVER_PRECHECK_FAILED",
+            "Verified off-host archive or recovery ledger is incomplete.");
+        }
+      }
+      return null; // Never select a companion for memory.
+    }
 
     if (COMPANION_LOCAL_REPOSITORY_TOOLS.has(invocation.name) && !principal.userId) {
       return mcpToolError(body, "IDENTITY_REQUIRED", "Individual MCP V3 identity is required for local repository operations.");

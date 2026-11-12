@@ -302,7 +302,11 @@ export function describeReleaseNextStep(
 }
 
 export const MCP_AGENT_INSTRUCTIONS =
-  "MCP Access Stack. Before a multi-step job (publishing or installing a release, operating the execution node, " +
+  "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context " +
+  "for relevant operational context when the central-memory authority is available. Record user-approved decisions " +
+  "and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of " +
+  "Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. " +
+  "Before a multi-step job (publishing or installing a release, operating the execution node, " +
   "Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic " +
   "and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell " +
   "to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and " +

@@ -10,11 +10,14 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(128);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(128);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(131);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(131);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
         ...MCP_REPOSITORY_TOOL_NAMES,
+        "memory_context",
+        "memory_update",
+        "memory_recovery_export",
         "oracle_list_instances",
         "oracle_disk_audit",
         "oracle_disk_audit_provision",
