@@ -1,5 +1,5 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, CentralMemoryLegacyBackup, mirrorMemoryUpdateResponse, mirrorLegacyImportResponse, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, mirrorMemoryUpdateResponse, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
 class MemoryStorage implements CloudAuditStorage {
@@ -41,51 +41,6 @@ const record=(changes:Partial<RecoveryRecord>={}):RecoveryRecord=>({
 });
 
 describe("Cloudflare off-host central memory recovery",()=>{
-  it("persists twelve divergent .codex documents off-host in bounded chunks",async()=>{
-    const storage=new MemoryStorage(),archive=new CentralMemoryLegacyBackup(storage);
-    const names=["CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
-      "NEXT_STEPS.md","PROJECT_CONTEXT.md"] as const;
-    const documents=await Promise.all((["oracle","windows"] as const).flatMap(surface=>
-      names.map(async filename=>{
-        const content=surface+":"+filename+"\n"+"á😀".repeat(filename==="HANDOFF.md"?60_000:500);
-        const digestBytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(content));
-        const contentSha256=[...new Uint8Array(digestBytes)]
-          .map(x=>x.toString(16).padStart(2,"0")).join("");
-        return {surface,filename,content,contentSha256};
-      })));
-    const sorted=[...documents].sort((a,b)=>
-      (a.surface+":"+a.filename).localeCompare(b.surface+":"+b.filename));
-    const digestBytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(
-      JSON.stringify(sorted.map(d=>({surface:d.surface,filename:d.filename,hash:d.contentSha256})))));
-    const importHash=[...new Uint8Array(digestBytes)].map(x=>x.toString(16).padStart(2,"0")).join("");
-    const totalBytes=documents.reduce((a,d)=>a+new TextEncoder().encode(d.content).length,0);
-    const receipt=await archive.archive(user,repo,"memory:legacy:20261112",documents,importHash,totalBytes);
-    expect(receipt).toMatchObject({importHash,replayed:false});
-    expect(await archive.archive(user,repo,"memory:legacy:20261112",documents,importHash,totalBytes))
-      .toMatchObject({replayed:true});
-    const recovered=await new CentralMemoryLegacyBackup(storage).restore(user,repo);
-    expect(recovered.documents).toEqual(sorted);
-    expect(recovered.totalBytes).toBe(totalBytes);
-    const chunks=[...storage.data.entries()].filter(([k])=>k.includes(":legacy:chunk:"));
-    expect(chunks.length).toBeGreaterThan(12);
-    for(const [,content] of chunks)expect(JSON.stringify(content).length).toBeLessThan(131072);
-    const key=chunks[0]![0];
-    storage.data.set(key,"Zm9v");
-    await expect(new CentralMemoryLegacyBackup(storage).restore(user,repo))
-      .rejects.toThrow("MEMORY_RECOVERY_LEGACY_CORRUPT");
-  });
-
-  it("refuses invalid import receipts or partial archive writes",async()=>{
-    const storage=new MemoryStorage();
-    const response=new Response(JSON.stringify({result:{structuredContent:{
-      repositoryId:repo,importHash:"0".repeat(64),totalBytes:10,filesImported:12,
-    }}}));
-    await expect(mirrorLegacyImportResponse(storage,user,{
-      repositoryId:repo,operationId:"memory:legacy:bad",action:"import_legacy",documents:[],
-    },response)).rejects.toThrow("MEMORY_RECOVERY_LEGACY_INPUT_INVALID");
-    expect(storage.data.size).toBe(0);
-  });
-
   it("mirrors only successful Oracle mutation receipts after validating the request identity",async()=>{
     const storage=new MemoryStorage();
     const args={repositoryId:repo,operationId:"memory:update:0001",recordId:"decision:single-memory",

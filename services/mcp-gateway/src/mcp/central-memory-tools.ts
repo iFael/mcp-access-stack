@@ -21,10 +21,28 @@ const contextInput = z.object({
   query:z.string().max(200).optional(),
   limit:z.number().int().min(1).max(12).optional(),
   historyRecordId:recordId.optional(),
+  legacySource:z.object({
+    surface:z.enum(["oracle","windows"]),
+    filename:z.enum(LEGACY_CODEX_FILES),
+    offset:z.number().int().nonnegative().default(0),
+    maxChars:z.number().int().min(1).max(12_000).default(8_000),
+  }).strict().optional(),
 }).strict();
 const contextOutput = z.object({
   repositoryId,totalActive:z.number().int().nonnegative(),
   records:z.array(recordSchema),history:z.array(recordSchema).optional(),
+  archiveMatches:z.array(z.object({
+    surface:z.enum(["oracle","windows"]),filename:z.enum(LEGACY_CODEX_FILES),
+    contentSha256:z.string().regex(/^[a-f0-9]{64}$/u),excerpt:z.string().max(600),
+  }).strict()),
+  legacyExcerpt:z.object({
+    surface:z.enum(["oracle","windows"]),
+    filename:z.enum(LEGACY_CODEX_FILES),
+    offset:z.number().int().nonnegative(),
+    text:z.string(),totalChars:z.number().int().nonnegative(),
+    sourceSha256:z.string().regex(/^[0-9a-f]{64}$/u),
+    truncated:z.boolean(),
+  }).strict().optional(),
 }).strict();
 // MCP SDK tool registration requires an object-shaped schema. The action-
  // specific constraints are enforced below before any state mutation.
@@ -83,6 +101,18 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
           ...(parsed.historyRecordId===undefined?{}:{
             history:options.store.history(owner,parsed.repositoryId,parsed.historyRecordId).slice(-10),
           }),
+          ...(parsed.legacySource===undefined?{}:(()=>{
+            const source=options.store!.readLegacySource(
+              owner,parsed.repositoryId,parsed.legacySource.surface,parsed.legacySource.filename);
+            if(!source)throw new Error("MEMORY_LEGACY_NOT_FOUND");
+            const offset=Math.min(parsed.legacySource.offset,source.content.length);
+            const end=Math.min(source.content.length,offset+parsed.legacySource.maxChars);
+            return {legacyExcerpt:{
+              surface:parsed.legacySource.surface,filename:parsed.legacySource.filename,
+              offset,text:source.content.slice(offset,end),totalChars:source.content.length,
+              sourceSha256:source.contentSha256,truncated:end<source.content.length,
+            }};
+          })()),
         });
       });
       return {content:[{type:"text" as const,text: "Central memory: "+result.records.length+" records; "+result.totalActive+" active."}],structuredContent:result};

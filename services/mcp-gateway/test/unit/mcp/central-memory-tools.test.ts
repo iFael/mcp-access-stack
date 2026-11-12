@@ -84,6 +84,28 @@ describe("public central-memory tools",()=>{
       name:"memory_context",arguments:{workspaceId:"mcp-access-stack",repositoryId:repo},
     });
     expect(context.structuredContent).toMatchObject({totalActive:0,records:[]});
+    const found=await client.callTool({name:"memory_context",arguments:{
+      workspaceId:"mcp-access-stack",repositoryId:repo,query:"legacy source preserved",
+    }});
+    const matches=(found.structuredContent as {archiveMatches:Array<{surface:string;filename:string}>})
+      .archiveMatches;
+    expect(matches).toHaveLength(12);
+    expect(matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({surface:"oracle",filename:"DECISIONS.md"}),
+      expect.objectContaining({surface:"windows",filename:"DECISIONS.md"}),
+    ]));
+    const excerpt=await client.callTool({
+      name:"memory_context",arguments:{workspaceId:"mcp-access-stack",repositoryId:repo,
+        legacySource:{surface:"oracle",filename:"DECISIONS.md",offset:7,maxChars:15}},
+    });
+    expect(excerpt.isError).toBeFalsy();
+    expect(excerpt.structuredContent).toMatchObject({legacyExcerpt:{
+      offset:7,totalChars:docs.find(x=>x.surface==="oracle"&&x.filename==="DECISIONS.md")!.content.length,
+      truncated:true,sourceSha256:docs.find(x=>x.surface==="oracle"&&x.filename==="DECISIONS.md")!.contentSha256,
+    }});
+    const expected=docs.find(x=>x.surface==="oracle"&&x.filename==="DECISIONS.md")!.content;
+    expect((excerpt.structuredContent as {legacyExcerpt:{text:string}}).legacyExcerpt.text)
+      .toBe(expected.slice(7,22));
   });
   it("fails closed without trusted identity or without Oracle memory",async()=>{
     for(const [user,available] of [[undefined,true],["user:alice",false]] as const){

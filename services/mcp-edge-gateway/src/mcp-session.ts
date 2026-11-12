@@ -43,7 +43,9 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorLegacyImportResponse, mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
+import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
+import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
@@ -1319,7 +1321,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       principal,
       unavailableResponse,
     );
-    if (companionResponse) return companionResponse;
+    if (companionResponse) return this.appendCentralMemoryOnWorkspaceContext(
+      request,body,principal,companionResponse,
+    );
     const primaryResponse = await this.relayAuthenticatedRequest(
       request,
       JSON.stringify(body),
@@ -1359,7 +1363,39 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         });
       }
     }
-    return primaryResponse;
+    return this.appendCentralMemoryOnWorkspaceContext(request,body,principal,primaryResponse);
+  }
+
+  private async appendCentralMemoryOnWorkspaceContext(
+    request:Request,body:unknown,principal:AuthenticatedEdgePrincipal,response:Response,
+  ):Promise<Response>{
+    const invocation=readMcpToolInvocation(body);
+    if(!principal.userId||invocation?.name!=="get_workspace_context"||
+      typeof invocation.arguments.workspaceId!=="string"||!response.ok)return response;
+    try{
+      const repositories=await this.accountStore.listRepositories(principal.userId);
+      const repositoryId=await findMemoryRepositoryId(
+        invocation.arguments.workspaceId,repositories,
+        id=>this.accountStore.listMaterializations(principal.userId!,id),
+      );
+      if(!repositoryId)return response;
+      const memoryBody=JSON.stringify({
+        jsonrpc:"2.0",id:"edge-memory-context-"+crypto.randomUUID(),
+        method:"tools/call",params:{name:"memory_context",arguments:{
+          workspaceId:"mcp-access-stack",repositoryId,limit:8,
+        }},
+      });
+      const memoryResponse=await this.relayAuthenticatedRequest(
+        request,memoryBody,principal,
+      );
+      const data=await readMcpStructuredContent(memoryResponse);
+      const note=memoryContextMessage(repositoryId,data?.records);
+      return note?appendMemoryContextText(response,note):response;
+    }catch{
+      // Existing workspace access keeps working during memory unavailability.
+      // The unavailable memory is not an empty or verified project context.
+      return response;
+    }
   }
 
   private async tryRelayCompanionMcpRequest(

@@ -49,6 +49,7 @@ export interface MemoryMutation {
 }
 export interface MemoryContext {
   repositoryId: string; records: MemoryRecord[]; totalActive: number;
+  archiveMatches: Array<{surface:"oracle"|"windows";filename:string;contentSha256:string;excerpt:string}>;
 }
 
 const REPO_ID = /^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -230,7 +231,27 @@ export class CentralMemoryStore {
     const total = this.db.prepare(
       "SELECT COUNT(*) AS n FROM records WHERE owner_scope=? AND repository_id=? AND status='active'",
     ).get(ownerScope,repositoryId) as {n:number};
-    return {repositoryId,records:records.map(asRecord),totalActive:total.n};
+    const archiveMatches:MemoryContext["archiveMatches"]=[];
+    if(query){
+      const candidates=this.db.prepare(
+        "SELECT surface,filename,content,content_sha256 FROM legacy_sources "+
+        "WHERE owner_scope=? AND repository_id=? AND content LIKE ? ESCAPE '\\' "+
+        "ORDER BY CASE surface WHEN 'oracle' THEN 0 ELSE 1 END,filename LIMIT 12",
+      ).all(ownerScope,repositoryId,match) as Array<{
+        surface:"oracle"|"windows";filename:string;content:string;content_sha256:string
+      }>;
+      for(const row of candidates){
+        if(sha(row.content)!==row.content_sha256)invalid("IMPORT_CORRUPT");
+        const index=row.content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+        if(index<0)continue;
+        const start=Math.max(0,index-200),end=Math.min(row.content.length,index+query.length+300);
+        archiveMatches.push({
+          surface:row.surface,filename:row.filename,contentSha256:row.content_sha256,
+          excerpt:(start>0?"…":"")+row.content.slice(start,end)+(end<row.content.length?"…":""),
+        });
+      }
+    }
+    return {repositoryId,records:records.map(asRecord),totalActive:total.n,archiveMatches};
   }
 
   update(ownerScope: string, input: MemoryMutation): {record:MemoryRecord;replayed:boolean} {

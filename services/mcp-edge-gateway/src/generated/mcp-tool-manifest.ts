@@ -28182,6 +28182,46 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$",
           "type": "string"
         },
+        "legacySource": {
+          "additionalProperties": false,
+          "properties": {
+            "filename": {
+              "enum": [
+                "CURRENT_TASK.md",
+                "DECISIONS.md",
+                "HANDOFF.md",
+                "KNOWN_ISSUES.md",
+                "NEXT_STEPS.md",
+                "PROJECT_CONTEXT.md"
+              ],
+              "type": "string"
+            },
+            "maxChars": {
+              "default": 8000,
+              "maximum": 12000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "surface": {
+              "enum": [
+                "oracle",
+                "windows"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "surface",
+            "filename"
+          ],
+          "type": "object"
+        },
         "limit": {
           "maximum": 12,
           "minimum": 1,
@@ -28211,6 +28251,47 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "archiveMatches": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "contentSha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "excerpt": {
+                "maxLength": 600,
+                "type": "string"
+              },
+              "filename": {
+                "enum": [
+                  "CURRENT_TASK.md",
+                  "DECISIONS.md",
+                  "HANDOFF.md",
+                  "KNOWN_ISSUES.md",
+                  "NEXT_STEPS.md",
+                  "PROJECT_CONTEXT.md"
+                ],
+                "type": "string"
+              },
+              "surface": {
+                "enum": [
+                  "oracle",
+                  "windows"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "surface",
+              "filename",
+              "contentSha256",
+              "excerpt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "history": {
           "items": {
             "additionalProperties": false,
@@ -28285,6 +28366,59 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "type": "object"
           },
           "type": "array"
+        },
+        "legacyExcerpt": {
+          "additionalProperties": false,
+          "properties": {
+            "filename": {
+              "enum": [
+                "CURRENT_TASK.md",
+                "DECISIONS.md",
+                "HANDOFF.md",
+                "KNOWN_ISSUES.md",
+                "NEXT_STEPS.md",
+                "PROJECT_CONTEXT.md"
+              ],
+              "type": "string"
+            },
+            "offset": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceSha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "surface": {
+              "enum": [
+                "oracle",
+                "windows"
+              ],
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "totalChars": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "surface",
+            "filename",
+            "offset",
+            "text",
+            "totalChars",
+            "sourceSha256",
+            "truncated"
+          ],
+          "type": "object"
         },
         "records": {
           "items": {
@@ -28374,7 +28508,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "required": [
         "repositoryId",
         "totalActive",
-        "records"
+        "records",
+        "archiveMatches"
       ],
       "type": "object"
     },
@@ -28398,7 +28533,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Record a user-approved decision, observed task state, or corrected knowledge on the single Oracle authority. Requires idempotent operationId and exact expectedRevision; never claim an agent observation was independently verified. Does not authorize Git, deploy, security or infrastructure actions. Next: memory_context to verify the updated revision before proceeding.",
+    "description": "Create, revise or resolve a memory record with exact CAS, or import all 12 legacy .codex source files losslessly in one atomic operation for the final cutover. Import does not activate legacy history as current truth. Never claim an agent observation is independently verified; this tool does not authorize Git, deploy or infrastructure actions. Next: memory_context to verify the updated revision before proceeding.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -28410,7 +28545,8 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "enum": [
             "create",
             "revise",
-            "resolve"
+            "resolve",
+            "import_legacy"
           ],
           "type": "string"
         },
@@ -28425,6 +28561,50 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 24000,
           "minLength": 1,
           "type": "string"
+        },
+        "documents": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "maxLength": 500000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "contentSha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "filename": {
+                "enum": [
+                  "CURRENT_TASK.md",
+                  "DECISIONS.md",
+                  "HANDOFF.md",
+                  "KNOWN_ISSUES.md",
+                  "NEXT_STEPS.md",
+                  "PROJECT_CONTEXT.md"
+                ],
+                "type": "string"
+              },
+              "surface": {
+                "enum": [
+                  "oracle",
+                  "windows"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "surface",
+              "filename",
+              "content",
+              "contentSha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 12,
+          "minItems": 12,
+          "type": "array"
         },
         "evidenceRefs": {
           "items": {
@@ -28478,9 +28658,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "workspaceId",
         "repositoryId",
         "operationId",
-        "action",
-        "recordId",
-        "expectedRevision"
+        "action"
       ],
       "type": "object"
     },
@@ -28489,6 +28667,14 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "filesImported": {
+          "const": 12,
+          "type": "number"
+        },
+        "importHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "record": {
           "additionalProperties": false,
           "properties": {
@@ -28563,10 +28749,18 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         },
         "replayed": {
           "type": "boolean"
+        },
+        "repositoryId": {
+          "pattern": "^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "totalBytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
         }
       },
       "required": [
-        "record",
         "replayed"
       ],
       "type": "object"
@@ -28576,15 +28770,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "cf96d785c6002402d6fc4d9e7da99f441db9e424306adb415062c5560d2fd51a",
-  "serverVersion": "0.4.0-catalog.ccf96d785c600.sfa0ad3a6b4d2",
+  "contractRevision": "4b9ab8751ed8f169df49dacec5309f44fa40c5d79c9eb24357cd9e50b649b78b",
+  "serverVersion": "0.4.0-catalog.c4b9ab8751ed8.sfa0ad3a6b4d2",
   "toolCount": 130,
   "toolSetRevision": "fa0ad3a6b4d25652a10056a11d65af7c8b0ca6274a388857688e1ef0d10ae560"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ccf96d785c600.sfa0ad3a6b4d2"
+  "version": "0.4.0-catalog.c4b9ab8751ed8.sfa0ad3a6b4d2"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
