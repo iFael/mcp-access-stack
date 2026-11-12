@@ -20,7 +20,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   get_operation_guide: "follow the returned steps in order; each tool's result names the call after it.",
   list_workspaces: "get_workspace_context for the workspace; list_workspace_roots first when it is an aggregate without a known root.",
   list_workspace_roots: "pass one root to get_workspace_context, list_files, search_files or inspect_workspace_git.",
-  get_workspace_context: "read the instructions it returns, then list_files, search_files or read_files for the work.",
+  get_workspace_context: "read project instructions; resolve repositoryId via list_repositories and consult memory_context on the Oracle authority when available, then inspect files as needed.",
   list_files: "read_files for the files you need (up to 20 at once).",
   read_file: "patch_file with its sha256 to change it; read_files for several files.",
   read_files: "patch_files with each sha256 to change them (up to 8 at once).",

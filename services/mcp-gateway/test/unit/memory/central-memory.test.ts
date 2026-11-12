@@ -1,9 +1,10 @@
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { CentralMemoryStore, type MemoryMutation } from "../../../src/memory/central-memory.js";
+import { CentralMemoryStore, LEGACY_CODEX_FILES, type MemoryMutation } from "../../../src/memory/central-memory.js";
 
 const repo = "repo_a3c7aaa6-9fb9-4d06-ba79-29f3c4cf1767";
 const secondRepo = "repo_211ade70-85c8-409b-90ce-a0bb0f18dc8a";
@@ -29,6 +30,42 @@ const mutation = (overrides: Partial<MemoryMutation> = {}): MemoryMutation => ({
 });
 
 describe("Oracle Central Memory store", () => {
+  it("imports both six-file legacy surfaces losslessly in one transaction",()=>{
+    const {db,databasePath,releaseRoot}=create();
+    const documents=(["oracle","windows"] as const).flatMap(surface=>
+      LEGACY_CODEX_FILES.map(filename=>{
+        const content=surface+":"+filename+"\\n# preserved\\n";
+        return {surface,filename,content,
+          contentSha256:createHash("sha256").update(content).digest("hex")};
+      }));
+    expect(()=>db.importLegacySources(owner,repo,documents.slice(0,11)))
+      .toThrow("MEMORY_IMPORT_INCOMPLETE");
+    expect(db.readLegacySource(owner,repo,"oracle","DECISIONS.md")).toBeNull();
+    const imported=db.importLegacySources(owner,repo,documents);
+    expect(imported).toMatchObject({filesImported:12,replayed:false});
+    expect(db.importLegacySources(owner,repo,documents)).toMatchObject({
+      importHash:imported.importHash,replayed:true,
+    });
+    const changed=documents.map(doc=>doc.filename==="DECISIONS.md" && doc.surface==="windows"
+      ? {...doc,content:"altered",contentSha256:createHash("sha256").update("altered").digest("hex")}
+      : doc);
+    expect(()=>db.importLegacySources(owner,repo,changed))
+      .toThrow("MEMORY_IMPORT_CONFLICT");
+    const tampered=documents.map((doc,i)=>i===0?{...doc,contentSha256:"0".repeat(64)}:doc);
+    expect(()=>db.importLegacySources(owner,repo,tampered))
+      .toThrow("MEMORY_IMPORT_SOURCE_MISMATCH");
+    expect(db.readLegacySource(owner,repo,"windows","DECISIONS.md")).toEqual({
+      content:"windows:DECISIONS.md\\n# preserved\\n",
+      contentSha256:documents.find(doc=>doc.surface==="windows"&&doc.filename==="DECISIONS.md")!.contentSha256,
+    });
+    expect(db.readLegacySource("user:bob",repo,"windows","DECISIONS.md")).toBeNull();
+    db.close();
+    const reopened=CentralMemoryStore.open(databasePath,releaseRoot);
+    expect(reopened.readLegacySource(owner,repo,"oracle","CURRENT_TASK.md")?.content)
+      .toContain("preserved");
+    reopened.close();
+  });
+
   it("persists across reopen, revisions, history and idempotent retries", () => {
     const {db,databasePath,releaseRoot} = create();
     const first=db.update(owner,mutation());

@@ -43,6 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
+import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
 import { ProgressPlans } from "./control-plane/progress-card.js";
@@ -1350,6 +1351,18 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   ): Promise<Response | null> {
     const invocation = readMcpToolInvocation(body);
     if (!invocation) return null;
+
+    // Central memory has one Oracle authority and the Edge owns repository ACLs.
+    if (invocation.name === "memory_context" || invocation.name === "memory_update") {
+      const refusal = await authorizeCentralMemory(
+        invocation.name,
+        invocation.arguments,
+        principal.userId,
+        (userId,repositoryId) => this.accountStore.getRepositoryForUser(userId,repositoryId),
+      );
+      if (refusal) return mcpToolError(body, refusal, "Central memory access denied.");
+      return null; // Never select a companion for memory.
+    }
 
     if (COMPANION_LOCAL_REPOSITORY_TOOLS.has(invocation.name) && !principal.userId) {
       return mcpToolError(body, "IDENTITY_REQUIRED", "Individual MCP V3 identity is required for local repository operations.");

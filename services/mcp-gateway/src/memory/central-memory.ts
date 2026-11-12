@@ -3,6 +3,23 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, readFileSync
 import path from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 
+export const LEGACY_CODEX_FILES = [
+  "CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
+  "NEXT_STEPS.md","PROJECT_CONTEXT.md",
+] as const;
+export interface LegacyCodexDocument {
+  surface: "oracle" | "windows";
+  filename: typeof LEGACY_CODEX_FILES[number];
+  content: string;
+  contentSha256: string;
+}
+export interface LegacyImportReceipt {
+  repositoryId: string;
+  importHash: string;
+  filesImported: number;
+  totalBytes: number;
+  replayed: boolean;
+}
 export type MemoryKind = "decision" | "context" | "task" | "issue" | "note";
 export type MemoryConfidence = "user_reported" | "inferred";
 export type MemoryStatus = "active" | "resolved";
@@ -55,6 +72,19 @@ CREATE TABLE IF NOT EXISTS receipts (
   owner_scope TEXT NOT NULL, operation_id TEXT NOT NULL,
   request_hash TEXT NOT NULL, result_json TEXT NOT NULL,
   PRIMARY KEY(owner_scope,operation_id)
+);
+CREATE TABLE IF NOT EXISTS legacy_sources (
+  owner_scope TEXT NOT NULL,repository_id TEXT NOT NULL,
+  surface TEXT NOT NULL CHECK(surface IN ('oracle','windows')),
+  filename TEXT NOT NULL,content TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  PRIMARY KEY(owner_scope,repository_id,surface,filename)
+);
+CREATE TABLE IF NOT EXISTS legacy_imports (
+  owner_scope TEXT NOT NULL,repository_id TEXT NOT NULL,
+  import_hash TEXT NOT NULL,files_imported INTEGER NOT NULL,
+  total_bytes INTEGER NOT NULL,imported_at TEXT NOT NULL,
+  PRIMARY KEY(owner_scope,repository_id)
 );
 CREATE TRIGGER IF NOT EXISTS immutable_event_update
   BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT,'MEMORY_EVENT_IMMUTABLE'); END;
@@ -214,6 +244,73 @@ export class CentralMemoryStore {
       "SELECT snapshot_json FROM events WHERE owner_scope=? AND repository_id=? AND record_id=? ORDER BY seq ASC LIMIT 500",
     ).all(ownerScope,repositoryId,recordId) as Array<{snapshot_json:string}>;
     return events.map(row => JSON.parse(row.snapshot_json) as MemoryRecord);
+  }
+
+  /**
+   * Lossless archival import into the SAME database, never into another live
+   * .codex. Both old surfaces are mandatory; disagreements remain auditable
+   * until explicitly classified. This does NOT promote memory authority.
+   */
+  importLegacySources(
+    ownerScope:string,repositoryId:string,documents:readonly LegacyCodexDocument[],
+  ): LegacyImportReceipt {
+    ownerValid(ownerScope); repoValid(repositoryId);
+    if(documents.length!==12) invalid("IMPORT_INCOMPLETE");
+    const ordered=[...documents].sort((a,b)=>(
+      a.surface+":"+a.filename).localeCompare(b.surface+":"+b.filename));
+    const expected=["oracle","windows"].flatMap(surface=>
+      LEGACY_CODEX_FILES.map(filename=>surface+":"+filename)).sort();
+    if(ordered.some((doc,i)=>doc.surface+":"+doc.filename!==expected[i])) {
+      invalid("IMPORT_INCOMPLETE");
+    }
+    let totalBytes=0;
+    for(const doc of ordered) {
+      const bytes=Buffer.byteLength(doc.content,"utf8");
+      if(bytes<1 || bytes>500_000 ||
+          doc.contentSha256!==sha(doc.content)) invalid("IMPORT_SOURCE_MISMATCH");
+      totalBytes+=bytes;
+    }
+    if(totalBytes>3_000_000) invalid("IMPORT_OVERSIZED");
+    const importHash=sha(JSON.stringify(ordered.map(doc=>({
+      surface:doc.surface,filename:doc.filename,hash:doc.contentSha256,
+    }))));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior=this.db.prepare(
+        "SELECT import_hash FROM legacy_imports WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as {import_hash:string}|undefined;
+      if(prior) {
+        if(prior.import_hash!==importHash) invalid("IMPORT_CONFLICT");
+        this.db.exec("COMMIT");
+        return {repositoryId,importHash,filesImported:12,totalBytes,replayed:true};
+      }
+      const insert=this.db.prepare(
+        "INSERT INTO legacy_sources(owner_scope,repository_id,surface,filename,content,content_sha256) VALUES(?,?,?,?,?,?)",
+      );
+      for(const doc of ordered) insert.run(ownerScope,repositoryId,
+        doc.surface,doc.filename,doc.content,doc.contentSha256);
+      this.db.prepare(
+        "INSERT INTO legacy_imports(owner_scope,repository_id,import_hash,files_imported,total_bytes,imported_at) VALUES(?,?,?,?,?,?)",
+      ).run(ownerScope,repositoryId,importHash,12,totalBytes,new Date().toISOString());
+      this.db.exec("COMMIT");
+      return {repositoryId,importHash,filesImported:12,totalBytes,replayed:false};
+    } catch(error) {this.db.exec("ROLLBACK");throw error;}
+  }
+
+  readLegacySource(ownerScope:string,repositoryId:string,
+    surface:LegacyCodexDocument["surface"],filename:LegacyCodexDocument["filename"],
+  ): {content:string;contentSha256:string}|null {
+    ownerValid(ownerScope);repoValid(repositoryId);
+    if(!["oracle","windows"].includes(surface) || !LEGACY_CODEX_FILES.includes(filename)) {
+      invalid("IMPORT_SOURCE_INVALID");
+    }
+    const row=this.db.prepare(
+      "SELECT content,content_sha256 FROM legacy_sources WHERE owner_scope=? AND repository_id=? AND surface=? AND filename=?",
+    ).get(ownerScope,repositoryId,surface,filename) as
+      {content:string;content_sha256:string}|undefined;
+    if(!row) return null;
+    if(sha(row.content)!==row.content_sha256) invalid("IMPORT_CORRUPT");
+    return {content:row.content,contentSha256:row.content_sha256};
   }
 
   /** Verified consistent backup; an off-host copy and restore proof remain mandatory before cutover. */
