@@ -12,6 +12,10 @@ export const MCP_TOOL_NEXT_STEP_META_KEY = "io.github.ifael/next-step";
 export type McpToolName = (typeof MCP_FULL_TOOL_CATALOG_NAMES)[number];
 
 export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
+  // Central operational memory: one Oracle authority, no local copies.
+  memory_context: "verify relevant claims against current Git, CI and runtime evidence; use memory_update with CAS after a user decision or meaningful checkpoint.",
+  memory_update: "memory_context to verify the updated revision before proceeding.",
+
   // Guides and workspaces
   get_operation_guide: "follow the returned steps in order; each tool's result names the call after it.",
   list_workspaces: "get_workspace_context for the workspace; list_workspace_roots first when it is an aggregate without a known root.",

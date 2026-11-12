@@ -17,6 +17,7 @@ import express, {
 import helmet from "helmet";
 import type { Logger } from "pino";
 import type { GatewayConfig } from "./config.js";
+import type { CentralMemoryStore } from "./memory/central-memory.js";
 import { BrowserWorkerClient } from "./browser/client.js";
 import { createLogger } from "./logger.js";
 import { createMcpServer } from "./mcp/server.js";
@@ -67,6 +68,7 @@ export interface GatewayApplicationDependencies {
   repositoryExecutor?: RepositoryExecutor;
   companionRepositoryBinder?: CompanionRepositoryBinder;
   policyAdmin?: PrimaryPolicyAdmin;
+  memoryStore?: CentralMemoryStore;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
   /** Each tool call with the ChatGPT conversation that made it (the companion's chat wake). */
@@ -252,6 +254,7 @@ export function createGatewayApplication(
     const server = createMcpServer({
       workspaceExecutor,
       sourceControlExecutor,
+      ...(dependencies.memoryStore === undefined ? {} : { memoryStore:dependencies.memoryStore }),
       ...(dependencies.policyAdmin === undefined ? {} : { policyAdmin: dependencies.policyAdmin }),
       ...(request.auth?.extra?.ownerScope === "owner" && typeof authenticatedUserId === "string"
         ? { authenticatedUserId } : {}),

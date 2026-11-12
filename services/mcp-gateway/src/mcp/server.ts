@@ -21,6 +21,8 @@ import {
   type ToolOperationContextFactory,
 } from "@vs-code-gpt/shared";
 import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
+import { registerCentralMemoryTools } from "./central-memory-tools.js";
+import type { CentralMemoryStore } from "../memory/central-memory.js";
 import { registerPrimaryPolicyAdminTool, type PrimaryPolicyAdmin } from "./primary-policy-admin-tool.js";
 import { registerCompanionInternalUserMessageTools } from "../companion/internal-user-message-tools.js";
 import {
@@ -42,6 +44,7 @@ export interface McpServerOptions {
   companionRepositoryBinder?: CompanionRepositoryBinder | undefined;
   browser?: BrowserExecutor | undefined;
   policyAdmin?: PrimaryPolicyAdmin | undefined;
+  memoryStore?: CentralMemoryStore | undefined;
   authenticatedUserId?: string | undefined;
   auth?: McpServerAuthOptions | undefined;
   operationContextFactory?: ToolOperationContextFactory | undefined;
@@ -119,6 +122,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   }
 
   registerPrimaryPolicyAdminTool(server, options.policyAdmin, options.authenticatedUserId, securitySchemes);
+  registerCentralMemoryTools(server,{store:options.memoryStore,operationContextFactory:options.operationContextFactory,securitySchemes});
 
   const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);
   Object.assign(catalog, finalizedCatalog);

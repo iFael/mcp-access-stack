@@ -24,6 +24,8 @@ export const MCP_REPOSITORY_TOOL_NAMES = [
 ] as const;
 
 export const MCP_FULL_TOOL_CATALOG_NAMES = [
+  "memory_context",
+  "memory_update",
   ...WORKSPACE_TOOL_NAMES,
   ...BROWSER_TOOL_NAMES,
   ...MCP_REPOSITORY_TOOL_NAMES,
