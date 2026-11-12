@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withToolOperationContext, type ToolOperationContextFactory } from "@vs-code-gpt/shared";
 import { z } from "zod";
-import type { CentralMemoryStore } from "../memory/central-memory.js";
+import { LEGACY_CODEX_FILES, type CentralMemoryStore } from "../memory/central-memory.js";
 
 const repositoryId = z.string().regex(/^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
 const recordId = z.string().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u);
@@ -26,19 +26,33 @@ const contextOutput = z.object({
   repositoryId,totalActive:z.number().int().nonnegative(),
   records:z.array(recordSchema),history:z.array(recordSchema).optional(),
 }).strict();
+// MCP SDK tool registration requires an object-shaped schema. The action-
+ // specific constraints are enforced below before any state mutation.
 const updateInput = z.object({
   workspaceId:authorityWorkspace,repositoryId,
   operationId:z.string().min(8).max(128),
-  action:z.enum(["create","revise","resolve"]),
-  recordId,expectedRevision:z.number().int().nonnegative(),
+  action:z.enum(["create","revise","resolve","import_legacy"]),
+  recordId:recordId.optional(),
+  expectedRevision:z.number().int().nonnegative().optional(),
   kind:z.enum(["decision","context","task","issue","note"]).optional(),
   confidence:z.enum(["user_reported","inferred"]).optional(),
   title:z.string().min(1).max(200).optional(),
   content:z.string().min(1).max(24_000).optional(),
   evidenceRefs:z.array(z.string().max(250)).max(8).optional(),
+  documents:z.array(z.object({
+    surface:z.enum(["oracle","windows"]),
+    filename:z.enum(LEGACY_CODEX_FILES),
+    content:z.string().min(1).max(500_000),
+    contentSha256:z.string().regex(/^[0-9a-f]{64}$/u),
+  }).strict()).length(12).optional(),
 }).strict();
-const updateOutput = z.object({
-  record:recordSchema,replayed:z.boolean(),
+const updateOutput=z.object({
+  record:recordSchema.optional(),
+  repositoryId:repositoryId.optional(),
+  importHash:z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+  filesImported:z.literal(12).optional(),
+  totalBytes:z.number().int().positive().optional(),
+  replayed:z.boolean(),
 }).strict();
 
 export interface MemoryToolOptions {
@@ -79,7 +93,7 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
 
   server.registerTool("memory_update",{
     title:"Update MCP V3 central memory",
-    description:"Record a user-approved decision, observed task state, or corrected knowledge on the single Oracle authority. Requires idempotent operationId and exact expectedRevision; never claim an agent observation was independently verified. Does not authorize Git, deploy, security or infrastructure actions.",
+    description:"Create, revise or resolve a memory record with exact CAS, or import all 12 legacy .codex source files losslessly in one atomic operation for the final cutover. Import does not activate legacy history as current truth. Never claim an agent observation is independently verified; this tool does not authorize Git, deploy or infrastructure actions.",
     inputSchema:updateInput,outputSchema:updateOutput,
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
     _meta:meta,
@@ -89,10 +103,41 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
         if (!options.store) throw new Error("MEMORY_UNAVAILABLE");
         const owner=context.ownerScope;
         if (!owner?.startsWith("user:")) throw new Error("MEMORY_IDENTITY_REQUIRED");
-        const {workspaceId:_workspaceId,...mutation}=updateInput.parse(input);
-        return updateOutput.parse(options.store.update(owner,mutation));
+        const parsed=updateInput.parse(input);
+        if(parsed.action==="import_legacy"){
+          if(!parsed.documents || parsed.recordId!==undefined ||
+             parsed.expectedRevision!==undefined || parsed.kind!==undefined ||
+             parsed.confidence!==undefined || parsed.title!==undefined ||
+             parsed.content!==undefined || parsed.evidenceRefs!==undefined) {
+            throw new Error("MEMORY_IMPORT_FIELDS_INVALID");
+          }
+          return updateOutput.parse(options.store.importLegacySources(
+            owner,parsed.repositoryId,parsed.documents,
+          ));
+        }
+        if(parsed.documents!==undefined || parsed.recordId===undefined ||
+           parsed.expectedRevision===undefined) {
+          throw new Error("MEMORY_INVALID_ARGUMENT");
+        }
+        return updateOutput.parse(options.store.update(owner,{
+          repositoryId:parsed.repositoryId,
+          operationId:parsed.operationId,
+          action:parsed.action,
+          recordId:parsed.recordId,
+          expectedRevision:parsed.expectedRevision,
+          kind:parsed.kind,
+          confidence:parsed.confidence,
+          title:parsed.title,
+          content:parsed.content,
+          evidenceRefs:parsed.evidenceRefs,
+        }));
       });
-      return {content:[{type:"text" as const,text:"Memory record "+result.record.recordId+" revision "+result.record.revision+(result.replayed?" (idempotent replay)":" saved")}],structuredContent:result};
+      const note=result.record!==undefined
+        ? "Memory record "+result.record.recordId+" revision "+result.record.revision+
+          (result.replayed?" (idempotent replay)":" saved")
+        : "Legacy archive "+result.importHash+" preserved: "+result.filesImported+
+          " source documents"+(result.replayed?" (idempotent replay)":"");
+      return {content:[{type:"text" as const,text:note}],structuredContent:result};
     } catch(error) {
       return memoryError(error);
     }

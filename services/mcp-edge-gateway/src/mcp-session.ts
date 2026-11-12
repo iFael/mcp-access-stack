@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
+import { mirrorLegacyImportResponse, mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
@@ -1328,9 +1328,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     );
     if (principal.userId && invocation?.name === "memory_update") {
       try {
-        await mirrorMemoryUpdateResponse(
-          this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
-        );
+        if(invocation.arguments.action==="import_legacy"){
+          await mirrorLegacyImportResponse(
+            this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+          );
+        }else{
+          await mirrorMemoryUpdateResponse(
+            this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+          );
+        }
       } catch {
         // The Oracle commit may already be durable. Never report a successful
         // backup or repeat with a new ID; reissue the SAME operationId.

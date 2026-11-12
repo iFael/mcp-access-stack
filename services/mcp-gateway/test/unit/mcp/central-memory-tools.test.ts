@@ -1,5 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -46,7 +47,7 @@ describe("public central-memory tools",()=>{
     expect(list.tools.map(tool=>tool.name)).toContain("memory_context");
     expect(list.tools.map(tool=>tool.name)).toContain("memory_update");
     const created=await client.callTool({name:"memory_update",arguments:updateArgs});
-    expect(created.isError).toBeFalsy();
+    if(created.isError) throw new Error(JSON.stringify(created));
     expect(created.structuredContent).toMatchObject({record:{revision:1,kind:"decision"},replayed:false});
     const replay=await client.callTool({name:"memory_update",arguments:updateArgs});
     expect(replay.structuredContent).toMatchObject({record:{revision:1},replayed:true});
@@ -58,6 +59,31 @@ describe("public central-memory tools",()=>{
       name:"memory_context",arguments:{workspaceId:"mcp-access-stack",repositoryId:repo,historyRecordId:"decision:one"},
     });
     expect(history.structuredContent).toMatchObject({history:[{revision:1}]});
+  });
+  it("imports all twelve legacy sources through MCP exactly once",async()=>{
+    const client=await fixture("user:alice");
+    const docs=(["oracle","windows"] as const).flatMap(surface=>
+      ["CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
+       "NEXT_STEPS.md","PROJECT_CONTEXT.md"].map(filename=>{
+        const content=surface+":"+filename+"\nlegacy source preserved\n";
+        return {surface,filename,content,contentSha256:
+          createHash("sha256").update(content).digest("hex")};
+      }));
+    const args={workspaceId:"mcp-access-stack",repositoryId:repo,
+      operationId:"operation:legacy:1",action:"import_legacy",documents:docs};
+    const first=await client.callTool({name:"memory_update",arguments:args});
+    expect(first.isError).toBeFalsy();
+    expect(first.structuredContent).toMatchObject({filesImported:12,replayed:false});
+    const replay=await client.callTool({name:"memory_update",arguments:args});
+    expect(replay.structuredContent).toMatchObject({filesImported:12,replayed:true});
+    const invalid=await client.callTool({name:"memory_update",arguments:{
+      ...args,recordId:"fake-record",
+    }});
+    expect(invalid.isError).toBe(true);
+    const context=await client.callTool({
+      name:"memory_context",arguments:{workspaceId:"mcp-access-stack",repositoryId:repo},
+    });
+    expect(context.structuredContent).toMatchObject({totalActive:0,records:[]});
   });
   it("fails closed without trusted identity or without Oracle memory",async()=>{
     for(const [user,available] of [[undefined,true],["user:alice",false]] as const){
