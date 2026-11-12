@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, readFileSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, createReadStream, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 
@@ -21,6 +21,16 @@ export interface LegacyImportReceipt {
   replayed: boolean;
 }
 export type MemoryKind = "decision" | "context" | "task" | "issue" | "note";
+
+export interface RecoverableMemoryEvent {
+  version:1;
+  operationId:string;
+  record:MemoryRecord;
+  recordDigest:string;
+  previousDigest:string;
+  chainDigest:string;
+}
+
 export type MemoryConfidence = "user_reported" | "inferred";
 export type MemoryStatus = "active" | "resolved";
 export type MemoryAction = "create" | "revise" | "resolve";
@@ -47,7 +57,7 @@ const RECORD_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u;
 const OWNER = /^user:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u;
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (
-  version INTEGER PRIMARY KEY CHECK (version = 1), checksum TEXT NOT NULL
+  version INTEGER PRIMARY KEY, checksum TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS records (
   owner_scope TEXT NOT NULL, repository_id TEXT NOT NULL, record_id TEXT NOT NULL,
@@ -86,6 +96,11 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
   total_bytes INTEGER NOT NULL,imported_at TEXT NOT NULL,
   PRIMARY KEY(owner_scope,repository_id)
 );
+CREATE TABLE IF NOT EXISTS recovery_imports (
+  owner_scope TEXT NOT NULL,repository_id TEXT NOT NULL,archive_digest TEXT NOT NULL,
+  event_count INTEGER NOT NULL,record_count INTEGER NOT NULL,restored_at TEXT NOT NULL,
+  PRIMARY KEY(owner_scope,repository_id)
+);
 CREATE TRIGGER IF NOT EXISTS immutable_event_update
   BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT,'MEMORY_EVENT_IMMUTABLE'); END;
 CREATE TRIGGER IF NOT EXISTS immutable_event_delete
@@ -93,6 +108,13 @@ CREATE TRIGGER IF NOT EXISTS immutable_event_delete
 `;
 
 function invalid(reason: string): never { throw new Error("MEMORY_" + reason); }
+function pathIsPresent(value:string):boolean {
+  try {lstatSync(value);return true;}
+  catch(error) {
+    if((error as NodeJS.ErrnoException).code==="ENOENT") return false;
+    throw error;
+  }
+}
 function sha(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -148,7 +170,7 @@ export class CentralMemoryStore {
     const relative = path.relative(releaseRoot,path.join(actualParent,path.basename(databasePath)));
     if (relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) &&
         !path.isAbsolute(relative))) invalid("PATH_INSIDE_RELEASE");
-    if (existsSync(databasePath) && (lstatSync(databasePath).isSymbolicLink() ||
+    if (pathIsPresent(databasePath) && (lstatSync(databasePath).isSymbolicLink() ||
        !lstatSync(databasePath).isFile())) invalid("PATH_INVALID");
     chmodSync(parent,0o700);
     const db = new DatabaseSync(databasePath);
@@ -159,13 +181,37 @@ export class CentralMemoryStore {
         invalid("WAL_UNAVAILABLE");
       }
       db.exec("PRAGMA synchronous=FULL");
-      db.exec(schema);
-      const checksum = sha(schema);
-      const versions = db.prepare("SELECT version,checksum FROM schema_version").all() as
-        Array<{version:number;checksum:string}>;
-      if (versions.length > 1 ||
-          versions.some(row => row.version !== 1 || row.checksum !== checksum)) invalid("SCHEMA_MISMATCH");
-      if (!versions.length) db.prepare("INSERT INTO schema_version(version,checksum) VALUES(1,?)").run(checksum);
+      // Version 1 schema is immutable. Future upgrades require explicit, CAS-safe
+      // migrations; do not apply CREATE IF NOT EXISTS to an unknown database.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const existing=db.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        ).get();
+        if(existing) {
+          const versions=db.prepare("SELECT version,checksum FROM schema_version").all() as
+            Array<{version:number;checksum:string}>;
+          if(versions.length!==1 || versions[0]?.version!==1 ||
+              versions[0]?.checksum!==sha(schema)) invalid("SCHEMA_MISMATCH");
+        } else {
+          const objects=db.prepare(
+            "SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger') AND name NOT LIKE 'sqlite_%'",
+          ).all();
+          if(objects.length!==0) invalid("UNVERSIONED_DB");
+          db.exec(schema);
+          db.prepare("INSERT INTO schema_version(version,checksum) VALUES(1,?)").run(sha(schema));
+        }
+        const required=["records","events","receipts","legacy_sources","legacy_imports",
+          "recovery_imports","immutable_event_update","immutable_event_delete"];
+        const objects=db.prepare(
+          "SELECT name FROM sqlite_master WHERE type IN ('table','trigger')",
+        ).all() as Array<{name:string}>;
+        const present=new Set(objects.map(row=>row.name));
+        if(required.some(name=>!present.has(name))) invalid("SCHEMA_MISMATCH");
+        const integrity=db.prepare("PRAGMA quick_check").get() as {quick_check:string};
+        if(integrity.quick_check!=="ok") invalid("SCHEMA_CORRUPT");
+        db.exec("COMMIT");
+      }catch(error) {db.exec("ROLLBACK");throw error;}
       chmodSync(databasePath,0o600);
       return new CentralMemoryStore(db,releaseRoot);
     } catch (error) { db.close(); throw error; }
@@ -313,9 +359,116 @@ export class CentralMemoryStore {
     return {content:row.content,contentSha256:row.content_sha256};
   }
 
+  /**
+   * Disaster recovery only. Rebuild the Oracle authority from a separately
+   * verified Edge archive, within ONE transaction and only for an empty scope.
+   * Never merge an ambiguous/off-host snapshot into active memory.
+   */
+  restoreVerifiedEvents(
+    ownerScope:string,repositoryId:string,events:readonly RecoverableMemoryEvent[],
+    expectedArchiveDigest:string,
+  ): {records:number;events:number;archiveDigest:string;replayed:boolean} {
+    ownerValid(ownerScope);repoValid(repositoryId);
+    if(events.length===0||events.length>50_000) invalid("RESTORE_INPUT_INVALID");
+    const bytes=Buffer.byteLength(JSON.stringify(events),"utf8");
+    if(bytes>16_000_000) invalid("RESTORE_TOO_LARGE");
+    const archiveDigest=sha(JSON.stringify(events));
+    if(!/^[0-9a-f]{64}$/u.test(expectedArchiveDigest)||
+      archiveDigest!==expectedArchiveDigest) invalid("RESTORE_ARCHIVE_MISMATCH");
+    const headById=new Map<string,{revision:number;digest:string;status:MemoryStatus}>();
+    const operationIds=new Set<string>();
+    for(const entry of events){
+      if(entry?.version!==1||!OP_ID.test(entry.operationId)||
+        operationIds.has(entry.operationId)||!entry.record||
+        entry.record.repositoryId!==repositoryId||
+        !RECORD_ID.test(entry.record.recordId)||
+        !["decision","context","task","issue","note"].includes(entry.record.kind)||
+        !["active","resolved"].includes(entry.record.status)||
+        !["user_reported","inferred"].includes(entry.record.confidence)||
+        typeof entry.record.title!=="string"||entry.record.title.length<1||
+        entry.record.title.length>200||typeof entry.record.content!=="string"||
+        entry.record.content.length<1||Buffer.byteLength(entry.record.content,"utf8")>24_000||
+        !Array.isArray(entry.record.evidenceRefs)||entry.record.evidenceRefs.length>8||
+        entry.record.evidenceRefs.some(x=>typeof x!=="string"||x.length>250)||
+        !Number.isSafeInteger(entry.record.revision)||entry.record.revision<1||
+        !Number.isFinite(Date.parse(entry.record.updatedAt))) invalid("RESTORE_EVENT_INVALID");
+      operationIds.add(entry.operationId);
+      const previous=headById.get(entry.record.recordId);
+      const requiredRevision=(previous?.revision??0)+1;
+      const previousDigest=previous?.digest??"0".repeat(64);
+      const recordDigest=sha(JSON.stringify(entry.record));
+      const chainDigest=sha(previousDigest+":"+entry.operationId+":"+recordDigest);
+      if(previous?.status==="resolved"||entry.record.revision!==requiredRevision||
+        entry.previousDigest!==previousDigest||
+        entry.recordDigest!==recordDigest||
+        entry.chainDigest!==chainDigest||
+        (requiredRevision===1&&entry.record.status!=="active")) invalid("RESTORE_EVENT_CORRUPT");
+      headById.set(entry.record.recordId,{
+        revision:requiredRevision,digest:chainDigest,status:entry.record.status,
+      });
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try{
+      const prior=this.db.prepare(
+        "SELECT archive_digest,event_count,record_count FROM recovery_imports WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as {
+        archive_digest:string;event_count:number;record_count:number
+      }|undefined;
+      if(prior){
+        if(prior.archive_digest!==archiveDigest||prior.event_count!==events.length||
+          prior.record_count!==headById.size) invalid("RESTORE_CONFLICT");
+        this.db.exec("COMMIT");
+        return {records:headById.size,events:events.length,archiveDigest,replayed:true};
+      }
+      const present=this.db.prepare(
+        "SELECT COUNT(*) AS n FROM events WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as {n:number};
+      const rows=this.db.prepare(
+        "SELECT COUNT(*) AS n FROM records WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as {n:number};
+      if(present.n!==0||rows.n!==0) invalid("RESTORE_SCOPE_NOT_EMPTY");
+      const addEvent=this.db.prepare(
+        "INSERT INTO events(owner_scope,repository_id,operation_id,record_id,revision,action,snapshot_json,occurred_at) VALUES(?,?,?,?,?,?,?,?)",
+      );
+      const addRecord=this.db.prepare(
+        "INSERT INTO records(owner_scope,repository_id,record_id,kind,status,confidence,title,content,evidence_refs,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) "+
+        "ON CONFLICT(owner_scope,repository_id,record_id) DO UPDATE SET kind=excluded.kind,status=excluded.status,"+
+        "confidence=excluded.confidence,title=excluded.title,content=excluded.content,"+
+        "evidence_refs=excluded.evidence_refs,revision=excluded.revision,updated_at=excluded.updated_at",
+      );
+      const addReceipt=this.db.prepare(
+        "INSERT INTO receipts(owner_scope,operation_id,request_hash,result_json) VALUES(?,?,?,?)",
+      );
+      for(const event of events){
+        const record=event.record;
+        const action=record.revision===1?"create":record.status==="resolved"?"resolve":"revise";
+        const mutation={
+          repositoryId,operationId:event.operationId,action,
+          recordId:record.recordId,expectedRevision:record.revision-1,
+          ...(action==="resolve"?{}:{
+            kind:record.kind,confidence:record.confidence,
+            title:record.title,content:record.content,evidenceRefs:record.evidenceRefs,
+          }),
+        };
+        addEvent.run(ownerScope,repositoryId,event.operationId,record.recordId,
+          record.revision,action,JSON.stringify(record),record.updatedAt);
+        addRecord.run(ownerScope,repositoryId,record.recordId,record.kind,record.status,
+          record.confidence,record.title,record.content,JSON.stringify(record.evidenceRefs),
+          record.revision,record.updatedAt);
+        addReceipt.run(ownerScope,event.operationId,sha(JSON.stringify(mutation)),
+          JSON.stringify({record}));
+      }
+      this.db.prepare(
+        "INSERT INTO recovery_imports(owner_scope,repository_id,archive_digest,event_count,record_count,restored_at) VALUES(?,?,?,?,?,?)",
+      ).run(ownerScope,repositoryId,archiveDigest,events.length,headById.size,new Date().toISOString());
+      this.db.exec("COMMIT");
+      return {records:headById.size,events:events.length,archiveDigest,replayed:false};
+    }catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
+
   /** Verified consistent backup; an off-host copy and restore proof remain mandatory before cutover. */
   async createVerifiedSnapshot(destination: string): Promise<{sha256:string;bytes:number}> {
-    if (!path.isAbsolute(destination) || existsSync(destination)) invalid("BACKUP_PATH_INVALID");
+    if (!path.isAbsolute(destination) || pathIsPresent(destination)) invalid("BACKUP_PATH_INVALID");
     const directory=path.dirname(destination);
     mkdirSync(directory,{recursive:true,mode:0o700});
     if (realpathSync(directory)!==directory || lstatSync(directory).isSymbolicLink()) {
@@ -325,14 +478,24 @@ export class CentralMemoryStore {
     if (relative==="" || (relative!==".." && !relative.startsWith(".."+path.sep) &&
         !path.isAbsolute(relative))) invalid("BACKUP_INSIDE_RELEASE");
     chmodSync(directory,0o700);
-    await backup(this.db,destination);
-    chmodSync(destination,0o600);
-    const check=new DatabaseSync(destination,{readOnly:true});
+    const temporary=path.join(directory,"."+path.basename(destination)+".tmp-"+randomUUID());
     try {
-      const integrity=check.prepare("PRAGMA integrity_check").get() as {integrity_check:string};
-      if (integrity.integrity_check!=="ok") invalid("BACKUP_CORRUPT");
-    } finally {check.close();}
-    return {sha256:createHash("sha256").update(readFileSync(destination)).digest("hex"),bytes:statSync(destination).size};
+      await backup(this.db,temporary);
+      chmodSync(temporary,0o600);
+      const check=new DatabaseSync(temporary,{readOnly:true});
+      try {
+        const integrity=check.prepare("PRAGMA integrity_check").get() as {integrity_check:string};
+        if (integrity.integrity_check!=="ok") invalid("BACKUP_CORRUPT");
+      } finally {check.close();}
+      const hash=createHash("sha256");
+      for await(const chunk of createReadStream(temporary)) hash.update(chunk);
+      const bytes=statSync(temporary).size;
+      // link is exclusive: even a racing writer cannot replace an existing file.
+      linkSync(temporary,destination);
+      return {sha256:hash.digest("hex"),bytes};
+    } finally {
+      if(pathIsPresent(temporary)) unlinkSync(temporary);
+    }
   }
 
   close(): void { this.db.close(); }

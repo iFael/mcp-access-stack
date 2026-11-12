@@ -43,6 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
+import { mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
 import { DeviceAdminDashboard } from "./control-plane/device-admin-dashboard.js";
 import { CloudAuditStore } from "./control-plane/cloud-audit-store.js";
@@ -1325,6 +1326,18 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       principal,
       unavailableResponse,
     );
+    if (principal.userId && invocation?.name === "memory_update") {
+      try {
+        await mirrorMemoryUpdateResponse(
+          this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+        );
+      } catch {
+        // The Oracle commit may already be durable. Never report a successful
+        // backup or repeat with a new ID; reissue the SAME operationId.
+        return mcpToolError(body, "MEMORY_RECOVERY_PENDING",
+          "Oracle may have committed; retry the same operationId to reconcile the off-host recovery copy.");
+      }
+    }
     if (principal.userId && invocation?.name.startsWith("browser_")) {
       await this.recordPrimaryBrowserAffinity(
         principal.userId,

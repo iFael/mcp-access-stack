@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -66,6 +66,64 @@ describe("Oracle Central Memory store", () => {
     reopened.close();
   });
 
+  it("reconstructs a fresh Oracle authority from off-host hash-chained events",()=>{
+    const origin=create();
+    const firstMutation=mutation();
+    const first=origin.db.update(owner,firstMutation);
+    const secondMutation=mutation({
+      action:"revise",expectedRevision:1,operationId:"operation:0002",
+      title:"Version two",content:"The source of truth is the Oracle database",
+    });
+    const second=origin.db.update(owner,secondMutation);
+    const event=(record:typeof first.record,operationId:string,previousDigest:string)=>{
+      const recordDigest=createHash("sha256").update(JSON.stringify(record)).digest("hex");
+      const chainDigest=createHash("sha256").update(
+        previousDigest+":"+operationId+":"+recordDigest).digest("hex");
+      return {version:1 as const,operationId,record,recordDigest,previousDigest,chainDigest};
+    };
+    const one=event(first.record,firstMutation.operationId,"0".repeat(64));
+    const two=event(second.record,secondMutation.operationId,one.chainDigest);
+    const restored=create();
+    const archiveDigest=createHash("sha256").update(JSON.stringify([one,two])).digest("hex");
+    const receipt=restored.db.restoreVerifiedEvents(owner,repo,[one,two],archiveDigest);
+    expect(receipt).toMatchObject({events:2,records:1,replayed:false});
+    expect(restored.db.restoreVerifiedEvents(owner,repo,[one,two],archiveDigest))
+      .toMatchObject({...receipt,replayed:true});
+    expect(restored.db.context(owner,repo).records)
+      .toEqual(origin.db.context(owner,repo).records);
+    expect(restored.db.history(owner,repo,"record:1"))
+      .toEqual(origin.db.history(owner,repo,"record:1"));
+    expect(restored.db.update(owner,firstMutation)).toEqual({...first,replayed:true});
+    expect(restored.db.update(owner,secondMutation)).toEqual({...second,replayed:true});
+    origin.db.close();restored.db.close();
+  });
+
+  it("never partially restores a corrupt or incomplete archive",()=>{
+    const source=create();
+    const first=source.db.update(owner,mutation());
+    const digest=createHash("sha256").update(JSON.stringify(first.record)).digest("hex");
+    const entry={version:1 as const,operationId:"operation:0001",record:first.record,
+      recordDigest:digest,previousDigest:"0".repeat(64),
+      chainDigest:createHash("sha256").update("0".repeat(64)+":operation:0001:"+digest).digest("hex")};
+    const target=create();
+    const incorrect=[{...entry,record:{...entry.record,content:"tampered"}}];
+    const incorrectDigest=createHash("sha256").update(JSON.stringify(incorrect)).digest("hex");
+    expect(()=>target.db.restoreVerifiedEvents(owner,repo,incorrect,incorrectDigest))
+      .toThrow("MEMORY_RESTORE_EVENT_CORRUPT");
+    expect(target.db.context(owner,repo).records).toEqual([]);
+    expect(target.db.history(owner,repo,"record:1")).toEqual([]);
+    const digestOfArchive=createHash("sha256").update(JSON.stringify([entry])).digest("hex");
+    expect(()=>target.db.restoreVerifiedEvents(owner,repo,[entry],"0".repeat(64)))
+      .toThrow("MEMORY_RESTORE_ARCHIVE_MISMATCH");
+    expect(target.db.restoreVerifiedEvents(owner,repo,[entry],digestOfArchive))
+      .toMatchObject({records:1});
+    const changed=[{...entry,operationId:"operation:9999"}];
+    expect(()=>target.db.restoreVerifiedEvents(owner,repo,changed,
+      createHash("sha256").update(JSON.stringify(changed)).digest("hex")))
+      .toThrow("MEMORY_RESTORE_EVENT_CORRUPT");
+    source.db.close();target.db.close();
+  });
+
   it("persists across reopen, revisions, history and idempotent retries", () => {
     const {db,databasePath,releaseRoot} = create();
     const first=db.update(owner,mutation());
@@ -121,6 +179,42 @@ describe("Oracle Central Memory store", () => {
     }))).toThrow("MEMORY_RESOLVE_FIELDS_INVALID");
     expect(db.context(owner,repo).records).toEqual([]);
     db.close();
+  });
+
+  it("refuses dangling symlink DB paths and snapshot destinations",async()=>{
+    const {db,root,releaseRoot}=create();
+    const dangling=path.join(root,"state","dangling.sqlite");
+    const escaped=path.join(root,"escaped.sqlite");
+    symlinkSync(escaped,dangling);
+    expect(()=>CentralMemoryStore.open(dangling,releaseRoot)).toThrow("MEMORY_PATH_INVALID");
+    expect(existsSync(escaped)).toBe(false);
+    const output=path.join(root,"outside-snapshot.sqlite");
+    symlinkSync(escaped,output);
+    await expect(db.createVerifiedSnapshot(output)).rejects.toThrow("MEMORY_BACKUP_PATH_INVALID");
+    expect(existsSync(escaped)).toBe(false);
+    db.close();
+  });
+
+  it("does not adopt an unversioned database or a database with missing audit triggers",()=>{
+    const {db,root,releaseRoot}=create();
+    db.close();
+    const unversioned=path.join(root,"state","unversioned.sqlite");
+    const initial=new DatabaseSync(unversioned);
+    initial.exec("CREATE TABLE unknown_secret (value TEXT NOT NULL)");
+    initial.close();
+    expect(()=>CentralMemoryStore.open(unversioned,releaseRoot))
+      .toThrow("MEMORY_UNVERSIONED_DB");
+    const after=new DatabaseSync(unversioned);
+    const names=after.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
+      Array<{name:string}>;
+    expect(names.map(x=>x.name)).toEqual(["unknown_secret"]);
+    after.close();
+    const knownPath=path.join(root,"state","central-memory.sqlite");
+    const removed=new DatabaseSync(knownPath);
+    removed.exec("DROP TRIGGER immutable_event_delete");
+    removed.close();
+    expect(()=>CentralMemoryStore.open(knownPath,releaseRoot))
+      .toThrow("MEMORY_SCHEMA_MISMATCH");
   });
 
   it("fails closed for symlinks, release tree, and unknown schema versions", () => {
