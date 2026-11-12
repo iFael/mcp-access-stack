@@ -96,6 +96,10 @@ const recoveryExportOutput=z.object({
   text:z.string().optional(),truncated:z.boolean().optional(),
   archiveDigest:z.string().optional(),totalEvents:z.number().int().optional(),
   events:z.array(z.unknown()).optional(),
+  activation:z.object({
+    operationId:z.string(),importHash:z.string(),archiveDigest:z.string(),
+    activatedAt:z.string(),
+  }).strict().optional(),
 }).strict();
 
 export interface MemoryToolOptions {

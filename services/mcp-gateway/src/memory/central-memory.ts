@@ -436,16 +436,32 @@ export class CentralMemoryStore {
       ).all(ownerScope,repositoryId) as Array<{content:string;content_sha256:string}>;
       if(files.length!==12||files.some(f=>sha(f.content)!==f.content_sha256))
         invalid("ACTIVATION_IMPORT_UNVERIFIED");
+      // Every original source must be referenced by a current curated
+      // record. The preserved original text is historical, not live authority.
+      const sourceRows=this.db.prepare(
+        "SELECT surface,filename,content_sha256 FROM legacy_sources "+
+        "WHERE owner_scope=? AND repository_id=?",
+      ).all(ownerScope,repositoryId) as
+        Array<{surface:string;filename:string;content_sha256:string}>;
       const curated=this.db.prepare(
-        "SELECT evidence_refs FROM records "+
-        "WHERE owner_scope=? AND repository_id=? AND status='active' AND kind='decision' "+
-        "ORDER BY record_id LIMIT 10",
-      ).all(ownerScope,repositoryId) as Array<{evidence_refs:string}>;
-      if(!curated.some(row=>{
-        try {const refs=JSON.parse(row.evidence_refs);return Array.isArray(refs)&&
-          refs.some((ref:unknown)=>typeof ref==="string"&&ref.length>0);}
-        catch {return false;}
-      }))invalid("ACTIVATION_CURATED_DECISION_REQUIRED");
+        "SELECT kind,evidence_refs FROM records "+
+        "WHERE owner_scope=? AND repository_id=? AND status='active'",
+      ).all(ownerScope,repositoryId) as
+        Array<{kind:string;evidence_refs:string}>;
+      const evidence=new Set<string>();
+      const kinds=new Set<string>();
+      for(const row of curated){
+        kinds.add(row.kind);
+        let refs:unknown;
+        try{refs=JSON.parse(row.evidence_refs);}catch{invalid("CURATION_INVALID");}
+        if(!Array.isArray(refs))invalid("CURATION_INVALID");
+        for(const ref of refs)if(typeof ref==="string")evidence.add(ref);
+      }
+      const covered=sourceRows.every(source=>evidence.has(
+        "legacy:"+source.surface+":"+source.filename+":"+source.content_sha256,
+      ));
+      if(!covered||!["decision","context","task"].every(kind=>kinds.has(kind)))
+        invalid("ACTIVATION_CURATED_DECISION_REQUIRED");
       const activatedAt=new Date().toISOString();
       this.db.prepare(
         "INSERT INTO legacy_activation(owner_scope,repository_id,operation_id,import_hash,archive_digest,activated_at) "+
@@ -462,7 +478,7 @@ export class CentralMemoryStore {
   primaryRepositoryId(ownerScope:string):string|null {
     ownerValid(ownerScope);
     const rows=this.db.prepare(
-      "SELECT repository_id FROM legacy_imports WHERE owner_scope=? ORDER BY repository_id LIMIT 2",
+      "SELECT repository_id FROM legacy_activation WHERE owner_scope=? ORDER BY repository_id LIMIT 2",
     ).all(ownerScope) as Array<{repository_id:string}>;
     return rows.length===1?rows[0]!.repository_id:null;
   }

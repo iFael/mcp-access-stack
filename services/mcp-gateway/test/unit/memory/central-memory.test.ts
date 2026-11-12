@@ -41,14 +41,25 @@ describe("Oracle Central Memory store", () => {
       }));
     const archived=db.importLegacySources(owner,repo,docs);
     expect(db.context(owner,repo).legacyStatus).toBe("imported");
+    expect(db.primaryRepositoryId(owner)).toBeNull();
     expect(()=>db.activateLegacyAuthority(owner,repo,
       "operation:activate:1",archived.importHash,"f".repeat(64)))
       .toThrow("MEMORY_ACTIVATION_CURATED_DECISION_REQUIRED");
     db.update(owner,mutation());
+    expect(()=>db.activateLegacyAuthority(owner,repo,
+      "operation:activate:1",archived.importHash,"f".repeat(64)))
+      .toThrow("MEMORY_ACTIVATION_CURATED_DECISION_REQUIRED");
+    const kinds=["decision","context","task"] as const;
+    kinds.forEach((kind,index)=>db.update(owner,mutation({
+      operationId:"operation:curated:"+index,recordId:"record:curated:"+index,
+      kind,evidenceRefs:docs.slice(index*4,index*4+4).map(doc=>
+        "legacy:"+doc.surface+":"+doc.filename+":"+doc.contentSha256),
+    })));
     const active=db.activateLegacyAuthority(owner,repo,
       "operation:activate:1",archived.importHash,"f".repeat(64));
     expect(active).toMatchObject({replayed:false,archiveDigest:"f".repeat(64)});
     expect(db.context(owner,repo).legacyStatus).toBe("active");
+    expect(db.primaryRepositoryId(owner)).toBe(repo);
     expect(db.activateLegacyAuthority(owner,repo,
       "operation:activate:1",archived.importHash,"f".repeat(64)))
       .toMatchObject({...active,replayed:true});
