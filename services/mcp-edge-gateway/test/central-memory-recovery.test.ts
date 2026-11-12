@@ -1,5 +1,5 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, mirrorMemoryUpdateResponse, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
 class MemoryStorage implements CloudAuditStorage {
@@ -41,6 +41,38 @@ const record=(changes:Partial<RecoveryRecord>={}):RecoveryRecord=>({
 });
 
 describe("Cloudflare off-host central memory recovery",()=>{
+  it("mirrors trusted native tool checkpoints without repeating a completed release",async()=>{
+    const storage=new MemoryStorage();
+    const key="io.github.ifael/mcp-memory-checkpoint";
+    const metadata={version:1,tool:"mcp_update",operationId:"native:mcp_update:001",
+      expectedRevision:0,record:record()};
+    const response=(value:unknown)=>new Response(JSON.stringify({
+      jsonrpc:"2.0",id:1,result:{content:[{type:"text",text:"Update succeeded"}],
+        _meta:{[key]:value}},
+    }),{headers:{"content-type":"application/json"}});
+    const allow=async(id:string)=>id===repo;
+    expect(await mirrorNativeCheckpointResponse(storage,user,"mcp_update",
+      response(metadata),allow)).toBe("persisted");
+    expect(await mirrorNativeCheckpointResponse(storage,user,"mcp_update",
+      response(metadata),allow)).toBe("persisted");
+    expect((await new CentralMemoryRecovery(storage).verifyRecord(
+      user,repo,"decision:single-memory")).length).toBe(1);
+    await expect(mirrorNativeCheckpointResponse(storage,user,"github_merge_pull_request",
+      response(metadata),allow)).rejects.toThrow("MEMORY_RECOVERY_RECEIPT_INVALID");
+    await expect(mirrorNativeCheckpointResponse(storage,user,"mcp_update",
+      response(metadata),async()=>false)).rejects.toThrow("MEMORY_RECOVERY_RECEIPT_UNAUTHORIZED");
+    const absent=new Response(JSON.stringify({jsonrpc:"2.0",id:2,result:{
+      content:[{type:"text",text:"No checkpoint"}]}}));
+    expect(await mirrorNativeCheckpointResponse(storage,user,"mcp_update",absent,allow))
+      .toBe("none");
+    const marked=await markNativeCheckpointDeferred(response(metadata));
+    const result=await marked.json() as {result:{content:unknown[];_meta:Record<string,unknown>}};
+    expect(result.result.content).toEqual([{type:"text",text:"Update succeeded"}]);
+    expect(result.result._meta["io.github.ifael/mcp-memory-warning"]).toBe("recovery_deferred");
+    expect(result.result._meta[key]).toEqual(metadata);
+  });
+
+
   it("mirrors only successful Oracle mutation receipts after validating the request identity",async()=>{
     const storage=new MemoryStorage();
     const args={repositoryId:repo,operationId:"memory:update:0001",recordId:"decision:single-memory",

@@ -7,7 +7,7 @@ export type MemoryAccessDenial =
   | "PERMISSION_DENIED";
 
 type MembershipLookup = (userId: string, repositoryId: string) =>
-  Promise<{ role: RepositoryRole } | null>;
+  Promise<{ role: RepositoryRole; repository?: {normalizedName:string} } | null>;
 
 /** The Edge validates repository membership before any memory call reaches Oracle. */
 export async function authorizeCentralMemory(
@@ -23,5 +23,9 @@ export async function authorizeCentralMemory(
   const access = await membership(userId,repositoryId);
   if (!access) return "REPOSITORY_NOT_FOUND";
   if (action === "memory_update" && access.role === "viewer") return "PERMISSION_DENIED";
+  // The historical .codex import is only for the MCP V3 repo. Do not let an
+  // unrelated project bind itself as the system-memory source of truth.
+  if (action === "memory_update" && args.action === "import_legacy" &&
+      access.repository?.normalizedName !== "mcp-access-stack") return "PERMISSION_DENIED";
   return null;
 }

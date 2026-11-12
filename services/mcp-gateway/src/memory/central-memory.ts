@@ -380,6 +380,16 @@ export class CentralMemoryStore {
     return {content:row.content,contentSha256:row.content_sha256};
   }
 
+  /** Only a fully imported, Edge-ACL-validated MCP V3 legacy scope can be
+   * used for automatic system lifecycle checkpoints. */
+  primaryRepositoryId(ownerScope:string):string|null {
+    ownerValid(ownerScope);
+    const rows=this.db.prepare(
+      "SELECT repository_id FROM legacy_imports WHERE owner_scope=? ORDER BY repository_id LIMIT 2",
+    ).all(ownerScope) as Array<{repository_id:string}>;
+    return rows.length===1?rows[0]!.repository_id:null;
+  }
+
   /**
    * Disaster recovery only. Rebuild the Oracle authority from a separately
    * verified Edge archive, within ONE transaction and only for an empty scope.

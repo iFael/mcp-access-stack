@@ -255,6 +255,7 @@ export function createGatewayApplication(
       workspaceExecutor,
       sourceControlExecutor,
       ...(dependencies.memoryStore === undefined ? {} : { memoryStore:dependencies.memoryStore }),
+      ...(typeof authenticatedUserId === "string" ? { memoryUserId:authenticatedUserId } : {}),
       ...(dependencies.policyAdmin === undefined ? {} : { policyAdmin: dependencies.policyAdmin }),
       ...(request.auth?.extra?.ownerScope === "owner" && typeof authenticatedUserId === "string"
         ? { authenticatedUserId } : {}),

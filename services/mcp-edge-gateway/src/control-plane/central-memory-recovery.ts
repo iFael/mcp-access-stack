@@ -61,6 +61,54 @@ export async function mirrorMemoryUpdateResponse(
 
 
 
+
+const CHECKPOINT_META_KEY="io.github.ifael/mcp-memory-checkpoint";
+
+/**
+ * A trusted Oracle tool completion can carry a typed, user-scoped memory receipt.
+ * The native operation must never be retried just because its recovery mirror failed.
+ */
+export async function mirrorNativeCheckpointResponse(
+  storage:RecoveryStorage,userId:string,tool:string,response:Response,
+  hasWriteAccess:(repositoryId:string)=>Promise<boolean>,
+):Promise<"persisted"|"none"|"upstream_error">{
+  if(!response.ok)return "upstream_error";
+  let payload:unknown;
+  try{payload=await response.clone().json();}catch{return "none";}
+  if(!object(payload)||!object(payload.result))return "none";
+  const result=payload.result;
+  if(result.isError===true)return "upstream_error";
+  if(!object(result._meta))return "none";
+  const metadata=result._meta[CHECKPOINT_META_KEY];
+  if(metadata===undefined)return "none";
+  if(!object(metadata)||metadata.version!==1||metadata.tool!==tool||
+    typeof metadata.operationId!=="string"||
+    !Number.isSafeInteger(metadata.expectedRevision)||
+    (metadata.expectedRevision as number)<0||!object(metadata.record))
+    bad("RECEIPT_INVALID");
+  const record=metadata.record as unknown as RecoveryRecord;
+  if(record.revision!==(metadata.expectedRevision as number)+1)bad("RECEIPT_INVALID");
+  if(!await hasWriteAccess(record.repositoryId))bad("RECEIPT_UNAUTHORIZED");
+  await new CentralMemoryRecovery(storage).append(userId,record.repositoryId,
+    metadata.operationId,metadata.expectedRevision as number,record);
+  return "persisted";
+}
+
+/** An off-host failure is visible without converting a successful native operation into an error. */
+export async function markNativeCheckpointDeferred(response:Response):Promise<Response>{
+  let body:unknown;
+  try{body=await response.clone().json();}catch{return response;}
+  if(!object(body)||!object(body.result)||body.result.isError===true)return response;
+  const result=body.result;
+  const meta=object(result._meta)?result._meta:{};
+  result._meta={...meta,"io.github.ifael/mcp-memory-warning":"recovery_deferred"};
+  const headers=new Headers(response.headers);
+  headers.delete("content-length");
+  headers.set("content-type","application/json; charset=utf-8");
+  headers.set("cache-control","no-store");
+  return new Response(JSON.stringify(body),{status:response.status,headers});
+}
+
 export interface RecoveryRecord {
   repositoryId:string;
   recordId:string;

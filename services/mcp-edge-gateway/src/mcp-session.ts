@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred } from "./control-plane/central-memory-recovery.js";
 import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
 import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
@@ -1346,6 +1346,20 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         // backup or repeat with a new ID; reissue the SAME operationId.
         return mcpToolError(body, "MEMORY_RECOVERY_PENDING",
           "Oracle may have committed; retry the same operationId to reconcile the off-host recovery copy.");
+      }
+    }
+    if(principal.userId && invocation &&
+      (invocation.name==="mcp_update" || invocation.name==="github_merge_pull_request")){
+      try{
+        await mirrorNativeCheckpointResponse(
+          this.ctx.storage,principal.userId,invocation.name,primaryResponse,
+          async repositoryId=>{
+            const access=await this.accountStore.getRepositoryForUser(principal.userId!,repositoryId);
+            return !!access && access.role!=="viewer";
+          },
+        );
+      }catch{
+        return markNativeCheckpointDeferred(primaryResponse);
       }
     }
     if (principal.userId && invocation?.name.startsWith("browser_")) {

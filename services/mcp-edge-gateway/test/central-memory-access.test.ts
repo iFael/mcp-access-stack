@@ -28,6 +28,19 @@ describe("Central Memory Edge repository authorization",()=>{
       .toBe("REPOSITORY_NOT_FOUND");
   });
 
+  it("allows legacy cutover only for the MCP V3 repository itself",async()=>{
+    const accounts=new EdgeAccountStore(new VolatileStore());
+    const user=await accounts.createSingleUserIdentity("owner");
+    const primary=await accounts.createRepository(user.id,"mcp-access-stack");
+    const other=await accounts.createRepository(user.id,"recontei-app");
+    const acl=(id:string,repo:string)=>accounts.getRepositoryForUser(id,repo);
+    expect(await authorizeCentralMemory("memory_update",
+      {...args(primary.id),action:"import_legacy"},user.id,acl)).toBeNull();
+    expect(await authorizeCentralMemory("memory_update",
+      {...args(other.id),action:"import_legacy"},user.id,acl)).toBe("PERMISSION_DENIED");
+    expect(await authorizeCentralMemory("memory_update",
+      {...args(other.id),action:"create"},user.id,acl)).toBeNull();
+  });
   it("enforces viewer read-only privileges when a repository is shared",async()=>{
     const allowed=async(_id:string,_repo:string)=>({role:"viewer" as const});
     expect(await authorizeCentralMemory("memory_context",args("repo_example"),
