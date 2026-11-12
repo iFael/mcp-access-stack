@@ -34,7 +34,7 @@ function validScope(userId:string,repositoryId:string):void{
 }
 async function hash(input:Uint8Array|string):Promise<string>{
   const bytes=typeof input==="string"?new TextEncoder().encode(input):input;
-  const buffer=await crypto.subtle.digest("SHA-256",bytes);
+  const buffer=await crypto.subtle.digest("SHA-256",new Uint8Array(bytes));
   return [...new Uint8Array(buffer)].map(x=>x.toString(16).padStart(2,"0")).join("");
 }
 function chunkKey(prefix:string,file:FileEntry,index:number):string{
