@@ -15,6 +15,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   // Central operational memory: one Oracle authority, no local copies.
   memory_context: "verify relevant claims against current Git, CI and runtime evidence; use memory_update with CAS after a user decision or meaningful checkpoint.",
   memory_update: "memory_context to verify the updated revision before proceeding.",
+  memory_recovery_export: "read subsequent pages to collect the verified off-host archive; never confuse disaster recovery evidence with live Oracle memory.",
 
   // Guides and workspaces
   get_operation_guide: "follow the returned steps in order; each tool's result names the call after it.",
