@@ -92,6 +92,28 @@ describe("public central-memory tools",()=>{
       name:"memory_context",arguments:{workspaceId:"mcp-access-stack",repositoryId:repo},
     });
     expect(context.structuredContent).toMatchObject({totalActive:0,records:[]});
+    expect(context.structuredContent).toMatchObject({legacyStatus:"imported"});
+    const activate={workspaceId:"mcp-access-stack",repositoryId:repo,
+      operationId:"operation:activation:1",action:"activate_legacy",
+      importHash:(first.structuredContent as {importHash:string}).importHash,
+      archiveDigest:"a".repeat(64)};
+    const early=await client.callTool({name:"memory_update",arguments:activate});
+    expect(early.isError).toBe(true);
+    expect(early.content).toEqual(expect.arrayContaining([expect.objectContaining({
+      text:"MEMORY_ACTIVATION_CURATED_DECISION_REQUIRED",
+    })]));
+    const decision=await client.callTool({name:"memory_update",arguments:updateArgs});
+    expect(decision.isError).toBeFalsy();
+    const activated=await client.callTool({name:"memory_update",arguments:activate});
+    expect(activated.structuredContent).toMatchObject({replayed:false,
+      archiveDigest:"a".repeat(64)});
+    const replayActivation=await client.callTool({name:"memory_update",arguments:activate});
+    expect(replayActivation.structuredContent).toMatchObject({replayed:true});
+    const live=await client.callTool({name:"memory_context",arguments:{
+      workspaceId:"mcp-access-stack",repositoryId:repo,
+    }});
+    expect(live.structuredContent).toMatchObject({legacyStatus:"active"});
+
     const found=await client.callTool({name:"memory_context",arguments:{
       workspaceId:"mcp-access-stack",repositoryId:repo,query:"legacy source preserved",
     }});

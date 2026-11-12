@@ -1,5 +1,6 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, verifyLegacyCutoverRecovery, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryLegacyArchive } from "../src/control-plane/central-memory-legacy-archive.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
 class MemoryStorage implements CloudAuditStorage {
@@ -41,6 +42,43 @@ const record=(changes:Partial<RecoveryRecord>={}):RecoveryRecord=>({
 });
 
 describe("Cloudflare off-host central memory recovery",()=>{
+  it("blocks cutover until the off-host legacy copy and curated event ledger both verify",async()=>{
+    const storage=new MemoryStorage();
+    const hash=async(value:string)=>{
+      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value));
+      return [...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    };
+    const names=["CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
+      "NEXT_STEPS.md","PROJECT_CONTEXT.md"] as const;
+    const docs=await Promise.all((["oracle","windows"] as const).flatMap(surface=>
+      names.map(async filename=>{
+        const content=surface+":"+filename+"\nA preserved source";
+        return {surface,filename,content,contentSha256:await hash(content)};
+      })));
+    const sorted=[...docs].sort((a,b)=>
+      (a.surface+":"+a.filename).localeCompare(b.surface+":"+b.filename));
+    const importHash=await hash(JSON.stringify(sorted.map(d=>({
+      surface:d.surface,filename:d.filename,hash:d.contentSha256,
+    }))));
+    const storageBackup=new CentralMemoryLegacyArchive(storage);
+    const backupDigest="a".repeat(64);
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,backupDigest))
+      .rejects.toThrow("MEMORY_ARCHIVE_MISSING");
+    const bytes=docs.reduce((total,d)=>total+new TextEncoder().encode(d.content).length,0);
+    await storageBackup.persist(user,repo,docs,importHash,bytes);
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,backupDigest))
+      .rejects.toThrow("MEMORY_RECOVERY_ARCHIVE_INCOMPLETE");
+    const ledger=new CentralMemoryRecovery(storage);
+    await ledger.append(user,repo,"memory:update:0001",0,record());
+    const archiveDigest=(await ledger.exportVerified(user,repo)).archiveDigest;
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,"f".repeat(64)))
+      .rejects.toThrow("MEMORY_RECOVERY_CUTOVER_BACKUP_MISMATCH");
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,
+      "f".repeat(64),archiveDigest)).rejects.toThrow("MEMORY_RECOVERY_CUTOVER_BACKUP_MISMATCH");
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,archiveDigest))
+      .resolves.toBeUndefined();
+  });
+
   it("exports hash-chained events without using Oracle after its loss",async()=>{
     const storage=new MemoryStorage(),writer=new CentralMemoryRecovery(storage);
     await writer.append(user,repo,"memory:update:0001",0,record());

@@ -28575,6 +28575,14 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           ],
           "type": "object"
         },
+        "legacyStatus": {
+          "enum": [
+            "none",
+            "imported",
+            "active"
+          ],
+          "type": "string"
+        },
         "records": {
           "items": {
             "additionalProperties": false,
@@ -28663,6 +28671,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "required": [
         "repositoryId",
         "totalActive",
+        "legacyStatus",
         "records",
         "archiveMatches"
       ],
@@ -28688,7 +28697,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create, revise or resolve a memory record with exact CAS, or import all 12 legacy .codex source files losslessly in one atomic operation for the final cutover. Import does not activate legacy history as current truth. Never claim an agent observation is independently verified; this tool does not authorize Git, deploy or infrastructure actions. Next: memory_context to verify the updated revision before proceeding.",
+    "description": "Create/revise/resolve a record with exact CAS; import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure. Next: memory_context to verify the updated revision before proceeding.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -28701,8 +28710,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "create",
             "revise",
             "resolve",
-            "import_legacy"
+            "import_legacy",
+            "activate_legacy"
           ],
+          "type": "string"
+        },
+        "archiveDigest": {
+          "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
         "confidence": {
@@ -28774,6 +28788,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "minimum": 0,
           "type": "integer"
         },
+        "importHash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "decision",
@@ -28822,6 +28840,13 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activatedAt": {
+          "type": "string"
+        },
+        "archiveDigest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "filesImported": {
           "const": 12,
           "type": "number"
@@ -28925,15 +28950,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "ab0532da2711260b410eb31bc37370db908840b5d214def6fc961a793fa5ef81",
-  "serverVersion": "0.4.0-catalog.cab0532da2711.s3ad895657bc2",
+  "contractRevision": "872dbc189511667a729f97b5d0430008328d05044f1a661769590ebee6f999eb",
+  "serverVersion": "0.4.0-catalog.c872dbc189511.s3ad895657bc2",
   "toolCount": 131,
   "toolSetRevision": "3ad895657bc2a0c890c4427e9f292886c515a59ef5e7cc40b592cbcb20137756"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cab0532da2711.s3ad895657bc2"
+  "version": "0.4.0-catalog.c872dbc189511.s3ad895657bc2"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

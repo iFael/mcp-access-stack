@@ -38,7 +38,11 @@ describe("Central Memory Edge repository authorization",()=>{
     expect(await authorizeCentralMemory("memory_update",
       {...args(primary.id),action:"import_legacy"},user.id,acl)).toBeNull();
     expect(await authorizeCentralMemory("memory_update",
+      {...args(primary.id),action:"activate_legacy"},user.id,acl)).toBeNull();
+    expect(await authorizeCentralMemory("memory_update",
       {...args(other.id),action:"import_legacy"},user.id,acl)).toBe("PERMISSION_DENIED");
+    expect(await authorizeCentralMemory("memory_update",
+      {...args(other.id),action:"activate_legacy"},user.id,acl)).toBe("PERMISSION_DENIED");
     expect(await authorizeCentralMemory("memory_update",
       {...args(other.id),action:"create"},user.id,acl)).toBeNull();
   });
@@ -50,7 +54,10 @@ describe("Central Memory Edge repository authorization",()=>{
       "usr_22222222-2222-4222-8222-222222222222",allowed)).toBe("PERMISSION_DENIED");
     expect(await authorizeCentralMemory("memory_recovery_export",args("repo_example"),
       "usr_22222222-2222-4222-8222-222222222222",allowed)).toBe("PERMISSION_DENIED");
-    const editor=async()=>({role:"editor" as const});
+    const editor=async()=>({role:"editor" as const,repository:{normalizedName:"mcp-access-stack"}});
+    expect(await authorizeCentralMemory("memory_update",
+      {...args("repo_example"),action:"activate_legacy"},
+      "usr_22222222-2222-4222-8222-222222222222",editor)).toBe("PERMISSION_DENIED");
     expect(await authorizeCentralMemory("memory_recovery_export",args("repo_example"),
       "usr_22222222-2222-4222-8222-222222222222",editor)).toBe("PERMISSION_DENIED");
   });

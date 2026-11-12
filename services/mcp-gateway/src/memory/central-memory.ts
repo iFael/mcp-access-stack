@@ -49,6 +49,7 @@ export interface MemoryMutation {
 }
 export interface MemoryContext {
   repositoryId: string; records: MemoryRecord[]; totalActive: number;
+  legacyStatus:"none"|"imported"|"active";
   archiveMatches: Array<{surface:"oracle"|"windows";filename:string;contentSha256:string;excerpt:string}>;
 }
 
@@ -95,6 +96,11 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
   owner_scope TEXT NOT NULL,repository_id TEXT NOT NULL,
   import_hash TEXT NOT NULL,files_imported INTEGER NOT NULL,
   total_bytes INTEGER NOT NULL,imported_at TEXT NOT NULL,
+  PRIMARY KEY(owner_scope,repository_id)
+);
+CREATE TABLE IF NOT EXISTS legacy_activation (
+  owner_scope TEXT NOT NULL,repository_id TEXT NOT NULL,operation_id TEXT NOT NULL,
+  import_hash TEXT NOT NULL,archive_digest TEXT NOT NULL,activated_at TEXT NOT NULL,
   PRIMARY KEY(owner_scope,repository_id)
 );
 CREATE TABLE IF NOT EXISTS recovery_imports (
@@ -203,7 +209,7 @@ export class CentralMemoryStore {
           db.prepare("INSERT INTO schema_version(version,checksum) VALUES(1,?)").run(sha(schema));
         }
         const required=["records","events","receipts","legacy_sources","legacy_imports",
-          "recovery_imports","immutable_event_update","immutable_event_delete"];
+          "recovery_imports","legacy_activation","immutable_event_update","immutable_event_delete"];
         const objects=db.prepare(
           "SELECT name FROM sqlite_master WHERE type IN ('table','trigger')",
         ).all() as Array<{name:string}>;
@@ -251,7 +257,14 @@ export class CentralMemoryStore {
         });
       }
     }
-    return {repositoryId,records:records.map(asRecord),totalActive:total.n,archiveMatches};
+    const enabled=this.db.prepare(
+      "SELECT 1 FROM legacy_activation WHERE owner_scope=? AND repository_id=?",
+    ).get(ownerScope,repositoryId);
+    const imported=this.db.prepare(
+      "SELECT 1 FROM legacy_imports WHERE owner_scope=? AND repository_id=?",
+    ).get(ownerScope,repositoryId);
+    return {repositoryId,records:records.map(asRecord),totalActive:total.n,
+      archiveMatches,legacyStatus:enabled?"active":imported?"imported":"none"};
   }
 
   update(ownerScope: string, input: MemoryMutation): {record:MemoryRecord;replayed:boolean} {
@@ -378,6 +391,70 @@ export class CentralMemoryStore {
     if(!row) return null;
     if(sha(row.content)!==row.content_sha256) invalid("IMPORT_CORRUPT");
     return {content:row.content,contentSha256:row.content_sha256};
+  }
+
+  /**
+   * One-way authority switch. The Edge verifies the off-host import and events
+   * before forwarding this operation; Oracle additionally verifies the original
+   * import and a curated active decision before persisting the cutover receipt.
+   */
+  activateLegacyAuthority(
+    ownerScope:string,repositoryId:string,operationId:string,
+    expectedImportHash:string,verifiedArchiveDigest:string,
+  ):{
+    repositoryId:string;importHash:string;archiveDigest:string;
+    activatedAt:string;replayed:boolean;
+  } {
+    ownerValid(ownerScope);repoValid(repositoryId);
+    if(!OP_ID.test(operationId)||
+       !/^[0-9a-f]{64}$/u.test(expectedImportHash)||
+       !/^[0-9a-f]{64}$/u.test(verifiedArchiveDigest))invalid("ACTIVATION_INPUT_INVALID");
+    this.db.exec("BEGIN IMMEDIATE");
+    try{
+      const prior=this.db.prepare(
+        "SELECT operation_id,import_hash,archive_digest,activated_at FROM legacy_activation "+
+        "WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as
+        {operation_id:string;import_hash:string;archive_digest:string;activated_at:string}|undefined;
+      if(prior){
+        if(prior.operation_id!==operationId||prior.import_hash!==expectedImportHash||
+          prior.archive_digest!==verifiedArchiveDigest)invalid("ACTIVATION_CONFLICT");
+        this.db.exec("COMMIT");
+        return {repositoryId,importHash:prior.import_hash,
+          archiveDigest:prior.archive_digest,activatedAt:prior.activated_at,replayed:true};
+      }
+      const imported=this.db.prepare(
+        "SELECT import_hash,files_imported FROM legacy_imports "+
+        "WHERE owner_scope=? AND repository_id=?",
+      ).get(ownerScope,repositoryId) as
+        {import_hash:string;files_imported:number}|undefined;
+      if(imported?.import_hash!==expectedImportHash||imported.files_imported!==12)
+        invalid("ACTIVATION_IMPORT_UNVERIFIED");
+      const files=this.db.prepare(
+        "SELECT content,content_sha256 FROM legacy_sources "+
+        "WHERE owner_scope=? AND repository_id=?",
+      ).all(ownerScope,repositoryId) as Array<{content:string;content_sha256:string}>;
+      if(files.length!==12||files.some(f=>sha(f.content)!==f.content_sha256))
+        invalid("ACTIVATION_IMPORT_UNVERIFIED");
+      const curated=this.db.prepare(
+        "SELECT evidence_refs FROM records "+
+        "WHERE owner_scope=? AND repository_id=? AND status='active' AND kind='decision' "+
+        "ORDER BY record_id LIMIT 10",
+      ).all(ownerScope,repositoryId) as Array<{evidence_refs:string}>;
+      if(!curated.some(row=>{
+        try {const refs=JSON.parse(row.evidence_refs);return Array.isArray(refs)&&
+          refs.some((ref:unknown)=>typeof ref==="string"&&ref.length>0);}
+        catch {return false;}
+      }))invalid("ACTIVATION_CURATED_DECISION_REQUIRED");
+      const activatedAt=new Date().toISOString();
+      this.db.prepare(
+        "INSERT INTO legacy_activation(owner_scope,repository_id,operation_id,import_hash,archive_digest,activated_at) "+
+        "VALUES(?,?,?,?,?,?)",
+      ).run(ownerScope,repositoryId,operationId,expectedImportHash,verifiedArchiveDigest,activatedAt);
+      this.db.exec("COMMIT");
+      return {repositoryId,importHash:expectedImportHash,
+        archiveDigest:verifiedArchiveDigest,activatedAt,replayed:false};
+    }catch(error){this.db.exec("ROLLBACK");throw error;}
   }
 
   /** Only a fully imported, Edge-ACL-validated MCP V3 legacy scope can be

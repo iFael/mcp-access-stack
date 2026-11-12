@@ -30,6 +30,38 @@ const mutation = (overrides: Partial<MemoryMutation> = {}): MemoryMutation => ({
 });
 
 describe("Oracle Central Memory store", () => {
+  it("activates legacy authority only after a complete import and curated decision",()=>{
+    const {db,databasePath,releaseRoot}=create();
+    expect(db.context(owner,repo).legacyStatus).toBe("none");
+    const docs=(["oracle","windows"] as const).flatMap(surface=>
+      LEGACY_CODEX_FILES.map(filename=>{
+        const content="# "+surface+" "+filename+"\nHistory\n";
+        return {surface,filename,content,
+          contentSha256:createHash("sha256").update(content).digest("hex")};
+      }));
+    const archived=db.importLegacySources(owner,repo,docs);
+    expect(db.context(owner,repo).legacyStatus).toBe("imported");
+    expect(()=>db.activateLegacyAuthority(owner,repo,
+      "operation:activate:1",archived.importHash,"f".repeat(64)))
+      .toThrow("MEMORY_ACTIVATION_CURATED_DECISION_REQUIRED");
+    db.update(owner,mutation());
+    const active=db.activateLegacyAuthority(owner,repo,
+      "operation:activate:1",archived.importHash,"f".repeat(64));
+    expect(active).toMatchObject({replayed:false,archiveDigest:"f".repeat(64)});
+    expect(db.context(owner,repo).legacyStatus).toBe("active");
+    expect(db.activateLegacyAuthority(owner,repo,
+      "operation:activate:1",archived.importHash,"f".repeat(64)))
+      .toMatchObject({...active,replayed:true});
+    expect(()=>db.activateLegacyAuthority(owner,repo,
+      "operation:activate:2",archived.importHash,"f".repeat(64)))
+      .toThrow("MEMORY_ACTIVATION_CONFLICT");
+    expect(db.context(owner,secondRepo).legacyStatus).toBe("none");
+    db.close();
+    const reopened=CentralMemoryStore.open(databasePath,releaseRoot);
+    expect(reopened.context(owner,repo).legacyStatus).toBe("active");
+    reopened.close();
+  });
+
   it("imports both six-file legacy surfaces losslessly in one transaction",()=>{
     const {db,databasePath,releaseRoot}=create();
     const documents=(["oracle","windows"] as const).flatMap(surface=>

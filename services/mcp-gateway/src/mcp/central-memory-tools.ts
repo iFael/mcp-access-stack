@@ -30,6 +30,7 @@ const contextInput = z.object({
 }).strict();
 const contextOutput = z.object({
   repositoryId,totalActive:z.number().int().nonnegative(),
+  legacyStatus:z.enum(["none","imported","active"]),
   records:z.array(recordSchema),history:z.array(recordSchema).optional(),
   archiveMatches:z.array(z.object({
     surface:z.enum(["oracle","windows"]),filename:z.enum(LEGACY_CODEX_FILES),
@@ -49,7 +50,9 @@ const contextOutput = z.object({
 const updateInput = z.object({
   workspaceId:authorityWorkspace,repositoryId,
   operationId:z.string().min(8).max(128),
-  action:z.enum(["create","revise","resolve","import_legacy"]),
+  action:z.enum(["create","revise","resolve","import_legacy","activate_legacy"]),
+  importHash:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  archiveDigest:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   recordId:recordId.optional(),
   expectedRevision:z.number().int().nonnegative().optional(),
   kind:z.enum(["decision","context","task","issue","note"]).optional(),
@@ -68,6 +71,8 @@ const updateOutput=z.object({
   record:recordSchema.optional(),
   repositoryId:repositoryId.optional(),
   importHash:z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+  archiveDigest:z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+  activatedAt:z.string().optional(),
   filesImported:z.literal(12).optional(),
   totalBytes:z.number().int().positive().optional(),
   replayed:z.boolean(),
@@ -152,7 +157,7 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
 
   server.registerTool("memory_update",{
     title:"Update MCP V3 central memory",
-    description:"Create, revise or resolve a memory record with exact CAS, or import all 12 legacy .codex source files losslessly in one atomic operation for the final cutover. Import does not activate legacy history as current truth. Never claim an agent observation is independently verified; this tool does not authorize Git, deploy or infrastructure actions.",
+    description:"Create/revise/resolve a record with exact CAS; import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure.",
     inputSchema:updateInput,outputSchema:updateOutput,
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
     _meta:meta,
@@ -164,7 +169,8 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
         if (!owner?.startsWith("user:")) throw new Error("MEMORY_IDENTITY_REQUIRED");
         const parsed=updateInput.parse(input);
         if(parsed.action==="import_legacy"){
-          if(!parsed.documents || parsed.recordId!==undefined ||
+          if(parsed.importHash!==undefined || parsed.archiveDigest!==undefined ||
+             !parsed.documents || parsed.recordId!==undefined ||
              parsed.expectedRevision!==undefined || parsed.kind!==undefined ||
              parsed.confidence!==undefined || parsed.title!==undefined ||
              parsed.content!==undefined || parsed.evidenceRefs!==undefined) {
@@ -174,7 +180,21 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
             owner,parsed.repositoryId,parsed.documents,
           ));
         }
-        if(parsed.documents!==undefined || parsed.recordId===undefined ||
+        if(parsed.action==="activate_legacy"){
+          if(!parsed.importHash || !parsed.archiveDigest ||
+             parsed.documents!==undefined || parsed.recordId!==undefined ||
+             parsed.expectedRevision!==undefined || parsed.kind!==undefined ||
+             parsed.confidence!==undefined || parsed.title!==undefined ||
+             parsed.content!==undefined || parsed.evidenceRefs!==undefined) {
+            throw new Error("MEMORY_ACTIVATION_FIELDS_INVALID");
+          }
+          return updateOutput.parse(options.store.activateLegacyAuthority(
+            owner,parsed.repositoryId,parsed.operationId,
+            parsed.importHash,parsed.archiveDigest,
+          ));
+        }
+        if(parsed.importHash!==undefined || parsed.archiveDigest!==undefined ||
+           parsed.documents!==undefined || parsed.recordId===undefined ||
            parsed.expectedRevision===undefined) {
           throw new Error("MEMORY_INVALID_ARGUMENT");
         }
@@ -194,8 +214,11 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
       const note=result.record!==undefined
         ? "Memory record "+result.record.recordId+" revision "+result.record.revision+
           (result.replayed?" (idempotent replay)":" saved")
-        : "Legacy archive "+result.importHash+" preserved: "+result.filesImported+
-          " source documents"+(result.replayed?" (idempotent replay)":"");
+        : result.filesImported===12
+        ? "Legacy archive "+result.importHash+" preserved: "+result.filesImported+
+          " source documents"+(result.replayed?" (idempotent replay)":"")
+        : "Central memory authority activated for "+result.repositoryId+
+          (result.replayed?" (idempotent replay)":"");
       return {content:[{type:"text" as const,text:note}],structuredContent:result};
     } catch(error) {
       return memoryError(error);

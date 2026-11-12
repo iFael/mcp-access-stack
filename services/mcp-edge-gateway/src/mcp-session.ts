@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
 import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
 import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
@@ -1332,7 +1332,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     );
     if (principal.userId && invocation?.name === "memory_update") {
       try {
-        if(invocation.arguments.action==="import_legacy"){
+        if(invocation.arguments.action==="activate_legacy"){
+          // Edge preflight already verified its durable recovery copy.
+        }else if(invocation.arguments.action==="import_legacy"){
           await mirrorLegacyImportResponse(
             this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
           );
@@ -1403,6 +1405,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         request,memoryBody,principal,
       );
       const data=await readMcpStructuredContent(memoryResponse);
+      if(data?.legacyStatus==="imported")return response;
       const note=memoryContextMessage(repositoryId,data?.records);
       return note?appendMemoryContextText(response,note):response;
     }catch{
@@ -1468,6 +1471,20 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         (userId,repositoryId) => this.accountStore.getRepositoryForUser(userId,repositoryId),
       );
       if (refusal) return mcpToolError(body, refusal, "Central memory access denied.");
+      if(invocation.name==="memory_update"&&invocation.arguments.action==="activate_legacy"){
+        try{
+          const userId=principal.userId!;
+          const repositoryId=invocation.arguments.repositoryId as string;
+          await verifyLegacyCutoverRecovery(
+            this.ctx.storage,userId,repositoryId,
+            invocation.arguments.importHash as string,
+            invocation.arguments.archiveDigest as string,
+          );
+        }catch{
+          return mcpToolError(body,"MEMORY_CUTOVER_PRECHECK_FAILED",
+            "Verified off-host archive or recovery ledger is incomplete.");
+        }
+      }
       return null; // Never select a companion for memory.
     }
 

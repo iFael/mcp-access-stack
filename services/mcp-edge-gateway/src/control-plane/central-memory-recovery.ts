@@ -148,6 +148,26 @@ export async function exportCentralMemoryRecovery(
   bad("INPUT_INVALID");
 }
 
+/**
+ * The irreversible authority switch is permitted only after the Edge's
+ * independent recovery copy validates both historical documents and all
+ * hash-chained memory events for the same authenticated owner and repository.
+ */
+export async function verifyLegacyCutoverRecovery(
+  storage:RecoveryStorage,userId:string,repositoryId:string,
+  expectedImportHash:string,expectedArchiveDigest:string,
+):Promise<void>{
+  if(!/^[0-9a-f]{64}$/u.test(expectedImportHash)||
+     !/^[0-9a-f]{64}$/u.test(expectedArchiveDigest))bad("CUTOVER_INPUT_INVALID");
+  const legacy=await new CentralMemoryLegacyArchive(storage).exportVerified(userId,repositoryId);
+  const recovery=await new CentralMemoryRecovery(storage).exportVerified(userId,repositoryId);
+  if(legacy.importHash!==expectedImportHash ||
+     recovery.archiveDigest!==expectedArchiveDigest ||
+     !recovery.events.some(e=>e.record.kind==="decision" &&
+       e.record.status==="active" && e.record.evidenceRefs.length>0))
+    bad("CUTOVER_BACKUP_MISMATCH");
+}
+
 export interface RecoveryRecord {
   repositoryId:string;
   recordId:string;

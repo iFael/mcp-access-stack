@@ -6,9 +6,9 @@ These instructions apply to the entire `mcp-access-stack` repository.
 
 ## Operational state
 
-Local operational state for ChatGPT work lives only in the ignored `.codex/` directory. Do not commit `.codex` and do not create parallel state files.
+One operational authority at a time. The cutover from the ignored `.codex/` to the Oracle-owned Central Memory is **explicit and one-way**: consult `memory_context` for the authorized MCP V3 repositoryId. Only `legacyStatus="active"` proves that the new authority was activated after verifying the original imports and an off-host recovery archive. Until then, the existing `.codex` remains canonical. After activation, Central Memory is the sole operational store; do not read, recreate, update or synchronize `.codex`. The Edge backup is for recovery, not a second live memory. If Central Memory is unavailable after activation, report that condition and reconcile its recovery; never silently fall back to a stale file.
 
-When `.codex/` is present, it must contain exactly these six canonical files:
+**Only before the verified cutover**, if `.codex/` is present it must contain exactly these six canonical files:
 
 - `CURRENT_TASK.md`
 - `DECISIONS.md`
@@ -17,13 +17,13 @@ When `.codex/` is present, it must contain exactly these six canonical files:
 - `NEXT_STEPS.md`
 - `PROJECT_CONTEXT.md`
 
-At the start of a task or after a chat/session handoff, read those six files before changing the repository, then inspect the current Git branch, HEAD, working tree and relevant diff. Preserve pre-existing local changes.
+At the start of a task or handoff, resolve the authorized repositoryId and consult `memory_context`. If the legacy scope is not yet activated, read the six existing `.codex` files and preserve their current authority; do not treat an unavailable response as empty memory. Once activated, use Central Memory instead and retrieve historical source excerpts only when needed, labeling them unverified. Always inspect the actual Git branch, HEAD, worktree and relevant diff before changing code. Preserve pre-existing changes.
 
 ## Context and handoff policy
 
 The MCP server does not receive a reliable ChatGPT context-window utilization percentage. Never invent or estimate a context percentage and never use tool-call count, elapsed time or request count as a proxy for token utilization.
 
-Use deterministic operational checkpoints instead. Update the existing `.codex` files whenever a non-replayable or continuity-critical boundary is reached, including:
+Use deterministic operational checkpoints instead. Before cutover, update the existing `.codex` files; **after activation, use `memory_update` with idempotent operationId and exact revision CAS** for meaningful verified milestones or user-approved decisions. Native release/merge checkpoint capture is supplementary evidence, not unconditional authority. Record a checkpoint whenever a non-replayable or continuity-critical boundary is reached, including:
 
 - a material architecture or policy decision;
 - a completed implementation milestone or incident diagnosis;
@@ -35,7 +35,7 @@ Use deterministic operational checkpoints instead. Update the existing `.codex` 
 
 A checkpoint is state preservation, not a request to stop work. A new-chat handoff is required only when explicitly requested or when continuing in the current session is no longer reliable for reasons that are actually observable. Do not claim a hidden token threshold was reached.
 
-## Canonical file responsibilities
+## Canonical file responsibilities (legacy staging only)
 
 - `CURRENT_TASK.md`: current objective, scope, authorization boundary and immediate state.
 - `DECISIONS.md`: durable architectural and operational decisions only.
@@ -44,7 +44,7 @@ A checkpoint is state preservation, not a request to stop work. A new-chat hando
 - `NEXT_STEPS.md`: ordered pending gates and explicit authorization boundaries.
 - `PROJECT_CONTEXT.md`: stable architecture, conventions and production baseline needed by a new session.
 
-Do not duplicate the same transient narrative across all six files. Put each fact in the file whose responsibility owns it and reference durable facts compactly from the others when needed.
+Before cutover, do not duplicate transient narratives across the six files. After activation, use discrete Central Memory records with provenance and revisions, and classify archived source text as `historical_unverified` until reconciled against live evidence. No parallel or shadow documentation.
 
 ## Long-running and disruptive work
 

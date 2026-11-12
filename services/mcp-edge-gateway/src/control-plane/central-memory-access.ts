@@ -24,9 +24,12 @@ export async function authorizeCentralMemory(
   if (!access) return "REPOSITORY_NOT_FOUND";
   if (action === "memory_recovery_export" && access.role !== "owner") return "PERMISSION_DENIED";
   if (action === "memory_update" && access.role === "viewer") return "PERMISSION_DENIED";
+  if (action === "memory_update" && args.action === "activate_legacy" &&
+      access.role !== "owner") return "PERMISSION_DENIED";
   // The historical .codex import is only for the MCP V3 repo. Do not let an
   // unrelated project bind itself as the system-memory source of truth.
-  if (action === "memory_update" && args.action === "import_legacy" &&
+  if (action === "memory_update" &&
+      (args.action === "import_legacy" || args.action === "activate_legacy") &&
       access.repository?.normalizedName !== "mcp-access-stack") return "PERMISSION_DENIED";
   return null;
 }
