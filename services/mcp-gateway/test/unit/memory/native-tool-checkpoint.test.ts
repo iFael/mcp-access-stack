@@ -7,10 +7,10 @@ import { CentralMemoryStore, LEGACY_CODEX_FILES } from "../../../src/memory/cent
 import { checkpointFromNativeTool, captureNativeToolCheckpoint } from "../../../src/memory/native-tool-checkpoint.js";
 
 const repo="repo_a3c7aaa6-9fb9-4d06-ba79-29f3c4cf1767";
-const updateId="cc9a5bb2-1773-4ecc-91ca-ca8b6d424f75";
-const mainSha="2843d1adea362c95ba3790badca94d16229b67ae";
+const updateId="upd_48b56969-e75f-4a0b-8a2a-5fa0799f80f0";
+const mainSha="0283771123bb27dc9301ed13bc6ab454a0b382c4";
 const result={update:{updateId,status:"succeeded",step:"windows_promote",mainSha,
-  tag:"v1.1.0-beta.135-connector.1",companionTag:"v1.1.0-companion.43022866283"}};
+  tag:"v1.1.0-beta.137-connector.1",companionTag:"v1.1.0-companion.43483987901"}};
 
 describe("deterministic tool-result checkpoints",()=>{
 
@@ -92,6 +92,12 @@ describe("deterministic tool-result checkpoints",()=>{
       {workspaceId:"wrong"},{update:result.update},repo)).toBeNull();
     expect(checkpointFromNativeTool("mcp_update",
       {workspaceId:"mcp-access-stack"},{update:result.update},"bad")).toBeNull();
+    expect(checkpointFromNativeTool("mcp_update",
+      {workspaceId:"mcp-access-stack"},{update:{...result.update,
+        updateId:updateId.slice(4)}},repo)).toBeNull();
+    expect(checkpointFromNativeTool("mcp_update",
+      {workspaceId:"mcp-access-stack"},{update:{...result.update,
+        updateId:"other_"+updateId.slice(4)}},repo)).toBeNull();
     expect(checkpointFromNativeTool("mcp_update",
       {workspaceId:"mcp-access-stack"},{update:{...result.update,tag:"private=secret"}},
       repo)?.content).not.toContain("private=secret");
