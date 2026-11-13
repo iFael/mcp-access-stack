@@ -1,5 +1,5 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, verifyLegacyCutoverRecovery, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, verifyLegacyCutoverRecovery, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
 import { CentralMemoryLegacyArchive } from "../src/control-plane/central-memory-legacy-archive.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
@@ -77,6 +77,56 @@ describe("Cloudflare off-host central memory recovery",()=>{
       "f".repeat(64),archiveDigest)).rejects.toThrow("MEMORY_RECOVERY_CUTOVER_BACKUP_MISMATCH");
     await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,archiveDigest))
       .resolves.toBeUndefined();
+  });
+
+  it("preserves an authenticated activation receipt independently of Oracle across later updates",async()=>{
+    const storage=new MemoryStorage();
+    const digest=async(value:string)=>{
+      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value));
+      return [...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    };
+    const names=["CURRENT_TASK.md","DECISIONS.md","HANDOFF.md","KNOWN_ISSUES.md",
+      "NEXT_STEPS.md","PROJECT_CONTEXT.md"] as const;
+    const docs=await Promise.all((["oracle","windows"] as const).flatMap(surface=>
+      names.map(async filename=>{
+        const content=surface+":"+filename;
+        return {surface,filename,content,contentSha256:await digest(content)};
+      })));
+    const sorted=[...docs].sort((a,b)=>
+      (a.surface+":"+a.filename).localeCompare(b.surface+":"+b.filename));
+    const importHash=await digest(JSON.stringify(sorted.map(d=>({
+      surface:d.surface,filename:d.filename,hash:d.contentSha256,
+    }))));
+    await new CentralMemoryLegacyArchive(storage).persist(user,repo,docs,importHash,
+      docs.reduce((n,d)=>n+new TextEncoder().encode(d.content).length,0));
+    const ledger=new CentralMemoryRecovery(storage);
+    await ledger.append(user,repo,"memory:update:0001",0,record());
+    const archiveDigest=(await ledger.exportVerified(user,repo)).archiveDigest;
+    const args={action:"activate_legacy",repositoryId:repo,
+      operationId:"memory:activate:001",importHash,archiveDigest};
+    const response=(activatedAt:string)=>new Response(JSON.stringify({
+      jsonrpc:"2.0",id:1,result:{structuredContent:{
+        repositoryId:repo,importHash,archiveDigest,activatedAt,replayed:false,
+      }},
+    }));
+    expect(await mirrorLegacyActivationResponse(storage,user,args,
+      response("2026-11-12T21:00:00.000Z"))).toBe("persisted");
+    await ledger.append(user,repo,"memory:update:0002",1,
+      record({revision:2,updatedAt:"2026-11-12T22:00:00.000Z"}));
+    const exported=await exportCentralMemoryRecovery(storage,user,repo,{kind:"events"});
+    expect(exported).toMatchObject({totalEvents:2,
+      activation:{operationId:args.operationId,importHash,archiveDigest,
+        activatedAt:"2026-11-12T21:00:00.000Z"}});
+    await expect(verifyLegacyCutoverRecovery(storage,user,repo,importHash,archiveDigest))
+      .resolves.toBeUndefined();
+    // An independently rebuilt Oracle authority may reuse the same operationId
+    // with a different local timestamp; the original off-host receipt is immutable.
+    expect(await mirrorLegacyActivationResponse(storage,user,args,
+      response("2026-11-13T01:00:00.000Z"))).toBe("persisted");
+    await expect(mirrorLegacyActivationResponse(storage,user,
+      {...args,operationId:"memory:activate:other"},
+      response("2026-11-13T02:00:00.000Z")))
+      .rejects.toThrow("MEMORY_RECOVERY_ACTIVATION_CONFLICT");
   });
 
   it("exports hash-chained events without using Oracle after its loss",async()=>{

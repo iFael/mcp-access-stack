@@ -9,6 +9,7 @@ const KINDS=new Set(["decision","context","task","issue","note"]);
 const CONFIDENCES=new Set(["user_reported","inferred"]);
 const STATUSES=new Set(["active","resolved"]);
 const PREFIX="central-memory-recovery:v1:";
+const ACTIVATION_PREFIX="central-memory-activation:v1:";
 
 
 function object(value:unknown):value is Record<string,unknown> {
@@ -111,6 +112,73 @@ export async function markNativeCheckpointDeferred(response:Response):Promise<Re
 }
 
 
+export interface LegacyActivationReceipt {
+  operationId:string;
+  importHash:string;
+  archiveDigest:string;
+  activatedAt:string;
+}
+
+/** Persist an Oracle-authoritative one-way cutover receipt off-host. */
+export async function mirrorLegacyActivationResponse(
+  storage:RecoveryStorage,userId:string,
+  args:Record<string,unknown>,response:Response,
+):Promise<"persisted"|"upstream_error"> {
+  if(!response.ok)return "upstream_error";
+  let payload:unknown;
+  try{payload=await response.clone().json();}catch{bad("ACTIVATION_RECEIPT_INVALID");}
+  if(!object(payload)||!object(payload.result))bad("ACTIVATION_RECEIPT_INVALID");
+  const result=payload.result;
+  if(result.isError===true)return "upstream_error";
+  const output=result.structuredContent;
+  if(!object(output)||args.action!=="activate_legacy"||
+     typeof args.repositoryId!=="string"||!REPO_ID.test(args.repositoryId)||
+     typeof args.operationId!=="string"||!OP_ID.test(args.operationId)||
+     typeof args.importHash!=="string"||typeof args.archiveDigest!=="string"||
+     output.repositoryId!==args.repositoryId||
+     output.importHash!==args.importHash||
+     output.archiveDigest!==args.archiveDigest||
+     typeof output.activatedAt!=="string"||
+     !Number.isFinite(Date.parse(output.activatedAt)))bad("ACTIVATION_RECEIPT_INVALID");
+  await verifyLegacyCutoverRecovery(storage,userId,args.repositoryId,
+    args.importHash,args.archiveDigest);
+  const receipt:LegacyActivationReceipt={
+    operationId:args.operationId,importHash:args.importHash,
+    archiveDigest:args.archiveDigest,activatedAt:output.activatedAt,
+  };
+  const key=ACTIVATION_PREFIX+userId+":"+args.repositoryId;
+  await storage.transaction(async txn=>{
+    const previous=await txn.get<LegacyActivationReceipt>(key);
+    if(previous){
+      // Recovery of a lost Oracle DB may reapply the same cutover with a new
+      // local timestamp. Preserve the first authenticated off-host receipt.
+      if(previous.operationId!==receipt.operationId||
+         previous.importHash!==receipt.importHash||
+         previous.archiveDigest!==receipt.archiveDigest)bad("ACTIVATION_CONFLICT");
+      return;
+    }
+    await txn.put(key,receipt);
+  });
+  return "persisted";
+}
+
+async function verifiedActivation(
+  storage:RecoveryStorage,userId:string,repositoryId:string,
+):Promise<LegacyActivationReceipt|undefined>{
+  const value=await storage.get<LegacyActivationReceipt>(
+    ACTIVATION_PREFIX+userId+":"+repositoryId);
+  if(value===undefined)return undefined;
+  if(!value||typeof value.operationId!=="string"||
+     !OP_ID.test(value.operationId)||
+     !/^[0-9a-f]{64}$/u.test(value.importHash)||
+     !/^[0-9a-f]{64}$/u.test(value.archiveDigest)||
+     typeof value.activatedAt!=="string"||
+     !Number.isFinite(Date.parse(value.activatedAt)))bad("ACTIVATION_CORRUPT");
+  const legacy=await new CentralMemoryLegacyArchive(storage).exportVerified(userId,repositoryId);
+  if(legacy.importHash!==value.importHash)bad("ACTIVATION_CORRUPT");
+  return value;
+}
+
 /** A read-only recovery export. Owner ACL is enforced by the Edge caller. */
 export async function exportCentralMemoryRecovery(
   storage:RecoveryStorage,userId:string,repositoryId:string,
@@ -140,10 +208,12 @@ export async function exportCentralMemoryRecovery(
     if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||
       limit<1||limit>5)bad("INPUT_INVALID");
     const archive=await new CentralMemoryRecovery(storage).exportVerified(userId,repositoryId);
+    const activation=await verifiedActivation(storage,userId,repositoryId);
     return {kind:"events",repositoryId,archiveDigest:archive.archiveDigest,
       totalEvents:archive.events.length,offset,
       events:archive.events.slice(offset,offset+limit),
-      truncated:offset+limit<archive.events.length};
+      truncated:offset+limit<archive.events.length,
+      ...(activation?{activation}:{})};
   }
   bad("INPUT_INVALID");
 }
@@ -161,8 +231,11 @@ export async function verifyLegacyCutoverRecovery(
      !/^[0-9a-f]{64}$/u.test(expectedArchiveDigest))bad("CUTOVER_INPUT_INVALID");
   const legacy=await new CentralMemoryLegacyArchive(storage).exportVerified(userId,repositoryId);
   const recovery=await new CentralMemoryRecovery(storage).exportVerified(userId,repositoryId);
+  const priorActivation=await verifiedActivation(storage,userId,repositoryId);
+  const sameCutover=priorActivation?.importHash===expectedImportHash&&
+    priorActivation.archiveDigest===expectedArchiveDigest;
   if(legacy.importHash!==expectedImportHash ||
-     recovery.archiveDigest!==expectedArchiveDigest ||
+     (recovery.archiveDigest!==expectedArchiveDigest && !sameCutover) ||
      !recovery.events.some(e=>e.record.kind==="decision" &&
        e.record.status==="active" && e.record.evidenceRefs.length>0))
     bad("CUTOVER_BACKUP_MISMATCH");

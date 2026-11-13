@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
 import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
 import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
@@ -1333,7 +1333,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (principal.userId && invocation?.name === "memory_update") {
       try {
         if(invocation.arguments.action==="activate_legacy"){
-          // Edge preflight already verified its durable recovery copy.
+          await mirrorLegacyActivationResponse(
+            this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
+          );
         }else if(invocation.arguments.action==="import_legacy"){
           await mirrorLegacyImportResponse(
             this.ctx.storage,principal.userId,invocation.arguments,primaryResponse,
@@ -1388,9 +1390,10 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     const invocation=readMcpToolInvocation(body);
     if(!principal.userId||invocation?.name!=="get_workspace_context"||
       typeof invocation.arguments.workspaceId!=="string"||!response.ok)return response;
+    let repositoryId:string|null=null;
     try{
       const repositories=await this.accountStore.listRepositories(principal.userId);
-      const repositoryId=await findMemoryRepositoryId(
+      repositoryId=await findMemoryRepositoryId(
         invocation.arguments.workspaceId,repositories,
         id=>this.accountStore.listMaterializations(principal.userId!,id),
       );
@@ -1405,12 +1408,21 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         request,memoryBody,principal,
       );
       const data=await readMcpStructuredContent(memoryResponse);
-      if(data?.legacyStatus==="imported")return response;
+      if(data?.legacyStatus!=="active"){
+        if(data?.legacyStatus==="none"||data?.legacyStatus==="imported")return response;
+        return appendMemoryContextText(response,
+          "MCP V3 Central Memory unavailable: authority cannot be verified. "+
+          "Reconcile memory_context and off-host recovery before treating any "+
+          "stored context as current; do not silently fall back to .codex.");
+      }
       const note=memoryContextMessage(repositoryId,data?.records);
       return note?appendMemoryContextText(response,note):response;
     }catch{
-      // Existing workspace access keeps working during memory unavailability.
-      // The unavailable memory is not an empty or verified project context.
+      // Workspace diagnostics remain accessible, but authority is unknown.
+      if(repositoryId)return appendMemoryContextText(response,
+        "MCP V3 Central Memory unavailable: reconcile the activated authority "+
+        "and its off-host recovery. Do not assume empty memory or silently "+
+        "fall back to .codex.");
       return response;
     }
   }

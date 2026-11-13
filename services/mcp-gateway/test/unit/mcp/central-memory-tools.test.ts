@@ -104,6 +104,20 @@ describe("public central-memory tools",()=>{
     })]));
     const decision=await client.callTool({name:"memory_update",arguments:updateArgs});
     expect(decision.isError).toBeFalsy();
+    const kinds=["decision","context","task"] as const;
+    for(const [index,kind] of kinds.entries()){
+      const result=await client.callTool({name:"memory_update",arguments:{
+        workspaceId:"mcp-access-stack",repositoryId:repo,
+        action:"create",expectedRevision:0,
+        operationId:"operation:curated:"+index,
+        recordId:"record:curated:"+index,
+        kind,confidence:"user_reported",title:"Curated "+kind,
+        content:"Verified against original source hashes",
+        evidenceRefs:docs.slice(index*4,index*4+4).map(doc=>
+          "legacy:"+doc.surface+":"+doc.filename+":"+doc.contentSha256),
+      }});
+      expect(result.isError).toBeFalsy();
+    }
     const activated=await client.callTool({name:"memory_update",arguments:activate});
     expect(activated.structuredContent).toMatchObject({replayed:false,
       archiveDigest:"a".repeat(64)});

@@ -29,8 +29,20 @@ describe("deterministic tool-result checkpoints",()=>{
           return {surface,filename,content,
             contentSha256:createHash("sha256").update(content).digest("hex")};
         }));
-      store.importLegacySources(owner,repo,docs);
+      const imported=store.importLegacySources(owner,repo,docs);
       const args={workspaceId:"mcp-access-stack",action:"read",updateId};
+      expect(captureNativeToolCheckpoint(store,owner,"mcp_update",args,result)).toBeNull();
+      const kinds=["decision","context","task"] as const;
+      kinds.forEach((kind,index)=>store.update(owner,{
+        repositoryId:repo,operationId:"operation:curated:"+index,
+        action:"create",recordId:"record:curated:"+index,expectedRevision:0,
+        kind,confidence:"user_reported",title:"Curated "+kind,
+        content:"Verified against legacy source hashes",
+        evidenceRefs:docs.slice(index*4,index*4+4).map(doc=>
+          "legacy:"+doc.surface+":"+doc.filename+":"+doc.contentSha256),
+      }));
+      store.activateLegacyAuthority(owner,repo,"operation:activate:1",
+        imported.importHash,"a".repeat(64));
       const first=captureNativeToolCheckpoint(store,owner,"mcp_update",args,result);
       expect(first).toMatchObject({version:1,expectedRevision:0,
         record:{recordId:"mcp-update:"+updateId,revision:1}});
