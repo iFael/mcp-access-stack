@@ -161,6 +161,7 @@ const githubCheckConclusionSchema = z.enum([
 
 export const sourceControlCapabilities = [
   "git.branch.write",
+  "git.worktree.write",
   "git.index.write",
   "git.commit.write",
   "git.merge.write",
@@ -184,6 +185,7 @@ export type SourceControlCapability = z.infer<typeof sourceControlCapabilitySche
 
 export const sourceControlOperationNameSchema = z.enum([
   "git_create_branch",
+  "git_create_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -254,6 +256,27 @@ export const gitCreateBranchResultSchema = z
   })
   .strict();
 export type GitCreateBranchResult = z.infer<typeof gitCreateBranchResultSchema>;
+
+// A new detached worktree shares Git history but never replaces a registered materialization.
+// Restrict the destination to one fresh child of .worktrees in the authorized repository.
+export const gitCreateWorktreeInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  destination: z.string().regex(/^\.worktrees\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u),
+  expectedHeadSha: gitShaSchema,
+  expectedRemoteSha: gitShaSchema,
+}).strict();
+export type GitCreateWorktreeInput = z.input<typeof gitCreateWorktreeInputSchema>;
+
+export const gitCreateWorktreeResultSchema = z.object({
+  root: rootSchema,
+  destination: gitCreateWorktreeInputSchema.shape.destination,
+  previousHeadSha: gitShaSchema,
+  headSha: gitShaSchema,
+  detached: z.literal(true),
+  created: z.literal(true),
+}).strict();
+export type GitCreateWorktreeResult = z.infer<typeof gitCreateWorktreeResultSchema>;
 
 export const gitStagePathsInputSchema = z
   .object({

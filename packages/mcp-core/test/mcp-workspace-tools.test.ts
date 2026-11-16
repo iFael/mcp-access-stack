@@ -1839,6 +1839,10 @@ class MockSourceControlExecutor {
     this.record("createBranch", input, context);
     return { root: input.root ?? ".", branch: input.branch, headSha: input.expectedHeadSha };
   }
+  async createWorktree(input: any, context?: unknown) {
+    this.record("createWorktree", input, context);
+    return { root: input.root ?? ".", destination: input.destination, previousHeadSha: input.expectedHeadSha, headSha: input.expectedRemoteSha, detached: true as const, created: true as const };
+  }
   async stagePaths(input: any, context?: unknown) {
     this.record("stagePaths", input, context);
     if (this.stageError) throw this.stageError;
@@ -1989,6 +1993,7 @@ class MockSourceControlExecutor {
 
 const sourceControlCases = [
   ["git_create_branch", "createBranch", { workspaceId: "ws", branch: "feature/task7", expectedHeadSha: sourceControlShaA }],
+  ["git_create_worktree", "createWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedHeadSha: sourceControlShaA, expectedRemoteSha: sourceControlShaB }],
   ["git_stage_paths", "stagePaths", { workspaceId: "ws", paths: ["a.txt"] }],
   ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
@@ -2018,6 +2023,7 @@ const sourceControlCases = [
 
 const expectedSourceControlAnnotations = {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  git_create_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2044,9 +2050,10 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-four source-control tools inside the 62-tool workspace surface", () => {
+  it("publishes twenty-five source-control tools in the workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
+      "git_create_worktree",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -2071,9 +2078,9 @@ describe("registerSourceControlTools", () => {
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(65);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(65);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(25);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(66);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(66);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

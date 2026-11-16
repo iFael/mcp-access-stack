@@ -102,6 +102,11 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       branch: input.branch,
       headSha: input.expectedHeadSha.toLowerCase(),
     })),
+    createWorktree: jest.fn<GitRepositoryExecutor["createWorktree"]>(async (input) => ({
+      root: input.root ?? ".", destination: input.destination,
+      previousHeadSha: input.expectedHeadSha.toLowerCase(),
+      headSha: input.expectedRemoteSha.toLowerCase(), detached: true as const, created: true as const,
+    })),
     stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
@@ -529,6 +534,30 @@ describe("LocalAgent typed source-control authorization", () => {
 });
 
 describe("LocalAgent direct authorization and mutation receipts", () => {
+  it("requires a dedicated worktree capability, independently of branch permission", async () => {
+    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.branch.write"] });
+    await expect((agent as any).gitCreateWorktree({
+      workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedHeadSha: SHA_A, expectedRemoteSha: SHA_B,
+    }, { idempotencyKey: "worktree-denied" })).rejects.toMatchObject({
+      code: "SOURCE_CONTROL_CAPABILITY_DENIED",
+    });
+    expect(gitExecutor.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it("audits a worktree mutation and replays its idempotent receipt", async () => {
+    const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.worktree.write"] });
+    const input = {
+      workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedHeadSha: SHA_A, expectedRemoteSha: SHA_B,
+    };
+    const first = await (agent as any).gitCreateWorktree(input, { idempotencyKey: "worktree-once" });
+    const again = await (agent as any).gitCreateWorktree(input, { idempotencyKey: "worktree-once" });
+    expect(again).toEqual(first);
+    expect(first).toMatchObject({ destination: ".worktrees/clean-main", headSha: SHA_B, created: true });
+    expect(gitExecutor.createWorktree).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves confirmation flow in standard mode", async () => {
     const { agent, gitExecutor } = await setupAgent({ capabilities: ["git.remote.push"] });
     const input = {

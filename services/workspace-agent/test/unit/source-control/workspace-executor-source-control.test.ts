@@ -5,6 +5,7 @@ import type { LocalAgent } from "../../../src/local-agent.js";
 
 const cases = [
   ["createBranch", "gitCreateBranch"],
+  ["createWorktree", "gitCreateWorktree"],
   ["stagePaths", "gitStagePaths"],
   ["unstagePaths", "gitUnstagePaths"],
   ["commit", "gitCommit"],

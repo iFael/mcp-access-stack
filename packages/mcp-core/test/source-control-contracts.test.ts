@@ -8,6 +8,7 @@ import {
   gitCommitPathsInputSchema,
   gitCommitPathsResultSchema,
   gitCreateBranchInputSchema,
+  gitCreateWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -54,9 +55,10 @@ const confirmation = {
 };
 
 describe("source-control contracts", () => {
-  test("publishes exactly seventeen source-control capabilities", () => {
+  test("publishes eighteen source-control capabilities", () => {
     expect(sourceControlCapabilities).toEqual([
       "git.branch.write",
+      "git.worktree.write",
       "git.index.write",
       "git.commit.write",
       "git.merge.write",
@@ -79,6 +81,7 @@ describe("source-control contracts", () => {
 
   test("publishes Task 1 contracts and typed error codes through the core boundary", () => {
     expect(core.gitCreateBranchInputSchema).toBe(gitCreateBranchInputSchema);
+    expect(core.gitCreateWorktreeInputSchema).toBe(gitCreateWorktreeInputSchema);
     expect(core.gitMergeBranchInputSchema).toBe(gitMergeBranchInputSchema);
     expect(core.githubMergePullRequestInputSchema).toBe(githubMergePullRequestInputSchema);
     expect(errorCodes).toEqual(expect.arrayContaining([
@@ -95,9 +98,10 @@ describe("source-control contracts", () => {
     ]));
   });
 
-  test("publishes twenty-two operation names and seven confirmable operations", () => {
+  test("publishes typed operation names and seven confirmable operations", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
+      "git_create_worktree",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -663,6 +667,7 @@ describe("source-control contracts", () => {
   test("rejects unknown fields across every public input schema", () => {
     const fixtures: Array<[string, { parse(value: unknown): unknown }, Record<string, unknown>]> = [
       ["git_create_branch", gitCreateBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedHeadSha: shaA }],
+      ["git_create_worktree", gitCreateWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB }],
       ["git_stage_paths", gitStagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"] }],
       ["git_unstage_paths", gitUnstagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],
       ["git_commit", gitCommitInputSchema, { workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],

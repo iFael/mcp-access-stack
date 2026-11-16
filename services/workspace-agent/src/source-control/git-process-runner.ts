@@ -42,6 +42,7 @@ export interface GitProcessExecutor {
   headSha(cwd: string, signal?: AbortSignal): Promise<string>;
   branchSha(cwd: string, branch: string, signal?: AbortSignal): Promise<string | undefined>;
   createBranch(cwd: string, branch: string, expectedHeadSha: string, signal?: AbortSignal): Promise<void>;
+  createDetachedWorktree(cwd: string, destination: string, headSha: string, signal?: AbortSignal): Promise<void>;
   stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   unstagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   writeTree(cwd: string, signal?: AbortSignal): Promise<string>;
@@ -130,6 +131,10 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async createBranch(cwd: string, branch: string, expectedHeadSha: string, signal?: AbortSignal): Promise<void> {
     await this.invokeSuccess(cwd, this.mutationArgs(["switch", "-c", branch, expectedHeadSha]), signal);
+  }
+
+  async createDetachedWorktree(cwd: string, destination: string, headSha: string, signal?: AbortSignal): Promise<void> {
+    await this.invokeSuccess(cwd, this.mutationArgs(["worktree", "add", "--detach", destination, headSha]), signal);
   }
 
   async stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {

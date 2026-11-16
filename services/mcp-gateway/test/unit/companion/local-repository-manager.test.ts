@@ -43,7 +43,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
       allowWrites: ["."],
     });
     expect(policy?.workspaces[0]?.sourceControl).toMatchObject({
-      capabilities: expect.arrayContaining(["git.branch.write", "git.commit.write"]),
+      capabilities: expect.arrayContaining(["git.branch.write", "git.worktree.write", "git.commit.write"]),
       accountOwners: [],
       additionalRepositories: [],
     });
@@ -536,6 +536,7 @@ describe("LocalRepositoryManager binding lifecycle", () => {
     expect(policy?.workspaces[0]?.sourceControl).toEqual({
       capabilities: [
         "git.branch.write",
+        "git.worktree.write",
         "git.index.write",
         "git.commit.write",
         "git.merge.write",

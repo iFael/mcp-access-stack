@@ -103,6 +103,8 @@ import {
   gitCommitResultSchema,
   gitCreateBranchInputSchema,
   gitCreateBranchResultSchema,
+  gitCreateWorktreeInputSchema,
+  gitCreateWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -151,6 +153,8 @@ import {
   type GitCommitResult,
   type GitCreateBranchInput,
   type GitCreateBranchResult,
+  type GitCreateWorktreeInput,
+  type GitCreateWorktreeResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
   type GitHubClosePullRequestInput,
@@ -1176,6 +1180,37 @@ export class LocalAgent {
           metadata,
           resultSchema: gitCreateBranchResultSchema,
           backend: async () => (await this.getGitRepositoryExecutor()).createBranch(parsed, activeContext),
+          resultSha: (result) => result.headSha,
+        });
+      },
+    );
+  }
+
+  async gitCreateWorktree(
+    input: GitCreateWorktreeInput,
+    context: OperationContext = {},
+  ): Promise<GitCreateWorktreeResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitCreateWorktree",
+      gitCreateWorktreeInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const targetResource = localGitRepositoryTarget(workspace.id, root) + ":" + parsed.destination;
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedRemoteSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_create_worktree",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: gitCreateWorktreeResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).createWorktree(parsed, activeContext),
           resultSha: (result) => result.headSha,
         });
       },
