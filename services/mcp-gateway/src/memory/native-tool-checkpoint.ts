@@ -49,7 +49,7 @@ function object(value:unknown):Record<string,unknown>|null{
     ?value as Record<string,unknown>:null;
 }
 function sha(value:string):string{return createHash("sha256").update(value).digest("hex");}
-const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const UPDATE_ID=/^upd_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SHA=/^[0-9a-f]{40}$/u;
 const TAG=/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/u;
 const REPOSITORY=/^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -64,7 +64,7 @@ export function checkpointFromNativeTool(
     if(args.workspaceId!=="mcp-access-stack")return null;
     const update=object(data.update);
     if(!update||!["succeeded","failed"].includes(String(update.status))||
-      typeof update.updateId!=="string"||!UUID.test(update.updateId)||
+      typeof update.updateId!=="string"||!UPDATE_ID.test(update.updateId)||
       typeof update.mainSha!=="string"||!SHA.test(update.mainSha))return null;
     const status=String(update.status);
     const version=typeof update.tag==="string"&&TAG.test(update.tag)?update.tag:null;

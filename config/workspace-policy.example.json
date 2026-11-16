@@ -22,9 +22,7 @@
         "maxDiffBytes": 500000,
         "maxListedFiles": 1000
       },
-      "allowWrites": [
-        ".codex/HANDOFF.md"
-      ],
+      "allowWrites": [],
       "sourceControl": {
         "capabilities": [
           "git.branch.write",
