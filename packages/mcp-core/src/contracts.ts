@@ -14,6 +14,8 @@ import {
   gitCommitResultSchema,
   gitCreateBranchInputSchema,
   gitCreateBranchResultSchema,
+  gitCreateWorktreeInputSchema,
+  gitCreateWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -893,6 +895,7 @@ export type HttpGetResult = z.infer<typeof httpGetResultSchema>;
 
 export const sourceControlRelayOperations = [
   "gitCreateBranch",
+  "gitCreateWorktree",
   "gitStagePaths",
   "gitUnstagePaths",
   "gitCommit",
@@ -1094,6 +1097,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
     input: readBackgroundTaskOutputInputSchema,
   }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("gitCreateBranch"), input: gitCreateBranchInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("gitCreateWorktree"), input: gitCreateWorktreeInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("gitStagePaths"), input: gitStagePathsInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("gitUnstagePaths"), input: gitUnstagePathsInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("gitCommit"), input: gitCommitInputSchema }).strict(),
@@ -1213,6 +1217,7 @@ export const relayResultSchemas = {
   writeBackgroundTaskStdin: backgroundTaskStdinResultSchema,
   readBackgroundTaskOutput: backgroundTaskOutputResultSchema,
   gitCreateBranch: gitCreateBranchResultSchema,
+  gitCreateWorktree: gitCreateWorktreeResultSchema,
   gitStagePaths: gitStagePathsResultSchema,
   gitUnstagePaths: gitUnstagePathsResultSchema,
   gitCommit: gitCommitResultSchema,

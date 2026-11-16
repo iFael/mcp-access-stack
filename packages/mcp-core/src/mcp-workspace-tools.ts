@@ -106,6 +106,8 @@ import {
   gitCommitPathsResultSchema,
   gitCreateBranchInputSchema,
   gitCreateBranchResultSchema,
+  gitCreateWorktreeInputSchema,
+  gitCreateWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -217,6 +219,7 @@ export type SourceControlToolName =
 
 export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_create_branch",
+  "git_create_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -2861,6 +2864,23 @@ const sourceControlMcpSchemas = {
     input: z.object({ workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(), branch: mcpSourceControlBranch, expectedHeadSha: mcpSourceControlSha }).strict(),
     output: z.object({ root: mcpSourceControlRoot, branch: mcpSourceControlBranch, headSha: mcpSourceControlSha }).strict(),
   },
+  git_create_worktree: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      destination: z.string().regex(/^\.worktrees\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u),
+      expectedHeadSha: mcpSourceControlSha,
+      expectedRemoteSha: mcpSourceControlSha,
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      destination: z.string().regex(/^\.worktrees\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u),
+      previousHeadSha: mcpSourceControlSha,
+      headSha: mcpSourceControlSha,
+      detached: z.literal(true),
+      created: z.literal(true),
+    }).strict(),
+  },
   git_stage_paths: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -3210,6 +3230,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   idempotentHint: boolean;
 }> = {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+  git_create_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
@@ -3272,6 +3293,31 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS, (context) => executor.createBranch(parsed, context)),
           );
           return sourceControlSuccess("Git branch created.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_create_worktree", include)) {
+    server.registerTool(
+      "git_create_worktree",
+      {
+        title: "Create isolated Git worktree",
+        description: "Creates a detached, clean worktree at an exact verified remote main SHA under .worktrees without changing the original checkout.",
+        inputSchema: sourceControlMcpSchemas.git_create_worktree.input,
+        outputSchema: sourceControlMcpSchemas.git_create_worktree.output,
+        annotations: sourceControlAnnotations.git_create_worktree,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitCreateWorktreeInputSchema.parse(input);
+          const structuredContent = gitCreateWorktreeResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.createWorktree(parsed, context)),
+          );
+          return sourceControlSuccess("Isolated Git worktree created.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -4035,6 +4081,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   writeBackgroundTaskStdin: "write_background_task_stdin",
   readBackgroundTaskOutput: "read_background_task_output",
   gitCreateBranch: "git_create_branch",
+  gitCreateWorktree: "git_create_worktree",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",

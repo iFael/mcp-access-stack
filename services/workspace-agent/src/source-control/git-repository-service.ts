@@ -1,10 +1,11 @@
-import { realpath } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
   assertTypedGitBranchMutationAllowed,
   gitCommitInputSchema,
   gitCreateBranchInputSchema,
+  gitCreateWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -15,6 +16,8 @@ import {
   type GitCommitResult,
   type GitCreateBranchInput,
   type GitCreateBranchResult,
+  type GitCreateWorktreeInput,
+  type GitCreateWorktreeResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
   type GitSyncBranchInput,
@@ -31,7 +34,7 @@ import {
   type OperationContext,
 } from "@vs-code-gpt/shared";
 import { authorizeGitMutationPath, authorizeGitOperationalRoot } from "../git/operational-root.js";
-import { PathSecurity } from "../path-security.js";
+import { isContained, PathSecurity } from "../path-security.js";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import { WorkspaceRegistry } from "../workspace-registry.js";
 import {
@@ -76,6 +79,81 @@ export class GitRepositoryService implements GitRepositoryExecutor {
     const headSha = await this.runner.headSha(repository.repositoryRoot, context?.signal);
     assertSha("GIT_HEAD_MISMATCH", parsed.expectedHeadSha, headSha, "Git branch creation produced an unexpected HEAD.");
     return { root: repository.logicalRoot, branch: parsed.branch, headSha };
+  }
+
+  async createWorktree(
+    input: GitCreateWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitCreateWorktreeResult> {
+    const parsed = gitCreateWorktreeInputSchema.parse(input);
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", context?.signal);
+    const sourceHead = await this.runner.headSha(repository.repositoryRoot, context?.signal);
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedHeadSha, sourceHead, "Source checkout changed before creating a worktree.");
+    if (await this.runner.currentBranch(repository.repositoryRoot, context?.signal) !== "main") {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Isolated main worktree requires the source checkout on main.");
+    }
+
+    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
+    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
+    const expectedParent = path.join(repository.repositoryRoot, ".worktrees");
+    if (!samePath(parent.canonicalPath, expectedParent) ||
+        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
+      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be a real directory under the selected repository.");
+    }
+    const destination = path.join(parent.canonicalPath, parsed.destination.slice(".worktrees/".length));
+    const assertAbsent = async () => {
+      try {
+        await lstat(destination);
+        throw new AppError("GIT_BRANCH_CONFLICT", "Worktree destination already exists; preserving its contents.");
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new AppError("INVALID_PATH", "Could not verify the worktree destination.");
+        }
+      }
+    };
+    await assertAbsent();
+
+    // Fetch only the fixed origin/main ref; a dirty source index or worktree is never reset.
+    const fetched = await this.runner.fetchBranch(repository.repositoryRoot, "origin", "main", context?.signal);
+    if (fetched !== parsed.expectedRemoteSha) {
+      throw new AppError("GIT_REMOTE_CHANGED", "Fetched origin/main differs from the authorized SHA.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedHeadSha,
+      await this.runner.headSha(repository.repositoryRoot, context?.signal), "Source checkout changed during fetch.");
+    await assertAbsent();
+    try {
+      await mkdir(destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new AppError("GIT_BRANCH_CONFLICT", "Worktree destination was created concurrently.");
+      }
+      throw error;
+    }
+    // On any uncertain Git failure, leave the reserved destination for reconciliation, never clean it.
+    try {
+      await this.runner.createDetachedWorktree(repository.repositoryRoot, destination, fetched, context?.signal);
+      const actual = await realpath(destination);
+      if (!samePath(actual, destination) ||
+          !samePath(await this.runner.showTopLevel(actual, context?.signal), actual) ||
+          await this.runner.headSha(actual, context?.signal) !== parsed.expectedRemoteSha ||
+          await this.runner.currentBranch(actual, context?.signal) !== "HEAD" ||
+          !(await this.runner.repositoryIsClean(actual, context?.signal)) ||
+          await this.runner.headSha(repository.repositoryRoot, context?.signal) !== sourceHead) {
+        throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED", "Isolated worktree requires Git state reconciliation.");
+      }
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Worktree creation could not be verified; inspect the destination and Git metadata before retrying.");
+    }
+    return {
+      root: repository.logicalRoot,
+      destination: parsed.destination,
+      previousHeadSha: sourceHead,
+      headSha: fetched,
+      detached: true,
+      created: true,
+    };
   }
 
   async stagePaths(

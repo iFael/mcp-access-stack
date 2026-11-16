@@ -26,6 +26,7 @@
       "sourceControl": {
         "capabilities": [
           "git.branch.write",
+          "git.worktree.write",
           "git.index.write",
           "git.commit.write",
           "git.merge.write",

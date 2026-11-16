@@ -44,6 +44,7 @@ const DEFAULT_DISCOVERY_DEPTH = 4;
 const MAX_GIT_OUTPUT_BYTES = 1_000_000;
 const LOCAL_REPOSITORY_SOURCE_CONTROL_CAPABILITIES = [
   "git.branch.write",
+  "git.worktree.write",
   "git.index.write",
   "git.commit.write",
   "git.merge.write",

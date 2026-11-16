@@ -7,6 +7,7 @@ import {
   gitCommitInputSchema,
   gitCommitPathsInputSchema,
   gitCreateBranchInputSchema,
+  gitCreateWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -39,6 +40,7 @@ const expectedPublicSourceControlNames = [
   "git_commit",
   "git_commit_paths",
   "git_create_branch",
+  "git_create_worktree",
   "git_merge_branch",
   "git_sync_branch",
   "git_push_branch",
@@ -68,6 +70,7 @@ const expectedRelaySourceControlNames = expectedPublicSourceControlNames.filter(
 
 const expectedSourceControlCapabilities = [
   "git.branch.write",
+  "git.worktree.write",
   "git.index.write",
   "git.commit.write",
   "git.merge.write",
@@ -154,6 +157,11 @@ const inputCases = [
     name: "git_create_branch",
     schema: gitCreateBranchInputSchema,
     input: { workspaceId: "repo", branch: "feature/task8", expectedHeadSha: shaA },
+  },
+  {
+    name: "git_create_worktree",
+    schema: gitCreateWorktreeInputSchema,
+    input: { workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB },
   },
   {
     name: "git_stage_paths",
@@ -369,7 +377,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty-four public tools, twenty-three relay operations and seventeen capabilities", () => {
+  it("exposes twenty-five public tools and eighteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -379,8 +387,8 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(24);
-    expect(sourceControlCapabilities).toHaveLength(17);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(25);
+    expect(sourceControlCapabilities).toHaveLength(18);
 
     for (const forbiddenName of [
       "source_control",

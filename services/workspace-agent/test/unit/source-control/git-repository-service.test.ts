@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, rmdir, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
@@ -77,6 +77,106 @@ describe("GitRepositoryService repository isolation", () => {
       service.stagePaths({ workspaceId: "test", paths: ["inside.txt"] }),
     ).rejects.toMatchObject({ code: "NOT_GIT_REPOSITORY" });
     expect(git(repositoryRoot, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+  });
+});
+
+describe("GitRepositoryService isolated worktrees", () => {
+  async function setupRemote() {
+    const { service, headSha } = await setupRepository();
+    const source = fixture!.workspacePath;
+    const remote = path.join(fixture!.basePath, "origin.git");
+    git(fixture!.basePath, ["init", "--bare", remote]);
+    git(source, ["remote", "add", "origin", remote]);
+    git(source, ["push", "origin", "main"]);
+    await mkdir(path.join(source, ".worktrees"));
+    return { service, headSha, source };
+  }
+
+  it("creates a detached, clean worktree from verified origin/main without changing dirty source", async () => {
+    const { service, headSha, source } = await setupRemote();
+    await writeWorkspaceFile(source, "base.txt", "unsaved local edit\n");
+    await writeWorkspaceFile(source, "private-untracked.txt", "preserve me\n");
+
+    const result = await service.createWorktree({
+      workspaceId: "test",
+      destination: ".worktrees/clean-main",
+      expectedHeadSha: headSha,
+      expectedRemoteSha: headSha,
+    });
+    const target = path.join(source, ".worktrees", "clean-main");
+    expect(result).toEqual({
+      root: ".", destination: ".worktrees/clean-main",
+      previousHeadSha: headSha, headSha, detached: true, created: true,
+    });
+    expect(git(target, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
+    expect(git(target, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("HEAD");
+    expect(git(target, ["status", "--porcelain"]).trim()).toBe("");
+    expect(git(source, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
+    expect(await readFile(path.join(source, "base.txt"), "utf8")).toBe("unsaved local edit\n");
+    expect(await readFile(path.join(source, "private-untracked.txt"), "utf8")).toBe("preserve me\n");
+    expect((await readFile(path.join(target, "base.txt"), "utf8")).replace(/\r\n/gu, "\n")).toBe("base\n");
+  });
+
+  it("rejects a stale local SHA or different remote SHA without creating a destination", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const input = { workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedHeadSha: headSha, expectedRemoteSha: headSha };
+    await expect(service.createWorktree({ ...input, expectedHeadSha: "f".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.createWorktree({ ...input, expectedRemoteSha: "e".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_REMOTE_CHANGED" });
+    await expect(readFile(path.join(source, ".worktrees/clean-main/.git"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect(git(source, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
+  });
+
+  it("rejects an existing destination, preserving its contents", async () => {
+    const { service, headSha, source } = await setupRemote();
+    await mkdir(path.join(source, ".worktrees/clean-main"));
+    await writeWorkspaceFile(source, ".worktrees/clean-main/sentinel.txt", "keep this\n");
+    await expect(service.createWorktree({
+      workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedHeadSha: headSha, expectedRemoteSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    expect(await readFile(path.join(source, ".worktrees/clean-main/sentinel.txt"), "utf8")).toBe("keep this\n");
+  });
+
+  it("rejects an invalid destination before any filesystem writes", async () => {
+    const { service, headSha } = await setupRemote();
+    for (const destination of ["../escape", ".worktrees/../escape", ".worktrees/a/b", ".worktrees/.git", "/tmp/escape"]) {
+      await expect(service.createWorktree({
+        workspaceId: "test", destination,
+        expectedHeadSha: headSha, expectedRemoteSha: headSha,
+      })).rejects.toThrow();
+    }
+  });
+
+  it("rejects a symlinked worktree parent without touching the target", async () => {
+    if (process.platform === "win32") return;
+    const { service, headSha, source } = await setupRemote();
+    const external = path.join(fixture!.basePath, "external");
+    await mkdir(external);
+    const linked = path.join(source, ".worktrees", "nested");
+    await symlink(external, linked);
+    await expect(service.createWorktree({
+      workspaceId: "test", destination: ".worktrees/nested",
+      expectedHeadSha: headSha, expectedRemoteSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    expect(await readdir(external)).toEqual([]);
+  });
+
+  it("rejects a symlinked .worktrees parent before a fetch or write", async () => {
+    if (process.platform === "win32") return;
+    const { service, headSha, source } = await setupRemote();
+    const external = path.join(fixture!.basePath, "external-parent");
+    await mkdir(external);
+    await rmdir(path.join(source, ".worktrees"));
+    await symlink(external, path.join(source, ".worktrees"));
+    await expect(service.createWorktree({
+      workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedHeadSha: headSha, expectedRemoteSha: headSha,
+    })).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
+    expect(await readdir(external)).toEqual([]);
   });
 });
 
