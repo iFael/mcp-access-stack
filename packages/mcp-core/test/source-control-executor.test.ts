@@ -11,6 +11,7 @@ import type {
   GitHubMergePullRequestInput,
   GitCommitInput,
   GitCreateBranchInput,
+  GitCreateWorktreeInput,
   GitMergeBranchInput,
   GitSyncBranchInput,
   GitPushBranchInput,
@@ -32,12 +33,18 @@ describe("source-control executor ports", () => {
     expect(sourceControlExecutorModule).toBeDefined();
   });
 
-  test("keeps GitRepositoryExecutor limited to exactly eight typed methods", async () => {
+  test("keeps GitRepositoryExecutor limited to exactly nine typed methods", async () => {
     const calls: string[] = [];
     const executor: GitRepositoryExecutor = {
       async createBranch(input: GitCreateBranchInput) {
         calls.push("createBranch");
         return { root: input.root ?? ".", branch: input.branch, headSha: input.expectedHeadSha };
+      },
+      async createWorktree(input: GitCreateWorktreeInput) {
+        calls.push("createWorktree");
+        return { root: input.root ?? ".", destination: input.destination,
+          previousHeadSha: input.expectedHeadSha, headSha: input.expectedRemoteSha,
+          detached: true as const, created: true as const };
       },
       async stagePaths(input: GitStagePathsInput) {
         calls.push("stagePaths");
@@ -106,6 +113,7 @@ describe("source-control executor ports", () => {
     expect(Object.keys(executor).sort()).toEqual([
       "commit",
       "createBranch",
+      "createWorktree",
       "mergeBranch",
       "publishTag",
       "pushBranch",
@@ -115,6 +123,7 @@ describe("source-control executor ports", () => {
     ]);
 
     await executor.createBranch({ workspaceId: "repo", branch: "feature/x", expectedHeadSha: shaA });
+    await executor.createWorktree({ workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB });
     await executor.stagePaths({ workspaceId: "repo", paths: ["src/a.ts"] });
     await executor.unstagePaths({ workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
     await executor.commit({ workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
@@ -125,6 +134,7 @@ describe("source-control executor ports", () => {
 
     expect(calls).toEqual([
       "createBranch",
+      "createWorktree",
       "stagePaths",
       "unstagePaths",
       "commit",
