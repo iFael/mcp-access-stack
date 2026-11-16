@@ -114,7 +114,7 @@ describe("GitRepositoryService isolated worktrees", () => {
     expect(git(source, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
     expect(await readFile(path.join(source, "base.txt"), "utf8")).toBe("unsaved local edit\n");
     expect(await readFile(path.join(source, "private-untracked.txt"), "utf8")).toBe("preserve me\n");
-    expect(await readFile(path.join(target, "base.txt"), "utf8")).toBe("base\n");
+    expect((await readFile(path.join(target, "base.txt"), "utf8")).replace(/\r\n/gu, "\n")).toBe("base\n");
   });
 
   it("rejects a stale local SHA or different remote SHA without creating a destination", async () => {
