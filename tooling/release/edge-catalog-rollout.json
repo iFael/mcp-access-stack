@@ -2,10 +2,10 @@
   "worker": "mcp-access-stack",
   "mode": "catalog",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "5dfb80f710461f3a73870c6ce5d22320d153b577e6541ef43eac5966eb3315a1",
-  "previousToolCount": 131,
-  "targetRevision": "7e732f68e2e18c87daf221f09ad401a232bbba03b45df18482663be9984575d0",
-  "targetToolCount": 132,
+  "previousRevision": "7e732f68e2e18c87daf221f09ad401a232bbba03b45df18482663be9984575d0",
+  "previousToolCount": 132,
+  "targetRevision": "c7f2f92a3e9f0cdbdcf079f9ad32c2dc4f8acaab688ba5ced6535c0aa7e3b13a",
+  "targetToolCount": 133,
   "requiredTools": [
     "memory_context",
     "memory_update",
@@ -30,6 +30,7 @@
     "oracle_disk_audit_provision",
     "relocate_repository_materialization",
     "git_create_worktree",
+    "git_remove_worktree",
     "rename_repository",
     "http_get"
   ]
