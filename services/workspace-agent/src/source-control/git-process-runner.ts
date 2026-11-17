@@ -35,6 +35,12 @@ export type GitSpawnProcess = (
   options: SpawnOptions,
 ) => ChildProcess;
 
+export interface GitWorktreeRecord {
+  path: string;
+  headSha: string;
+  prunable: boolean;
+}
+
 export interface GitProcessExecutor {
   isInsideWorkTree(cwd: string, signal?: AbortSignal): Promise<boolean>;
   showTopLevel(cwd: string, signal?: AbortSignal): Promise<string>;
@@ -43,6 +49,9 @@ export interface GitProcessExecutor {
   branchSha(cwd: string, branch: string, signal?: AbortSignal): Promise<string | undefined>;
   createBranch(cwd: string, branch: string, expectedHeadSha: string, signal?: AbortSignal): Promise<void>;
   createDetachedWorktree(cwd: string, destination: string, headSha: string, signal?: AbortSignal): Promise<void>;
+  listWorktrees(cwd: string, signal?: AbortSignal): Promise<GitWorktreeRecord[]>;
+  worktreeIsCompletelyClean(cwd: string, signal?: AbortSignal): Promise<boolean>;
+  removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void>;
   stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   unstagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   writeTree(cwd: string, signal?: AbortSignal): Promise<string>;
@@ -135,6 +144,27 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async createDetachedWorktree(cwd: string, destination: string, headSha: string, signal?: AbortSignal): Promise<void> {
     await this.invokeSuccess(cwd, this.mutationArgs(["worktree", "add", "--detach", destination, headSha]), signal);
+  }
+
+  async listWorktrees(cwd: string, signal?: AbortSignal): Promise<GitWorktreeRecord[]> {
+    const output = await this.invokeSuccess(cwd, ["worktree", "list", "--porcelain"], signal);
+    return output.trim().split(/\r?\n\r?\n/u).filter(Boolean).map((block) => {
+      const lines = block.split(/\r?\n/u);
+      const worktree = lines.find((line) => line.startsWith("worktree "))?.slice(9);
+      const sha = lines.find((line) => line.startsWith("HEAD "))?.slice(5);
+      if (!worktree || !sha) {
+        throw new AppError("GIT_ERROR", "Git worktree inventory is incomplete.");
+      }
+      return { path: worktree, headSha: parseSha(sha), prunable: lines.some((line) => line.startsWith("prunable ")) };
+    });
+  }
+
+  async worktreeIsCompletelyClean(cwd: string, signal?: AbortSignal): Promise<boolean> {
+    return (await this.invokeSuccess(cwd, ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"], signal)).trim().length === 0;
+  }
+
+  async removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void> {
+    await this.invoke(cwd, this.mutationArgs(["worktree", "remove", destination]), signal, [0], true);
   }
 
   async stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {

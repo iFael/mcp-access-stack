@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rmdir, symlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rmdir, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import { AppError } from "@vs-code-gpt/shared";
@@ -178,6 +178,68 @@ describe("GitRepositoryService isolated worktrees", () => {
     })).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
     expect(await readdir(external)).toEqual([]);
   });
+  it("removes only a registered clean worktree without changing a dirty source checkout", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, "base.txt", "unsaved source change\n");
+    await writeWorkspaceFile(source, "untracked-source.txt", "keep me\n");
+    const removed = await service.removeWorktree({
+      workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+    });
+    expect(removed).toEqual({ root: ".", destination,
+      sourceHeadSha: headSha, removedWorktreeHeadSha: headSha, removed: true });
+    await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(git(source, ["worktree", "list", "--porcelain"])).not.toContain(target);
+    expect(head()).toBe(headSha);
+    expect(await readFile(path.join(source, "base.txt"), "utf8")).toBe("unsaved source change\n");
+    expect(await readFile(path.join(source, "untracked-source.txt"), "utf8")).toBe("keep me\n");
+  });
+
+  it("refuses a stale SHA, modified files, untracked files and ignored files", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    const input = { workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha };
+    await expect(service.removeWorktree({ ...input, expectedSourceHeadSha: "f".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.removeWorktree({ ...input, expectedWorktreeHeadSha: "e".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await writeWorkspaceFile(target, "base.txt", "changed\n");
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    await writeWorkspaceFile(target, "base.txt", "base\n");
+    await writeWorkspaceFile(target, "untracked.txt", "preserve\n");
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    await unlink(path.join(target, "untracked.txt"));
+    await writeWorkspaceFile(source, ".git/info/exclude", "ignored-cache/\n");
+    await mkdir(path.join(target, "ignored-cache"));
+    await writeWorkspaceFile(target, "ignored-cache/cache.txt", "preserve\n");
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(await readFile(path.join(target, "ignored-cache/cache.txt"), "utf8")).toBe("preserve\n");
+  }, 120_000);
+
+  it("rejects a missing Git marker, unsafe destination or target registration", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    const input = { workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha };
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    await unlink(path.join(source, destination, ".git"));
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    for (const bad of ["../outside", ".worktrees/../escape", ".worktrees/a/b", ".worktrees/.git"]) {
+      await expect(service.removeWorktree({ ...input, destination: bad })).rejects.toThrow();
+    }
+    expect(await readFile(path.join(source, destination, "base.txt"), "utf8")).toContain("base");
+  });
+
 });
 
 describe("GitRepositoryService create/stage/unstage", () => {

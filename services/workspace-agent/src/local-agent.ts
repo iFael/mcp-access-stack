@@ -105,6 +105,8 @@ import {
   gitCreateBranchResultSchema,
   gitCreateWorktreeInputSchema,
   gitCreateWorktreeResultSchema,
+  gitRemoveWorktreeInputSchema,
+  gitRemoveWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -155,6 +157,8 @@ import {
   type GitCreateBranchResult,
   type GitCreateWorktreeInput,
   type GitCreateWorktreeResult,
+  type GitRemoveWorktreeInput,
+  type GitRemoveWorktreeResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
   type GitHubClosePullRequestInput,
@@ -1212,6 +1216,37 @@ export class LocalAgent {
           resultSchema: gitCreateWorktreeResultSchema,
           backend: async () => (await this.getGitRepositoryExecutor()).createWorktree(parsed, activeContext),
           resultSha: (result) => result.headSha,
+        });
+      },
+    );
+  }
+
+  async gitRemoveWorktree(
+    input: GitRemoveWorktreeInput,
+    context: OperationContext = {},
+  ): Promise<GitRemoveWorktreeResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitRemoveWorktree",
+      gitRemoveWorktreeInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const targetResource = localGitRepositoryTarget(workspace.id, root) + ":" + parsed.destination;
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedWorktreeHeadSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_remove_worktree",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: gitRemoveWorktreeResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext),
+          resultSha: (result) => result.removedWorktreeHeadSha,
         });
       },
     );

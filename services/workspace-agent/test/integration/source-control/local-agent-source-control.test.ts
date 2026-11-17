@@ -107,6 +107,11 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       previousHeadSha: input.expectedHeadSha.toLowerCase(),
       headSha: input.expectedRemoteSha.toLowerCase(), detached: true as const, created: true as const,
     })),
+    removeWorktree: jest.fn<GitRepositoryExecutor["removeWorktree"]>(async (input) => ({
+      root: input.root ?? ".", destination: input.destination,
+      sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), removedWorktreeHeadSha: input.expectedWorktreeHeadSha.toLowerCase(),
+      removed: true as const,
+    })),
     stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
@@ -556,6 +561,29 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
     expect(again).toEqual(first);
     expect(first).toMatchObject({ destination: ".worktrees/clean-main", headSha: SHA_B, created: true });
     expect(gitExecutor.createWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies worktree removal without its capability and replays authorized removal", async () => {
+    const input = { workspaceId: "test", destination: ".worktrees/clean-main",
+      expectedSourceHeadSha: SHA_A, expectedWorktreeHeadSha: SHA_B };
+    const denied = await setupAgent({ capabilities: ["git.branch.write"] });
+    await expect((denied.agent as any).gitRemoveWorktree(input, {
+      idempotencyKey: "worktree-remove-denied",
+    })).rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(denied.gitExecutor.removeWorktree).not.toHaveBeenCalled();
+    await fixture?.cleanup();
+    fixture = undefined;
+
+    const allowed = await setupAgent({ capabilities: ["git.worktree.write"] });
+    const first = await (allowed.agent as any).gitRemoveWorktree(input, {
+      idempotencyKey: "worktree-remove-once",
+    });
+    const again = await (allowed.agent as any).gitRemoveWorktree(input, {
+      idempotencyKey: "worktree-remove-once",
+    });
+    expect(first).toMatchObject({ removed: true, sourceHeadSha: SHA_A, removedWorktreeHeadSha: SHA_B });
+    expect(again).toEqual(first);
+    expect(allowed.gitExecutor.removeWorktree).toHaveBeenCalledTimes(1);
   });
 
   it("preserves confirmation flow in standard mode", async () => {
