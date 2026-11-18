@@ -20,10 +20,9 @@ import {
 // the user's companion installs when the node asks it through the Edge. Each
 // step is the same typed operation an agent would call, in a fixed order,
 // with the same one-shot rules: a dispatch is never repeated (an uncertain one
-// is only reconciled), prepare and promote are each requested once, and any
-// surprise stops the update for the agent. The record is written before every
-// effect, so the process that the promote replaces is resumed by its
-// successor at the step it reached.
+// is only reconciled), and prepare is retried only after a verified terminal
+// failure on explicit resume. Any surprise stops the update for the agent.
+// The record is written before each effect so a new process can resume it.
 
 export const MCP_UPDATE_STEPS = [
   "precheck",
@@ -258,8 +257,9 @@ export class McpUpdateRunner {
 
   /**
    * Continues a failed update from the step that failed, once the agent fixed
-   * its cause. A workflow that ended in failure is dispatched again; what the
-   * steps saved before keeps them from redoing anything else.
+   * its cause. A workflow that ended in failure is dispatched again; a failed
+   * prepare retries only after confirming its task and unchanged release state.
+   * All preceding successful steps stay intact.
    */
   async resume(updateId: string): Promise<McpUpdateRecord> {
     const record = await this.require(updateId);
@@ -270,6 +270,26 @@ export class McpUpdateRunner {
     const run = STEP_RUN[record.step];
     const data = { ...rest.data };
     if (run !== undefined && error?.code === "WORKFLOW_FAILED") delete data[run];
+    if (record.step === "oracle_prepare" && error?.code === "PREPARE_FAILED") {
+      const previousTaskId = data.prepareTaskId;
+      if (!data.prepareRequested || !previousTaskId || !data.activeBefore || !data.tag ||
+          data.failedPrepareTaskIds?.includes(previousTaskId)) {
+        throw new StopUpdate("PREPARE_RECONCILIATION_REQUIRED", "The failed Oracle prepare has no recoverable task identity.");
+      }
+      const [taskState, releaseState] = await Promise.all([
+        this.options.port.task(previousTaskId, record.ownerScope),
+        this.options.port.releaseState(),
+      ]);
+      if (taskState !== "failed" || releaseState.active !== data.activeBefore || releaseState.candidate !== null) {
+        throw new StopUpdate("PREPARE_RECONCILIATION_REQUIRED",
+          "Oracle prepare can retry only after the previous task failed and the release state stayed unchanged.");
+      }
+      // Explicit resume authorizes a new attempt only for a verified terminal failure.
+      // Retain the old task ID as evidence; a lost or running outcome remains fail-closed.
+      data.failedPrepareTaskIds = [...(data.failedPrepareTaskIds ?? []), previousTaskId];
+      delete data.prepareRequested;
+      delete data.prepareTaskId;
+    }
     // A failed activation may have deployed the staged Worker already, and a new activation pins
     // the deployment the stage saw: it starts again from a new stage of the same MAIN. Preparing
     // the candidate again is harmless, the Edge answers that it is already prepared.

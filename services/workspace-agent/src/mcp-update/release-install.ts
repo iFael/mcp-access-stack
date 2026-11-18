@@ -63,6 +63,8 @@ export interface ReleaseInstallData {
   /** Set before the call: a crash in between leaves an outcome nobody may guess. */
   prepareRequested?: boolean;
   prepareTaskId?: string;
+  /** Completed failed prepare task IDs retained after explicit, verified retries. */
+  failedPrepareTaskIds?: string[];
   promoteRequested?: boolean;
   promoteStartedAt?: string;
 }
