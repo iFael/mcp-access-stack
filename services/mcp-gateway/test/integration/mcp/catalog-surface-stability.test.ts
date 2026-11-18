@@ -49,12 +49,12 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(133);
+      expect(listed.tools).toHaveLength(134);
       expect(listed.tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["memory_context", "memory_update", "memory_recovery_export", "patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_create_worktree", "git_remove_worktree", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_list_instances", "oracle_disk_audit", "oracle_disk_audit_provision", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "rename_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "relocate_repository_materialization", "sync_repository", "list_devices", "revoke_device"]),
+        expect.arrayContaining(["memory_context", "memory_update", "memory_recovery_export", "patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_create_worktree", "git_remove_worktree", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_grant_worktree_permission", "oracle_list_instances", "oracle_disk_audit", "oracle_disk_audit_provision", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "rename_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "relocate_repository_materialization", "sync_repository", "list_devices", "revoke_device"]),
       );
       expect(metadata).toMatchObject({
-        toolCount: 133,
+        toolCount: 134,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);
@@ -146,6 +146,90 @@ describe("MCP public catalog stability", () => {
     }
   });
 
+  it("exposes the fixed Oracle worktree grant only to the authenticated owner", async () => {
+    const executor = createTestExecutor();
+    const inspect = jest.fn(async () => ({
+      status: "not_granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "git.worktree.write" as const, policySha256: "a".repeat(64),
+      effective: false, backupCreated: false,
+    }));
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "git.worktree.write" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
+    const server = createMcpServer({
+      workspaceExecutor: executor, sourceControlExecutor: executor,
+      worktreePolicyAdmin: { inspect, grant },
+      authenticatedUserId: "edge-owner-1",
+    });
+    const client = new Client({ name: "worktree-policy-admin-test", version: "0.0.0" }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const read = await client.callTool({ name: "oracle_grant_worktree_permission", arguments: { action: "inspect" } });
+      expect(read.structuredContent).toMatchObject({
+        status: "not_granted", capability: "git.worktree.write", effective: false,
+      });
+      const operationId = "b6ed7ef2-f66a-47d2-832e-e5cd1d50ba48";
+      const result = await client.callTool({
+        name: "oracle_grant_worktree_permission",
+        arguments: { action: "grant", expectedPolicySha256: "a".repeat(64), operationId },
+      });
+      expect(result.structuredContent).toMatchObject({
+        status: "granted", capability: "git.worktree.write", effective: true,
+      });
+      expect(grant).toHaveBeenCalledWith({
+        expectedPolicySha256: "a".repeat(64), operationId, actor: "edge-owner-1",
+      });
+      for (const forbidden of [
+        { action: "grant", expectedPolicySha256: "a".repeat(64), operationId, capability: "git.remote.push" },
+        { action: "grant", expectedPolicySha256: "a".repeat(64), operationId, policyPath: "/etc/other.json" },
+      ]) {
+        const denied = await client.callTool({ name: "oracle_grant_worktree_permission", arguments: forbidden });
+        expect(denied.isError).toBe(true);
+      }
+      expect(grant).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses the worktree grant without the trusted Oracle principal", async () => {
+    const executor = createTestExecutor();
+    const grant = jest.fn(async () => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "git.worktree.write" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
+    const server = createMcpServer({
+      workspaceExecutor: executor, sourceControlExecutor: executor,
+      worktreePolicyAdmin: {
+        inspect: async () => ({
+          status: "not_granted" as const, workspaceId: "mcp-access-stack" as const,
+          capability: "git.worktree.write" as const, policySha256: "a".repeat(64),
+          effective: false, backupCreated: false,
+        }), grant,
+      },
+    });
+    const client = new Client({ name: "unauthorized-worktree-grant", version: "0.0.0" }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const rejected = await client.callTool({
+        name: "oracle_grant_worktree_permission",
+        arguments: { action: "grant", expectedPolicySha256: "a".repeat(64),
+          operationId: "b6ed7ef2-f66a-47d2-832e-e5cd1d50ba48" },
+      });
+      expect(rejected.isError).toBe(true);
+      expect(grant).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("keeps companion-internal tools executable but outside the published MCP catalog", async () => {
     const executor = createTestExecutor();
     const bindRepositories = jest.fn(async (bindings: Array<{
@@ -194,7 +278,7 @@ describe("MCP public catalog stability", () => {
         client.connect(clientTransport),
       ]);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(133);
+      expect(listed.tools).toHaveLength(134);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL)).toBe(false);

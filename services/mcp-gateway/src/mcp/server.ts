@@ -24,7 +24,7 @@ import { installChatGptToolsListCompatibility } from "./chatgpt-tools-list.js";
 import { registerCentralMemoryTools } from "./central-memory-tools.js";
 import type { CentralMemoryStore } from "../memory/central-memory.js";
 import { captureNativeToolCheckpoint } from "../memory/native-tool-checkpoint.js";
-import { registerPrimaryPolicyAdminTool, type PrimaryPolicyAdmin } from "./primary-policy-admin-tool.js";
+import { registerPrimaryPolicyAdminTool, registerWorktreePolicyAdminTool, type PrimaryPolicyAdmin, type WorktreePolicyAdmin } from "./primary-policy-admin-tool.js";
 import { registerCompanionInternalUserMessageTools } from "../companion/internal-user-message-tools.js";
 import {
   registerCompanionInternalRepositoryTools,
@@ -45,6 +45,7 @@ export interface McpServerOptions {
   companionRepositoryBinder?: CompanionRepositoryBinder | undefined;
   browser?: BrowserExecutor | undefined;
   policyAdmin?: PrimaryPolicyAdmin | undefined;
+  worktreePolicyAdmin?: WorktreePolicyAdmin | undefined;
   memoryStore?: CentralMemoryStore | undefined;
   /** Individual identity from the signed Edge assertion, independent of owner-admin authority. */
   memoryUserId?: string | undefined;
@@ -132,6 +133,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   }
 
   registerPrimaryPolicyAdminTool(server, options.policyAdmin, options.authenticatedUserId, securitySchemes);
+  registerWorktreePolicyAdminTool(server, options.worktreePolicyAdmin, options.authenticatedUserId, securitySchemes);
   registerCentralMemoryTools(server,{store:options.memoryStore,operationContextFactory:options.operationContextFactory,securitySchemes});
 
   const finalizedCatalog = installChatGptToolsListCompatibility(server, securitySchemes);

@@ -21,7 +21,7 @@ import type { CentralMemoryStore } from "./memory/central-memory.js";
 import { BrowserWorkerClient } from "./browser/client.js";
 import { createLogger } from "./logger.js";
 import { createMcpServer } from "./mcp/server.js";
-import type { PrimaryPolicyAdmin } from "./mcp/primary-policy-admin-tool.js";
+import type { PrimaryPolicyAdmin, WorktreePolicyAdmin } from "./mcp/primary-policy-admin-tool.js";
 import { tryHandleLegacyBrowserFastPath } from "./mcp/browser-legacy-fast-path.js";
 import {  McpOperationRegistry,
   createGatewayOperationContextFactory,
@@ -68,6 +68,7 @@ export interface GatewayApplicationDependencies {
   repositoryExecutor?: RepositoryExecutor;
   companionRepositoryBinder?: CompanionRepositoryBinder;
   policyAdmin?: PrimaryPolicyAdmin;
+  worktreePolicyAdmin?: WorktreePolicyAdmin;
   memoryStore?: CentralMemoryStore;
   workspaceReady?: () => boolean;
   edgeTrust?: EdgeTrustConfig;
@@ -257,6 +258,7 @@ export function createGatewayApplication(
       ...(dependencies.memoryStore === undefined ? {} : { memoryStore:dependencies.memoryStore }),
       ...(typeof authenticatedUserId === "string" ? { memoryUserId:authenticatedUserId } : {}),
       ...(dependencies.policyAdmin === undefined ? {} : { policyAdmin: dependencies.policyAdmin }),
+      ...(dependencies.worktreePolicyAdmin === undefined ? {} : { worktreePolicyAdmin: dependencies.worktreePolicyAdmin }),
       ...(request.auth?.extra?.ownerScope === "owner" && typeof authenticatedUserId === "string"
         ? { authenticatedUserId } : {}),
       ...(dependencies.repositoryExecutor === undefined ? {} : { repositoryExecutor: dependencies.repositoryExecutor }),

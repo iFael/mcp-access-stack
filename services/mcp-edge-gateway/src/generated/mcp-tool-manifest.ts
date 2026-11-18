@@ -28346,6 +28346,76 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Oracle-only fixed git.worktree.write grant for mcp-access-stack: inspect first, then grant with policy SHA-256 CAS and operationId. Audits, backs up and reloads the policy in-process; cannot choose paths or other capabilities. Next: inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "oracle_grant_worktree_permission",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "backupCreated": {
+          "type": "boolean"
+        },
+        "capability": {
+          "const": "git.worktree.write",
+          "type": "string"
+        },
+        "effective": {
+          "type": "boolean"
+        },
+        "policySha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "not_granted",
+            "granted",
+            "already_granted"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "workspaceId",
+        "capability",
+        "policySha256",
+        "effective",
+        "backupCreated"
+      ],
+      "type": "object"
+    },
+    "title": "Inspect or grant Oracle Git worktree permission"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "read subsequent pages to collect the verified off-host archive; never confuse disaster recovery evidence with live Oracle memory.",
       "securitySchemes": [
         {
@@ -29167,15 +29237,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "c7f2f92a3e9f0cdbdcf079f9ad32c2dc4f8acaab688ba5ced6535c0aa7e3b13a",
-  "serverVersion": "0.4.0-catalog.cc7f2f92a3e9f.s44446d43aaf0",
-  "toolCount": 133,
-  "toolSetRevision": "44446d43aaf0982dd89d1121a11c1aab6ae6fd82706dacd102e49f96b4d1af76"
+  "contractRevision": "bead332c182b94798e6173e57c064f36c9c7d880e0ca3d3a3743a7e2c1ff9c17",
+  "serverVersion": "0.4.0-catalog.cbead332c182b.sa15e528da70d",
+  "toolCount": 134,
+  "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cc7f2f92a3e9f.s44446d43aaf0"
+  "version": "0.4.0-catalog.cbead332c182b.sa15e528da70d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -36,6 +36,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   run_workspace_validations: "fix what it reports with patch_files, then git_commit_paths.",
   http_get: "",
   oracle_grant_github_ready_permission: "inspect first, then grant once with the observed SHA-256 and operationId; inspect again to confirm effective policy before using github_mark_pull_request_ready.",
+  oracle_grant_worktree_permission: "inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
 
   // Commands and background tasks
   run_command: "when it answers confirmation_required, show the reasons and call again with its confirmationId; when it became a background task, wait_background_task with its taskId.",
