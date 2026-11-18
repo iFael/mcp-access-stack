@@ -56,7 +56,8 @@ class FixedOraclePolicyGrant<C extends OracleGrantCapability> {
         throw new AppError("GIT_HEAD_MISMATCH", "Oracle policy SHA changed; inspect before retrying.");
       }
       const workspace = current.policy.workspaces.find((item) => item.id === "mcp-access-stack");
-      if (!workspace?.enabled || workspace.permissionProfile !== "full-repo-write" ||
+      if (!workspace?.enabled ||
+          (this.capability === "git.worktree.write" && workspace.permissionProfile !== "full-repo-write") ||
           !workspace.sourceControl?.capabilities.includes(this.prerequisite)) {
         throw new AppError("PERMISSION_DENIED", "Oracle grant requires an existing trusted source-control capability.");
       }

@@ -62,6 +62,21 @@ describe("narrow Oracle ready-for-review policy administration", () => {
     expect(reloads).toBe(1);
   });
 
+  it("keeps the legacy ready grant independent of the workspace permission profile", async () => {
+    const { fixture, audit, expectedPolicySha256 } = await grantFixture();
+    const policy = JSON.parse(await readFile(fixture.policyPath, "utf8"));
+    policy.workspaces[0].permissionProfile = "full-repo-readonly";
+    await writeFile(fixture.policyPath, JSON.stringify(policy, null, 2), "utf8");
+    let effective = false;
+    const admin = new ReadyReviewPolicyGrant(fixture.policyPath, audit, () => effective, async () => {
+      effective = true;
+    });
+    const actualSha = createHash("sha256").update(await readFile(fixture.policyPath)).digest("hex");
+    expect(actualSha).not.toBe(expectedPolicySha256);
+    await expect(admin.grant({ expectedPolicySha256: actualSha, operationId: randomUUID(), actor: "owner" }))
+      .resolves.toMatchObject({ status: "granted", effective: true });
+  });
+
   it("rejects stale CAS without modifying policy or writing backup", async () => {
     const { fixture, audit, prior } = await grantFixture();
     const admin = new ReadyReviewPolicyGrant(fixture.policyPath, audit, () => false, async () => undefined);
