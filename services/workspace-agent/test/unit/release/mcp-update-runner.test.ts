@@ -262,6 +262,95 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.calls.filter((call) => call === "dispatch edge-catalog-activate.yml")).toHaveLength(2);
   });
 
+  it("retries a completed failed Oracle prepare on explicit resume, keeping the same update and successful workflows", async () => {
+    const env = world();
+    let attempts = 0;
+    env.port.prepare = async (tag) => {
+      attempts += 1;
+      env.calls.push(`prepare ${tag}`);
+      if (attempts === 1) return { status: "started", taskId: "failed_oracle_prepare" };
+      env.state.candidate = tag.slice(1);
+      return { status: "started", taskId: "successful_oracle_prepare" };
+    };
+    env.port.task = async (taskId) => taskId === "failed_oracle_prepare" ? "failed" : "succeeded";
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
+    expect(failed).toMatchObject({
+      status: "failed", step: "oracle_prepare", error: { code: "PREPARE_FAILED" },
+      data: { prepareTaskId: "failed_oracle_prepare", prepareRequested: true },
+    });
+    expect(attempts).toBe(1);
+
+    const resumed = await updates.resume(failed.updateId);
+    expect(resumed).toMatchObject({
+      updateId: failed.updateId, status: "running", step: "oracle_prepare",
+      data: { failedPrepareTaskIds: ["failed_oracle_prepare"] },
+    });
+    expect(resumed.data.prepareTaskId).toBeUndefined();
+    expect(resumed.data.prepareRequested).toBeUndefined();
+    const done = await updates.settled(failed.updateId);
+    expect(done).toMatchObject({
+      updateId: failed.updateId, status: "succeeded",
+      data: { failedPrepareTaskIds: ["failed_oracle_prepare"], prepareTaskId: "successful_oracle_prepare" },
+    });
+    expect(attempts).toBe(2);
+    expect(env.calls.filter((call) => call.startsWith("dispatch "))).toHaveLength(5);
+    expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(1);
+    expect(env.calls.filter((call) => call.startsWith("promote "))).toHaveLength(1);
+  });
+
+  it("fails closed when the prior Oracle task is no longer in failed state", async () => {
+    const env = world();
+    env.port.prepare = async () => ({ status: "started", taskId: "old_oracle_task" });
+    let observed: "failed" | "running" | "succeeded" = "failed";
+    env.port.task = async () => observed;
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(failed.error?.code).toBe("PREPARE_FAILED");
+    observed = "running";
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "PREPARE_RECONCILIATION_REQUIRED" });
+    observed = "succeeded";
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "PREPARE_RECONCILIATION_REQUIRED" });
+    expect(await updates.read(failed.updateId)).toMatchObject({
+      status: "failed", data: { prepareTaskId: "old_oracle_task" },
+    });
+    expect(env.calls.filter((call) => call.startsWith("promote "))).toHaveLength(0);
+  });
+
+  it("does not retry a failed task if the candidate or active Oracle release changed", async () => {
+    const env = world();
+    env.port.prepare = async () => ({ status: "started", taskId: "failed_oracle_task" });
+    env.port.task = async () => "failed";
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(failed.error?.code).toBe("PREPARE_FAILED");
+    env.state.candidate = "unexpected-candidate";
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "PREPARE_RECONCILIATION_REQUIRED" });
+    env.state.candidate = null;
+    env.state.active = "1.1.0-beta.999-connector.1";
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "PREPARE_RECONCILIATION_REQUIRED" });
+    expect(await updates.read(failed.updateId)).toMatchObject({
+      status: "failed", data: { prepareTaskId: "failed_oracle_task" },
+    });
+  });
+
+  it("does not retry a prepare whose original outcome is unknown", async () => {
+    const env = world();
+    let attempts = 0;
+    env.port.prepare = async () => {
+      attempts += 1;
+      throw new Error("lost prepare response");
+    };
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(failed).toMatchObject({ status: "failed", step: "oracle_prepare", data: { prepareRequested: true } });
+    expect(failed.data.prepareTaskId).toBeUndefined();
+    expect(await updates.resume(failed.updateId)).toMatchObject({ status: "running" });
+    const retried = await updates.settled(failed.updateId);
+    expect(retried).toMatchObject({ status: "failed", error: { code: "PREPARE_OUTCOME_UNKNOWN" } });
+    expect(attempts).toBe(1);
+  });
+
   it("goes on with a companion release published before, and one its own run refused to publish again", async () => {
     const before = world({ companionReleased: async () => true });
     const first = runner(before.port);
