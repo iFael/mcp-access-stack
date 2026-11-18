@@ -9,6 +9,7 @@ import {
   gitCommitPathsResultSchema,
   gitCreateBranchInputSchema,
   gitCreateWorktreeInputSchema,
+  gitRemoveWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -82,6 +83,7 @@ describe("source-control contracts", () => {
   test("publishes Task 1 contracts and typed error codes through the core boundary", () => {
     expect(core.gitCreateBranchInputSchema).toBe(gitCreateBranchInputSchema);
     expect(core.gitCreateWorktreeInputSchema).toBe(gitCreateWorktreeInputSchema);
+    expect(core.gitRemoveWorktreeInputSchema).toBe(gitRemoveWorktreeInputSchema);
     expect(core.gitMergeBranchInputSchema).toBe(gitMergeBranchInputSchema);
     expect(core.githubMergePullRequestInputSchema).toBe(githubMergePullRequestInputSchema);
     expect(errorCodes).toEqual(expect.arrayContaining([
@@ -102,6 +104,7 @@ describe("source-control contracts", () => {
     expect(sourceControlOperationNameSchema.options).toEqual([
       "git_create_branch",
       "git_create_worktree",
+      "git_remove_worktree",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -668,6 +671,7 @@ describe("source-control contracts", () => {
     const fixtures: Array<[string, { parse(value: unknown): unknown }, Record<string, unknown>]> = [
       ["git_create_branch", gitCreateBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedHeadSha: shaA }],
       ["git_create_worktree", gitCreateWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB }],
+      ["git_remove_worktree", gitRemoveWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB }],
       ["git_stage_paths", gitStagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"] }],
       ["git_unstage_paths", gitUnstagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],
       ["git_commit", gitCommitInputSchema, { workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],

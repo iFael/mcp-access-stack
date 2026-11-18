@@ -12190,6 +12190,100 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Removes only a registered, completely clean worktree beneath .worktrees after verifying source and target SHAs; never forces removal or deletes branches. Next: inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "pattern": "^\\.worktrees\\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "type": "string"
+        },
+        "expectedSourceHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedWorktreeHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "destination",
+        "expectedSourceHeadSha",
+        "expectedWorktreeHeadSha"
+      ],
+      "type": "object"
+    },
+    "name": "git_remove_worktree",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "pattern": "^\\.worktrees\\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "type": "string"
+        },
+        "removed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "removedWorktreeHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sourceHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "destination",
+        "sourceHeadSha",
+        "removedWorktreeHeadSha",
+        "removed"
+      ],
+      "type": "object"
+    },
+    "title": "Remove clean Git worktree"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "git_commit.",
       "securitySchemes": [
         {
@@ -29073,15 +29167,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "7e732f68e2e18c87daf221f09ad401a232bbba03b45df18482663be9984575d0",
-  "serverVersion": "0.4.0-catalog.c7e732f68e2e1.s9768d56f85f7",
-  "toolCount": 132,
-  "toolSetRevision": "9768d56f85f742687d30deafe0b9d3b52109e726498137faa6c5a1d29107d6da"
+  "contractRevision": "c7f2f92a3e9f0cdbdcf079f9ad32c2dc4f8acaab688ba5ced6535c0aa7e3b13a",
+  "serverVersion": "0.4.0-catalog.cc7f2f92a3e9f.s44446d43aaf0",
+  "toolCount": 133,
+  "toolSetRevision": "44446d43aaf0982dd89d1121a11c1aab6ae6fd82706dacd102e49f96b4d1af76"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c7e732f68e2e1.s9768d56f85f7"
+  "version": "0.4.0-catalog.cc7f2f92a3e9f.s44446d43aaf0"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

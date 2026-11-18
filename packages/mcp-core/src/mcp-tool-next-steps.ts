@@ -67,6 +67,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   inspect_workspace_git: "git_create_branch before changing files on main; git_commit_paths for the change.",
   git_create_branch: "patch_files for the change, then git_commit_paths.",
   git_create_worktree: "inspect_workspace_git with root set to the returned destination; the original checkout is not synchronized.",
+  git_remove_worktree: "inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
   git_stage_paths: "git_commit.",
   git_unstage_paths: "git_stage_paths for the paths to keep.",
   git_commit: "git_push_branch.",

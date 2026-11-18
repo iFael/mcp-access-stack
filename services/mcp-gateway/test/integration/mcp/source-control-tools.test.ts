@@ -43,6 +43,13 @@ class RecordingSourceControlExecutor {
       detached: true as const, created: true as const });
   }
 
+  async removeWorktree(input: any, context?: OperationContext) {
+    this.record("removeWorktree", input, context);
+    return this.result({ root: input.root ?? ".", destination: input.destination,
+      sourceHeadSha: input.expectedSourceHeadSha, removedWorktreeHeadSha: input.expectedWorktreeHeadSha,
+      removed: true as const });
+  }
+
   async stagePaths(input: any, context?: OperationContext) {
     this.record("stagePaths", input, context);
     return this.result({ root: input.root ?? ".", headSha: shaA, indexTreeSha: shaB, paths: input.paths });
@@ -276,6 +283,13 @@ const cases = [
     input: { workspaceId: "repo", root: "project", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB },
     expectedInput: { workspaceId: "repo", root: "project", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB },
     expectedResult: { root: "project", destination: ".worktrees/clean-main", previousHeadSha: shaA, headSha: shaB, detached: true, created: true },
+  },
+  {
+    name: "git_remove_worktree",
+    method: "removeWorktree",
+    input: { workspaceId: "repo", root: "project", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB },
+    expectedInput: { workspaceId: "repo", root: "project", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB },
+    expectedResult: { root: "project", destination: ".worktrees/clean-main", sourceHeadSha: shaA, removedWorktreeHeadSha: shaB, removed: true },
   },
   {
     name: "git_stage_paths",

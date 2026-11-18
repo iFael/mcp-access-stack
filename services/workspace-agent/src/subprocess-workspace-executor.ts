@@ -197,6 +197,9 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   createWorktree(...args: Parameters<GitRepositoryExecutor["createWorktree"]>) {
     return this.fallback?.createWorktree?.(...args) ?? Promise.reject(this.notImplemented("createWorktree"));
   }
+  removeWorktree(...args: Parameters<GitRepositoryExecutor["removeWorktree"]>) {
+    return this.fallback?.removeWorktree?.(...args) ?? Promise.reject(this.notImplemented("removeWorktree"));
+  }
   stagePaths(...args: Parameters<GitRepositoryExecutor["stagePaths"]>) {
     return this.fallback?.stagePaths?.(...args) ?? Promise.reject(this.notImplemented("stagePaths"));
   }

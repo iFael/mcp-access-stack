@@ -1843,6 +1843,11 @@ class MockSourceControlExecutor {
     this.record("createWorktree", input, context);
     return { root: input.root ?? ".", destination: input.destination, previousHeadSha: input.expectedHeadSha, headSha: input.expectedRemoteSha, detached: true as const, created: true as const };
   }
+  async removeWorktree(input: any, context?: unknown) {
+    this.record("removeWorktree", input, context);
+    return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
+      removedWorktreeHeadSha: input.expectedWorktreeHeadSha, removed: true as const };
+  }
   async stagePaths(input: any, context?: unknown) {
     this.record("stagePaths", input, context);
     if (this.stageError) throw this.stageError;
@@ -1994,6 +1999,7 @@ class MockSourceControlExecutor {
 const sourceControlCases = [
   ["git_create_branch", "createBranch", { workspaceId: "ws", branch: "feature/task7", expectedHeadSha: sourceControlShaA }],
   ["git_create_worktree", "createWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedHeadSha: sourceControlShaA, expectedRemoteSha: sourceControlShaB }],
+  ["git_remove_worktree", "removeWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedSourceHeadSha: sourceControlShaA, expectedWorktreeHeadSha: sourceControlShaB }],
   ["git_stage_paths", "stagePaths", { workspaceId: "ws", paths: ["a.txt"] }],
   ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
@@ -2024,6 +2030,7 @@ const sourceControlCases = [
 const expectedSourceControlAnnotations = {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_remove_worktree: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2050,10 +2057,11 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-five source-control tools in the workspace surface", () => {
+  it("publishes twenty-six source-control tools in the workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_create_worktree",
+      "git_remove_worktree",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -2078,9 +2086,9 @@ describe("registerSourceControlTools", () => {
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(25);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(66);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(66);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(67);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(67);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

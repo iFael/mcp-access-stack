@@ -108,6 +108,8 @@ import {
   gitCreateBranchResultSchema,
   gitCreateWorktreeInputSchema,
   gitCreateWorktreeResultSchema,
+  gitRemoveWorktreeInputSchema,
+  gitRemoveWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -220,6 +222,7 @@ export type SourceControlToolName =
 export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_create_branch",
   "git_create_worktree",
+  "git_remove_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -2881,6 +2884,22 @@ const sourceControlMcpSchemas = {
       created: z.literal(true),
     }).strict(),
   },
+  git_remove_worktree: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      destination: gitRemoveWorktreeInputSchema.shape.destination,
+      expectedSourceHeadSha: mcpSourceControlSha,
+      expectedWorktreeHeadSha: mcpSourceControlSha,
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      destination: gitRemoveWorktreeInputSchema.shape.destination,
+      sourceHeadSha: mcpSourceControlSha,
+      removedWorktreeHeadSha: mcpSourceControlSha,
+      removed: z.literal(true),
+    }).strict(),
+  },
   git_stage_paths: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -3231,6 +3250,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
 }> = {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  git_remove_worktree: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
@@ -3318,6 +3338,31 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.createWorktree(parsed, context)),
           );
           return sourceControlSuccess("Isolated Git worktree created.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_remove_worktree", include)) {
+    server.registerTool(
+      "git_remove_worktree",
+      {
+        title: "Remove clean Git worktree",
+        description: "Removes only a registered, completely clean worktree beneath .worktrees after verifying source and target SHAs; never forces removal or deletes branches.",
+        inputSchema: sourceControlMcpSchemas.git_remove_worktree.input,
+        outputSchema: sourceControlMcpSchemas.git_remove_worktree.output,
+        annotations: sourceControlAnnotations.git_remove_worktree,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitRemoveWorktreeInputSchema.parse(input);
+          const structuredContent = gitRemoveWorktreeResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.removeWorktree(parsed, context)),
+          );
+          return sourceControlSuccess("Clean Git worktree removed.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -4082,6 +4127,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   readBackgroundTaskOutput: "read_background_task_output",
   gitCreateBranch: "git_create_branch",
   gitCreateWorktree: "git_create_worktree",
+  gitRemoveWorktree: "git_remove_worktree",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",

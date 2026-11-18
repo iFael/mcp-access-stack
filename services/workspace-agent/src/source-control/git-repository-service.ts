@@ -6,6 +6,7 @@ import {
   gitCommitInputSchema,
   gitCreateBranchInputSchema,
   gitCreateWorktreeInputSchema,
+  gitRemoveWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -18,6 +19,8 @@ import {
   type GitCreateBranchResult,
   type GitCreateWorktreeInput,
   type GitCreateWorktreeResult,
+  type GitRemoveWorktreeInput,
+  type GitRemoveWorktreeResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
   type GitSyncBranchInput,
@@ -153,6 +156,83 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       headSha: fetched,
       detached: true,
       created: true,
+    };
+  }
+
+  async removeWorktree(
+    input: GitRemoveWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitRemoveWorktreeResult> {
+    const parsed = gitRemoveWorktreeInputSchema.parse(input);
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", context?.signal);
+    const sourceHead = await this.runner.headSha(repository.repositoryRoot, context?.signal);
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, sourceHead,
+      "Source HEAD changed before worktree removal.");
+
+    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
+    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
+    if (!samePath(parent.canonicalPath, path.join(repository.repositoryRoot, ".worktrees")) ||
+        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
+      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be within the selected repository.");
+    }
+    const destination = path.join(parent.canonicalPath, parsed.destination.slice(".worktrees/".length));
+    let targetStat: Awaited<ReturnType<typeof lstat>>;
+    let markerStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      targetStat = await lstat(destination);
+      markerStat = await lstat(path.join(destination, ".git"));
+    } catch {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree or its Git registration marker is missing.");
+    }
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink() ||
+        !markerStat.isFile() || markerStat.isSymbolicLink() ||
+        !samePath(await realpath(destination), destination)) {
+      throw new AppError("INVALID_PATH", "Worktree must be a real directory with an intact Git marker.");
+    }
+
+    const registrations = (await this.runner.listWorktrees(repository.repositoryRoot, context?.signal))
+      .filter((entry) => samePath(entry.path, destination));
+    if (registrations.length !== 1 || registrations[0]!.prunable) {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree is missing or prunable; repair it separately before removal.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedWorktreeHeadSha, registrations[0]!.headSha,
+      "Registered worktree HEAD differs from the expected SHA.");
+    if (!samePath(await this.runner.showTopLevel(destination, context?.signal), destination) ||
+        await this.runner.headSha(destination, context?.signal) !== parsed.expectedWorktreeHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
+    }
+    if (!(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
+      throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified, untracked or ignored files; removal denied.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha,
+      await this.runner.headSha(repository.repositoryRoot, context?.signal),
+      "Source HEAD changed during removal preflight.");
+
+    // Git performs its own non-forced cleanliness check. Failure after this point
+    // may have altered metadata, so always require reconciliation before retrying.
+    try {
+      await this.runner.removeWorktree(repository.repositoryRoot, destination, context?.signal);
+      try {
+        await lstat(destination);
+        throw new Error("Worktree directory still exists.");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if ((await this.runner.listWorktrees(repository.repositoryRoot, context?.signal))
+        .some((entry) => samePath(entry.path, destination)) ||
+          await this.runner.headSha(repository.repositoryRoot, context?.signal) !== sourceHead) {
+        throw new Error("Worktree removal could not be reconciled.");
+      }
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Worktree removal outcome is uncertain; inspect Git metadata before attempting another removal.");
+    }
+    return {
+      root: repository.logicalRoot,
+      destination: parsed.destination,
+      sourceHeadSha: sourceHead,
+      removedWorktreeHeadSha: parsed.expectedWorktreeHeadSha,
+      removed: true,
     };
   }
 

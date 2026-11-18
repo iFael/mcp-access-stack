@@ -186,6 +186,7 @@ export type SourceControlCapability = z.infer<typeof sourceControlCapabilitySche
 export const sourceControlOperationNameSchema = z.enum([
   "git_create_branch",
   "git_create_worktree",
+  "git_remove_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -277,6 +278,25 @@ export const gitCreateWorktreeResultSchema = z.object({
   created: z.literal(true),
 }).strict();
 export type GitCreateWorktreeResult = z.infer<typeof gitCreateWorktreeResultSchema>;
+
+// Removal never accepts --force, arbitrary paths or branch deletion.
+export const gitRemoveWorktreeInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  destination: gitCreateWorktreeInputSchema.shape.destination,
+  expectedSourceHeadSha: gitShaSchema,
+  expectedWorktreeHeadSha: gitShaSchema,
+}).strict();
+export type GitRemoveWorktreeInput = z.input<typeof gitRemoveWorktreeInputSchema>;
+
+export const gitRemoveWorktreeResultSchema = z.object({
+  root: rootSchema,
+  destination: gitRemoveWorktreeInputSchema.shape.destination,
+  sourceHeadSha: gitShaSchema,
+  removedWorktreeHeadSha: gitShaSchema,
+  removed: z.literal(true),
+}).strict();
+export type GitRemoveWorktreeResult = z.infer<typeof gitRemoveWorktreeResultSchema>;
 
 export const gitStagePathsInputSchema = z
   .object({
