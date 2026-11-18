@@ -10,8 +10,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(133);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(133);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(134);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(134);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
         ...MCP_REPOSITORY_TOOL_NAMES,
@@ -32,6 +32,7 @@ describe("MCP tool catalog identity", () => {
         "github_read",
         "github_issue_write",
         "oracle_grant_github_ready_permission",
+        "oracle_grant_worktree_permission",
         "http_get",
       ]),
     );

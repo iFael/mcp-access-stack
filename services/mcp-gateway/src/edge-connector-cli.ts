@@ -16,7 +16,7 @@ import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
-import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, ReadyReviewPolicyGrant, type LocalAgent} from "@vs-code-gpt/local-agent";
+import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, ReadyReviewPolicyGrant, WorktreePolicyGrant, type LocalAgent} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
 import type { CompanionUpdateRequest, ProgressUpdate, WakeEvent } from "@mcp-access-stack/edge-protocol";
 import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
@@ -101,15 +101,24 @@ async function main(): Promise<void> {
     onChanged: reloadPrimaryRuntime,
   });
   await reloadPrimaryRuntime();
+  const hasEffectiveCapability = (capability: "github.pull_request.ready" | "git.worktree.write") =>
+    effectivePolicy.workspaces.some((item) => item.id === "mcp-access-stack" &&
+      (item.sourceControl?.capabilities.includes(capability) ?? false));
+  const reloadGrantedPolicy = async () => {
+    basePolicy = await readPrimaryPolicy(runtime.policyPath);
+    await reloadPrimaryRuntime();
+  };
   const policyAdmin = new ReadyReviewPolicyGrant(
     runtime.policyPath,
     path.join(runtime.runtimeRoot, "policy-ready-grant-audit.jsonl"),
-    () => effectivePolicy.workspaces.some((item) => item.id === "mcp-access-stack" &&
-      (item.sourceControl?.capabilities.includes("github.pull_request.ready") ?? false)),
-    async () => {
-      basePolicy = await readPrimaryPolicy(runtime.policyPath);
-      await reloadPrimaryRuntime();
-    },
+    () => hasEffectiveCapability("github.pull_request.ready"),
+    reloadGrantedPolicy,
+  );
+  const worktreePolicyAdmin = new WorktreePolicyGrant(
+    runtime.policyPath,
+    path.join(runtime.runtimeRoot, "policy-worktree-grant-audit.jsonl"),
+    () => hasEffectiveCapability("git.worktree.write"),
+    reloadGrantedPolicy,
   );
   const sourceOptions=await loadOracleSourceProviderFromEnvironment(process.env,
     config=>reloadable.oracleSourceReadPort(config));
@@ -151,6 +160,7 @@ async function main(): Promise<void> {
     companionRepositoryBinder: repositories,
     memoryStore,
     policyAdmin,
+    worktreePolicyAdmin,
     ...(browserPool === undefined
       ? {}
       : {

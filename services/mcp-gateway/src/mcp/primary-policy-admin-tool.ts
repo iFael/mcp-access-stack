@@ -12,40 +12,58 @@ const grantInputSchema = z.discriminatedUnion("action", [
   }).strict(),
 ]);
 
-const grantResultSchema = z.object({
+type GrantCapability = "github.pull_request.ready" | "git.worktree.write";
+const grantResultSchema = <C extends GrantCapability>(capability: C) => z.object({
   status: z.enum(["not_granted", "granted", "already_granted"]),
   workspaceId: z.literal("mcp-access-stack"),
-  capability: z.literal("github.pull_request.ready"),
+  capability: z.literal(capability),
   policySha256: sha256Schema,
   effective: z.boolean(),
   backupCreated: z.boolean(),
 }).strict();
 
-export type PrimaryPolicyGrantResult = z.infer<typeof grantResultSchema>;
+export type PrimaryPolicyGrantResult = z.infer<ReturnType<typeof readyGrantResultSchema>>;
 export type PrimaryPolicyGrantInput = z.infer<typeof grantInputSchema>;
+export type WorktreePolicyGrantResult = z.infer<ReturnType<typeof worktreeGrantResultSchema>>;
 
-export interface PrimaryPolicyAdmin {
-  inspect(): Promise<PrimaryPolicyGrantResult>;
-  grant(input: { expectedPolicySha256: string; operationId: string; actor: string }):
-    Promise<PrimaryPolicyGrantResult>;
+function readyGrantResultSchema() {
+  return grantResultSchema("github.pull_request.ready");
+}
+function worktreeGrantResultSchema() {
+  return grantResultSchema("git.worktree.write");
 }
 
-export function registerPrimaryPolicyAdminTool(
+interface NarrowPolicyAdmin<C extends GrantCapability> {
+  inspect(): Promise<z.infer<ReturnType<typeof grantResultSchema<C>>>>;
+  grant(input: { expectedPolicySha256: string; operationId: string; actor: string }):
+    Promise<z.infer<ReturnType<typeof grantResultSchema<C>>>>;
+}
+
+export type PrimaryPolicyAdmin = NarrowPolicyAdmin<"github.pull_request.ready">;
+export type WorktreePolicyAdmin = NarrowPolicyAdmin<"git.worktree.write">;
+
+function registerNarrowPolicyAdminTool<C extends GrantCapability>(
   server: McpServer,
-  admin?: PrimaryPolicyAdmin,
-  authenticatedUserId?: string,
-  securitySchemes: Array<{ type: "oauth2" | "noauth"; scopes?: string[] }> = [{ type: "noauth" }],
+  name: "oracle_grant_github_ready_permission" | "oracle_grant_worktree_permission",
+  capability: C,
+  admin: NarrowPolicyAdmin<C> | undefined,
+  authenticatedUserId: string | undefined,
+  securitySchemes: Array<{ type: "oauth2" | "noauth"; scopes?: string[] }>,
 ): void {
   server.registerTool(
-    "oracle_grant_github_ready_permission",
+    name,
     {
-      title: "Inspect or grant Oracle GitHub ready-for-review permission",
-      description: "Oracle-only administrative operation. Inspects the installed policy or grants only github.pull_request.ready to mcp-access-stack using policy SHA-256 CAS, a UUID operation ID, backup, audit and in-process policy reload. No arbitrary file paths or capabilities.",
+      title: capability === "git.worktree.write"
+        ? "Inspect or grant Oracle Git worktree permission"
+        : "Inspect or grant Oracle GitHub ready-for-review permission",
+      description: capability === "git.worktree.write"
+        ? "Oracle-only fixed git.worktree.write grant for mcp-access-stack: inspect first, then grant with policy SHA-256 CAS and operationId. Audits, backs up and reloads the policy in-process; cannot choose paths or other capabilities."
+        : "Oracle-only administrative operation. Inspects the installed policy or grants only github.pull_request.ready to mcp-access-stack using policy SHA-256 CAS, a UUID operation ID, backup, audit and in-process policy reload. No arbitrary file paths or capabilities.",
       inputSchema: grantInputSchema,
-      outputSchema: grantResultSchema,
+      outputSchema: grantResultSchema(capability),
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: capability === "git.worktree.write",
         openWorldHint: false,
         idempotentHint: true,
       },
@@ -57,7 +75,7 @@ export function registerPrimaryPolicyAdminTool(
           throw new AppError("PERMISSION_DENIED", "Oracle policy administration requires a trusted authenticated owner session.");
         }
         const parsed = grantInputSchema.parse(input);
-        const result = grantResultSchema.parse(parsed.action === "inspect"
+        const result = grantResultSchema(capability).parse(parsed.action === "inspect"
           ? await admin.inspect()
           : await admin.grant({ expectedPolicySha256: parsed.expectedPolicySha256,
               operationId: parsed.operationId, actor: authenticatedUserId }));
@@ -71,4 +89,24 @@ export function registerPrimaryPolicyAdminTool(
       }
     },
   );
+}
+
+export function registerPrimaryPolicyAdminTool(
+  server: McpServer,
+  admin?: PrimaryPolicyAdmin,
+  authenticatedUserId?: string,
+  securitySchemes: Array<{ type: "oauth2" | "noauth"; scopes?: string[] }> = [{ type: "noauth" }],
+): void {
+  registerNarrowPolicyAdminTool(server, "oracle_grant_github_ready_permission",
+    "github.pull_request.ready", admin, authenticatedUserId, securitySchemes);
+}
+
+export function registerWorktreePolicyAdminTool(
+  server: McpServer,
+  admin?: WorktreePolicyAdmin,
+  authenticatedUserId?: string,
+  securitySchemes: Array<{ type: "oauth2" | "noauth"; scopes?: string[] }> = [{ type: "noauth" }],
+): void {
+  registerNarrowPolicyAdminTool(server, "oracle_grant_worktree_permission",
+    "git.worktree.write", admin, authenticatedUserId, securitySchemes);
 }

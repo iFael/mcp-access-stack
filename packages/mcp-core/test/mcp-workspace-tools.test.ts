@@ -2087,8 +2087,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(67);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(67);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(68);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(68);
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{
