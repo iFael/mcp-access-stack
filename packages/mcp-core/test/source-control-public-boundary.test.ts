@@ -139,6 +139,19 @@ describe("unified workflow bootstrap provenance",()=>{
   });
 });
 
+describe("opt-in generated worktree cleanup contract", () => {
+  const input = { workspaceId: "repo", destination: ".worktrees/old-task",
+    expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB };
+  it("preserves legacy removal and permits only the explicit boolean option", () => {
+    expect(gitRemoveWorktreeInputSchema.safeParse(input).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: true }).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: "all" }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, force: true }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, destination: ".worktrees/../../outside",
+      pruneGeneratedArtifacts: true }).success).toBe(false);
+  });
+});
+
 const forbiddenEscapeHatchValues = {
   command: "git status",
   args: ["status"],

@@ -224,6 +224,101 @@ describe("GitRepositoryService isolated worktrees", () => {
     expect(await readFile(path.join(target, "ignored-cache/cache.txt"), "utf8")).toBe("preserve\n");
   }, 120_000);
 
+  it("prunes only allowlisted ignored build caches when explicitly requested", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules/\npackages/*/dist/\n");
+    await writeWorkspaceFile(target, "node_modules/cache.txt", "generated\n");
+    await writeWorkspaceFile(target, "packages/mcp-core/dist/index.js", "generated\n");
+
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+    })).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+
+    const removed = await service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true,
+    });
+    expect(removed.removed).toBe(true);
+    await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not prune any generated cache when protected ignored data is present", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules/\n.codex/\n");
+    await writeWorkspaceFile(target, "node_modules/cache.txt", "preserve until safe\n");
+    await writeWorkspaceFile(target, ".codex/HANDOFF.md", "historical data\n");
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true,
+    })).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(await readFile(path.join(target, "node_modules/cache.txt"), "utf8")).toBe("preserve until safe\n");
+    expect(await readFile(path.join(target, ".codex/HANDOFF.md"), "utf8")).toBe("historical data\n");
+  });
+
+  it("does not prune with untracked source files inside the worktree", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules/\n");
+    await writeWorkspaceFile(target, "node_modules/cache.txt", "cache\n");
+    await writeWorkspaceFile(target, "user-data.txt", "retain\n");
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true,
+    })).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(await readFile(path.join(target, "node_modules/cache.txt"), "utf8")).toBe("cache\n");
+  });
+
+  it("preserves tracked files co-located with ignored generated output", async () => {
+    const { service, source } = await setupRemote();
+    await writeWorkspaceFile(source, "packages/mcp-core/dist/tracked.txt", "tracked data\n");
+    git(source, ["add", "packages/mcp-core/dist/tracked.txt"]);
+    git(source, ["commit", "-m", "tracked artifact fixture"]);
+    git(source, ["push", "origin", "main"]);
+    const updatedHead = head();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: updatedHead, expectedRemoteSha: updatedHead });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "packages/*/dist/\n");
+    await writeWorkspaceFile(target, "packages/mcp-core/dist/generated.js", "ignored\n");
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: updatedHead, expectedWorktreeHeadSha: updatedHead,
+      pruneGeneratedArtifacts: true,
+    })).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect((await readFile(path.join(target, "packages/mcp-core/dist/tracked.txt"), "utf8")).replace(/\r\n/gu, "\n")).toBe("tracked data\n");
+    expect(await readFile(path.join(target, "packages/mcp-core/dist/generated.js"), "utf8")).toBe("ignored\n");
+  });
+
+  it("blocks symlinked generated directories before deleting external files", async () => {
+    if (process.platform === "win32") return;
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/clean-main";
+    await service.createWorktree({ workspaceId: "test", destination,
+      expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    const external = path.join(fixture!.basePath, "external-cache");
+    await mkdir(external);
+    await writeWorkspaceFile(external, "sentinel.txt", "never delete\n");
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules\n");
+    await symlink(external, path.join(target, "node_modules"), "dir");
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true,
+    })).rejects.toMatchObject({ code: "INVALID_PATH" });
+    expect(await readFile(path.join(external, "sentinel.txt"), "utf8")).toBe("never delete\n");
+  });
+
   it("rejects a missing Git marker, unsafe destination or target registration", async () => {
     const { service, headSha, source } = await setupRemote();
     const destination = ".worktrees/clean-main";

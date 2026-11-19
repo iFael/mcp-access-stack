@@ -1,4 +1,4 @@
-import { lstat, mkdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   AppError,
@@ -201,6 +201,10 @@ export class GitRepositoryService implements GitRepositoryExecutor {
         await this.runner.headSha(destination, context?.signal) !== parsed.expectedWorktreeHeadSha) {
       throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
     }
+    if (parsed.pruneGeneratedArtifacts &&
+        !(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
+      await this.pruneGeneratedArtifacts(repository.repositoryRoot, destination, parsed.expectedWorktreeHeadSha, context?.signal);
+    }
     if (!(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
       throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified, untracked or ignored files; removal denied.");
     }
@@ -234,6 +238,64 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       removedWorktreeHeadSha: parsed.expectedWorktreeHeadSha,
       removed: true,
     };
+  }
+
+  private async pruneGeneratedArtifacts(source: string, destination: string, expectedHead: string, signal?: AbortSignal): Promise<void> {
+    // Preflight the ENTIRE worktree before deleting any ignored artifact.
+    if (!(await this.runner.repositoryIsClean(destination, signal))) {
+      throw new AppError("GIT_INDEX_CHANGED", "Modified or untracked worktree content cannot be pruned.");
+    }
+    const ignored = await this.runner.listIgnoredPaths(destination, signal);
+    const roots = new Set<string>();
+    for (const entry of ignored) {
+      const root = generatedArtifactRoot(entry);
+      if (root === undefined) {
+        throw new AppError("GIT_INDEX_CHANGED", "Ignored worktree content is not an allowlisted generated artifact.");
+      }
+      roots.add(root);
+    }
+    if (roots.size === 0) {
+      throw new AppError("GIT_INDEX_CHANGED", "Worktree cannot be safely classified for generated-artifact pruning.");
+    }
+    const registered = await this.runner.listWorktrees(source, signal);
+    const targets: string[] = [];
+    for (const root of roots) {
+      const target = path.join(destination, root);
+      if (!isContained(destination, target) ||
+          registered.some((entry) => !samePath(entry.path, destination) &&
+            (samePath(entry.path, target) || isContained(target, entry.path)))) {
+        throw new AppError("PATH_OUTSIDE_WORKSPACE", "Generated artifacts overlap another registered worktree.");
+      }
+      // Neither the generated root nor its parents may redirect outside the worktree.
+      let current = destination;
+      for (const segment of root.split("/")) {
+        current = path.join(current, segment);
+        const stat = await lstat(current);
+        if (stat.isSymbolicLink() || !stat.isDirectory() || !samePath(await realpath(current), current)) {
+          throw new AppError("INVALID_PATH", "Generated artifact path must contain only real directories.");
+        }
+      }
+      if (await this.runner.hasTrackedPaths(destination, root, signal)) {
+        throw new AppError("GIT_INDEX_CHANGED", "Generated artifact directory includes tracked files.");
+      }
+      targets.push(target);
+    }
+    assertSha("GIT_HEAD_MISMATCH", expectedHead, await this.runner.headSha(destination, signal),
+      "Worktree HEAD changed before generated-artifact pruning.");
+    if (!(await this.runner.repositoryIsClean(destination, signal))) {
+      throw new AppError("GIT_INDEX_CHANGED", "Worktree content changed during pruning preflight.");
+    }
+    // Removing generated caches is opt-in; a partial failure requires reconciliation, not force.
+    try {
+      for (const target of targets) await rm(target, { recursive: true });
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Generated artifact pruning may be partial; inspect the worktree before retrying.");
+    }
+    if (!(await this.runner.worktreeIsCompletelyClean(destination, signal))) {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Worktree is not completely clean after generated-artifact pruning.");
+    }
   }
 
   async stagePaths(
@@ -760,6 +822,18 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       ),
     );
   }
+}
+
+function generatedArtifactRoot(entry: string): string | undefined {
+  const segments = entry.replace(/\/$/u, "").split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === ".." || segment.includes("\\"))) return undefined;
+  if (segments[0] === "node_modules") return "node_modules";
+  if ((segments[0] === "packages" || segments[0] === "services") &&
+      segments.length >= 3 && /^[a-z0-9][a-z0-9._-]*$/iu.test(segments[1]!) &&
+      (segments[2] === "dist" || segments[2] === "node_modules")) {
+    return segments.slice(0, 3).join("/");
+  }
+  return undefined;
 }
 
 function assertSha(

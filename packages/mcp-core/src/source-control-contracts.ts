@@ -286,6 +286,7 @@ export const gitRemoveWorktreeInputSchema = z.object({
   destination: gitCreateWorktreeInputSchema.shape.destination,
   expectedSourceHeadSha: gitShaSchema,
   expectedWorktreeHeadSha: gitShaSchema,
+  pruneGeneratedArtifacts: z.boolean().optional(),
 }).strict();
 export type GitRemoveWorktreeInput = z.input<typeof gitRemoveWorktreeInputSchema>;
 
