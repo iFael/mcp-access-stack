@@ -2329,6 +2329,87 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     expect(calls.filter((call) => call === "detach")).toHaveLength(2);
   });
 
+  it("waits for a pending Chrome debugger detach before attaching again", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    let attached = false;
+    let finishDetach: (() => void) | undefined;
+    const ctx = vm.createContext({
+      Map, Promise,
+      setTimeout: () => 1, clearTimeout: () => undefined,
+      chrome: { debugger: {
+        attach: async () => {
+          calls.push("attach");
+          if (attached) throw new Error("Chrome debugger still occupied");
+          attached = true;
+        },
+        detach: () => new Promise<void>((resolve) => {
+          calls.push("detach");
+          finishDetach = () => { attached = false; resolve(); };
+        }),
+      } },
+    });
+    vm.runInContext(`const inFlightRequests = new Map(); const personalTaskDebuggers = new Map();
+const personalViewportSessions = new Map(); const personalDialogArms = new Map();
+const personalNetworkCaptures = new Map(); const personalRecordings = new Map();
+const personalDebuggerTransitions = new Map();
+globalThis.__mcpV3PersonalDebuggerTransitions = personalDebuggerTransitions;
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
+globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger",
+      "detachGuardedDebugger", "holdPersonalTaskDebugger", "releasePersonalTaskDebugger"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const release = vm.runInContext("releasePersonalTaskDebugger", ctx) as (tabId: number) => Promise<void>;
+    await attach({ tabId: 7 });
+    const releasing = release(7);
+    const acquiring = attach({ tabId: 7 }).then(() => "acquired", (error: Error) => error.message);
+    expect(calls).toEqual(["attach", "detach"]);
+    finishDetach!();
+    await releasing;
+    expect(await acquiring).toBe("acquired");
+    expect(calls).toEqual(["attach", "detach", "attach"]);
+  });
+
+  it("serializes concurrent debugger attachments on the same Chrome tab", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    let finishAttach: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => { finishAttach = resolve; });
+    const ctx = vm.createContext({
+      Map, Promise, setTimeout: () => 1, clearTimeout: () => undefined,
+      chrome: { debugger: {
+        attach: () => {
+          calls.push("attach");
+          if (calls.length !== 1) throw new Error("duplicate Chrome debugger attach");
+          return pending;
+        },
+        detach: async () => undefined,
+      } },
+    });
+    vm.runInContext(`const inFlightRequests = new Map(); const personalTaskDebuggers = new Map();
+const personalDebuggerTransitions = new Map();
+const personalViewportSessions = new Map(); const personalDialogArms = new Map();
+const personalNetworkCaptures = new Map(); const personalRecordings = new Map();
+globalThis.__mcpV3PersonalDebuggerTransitions = personalDebuggerTransitions;
+globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
+globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
+const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "holdPersonalTaskDebugger"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const first = attach({ tabId: 7 });
+    const second = attach({ tabId: 7 });
+    expect(calls).toEqual(["attach"]);
+    finishAttach!();
+    expect(await first).toBe(false);
+    expect(await second).toBe(false);
+    expect(calls).toEqual(["attach"]);
+  });
+
   it("records fresh captures as WebP stills, skips unchanged pages and the user's turn, and ends with the page as it is", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<[string, Record<string, unknown> | undefined]> = [];
