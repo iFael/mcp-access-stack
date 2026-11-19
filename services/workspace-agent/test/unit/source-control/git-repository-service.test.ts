@@ -296,7 +296,7 @@ describe("GitRepositoryService isolated worktrees", () => {
       expectedSourceHeadSha: updatedHead, expectedWorktreeHeadSha: updatedHead,
       pruneGeneratedArtifacts: true,
     })).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
-    expect(await readFile(path.join(target, "packages/mcp-core/dist/tracked.txt"), "utf8")).toBe("tracked data\n");
+    expect((await readFile(path.join(target, "packages/mcp-core/dist/tracked.txt"), "utf8")).replace(/\r\n/gu, "\n")).toBe("tracked data\n");
     expect(await readFile(path.join(target, "packages/mcp-core/dist/generated.js"), "utf8")).toBe("ignored\n");
   });
 
