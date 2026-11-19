@@ -1178,6 +1178,12 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.activeMcpCatalog,
       {
         handle: async (body, principal, request) => {
+          try {
+            await this.progressPlans.startTool(body, principal.userId);
+          } catch {
+            // Progress is presentation state, not a prerequisite to execute a tool.
+            console.warn(JSON.stringify({ event: "mcp_auto_progress_start_failed" }));
+          }
           await this.progressPlans.openForUpdate(body, principal.userId);
           const progress = await this.progressPlans.handle(body, principal.userId);
           if (progress) return progress;
@@ -1186,7 +1192,14 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           return this.tryRelayCompanionMcpRequest(request, body, principal);
         },
       },
-      (body, principal, response, request) => this.attachPendingUserMessages(body, principal, response, request),
+      async (body, principal, response, request) => {
+        try {
+          await this.progressPlans.finishTool(body, principal.userId, response);
+        } catch {
+          console.warn(JSON.stringify({ event: "mcp_auto_progress_finish_failed" }));
+        }
+        return this.attachPendingUserMessages(body, principal, response, request);
+      },
     );
     return this.controlRuntime;
   }

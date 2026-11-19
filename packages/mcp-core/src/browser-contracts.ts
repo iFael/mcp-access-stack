@@ -1184,7 +1184,7 @@ export const browserProgressUpdateInputSchema = z
     steps: z.array(browserProgressStepSchema).min(1).max(20),
   })
   .strict();
-export const browserProgressReadInputSchema = z.object({ planId: progressPlanIdSchema }).strict();
+export const browserProgressReadInputSchema = z.object({ planId: progressPlanIdSchema.optional() }).strict();
 export const browserProgressPlanSchema = z
   .object({
     planId: progressPlanIdSchema,

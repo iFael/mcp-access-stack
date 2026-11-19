@@ -64,6 +64,9 @@ describe("advanced browser tools HTTP list", () => {
         const { "io.github.ifael/next-step": _next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
         expect(meta).toEqual({
           securitySchemes: [{ type: "noauth" }],
+          ui: { resourceUri: "ui://mcp-v3/progress-v11.html" },
+          "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+          "openai/widgetAccessible": true,
         });
       }
     } finally {

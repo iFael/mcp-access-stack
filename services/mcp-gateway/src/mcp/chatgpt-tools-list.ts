@@ -8,6 +8,7 @@ import {
   MCP_TOOL_CATALOG_META_KEY,
   MCP_TOOL_NEXT_STEP_META_KEY,
   MCP_TOOL_NEXT_STEPS,
+  PROGRESS_CARD_URI,
   withMcpToolNextStep,
   createMcpToolCatalogMetadata,
   type McpToolCatalogMetadata,
@@ -60,13 +61,36 @@ export function buildPublishedTools(
         annotations: tool.annotations,
         execution: tool.execution,
         securitySchemes,
-        _meta: next ? { ...tool._meta, [MCP_TOOL_NEXT_STEP_META_KEY]: next } : tool._meta,
+        _meta: universalProgressMetadata(name, tool._meta, next),
       };
       if (tool.outputSchema) {
         definition.outputSchema = toOutputJsonSchema(tool.outputSchema);
       }
       return definition;
     });
+}
+
+/** The existing progress app is the default view for MCP tools without a dedicated app. */
+function universalProgressMetadata(
+  name: string,
+  original: Record<string, unknown> | undefined,
+  next: string | undefined,
+): Record<string, unknown> | undefined {
+  const meta: Record<string, unknown> = { ...original, ...(next ? { [MCP_TOOL_NEXT_STEP_META_KEY]: next } : {}) };
+  const ui = meta.ui && typeof meta.ui === "object" && !Array.isArray(meta.ui)
+    ? meta.ui as Record<string, unknown> : {};
+  if (name === "browser_progress_update" || name === "browser_progress_read" ||
+      name === "browser_user_card" || name === "browser_user_reply" ||
+      ui.visibility !== undefined || meta["openai/visibility"] === "private" ||
+      typeof ui.resourceUri === "string" || typeof meta["openai/outputTemplate"] === "string") {
+    return Object.keys(meta).length ? meta : undefined;
+  }
+  return {
+    ...meta,
+    ui: { ...ui, resourceUri: PROGRESS_CARD_URI },
+    "openai/outputTemplate": PROGRESS_CARD_URI,
+    "openai/widgetAccessible": true,
+  };
 }
 
 export function createRegisteredMcpCatalogMetadata(

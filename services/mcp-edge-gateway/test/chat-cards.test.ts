@@ -160,6 +160,105 @@ describe("the plan card", () => {
   });
 });
 
+describe("automatic progress across MCP tools", () => {
+  function sessionTool(name: string, session: string) {
+    const body = call(name, {});
+    return { ...body, params: { ...body.params, _meta: { "openai/session": session } } };
+  }
+  function response(data: Record<string, unknown>) {
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {
+      content: [{ type: "text", text: "Original result" }], structuredContent: data,
+    } }), { headers: { "content-type": "application/json" } });
+  }
+
+  it("opens one session-bound plan for parallel calls, groups activities and keeps tool output unchanged", async () => {
+    const storage = memory();
+    let ids = 0;
+    const plans = new ProgressPlans(storage, () => new Date("2026-11-19T14:00:00.000Z"),
+      () => `plan_00000000-0000-4000-8000-${String(++ids).padStart(12, "0")}`);
+    const first = sessionTool("browser_open", "chat-a");
+    const second = sessionTool("browser_snapshot", "chat-a");
+    await Promise.all([plans.startTool(first, "user_1"), plans.startTool(second, "user_1")]);
+    const card = await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_1"));
+    expect(card.structuredContent).toMatchObject({
+      title: "MCP V3 — Pesquisa e navegação",
+      steps: [{ text: "Pesquisa e navegação", state: "doing" }],
+    });
+    const id = card.structuredContent!.planId;
+    expect(ids).toBe(1);
+    const output = response({ pages: 3 });
+    const before = await output.clone().text();
+    await plans.finishTool(first, "user_1", output);
+    expect(await output.text()).toBe(before);
+    await plans.startTool(sessionTool("github_get_commit_checks", "chat-a"), "user_1");
+    await plans.finishTool(sessionTool("github_get_commit_checks", "chat-a"), "user_1", response({ passed: true }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_1"))).structuredContent)
+      .toMatchObject({ planId: id, steps: [
+        { text: "Pesquisa e navegação", state: "done" },
+        { text: "GitHub e CI", state: "done" },
+      ] });
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_2"))).isError).toBe(true);
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-b"), "user_1"))).isError).toBe(true);
+    expect(storage.values.size).toBeGreaterThan(0);
+  });
+
+  it("preserves failures, pending work and authorization without claiming successful completion", async () => {
+    const plans = new ProgressPlans(memory());
+    const command = sessionTool("run_command", "chat-running");
+    await plans.startTool(command, "owner");
+    await plans.finishTool(command, "owner", response({ status: "background_task_started" }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-running"), "owner"))).structuredContent)
+      .toMatchObject({ steps: [{ text: "Execução e diagnóstico", state: "doing" }] });
+    await plans.finishTool(command, "owner", response({ status: "confirmation_required" }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-running"), "owner"))).structuredContent)
+      .toMatchObject({ steps: [{ state: "doing", detail: "Aguardando autorização" }] });
+    await plans.finishTool(command, "owner", response({ status: "reconciliation_required" }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-running"), "owner"))).structuredContent)
+      .toMatchObject({ steps: [{ state: "doing", detail: "Aguardando reconciliação" }] });
+    await plans.finishTool(sessionTool("get_background_task", "chat-running"), "owner",
+      response({ task: { state: "running" } }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-running"), "owner"))).structuredContent)
+      .toMatchObject({ steps: [{ state: "doing" }] });
+    await plans.finishTool(command, "owner", new Response(JSON.stringify({ jsonrpc: "2.0", id: 1,
+      result: { isError: true, content: [{ type: "text", text: "Operation denied" }] },
+    }), { headers: { "content-type": "application/json" } }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-running"), "owner"))).structuredContent)
+      .toMatchObject({ steps: [{ state: "failed" }] });
+  });
+
+  it("lets the agent adopt the automatic card without opening another one", async () => {
+    const storage = memory();
+    const plans = new ProgressPlans(storage);
+    await plans.startTool(sessionTool("read_file", "chat-adopted"), "user_1");
+    const auto = await result(await plans.handle(sessionTool("browser_progress_read", "chat-adopted"), "user_1"));
+    const body = sessionTool("browser_progress", "chat-adopted");
+    body.params.arguments = { title: "Analisar fontes", steps: [{ text: "Ler fontes", state: "doing" }] };
+    const adopted = await result(await plans.handle(body, "user_1"));
+    expect(adopted.structuredContent?.planId).toBe(auto.structuredContent?.planId);
+    await plans.startTool(sessionTool("run_command", "chat-adopted"), "user_1");
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-adopted"), "user_1"))).structuredContent)
+      .toMatchObject({ title: "Analisar fontes", steps: [{ text: "Ler fontes", state: "doing" }] });
+    await plans.startTool(sessionTool("browser_open", "no-session"), undefined);
+    expect((storage.values.get("progress-plans:user_1") as unknown[]).length).toBe(1);
+  });
+
+  it("passes the existing session plan into the native updater without creating a duplicate", async () => {
+    const storage = memory();
+    const plans = new ProgressPlans(storage);
+    await plans.startTool(sessionTool("read_file", "chat-release"), "owner");
+    const original = await result(await plans.handle(sessionTool("browser_progress_read", "chat-release"), "owner"));
+    const update = sessionTool("mcp_update", "chat-release");
+    update.params.arguments = { action: "start", expectedMainSha: "a".repeat(40), workspaceId: "mcp-access-stack" };
+    await plans.openForUpdate(update, "owner");
+    expect(update.params.arguments).toMatchObject({ planId: original.structuredContent?.planId });
+    expect((storage.values.get("progress-plans:owner") as unknown[]).length).toBe(1);
+    expect(await plans.applyUpdate({ planId: original.structuredContent!.planId as string,
+      title: "Atualizando o MCP", steps: [{ text: "Publicar", state: "doing" }] }, "owner")).toBe(true);
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-release"), "owner"))).structuredContent)
+      .toMatchObject({ title: "Atualizando o MCP", steps: [{ text: "Publicar", state: "doing" }] });
+  });
+});
+
 describe("the chat cards the Edge serves", () => {
   it("serves the plan and pull request cards when the catalog points at them", () => {
     const resources = uiResourcesForManifest([
@@ -168,7 +267,7 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
-    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v10.html");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v11.html");
     expect(resources[0]!.text).not.toContain('id="talk"');
     expect(resources[0]!.text).not.toContain('<textarea');
     expect(resources[0]!.text).not.toContain('id="send"');

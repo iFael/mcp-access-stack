@@ -86,9 +86,15 @@ describe("embedded gateway HTTP surface", () => {
         } else if (["browser_progress", "github_get_pull_request", "mcp_update"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],
             "openai/outputTemplate": expect.stringMatching(/^ui:\/\/mcp-v3\//u) });
+        } else if (tool.name === "browser_progress_update") {
+          // Internal progress mutations do not create their own visible cards.
+          expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
         } else {
           expect(tool._meta).toEqual({
             securitySchemes: [{ type: "noauth" }],
+            ui: { resourceUri: "ui://mcp-v3/progress-v11.html" },
+            "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+            "openai/widgetAccessible": true,
           });
         }
       }
