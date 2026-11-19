@@ -146,6 +146,8 @@ const personalNetworkCaptures = new Map();
 const personalDialogArms = new Map();
 const personalViewportSessions = new Map();
 const personalTaskDebuggers = new Map();
+const personalDebuggerTransitions = new Map();
+globalThis.__mcpV3PersonalDebuggerTransitions = personalDebuggerTransitions;
 globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
 globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
 globalThis.__mcpV3PersonalDialogArms = personalDialogArms;
@@ -178,17 +180,27 @@ function borrowPersonalDebugger(target) {
 // or the tab sits idle; an action only borrows it. Without that hold, which the
 // worker installs, the action attaches and detaches the debugger itself.
 async function attachGuardedDebugger(target) {
+  const key = String(target.tabId);
+  const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
+  const pending = transitions?.get(key);
+  if (pending) await pending;
   if (borrowPersonalDebugger(target)) return false;
   const held = globalThis.__mcpV3PersonalTaskDebuggers;
-  const current = held?.get(String(target.tabId));
+  const current = held?.get(key);
   if (current) {
     current.arm();
     return false;
   }
-  await chrome.debugger.attach(target, "1.3");
-  if (!held) return true;
-  holdPersonalTaskDebugger(target.tabId);
-  return false;
+  const attaching = chrome.debugger.attach(target, "1.3");
+  transitions?.set(key, attaching);
+  try {
+    await attaching;
+    if (!held) return true;
+    holdPersonalTaskDebugger(target.tabId);
+    return false;
+  } finally {
+    if (transitions?.get(key) === attaching) transitions.delete(key);
+  }
 }
 
 async function detachGuardedDebugger(target, attached) {
@@ -254,6 +266,9 @@ function takeFreshPersonalDebugger(target) {
 
 async function releasePersonalTaskDebugger(chromeTabId) {
   const key = String(chromeTabId);
+  const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
+  const pending = transitions?.get(key);
+  if (pending) await pending.catch(() => undefined);
   const held = personalTaskDebuggers.get(key);
   if (!held) return;
   personalTaskDebuggers.delete(key);
@@ -266,7 +281,13 @@ async function releasePersonalTaskDebugger(chromeTabId) {
     heir.attached = true;
     return;
   }
-  await chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  const detaching = chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  transitions?.set(key, detaching);
+  try {
+    await detaching;
+  } finally {
+    if (transitions?.get(key) === detaching) transitions.delete(key);
+  }
 }
 
 function connect() {
