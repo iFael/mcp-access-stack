@@ -645,6 +645,45 @@ describe("McpSession legacy candidate replacement CAS", () => {
     });
     expect(storage.writes).toEqual([]);
   });
+
+  it("rejects a legacy candidate that becomes ready during the replacement transaction", async () => {
+    const { EXPECTED_MCP_CONTRACT_REVISION: next, MCP_CONTRACT_ROLLOUT_STORAGE_KEY: key } =
+      await import("../src/contract-compatibility.js");
+    const { EDGE_PROTOCOL_VERSION } = await import("../src/protocol.js");
+    const storage = new MemoryStorage();
+    const original = seed(storage);
+    let connected = false;
+    const socket = {
+      get readyState() { return connected ? WebSocket.OPEN : WebSocket.CLOSED; },
+      deserializeAttachment: () => ({
+        role: "connector", ready: true, protocolVersion: EDGE_PROTOCOL_VERSION,
+        runtime: {
+          version: 1, connectorInstanceId: "11111111-1111-4111-8111-111111111111",
+          connectionGeneration: 1, processStartedAt: "2026-10-11T22:00:00Z",
+          catalogContractRevision: legacy, toolSetRevision: "b".repeat(64),
+          toolCount: 94, serverVersion: "beta.84", nodePid: 1, hostPid: 1,
+        },
+      }),
+    };
+    const session = await createSession(storage, [socket]);
+    const receiptKey = `edge:mcp-contract-candidate-replacement:v1:${operationId}`;
+    const originalGet = storage.get.bind(storage);
+    let receiptRead = false;
+    storage.get = async <T>(requestedKey: string): Promise<T | undefined> => {
+      if (requestedKey === receiptKey) {
+        receiptRead = true;
+        connected = true;
+      }
+      return originalGet<T>(requestedKey);
+    };
+
+    const outcome = await invoke(session, input(next));
+    expect(receiptRead).toBe(true);
+    expect(outcome).toEqual({ status: 409, body: { error: "previous_candidate_in_use" } });
+    expect(await storage.get<typeof original>(key)).toEqual(original);
+    expect(await storage.get(receiptKey)).toBeUndefined();
+    expect(storage.writes).toEqual([]);
+  });
 });
 
 describe("McpSession explicit first-install bootstrap", () => {
