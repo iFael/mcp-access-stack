@@ -44,7 +44,7 @@ export const USER_MESSAGES_CARD_URI = "ui://mcp-v3/user-messages-v11.html";
 // The checklist card browser_progress shows: the plan of the work, done, in
 // progress and to do, which follows browser_progress_update by itself. The
 // Edge answers the three calls, keeps the plans and serves the card.
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v10.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v11.html";
 const TOOL_UI_META: Partial<Record<BrowserToolName, Record<string, unknown>>> = {
   browser_user_messages: {
     ui: { resourceUri: USER_MESSAGES_CARD_URI },

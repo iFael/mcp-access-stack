@@ -13,7 +13,7 @@ import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v10.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v11.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -21,6 +21,11 @@ const MAX_PLANS = 20;
 const OWNER_PREFIX = "progress-plan-owner:";
 // When the newest reply card of each task was shown ("" for none), so older ones fold.
 const USER_CARD_PREFIX = "user-card-shown:";
+const AUTO_PLAN_PREFIX = "progress-auto-plan:";
+const AUTO_SKIP = new Set([
+  "browser_progress", "browser_progress_update", "browser_progress_read",
+  "browser_user_card", "browser_user_reply", "browser_user_messages", "mcp_update",
+]);
 const SESSION_PLAN_PREFIX = "progress-plan-sessions:";
 const MAX_SESSION_PLANS = 100;
 const MAX_USER_CARDS = 50;
@@ -73,10 +78,14 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   function refresh() {
     var bridge = (window.mcpV3Card || window.openai);
     var out = bridge && bridge.toolOutput;
-    // browser_progress answers with the plan; mcp_update with the update that moves it.
-    var planId = out && (out.planId || (out.update && out.update.planId));
-    if (!planId || typeof bridge.callTool !== "function" || document.hidden) return;
-    Promise.resolve(bridge.callTool("browser_progress_read", { planId: planId })).then(function (result) {
+    // Generic tools may return a different planId (such as browser_plan).
+    // Only a ProgressPlan or mcp_update has an explicit progress card identity.
+    var planId = out && (Array.isArray(out.steps) && typeof out.updatedAt === "string"
+      ? out.planId : out.update && out.update.planId);
+    if (typeof bridge.callTool !== "function" || document.hidden) return;
+    // Regular MCP tools retain their structuredContent contract. The app can
+    // resolve their progress plan from the authenticated ChatGPT session.
+    Promise.resolve(bridge.callTool("browser_progress_read", planId ? { planId: planId } : {})).then(function (result) {
       var value = result && (result.structuredContent || result);
       if (value && !result.isError && Array.isArray(value.steps)) { latest = value; render(); }
     }).catch(function () {});
@@ -217,7 +226,9 @@ export class ProgressPlans {
       return rpc(id, { content: [{ type: "text", text: `Newest card shown at ${shownAt ?? "never"}.` }], structuredContent: shownAt ? { shownAt } : {} });
     }
     if (name === "browser_progress_read") {
-      const plan = typeof args.planId === "string" ? plans.find((entry) => entry.planId === args.planId) : undefined;
+      const planId = typeof args.planId === "string"
+        ? args.planId : await this.planForSession(userId, progressSession(body));
+      const plan = plans.find((entry) => entry.planId === planId);
       return plan ? toolResult(id, `Plan ${plan.planId}.`, plan) : toolError(id, "NOT_FOUND", "This plan is no longer kept.");
     }
 
@@ -239,7 +250,18 @@ export class ProgressPlans {
     const input = readPlanInput(args, allowed);
     if (!input) return invalid(id, name);
     if (name === "browser_progress") {
-      plan = await this.open(userId, plans, input.title!, input.steps);
+      const existingId = await this.planForSession(userId, progressSession(body));
+      const automatic = existingId && await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existingId}`);
+      const existing = automatic ? plans.find((entry) => entry.planId === existingId) : undefined;
+      if (existing) {
+        // Explicit planning adopts the automatically created card.
+        plan = { ...existing, title: input.title!, steps: timed(existing.steps, input.steps, now),
+          updatedAt: now, shownAt: now };
+        await this.storage.put(key, plans.map((entry) => entry.planId === existingId ? plan : entry));
+        await this.storage.delete(`${AUTO_PLAN_PREFIX}${existingId}`);
+      } else {
+        plan = await this.open(userId, plans, input.title!, input.steps);
+      }
       await this.bindSession(userId, progressSession(body), plan.planId);
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
@@ -252,6 +274,100 @@ export class ProgressPlans {
       ? `Plan shown to the user (planId ${plan.planId}, ${done}/${plan.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
       : `Plan updated: ${done}/${plan.steps.length} done.`;
     return toolResult(id, text, plan);
+  }
+
+  private readonly sessionQueue = new Map<string, Promise<unknown>>();
+
+  /** Serializes first calls so parallel tools in one session cannot open duplicate cards. */
+  private async serial<T>(key: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.sessionQueue.get(key) ?? Promise.resolve();
+    const running = previous.catch(() => undefined).then(action);
+    this.sessionQueue.set(key, running);
+    try { return await running; }
+    finally { if (this.sessionQueue.get(key) === running) this.sessionQueue.delete(key); }
+  }
+
+  /** A normal MCP tool starts or advances a phase without an agent-side card call. */
+  async startTool(body: unknown, userId: string | undefined): Promise<void> {
+    const name = progressToolName(body);
+    const session = progressSession(body);
+    if (!name || !session || !userId) return;
+    const phase = phaseForTool(name);
+    if (!phase) return;
+    await this.serial(`${userId}:${session}`, async () => {
+      const existingId = await this.planForSession(userId, session);
+      if (existingId && !await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existingId}`)) return;
+      const key = `progress-plans:${userId}`;
+      const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
+      const existing = plans.find((entry) => entry.planId === existingId);
+      const now = this.now().toISOString();
+      if (!existing) {
+        const plan = await this.open(userId, plans, `MCP V3 — ${phase}`,
+          [{ text: phase, state: "doing" }]);
+        await this.storage.put(`${AUTO_PLAN_PREFIX}${plan.planId}`, true);
+        await this.bindSession(userId, session, plan.planId);
+        return;
+      }
+      const current = existing.steps.find((step) => step.text === phase);
+      if (current?.state === "doing" || (!current && existing.steps.length >= 20)) return;
+      const steps = current
+        ? existing.steps.map((step) => step.text === phase ? { text: phase, state: "doing" as const } : step)
+        : [...existing.steps, { text: phase, state: "doing" as const }];
+      await this.storage.put(key, plans.map((entry) => entry.planId === existingId
+        ? { ...entry, steps: timed(entry.steps, steps, now), updatedAt: now } : entry));
+    });
+  }
+
+  /** Only observed tool outcomes change a phase; the tool response is never rewritten. */
+  async finishTool(body: unknown, userId: string | undefined, response: Response): Promise<void> {
+    const name = progressToolName(body);
+    const session = progressSession(body);
+    if (!name || !session || !userId) return;
+    const phase = phaseForTool(name);
+    if (!phase) return;
+    let parsed: unknown;
+    try { parsed = await response.clone().json(); } catch { return; }
+    if (!isRecord(parsed)) return;
+    const result = isRecord(parsed.result) ? parsed.result : {};
+    const content = isRecord(result.structuredContent) ? result.structuredContent : {};
+    const status = typeof content.status === "string" ? content.status
+      : isRecord(content.update) && typeof content.update.status === "string"
+        ? content.update.status : undefined;
+    const nestedState = typeof content.state === "string" ? content.state
+      : isRecord(content.task) && typeof content.task.state === "string"
+        ? content.task.state : undefined;
+    const failed = !response.ok || parsed.error !== undefined || result.isError === true ||
+      [status, nestedState].some((value) => ["failed", "failure", "error"].includes(value ?? "")) ||
+      content.passed === false || (typeof content.failingCount === "number" && content.failingCount > 0) ||
+      (typeof content.exitCode === "number" && content.exitCode !== 0);
+    const pending = !failed && (
+      [status, nestedState].some((value) => [
+        "running", "pending", "queued", "in_progress", "started",
+        "background_task_started", "handover_started", "confirmation_required",
+        "needs_confirmation", "reconciliation_required", "outcome_unknown",
+      ].includes(value ?? "")) ||
+      content.allCompleted === false ||
+      (typeof content.pendingCount === "number" && content.pendingCount > 0)
+    );
+    const state: ProgressStep["state"] = failed ? "failed" : pending ? "doing" : "done";
+    await this.serial(`${userId}:${session}`, async () => {
+      const planId = await this.planForSession(userId, session);
+      if (!planId || !await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${planId}`)) return;
+      const key = `progress-plans:${userId}`;
+      const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
+      const current = plans.find((entry) => entry.planId === planId);
+      if (!current) return;
+      const now = this.now().toISOString();
+      const detail = status === "confirmation_required" || status === "needs_confirmation"
+        ? "Aguardando autorização" : status === "reconciliation_required" ||
+          status === "outcome_unknown" ? "Aguardando reconciliação" : undefined;
+      const steps = current.steps.map((step) => step.text === phase
+        ? { text: phase, state, ...(pending && detail ? { detail } : {}) }
+        : step);
+      // A newer card folds earlier copies of the same task.
+      await this.storage.put(key, plans.map((entry) => entry.planId === planId
+        ? { ...entry, steps: timed(entry.steps, steps, now), updatedAt: now, shownAt: now } : entry));
+    });
   }
 
   /** Notes that a reply card of this task is shown now, and says when. */
@@ -275,11 +391,19 @@ export class ProgressPlans {
     if (!userId || !isRecord(body) || body.method !== "tools/call" || !isRecord(body.params) || body.params.name !== "mcp_update") return;
     const args = body.params.arguments;
     if (!isRecord(args) || args.action !== "start" || args.planId !== undefined) return;
+    const session = progressSession(body);
+    const existingId = await this.planForSession(userId, session);
+    if (existingId) {
+      // The update driver takes over the existing task card instead of opening a second one.
+      args.planId = existingId;
+      await this.storage.delete(`${AUTO_PLAN_PREFIX}${existingId}`);
+      return;
+    }
     const plans = (await this.storage.get<ProgressPlan[]>(`progress-plans:${userId}`)) ?? [];
     const plan = await this.open(userId, plans, "Atualizando o MCP",
       [{ text: "Pré-checagem: CI da MAIN, estado da Oracle e do Edge", state: "doing" }]);
     args.planId = plan.planId;
-    await this.bindSession(userId, progressSession(body), plan.planId);
+    await this.bindSession(userId, session, plan.planId);
   }
 
   /** Resolves only plans created by this user and this exact ChatGPT session. */
@@ -307,6 +431,7 @@ export class ProgressPlans {
     await this.storage.put(`progress-plans:${userId}`, kept);
     for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
       await this.storage.delete(`${OWNER_PREFIX}${dropped.planId}`);
+      await this.storage.delete(`${AUTO_PLAN_PREFIX}${dropped.planId}`);
     }
     // A runtime given this planId finds whose plan it moves.
     await this.storage.put(`${OWNER_PREFIX}${plan.planId}`, userId);
@@ -335,6 +460,24 @@ export class ProgressPlans {
     await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     return true;
   }
+}
+
+function progressToolName(body: unknown): string | null {
+  if (!isRecord(body) || body.method !== "tools/call" || !isRecord(body.params) ||
+      typeof body.params.name !== "string") return null;
+  return body.params.name;
+}
+
+function phaseForTool(name: string): string | null {
+  if (AUTO_SKIP.has(name) || name.startsWith("companion_internal_")) return null;
+  if (name.startsWith("browser_")) return "Pesquisa e navegação";
+  if (name.startsWith("github_")) return "GitHub e CI";
+  if (name.startsWith("git_")) return "Git e versionamento";
+  if (/file|repository|workspace|materializ|memory|document/u.test(name)) return "Arquivos e contexto";
+  if (/command|task|test|validation|diagnostic|service|release|oracle|deploy/u.test(name)) {
+    return "Execução e diagnóstico";
+  }
+  return "Consulta MCP V3";
 }
 
 /** The session metadata is supplied by ChatGPT to the MCP request, not by the card. */

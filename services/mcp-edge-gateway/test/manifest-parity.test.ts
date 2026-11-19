@@ -18,6 +18,31 @@ import {
 } from "../src/generated/mcp-tool-manifest.js";
 
 describe("Edge MCP generated manifest parity", () => {
+  it("defaults ordinary MCP tools to the shared progress app without replacing specialized or private cards", () => {
+    const metaFor = (name: string) => {
+      const tool = EDGE_MCP_TOOL_MANIFEST.find((entry) => entry.name === name);
+      expect(tool).toBeDefined();
+      return tool!._meta as Record<string, unknown>;
+    };
+    for (const name of ["list_workspaces", "read_file", "browser_open", "github_get_commit_checks"]) {
+      const meta = metaFor(name);
+      expect((meta.ui as Record<string, unknown>).resourceUri).toBe("ui://mcp-v3/progress-v11.html");
+      expect(meta["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v11.html");
+      expect(meta["openai/widgetAccessible"]).toBe(true);
+    }
+    expect((metaFor("github_get_pull_request").ui as Record<string, unknown>).resourceUri)
+      .toBe("ui://mcp-v3/pull-request-v6.html");
+    expect((metaFor("browser_user_messages").ui as Record<string, unknown>).resourceUri)
+      .toBe("ui://mcp-v3/user-messages-v11.html");
+    expect((metaFor("mcp_update").ui as Record<string, unknown>).resourceUri)
+      .toBe("ui://mcp-v3/progress-v11.html");
+    for (const name of ["browser_progress_read", "browser_user_reply"]) {
+      const meta = metaFor(name);
+      expect((meta.ui as Record<string, unknown>).visibility).toEqual(["app"]);
+      expect(meta).not.toHaveProperty("openai/outputTemplate");
+    }
+  });
+
   it("requires the dedicated contract preparation secret without exposing it as a plaintext variable", () => {
     const config = JSON.parse(
       readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
