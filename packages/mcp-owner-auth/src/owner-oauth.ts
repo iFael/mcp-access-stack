@@ -7,6 +7,8 @@ import {
 } from "./auth.js";
 
 const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
+// Bound retries after a lost rotation response; never allow an old token to advance twice.
+const REFRESH_RETRY_GRACE_MS = 60 * 1000;
 const MAX_CLIENTS = 256;
 const MAX_SCOPES = 64;
 
@@ -53,6 +55,8 @@ type RefreshTokenRecord = {
   expiresAt: number;
   credentialVersion?: string;
   userId?: string;
+  previousRefreshKey?: string;
+  rotatedAtMs?: number;
 };
 
 type RevokedAccessRecord = { expiresAt: number };
@@ -378,8 +382,24 @@ export class EdgeOwnerOAuth {
       if (resource !== record.resource) return oauthError("invalid_grant", 400);
       const requested = parseScopes(fields.get("scope") ?? record.scopes.join(" "));
       if (!requested.every((scope) => record.scopes.includes(scope))) return oauthError("invalid_scope", 400);
-      await this.storage.delete(key);
-      return jsonResponse(await this.issueTokens(clientId, requested, record.resource, record.userId));
+      const rotatedToken = await this.rotatedRefreshToken(clientId, refresh);
+      if (record.rotatedAtMs !== undefined) {
+        if (Date.now() - record.rotatedAtMs > REFRESH_RETRY_GRACE_MS ||
+            requested.join(" ") !== record.scopes.join(" ")) return oauthError("invalid_grant", 400);
+        const successor = await this.storage.get<RefreshTokenRecord>(refreshKey(await sha256Base64Url(rotatedToken)));
+        if (!successor || successor.rotatedAtMs !== undefined || successor.previousRefreshKey !== key ||
+            successor.clientId !== clientId || successor.resource !== resource ||
+            successor.credentialVersion !== record.credentialVersion ||
+            successor.expiresAt <= nowSeconds() || successor.scopes.join(" ") !== requested.join(" ")) {
+          return oauthError("invalid_grant", 400);
+        }
+        return jsonResponse(await this.issueTokens(clientId, requested, record.resource, record.userId, rotatedToken, undefined, false));
+      }
+      // Retire the old token before issuing its successor; failed writes remain fail-closed.
+      await this.storage.put(key, { ...record, scopes: requested, rotatedAtMs: Date.now() } satisfies RefreshTokenRecord);
+      const response = await this.issueTokens(clientId, requested, record.resource, record.userId, rotatedToken, key);
+      if (record.previousRefreshKey) await this.storage.delete(record.previousRefreshKey);
+      return jsonResponse(response);
     }
 
     return oauthError("unsupported_grant_type", 400);
@@ -395,12 +415,24 @@ export class EdgeOwnerOAuth {
       await this.storage.put(revokedAccessKey(claims.jti), { expiresAt: claims.exp } satisfies RevokedAccessRecord);
     } else {
       const hash = await sha256Base64Url(token);
-      await this.storage.delete(refreshKey(hash));
+      const key = refreshKey(hash);
+      const record = await this.storage.get<RefreshTokenRecord>(key);
+      await this.storage.delete(key);
+      if (record?.previousRefreshKey) await this.storage.delete(record.previousRefreshKey);
     }
     return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
   }
 
-  private async issueTokens(clientId: string, scopes: string[], resource: string, userId?: string): Promise<Record<string, unknown>> {
+  private async rotatedRefreshToken(clientId: string, token: string): Promise<string> {
+    const input = new TextEncoder().encode(`oauth-refresh-rotation-v1:${clientId}:${token}`);
+    const derived = new Uint8Array(await crypto.subtle.sign("HMAC", await this.hmacKey(), input));
+    return `refresh-${base64UrlBytes(derived)}`;
+  }
+
+  private async issueTokens(
+    clientId: string, scopes: string[], resource: string, userId?: string,
+    rotatedRefreshToken?: string, previousRefreshKey?: string, persistRefresh = true,
+  ): Promise<Record<string, unknown>> {
     const now = nowSeconds();
     const claims: OwnerAccessClaims = {
       iss: this.config.publicBaseUrl.href,
@@ -415,16 +447,19 @@ export class EdgeOwnerOAuth {
       jti: crypto.randomUUID(),
     };
     const accessToken = await this.signAccessToken(claims);
-    const refreshToken = `refresh-${randomToken()}`;
-    const credentialVersion = await this.currentCredentialVersion();
-    await this.storage.put(refreshKey(await sha256Base64Url(refreshToken)), {
-      clientId,
-      scopes: [...scopes],
-      resource,
-      expiresAt: now + this.config.refreshTokenTtlSeconds,
-      ...(credentialVersion === undefined ? {} : { credentialVersion }),
-      ...(userId === undefined ? {} : { userId }),
-    } satisfies RefreshTokenRecord);
+    const refreshToken = rotatedRefreshToken ?? `refresh-${randomToken()}`;
+    if (persistRefresh) {
+      const credentialVersion = await this.currentCredentialVersion();
+      await this.storage.put(refreshKey(await sha256Base64Url(refreshToken)), {
+        clientId,
+        scopes: [...scopes],
+        resource,
+        expiresAt: now + this.config.refreshTokenTtlSeconds,
+        ...(credentialVersion === undefined ? {} : { credentialVersion }),
+        ...(userId === undefined ? {} : { userId }),
+        ...(previousRefreshKey === undefined ? {} : { previousRefreshKey }),
+      } satisfies RefreshTokenRecord);
+    }
     return {
       access_token: accessToken,
       token_type: "bearer",
