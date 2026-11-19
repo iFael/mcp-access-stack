@@ -2892,6 +2892,7 @@ const sourceControlMcpSchemas = {
       destination: gitRemoveWorktreeInputSchema.shape.destination,
       expectedSourceHeadSha: mcpSourceControlSha,
       expectedWorktreeHeadSha: mcpSourceControlSha,
+      pruneGeneratedArtifacts: z.boolean().optional(),
     }).strict(),
     output: z.object({
       root: mcpSourceControlRoot,
@@ -3349,7 +3350,7 @@ export function registerSourceControlTools(
       "git_remove_worktree",
       {
         title: "Remove clean Git worktree",
-        description: "Removes only a registered, completely clean worktree beneath .worktrees after verifying source and target SHAs; never forces removal or deletes branches.",
+        description: "Removes a registered worktree with exact source/target SHA checks. Opt-in pruneGeneratedArtifacts removes only known ignored build caches before non-forced removal; preserves other ignored files, local changes and branches.",
         inputSchema: sourceControlMcpSchemas.git_remove_worktree.input,
         outputSchema: sourceControlMcpSchemas.git_remove_worktree.output,
         annotations: sourceControlAnnotations.git_remove_worktree,

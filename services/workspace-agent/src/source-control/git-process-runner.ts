@@ -51,6 +51,8 @@ export interface GitProcessExecutor {
   createDetachedWorktree(cwd: string, destination: string, headSha: string, signal?: AbortSignal): Promise<void>;
   listWorktrees(cwd: string, signal?: AbortSignal): Promise<GitWorktreeRecord[]>;
   worktreeIsCompletelyClean(cwd: string, signal?: AbortSignal): Promise<boolean>;
+  listIgnoredPaths(cwd: string, signal?: AbortSignal): Promise<string[]>;
+  hasTrackedPaths(cwd: string, relativePath: string, signal?: AbortSignal): Promise<boolean>;
   removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void>;
   stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   unstagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
@@ -161,6 +163,18 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async worktreeIsCompletelyClean(cwd: string, signal?: AbortSignal): Promise<boolean> {
     return (await this.invokeSuccess(cwd, ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"], signal)).trim().length === 0;
+  }
+
+  async listIgnoredPaths(cwd: string, signal?: AbortSignal): Promise<string[]> {
+    const output = await this.invokeSuccess(cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], signal);
+    const entries = output.split("\0").filter(Boolean);
+    // Git also reports intermediate untracked directories (e.g. packages/ before packages/pkg/dist/).
+    // Keep only the deepest ignored entries; never remove ancestor directories.
+    return entries.filter((entry) => !entries.some((other) => other !== entry && other.startsWith(entry.endsWith("/") ? entry : `${entry}/`)));
+  }
+
+  async hasTrackedPaths(cwd: string, relativePath: string, signal?: AbortSignal): Promise<boolean> {
+    return (await this.invokeSuccess(cwd, ["ls-files", "--cached", "-z", "--", relativePath], signal)).length > 0;
   }
 
   async removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void> {
