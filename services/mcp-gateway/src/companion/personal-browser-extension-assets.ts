@@ -6367,7 +6367,7 @@ function snapshotPage(generation) {
     }
     liveRefs.set(ref, element);
     const role = element.getAttribute("role") || defaultRole(element);
-    const name = normalizeText(accessibleName(element)).slice(0, 500);
+    const name = normalizeText(accessibleName(element, role)).slice(0, 500);
     const states = semanticStates(element, role);
     refs.push({ ref, role, name });
     refMetadata.set(ref, { ref, role, name });
@@ -6405,6 +6405,7 @@ function snapshotPage(generation) {
       if (type === "number") return "spinbutton";
       return "textbox";
     }
+    if (element.isContentEditable) return "textbox";
     return "generic";
   }
 
@@ -6445,7 +6446,7 @@ function snapshotPage(generation) {
     return String(value || "").replace(/\\s+/gu, " ").trim();
   }
 
-  function accessibleName(element) {
+  function accessibleName(element, role) {
     const labelledBy = element.getAttribute("aria-labelledby");
     const root = element.getRootNode?.() || document;
     const labelledByText = labelledBy
@@ -6469,8 +6470,7 @@ function snapshotPage(generation) {
       element.getAttribute("placeholder") ||
       element.getAttribute("title") ||
       safeButtonValue ||
-      element.innerText ||
-      element.textContent ||
+      (element.isContentEditable && ["textbox", "searchbox"].includes(role) ? "" : element.innerText || element.textContent) ||
       "";
   }
 }
@@ -6507,7 +6507,8 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
       tag === "textarea" ? "textbox" : tag === "select" ? element.multiple ? "listbox" : "combobox" :
       tag === "input" ? ["button","submit","reset","image","file"].includes(type) ? "button" :
         type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
-        type === "range" ? "slider" : type === "number" ? "spinbutton" : "textbox" : "generic");
+        type === "range" ? "slider" : type === "number" ? "spinbutton" : "textbox" :
+        element.isContentEditable ? "textbox" : "generic");
   const labelledBy = element.getAttribute("aria-labelledby");
   const root = element.getRootNode?.() || document;
   const labelledByText = labelledBy ? labelledBy.split(/\\s+/u)
@@ -6517,7 +6518,7 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   const safeButtonValue = tag === "input" && ["button","submit","reset"].includes(type) ? String(element.value || "") : "";
   const name = String(element.getAttribute("aria-label") || labelledByText || labelsText ||
     element.getAttribute("placeholder") || element.getAttribute("title") || safeButtonValue ||
-    element.innerText || element.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
+    (element.isContentEditable && ["textbox", "searchbox"].includes(role) ? "" : element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
   if (guard.role !== role || guard.name !== name) return { error: "target_changed" };
   if (focus && !(element instanceof HTMLInputElement && !["checkbox", "radio", "file", "button", "submit", "reset", "hidden"].includes(type)) &&
       !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement && element.isContentEditable)) {
@@ -6539,7 +6540,15 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
     if (!inner || inner === top) break;
     top = inner;
   }
-  if (!top || (top !== element && !element.contains(top))) return { error: "obscured" };
+  // A native label is an authorized hit target for its own checkbox/radio.
+  // A different overlay or nested interactive control remains forbidden.
+  const associatedLabel = ["checkbox", "radio"].includes(role) &&
+    Array.from(element.labels || []).some((label) =>
+      (top === label || label.contains(top)) &&
+      !top?.closest?.("a,button,input,select,textarea,[role=button],[role=link]"));
+  if (!top || (top !== element && !element.contains(top) && !associatedLabel)) {
+    return { error: "obscured" };
+  }
   return { x, y };
 }
 

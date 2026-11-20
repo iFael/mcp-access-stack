@@ -1242,6 +1242,90 @@ describe("personal browser extension assets", () => {
     expect(parseChromeKey("pagedown")).toMatchObject({ key: "PageDown", keyCode: 34 });
   });
 
+  it("keeps the same guarded editor ref when only its editable content changes", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const editor = fakeElement({
+      tagName: "DIV", text: "previous formula",
+      attributes: { contenteditable: "true" },
+    });
+    Object.assign(editor, {
+      isConnected: true, isContentEditable: true, parentElement: null,
+      getRootNode: () => ({}),
+      contains: () => false,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
+    });
+    const dom = createDom([editor]);
+    Object.assign(dom.context, { innerWidth: 800, innerHeight: 600 });
+    const page = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    page.elementFromPoint = () => editor;
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    const probe = vm.runInContext(`(${extractFunction(serviceWorker, "probeGuardedElement")})`, dom.context) as (ref: string, guard: unknown, focus: boolean) => { x?: number; y?: number; error?: string };
+    const ref = snapshot("editor-regression").refs[0]!;
+    expect(ref).toMatchObject({ role: "textbox", name: "" });
+    editor.innerText = "new formula";
+    editor.textContent = "new formula";
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ x: 50, y: 50 });
+    expect(probe(ref.ref, { ...ref, name: "different control", url: "https://example.test/" }, false))
+      .toMatchObject({ error: "target_changed" });
+  });
+
+  it("does not hide changing action names on contenteditable buttons", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const button = fakeElement({
+      tagName: "DIV", text: "Delete record",
+      attributes: { role: "button", contenteditable: "true" },
+    });
+    Object.assign(button, {
+      isConnected: true, isContentEditable: true, parentElement: null,
+      getRootNode: () => ({}), contains: () => false,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
+    });
+    const dom = createDom([button]);
+    Object.assign(dom.context, { innerWidth: 800, innerHeight: 600 });
+    const page = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    page.elementFromPoint = () => button;
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as
+      (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    const probe = vm.runInContext(`(${extractFunction(serviceWorker, "probeGuardedElement")})`, dom.context) as
+      (ref: string, guard: unknown, focus: boolean) => { error?: string };
+    const ref = snapshot("action-name-regression").refs[0]!;
+    expect(ref).toMatchObject({ role: "button", name: "Delete record" });
+    button.innerText = "Pay now";
+    button.textContent = "Pay now";
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ error: "target_changed" });
+  });
+
+  it("allows a checkbox's exact associated label but rejects unrelated overlays", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const checkbox = fakeElement({
+      tagName: "INPUT", attributes: { type: "checkbox", "aria-label": "Disable experimental rule" },
+    });
+    const label = { tagName: "LABEL", innerText: "Disable experimental rule", control: checkbox, contains: () => false };
+    checkbox.labels = [label];
+    Object.assign(checkbox, {
+      isConnected: true, parentElement: null, getRootNode: () => ({}),
+      contains: () => false,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
+    });
+    const dom = createDom([checkbox]);
+    Object.assign(dom.context, { innerWidth: 800, innerHeight: 600 });
+    const page = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    page.elementFromPoint = () => label;
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    const probe = vm.runInContext(`(${extractFunction(serviceWorker, "probeGuardedElement")})`, dom.context) as (ref: string, guard: unknown, focus: boolean) => { x?: number; y?: number; error?: string };
+    const ref = snapshot("checkbox-regression").refs[0]!;
+    const guard = { ...ref, url: "https://example.test/" };
+    expect(probe(ref.ref, guard, false)).toMatchObject({ x: 50, y: 50 });
+    page.elementFromPoint = () => ({ tagName: "BUTTON", closest: () => null });
+    expect(probe(ref.ref, guard, false)).toMatchObject({ error: "obscured" });
+    const nestedLink = { tagName: "A", closest: () => nestedLink };
+    label.contains = () => true;
+    page.elementFromPoint = () => nestedLink;
+    expect(probe(ref.ref, guard, false)).toMatchObject({ error: "obscured" });
+  });
+
   it("hit-tests viewport coordinates against authoritative isolated-world refs", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const button = {
