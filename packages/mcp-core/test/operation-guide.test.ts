@@ -56,6 +56,13 @@ describe("operation guide", () => {
     expect(release.rules.join(" ")).toMatch(/never run Update-McpAccessStack\.sh/iu);
   });
 
+  it("instructs reusing the mounted progress card without repeating browser_progress", () => {
+    const guide = getOperationGuide("browser");
+    const instructions = guide.steps.join(" ");
+    expect(instructions).toContain("browser_progress_update");
+    expect(instructions).not.toContain("end each answer with browser_progress");
+  });
+
   it("points server instructions at the guide", () => {
     expect(MCP_AGENT_INSTRUCTIONS).toContain("get_operation_guide");
   });

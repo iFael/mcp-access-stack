@@ -18,24 +18,26 @@ import {
 } from "../src/generated/mcp-tool-manifest.js";
 
 describe("Edge MCP generated manifest parity", () => {
-  it("defaults ordinary MCP tools to the shared progress app without replacing specialized or private cards", () => {
+  it("reserves the progress app for the progress tool and keeps ordinary tools card-free", () => {
     const metaFor = (name: string) => {
       const tool = EDGE_MCP_TOOL_MANIFEST.find((entry) => entry.name === name);
       expect(tool).toBeDefined();
       return tool!._meta as Record<string, unknown>;
     };
-    for (const name of ["list_workspaces", "read_file", "browser_open", "github_get_commit_checks"]) {
+    for (const name of ["list_workspaces", "read_file", "browser_open", "browser_snapshot", "github_get_commit_checks"]) {
       const meta = metaFor(name);
-      expect((meta.ui as Record<string, unknown>).resourceUri).toBe("ui://mcp-v3/progress-v12.html");
-      expect(meta["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v12.html");
-      expect(meta["openai/widgetAccessible"]).toBe(true);
+      expect(meta).not.toHaveProperty("ui");
+      expect(meta).not.toHaveProperty("openai/outputTemplate");
     }
+    expect((metaFor("browser_progress").ui as Record<string, unknown>).resourceUri)
+      .toBe("ui://mcp-v3/progress-v13.html");
+    expect(metaFor("browser_progress_update")).not.toHaveProperty("openai/outputTemplate");
     expect((metaFor("github_get_pull_request").ui as Record<string, unknown>).resourceUri)
       .toBe("ui://mcp-v3/pull-request-v6.html");
     expect((metaFor("browser_user_messages").ui as Record<string, unknown>).resourceUri)
       .toBe("ui://mcp-v3/user-messages-v11.html");
     expect((metaFor("mcp_update").ui as Record<string, unknown>).resourceUri)
-      .toBe("ui://mcp-v3/progress-v12.html");
+      .toBe("ui://mcp-v3/progress-v13.html");
     for (const name of ["browser_progress_read", "browser_user_reply"]) {
       const meta = metaFor(name);
       expect((meta.ui as Record<string, unknown>).visibility).toEqual(["app"]);

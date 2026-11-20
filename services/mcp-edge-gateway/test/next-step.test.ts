@@ -5,6 +5,10 @@ const json = (value: unknown) => new Response(JSON.stringify(value), { headers: 
 const call = (name: string) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } });
 
 describe("the next step the Edge adds to each result", () => {
+  it("directs the agent to update one existing card instead of reopening it", () => {
+    expect(PLAN_CARD_REMINDER).toContain("browser_progress_update");
+    expect(PLAN_CARD_REMINDER).not.toContain("end this answer");
+  });
   const steps = nextStepsOf([
     { name: "git_commit", _meta: { [NEXT_STEP_META_KEY]: "git_push_branch." } },
     { name: "http_get", _meta: {} },

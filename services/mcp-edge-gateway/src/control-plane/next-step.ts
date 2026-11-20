@@ -1,13 +1,13 @@
 // Every published tool carries, in its _meta, the call that comes after it.
 // The Edge adds it to each successful result, wherever the call was answered,
 // so the agent is told the next call when it needs it. Every published tool's
-// result, but the card tools', also reminds it to end the answer with the plan
-// card, which ChatGPT draws only where browser_progress is called.
+// result, but the card tools', also reminds it to update the already mounted
+// plan without opening another visual card.
 
 export const NEXT_STEP_META_KEY = "io.github.ifael/next-step";
 
 export const PLAN_CARD_REMINDER =
-  "Card: end this answer, after your text, with browser_progress and the conversation's planId (open one with browser_progress if it has none).";
+  "Card: keep the existing card visible; update its planId with browser_progress_update when steps change. Open browser_progress only once at the start (or when the user explicitly requests it).";
 const CARD_TOOLS = /^browser_(progress|user_|plan$)/;
 
 export function nextStepsOf(manifest: readonly unknown[]): Map<string, string> {
