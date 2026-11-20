@@ -62,12 +62,7 @@ describe("advanced browser tools HTTP list", () => {
         expect(tool.securitySchemes).toEqual([{ type: "noauth" }]);
         // Its next step aside, which ends its description too.
         const { "io.github.ifael/next-step": _next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
-        expect(meta).toEqual({
-          securitySchemes: [{ type: "noauth" }],
-          ui: { resourceUri: "ui://mcp-v3/progress-v12.html" },
-          "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
-          "openai/widgetAccessible": true,
-        });
+        expect(meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
       }
     } finally {
       await gateway.close();

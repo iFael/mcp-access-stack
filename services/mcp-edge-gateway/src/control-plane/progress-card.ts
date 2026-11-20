@@ -6,14 +6,14 @@
 // companion connected, and keeps each user's recent plans. A long operation on
 // a runtime that was handed the planId moves the same plan (applyUpdate).
 // The Edge notes when each step starts and ends, so the card shows how long
-// it took or has been running. browser_progress with only a planId shows the
-// card again at the end of an answer; its older copies fold into one line.
+// it took or has been running. Mount the card once per task and update its
+// existing rows; other MCP calls must not mount extra copies.
 
 import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v12.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v13.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -70,6 +70,10 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     skipped: '<svg viewBox="0 0 20 20" aria-label="pulada"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6"/><path d="M6 10h8" stroke="var(--muted)" stroke-width="1.6" stroke-linecap="round"/></svg>'
   };
   var latest = null;
+  var refreshInFlight = false;
+  var refreshStartedAt = 0;
+  var refreshSequence = 0;
+  var renderedRows = [];
   function data() {
     if (latest) return latest;
     var bridge = (window.mcpV3Card || window.openai) || {};
@@ -81,17 +85,23 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   function refresh() {
     var bridge = (window.mcpV3Card || window.openai);
     var out = bridge && bridge.toolOutput;
-    // Generic tools may return a different planId (such as browser_plan).
-    // Only a ProgressPlan or mcp_update has an explicit progress card identity.
     var planId = out && (Array.isArray(out.steps) && typeof out.updatedAt === "string"
       ? out.planId : out.update && out.update.planId);
-    if (typeof bridge.callTool !== "function" || document.hidden) return;
-    // Regular MCP tools retain their structuredContent contract. The app can
-    // resolve their progress plan from the authenticated ChatGPT session.
-    Promise.resolve(bridge.callTool("browser_progress_read", planId ? { planId: planId } : {})).then(function (result) {
+    if (!bridge || typeof bridge.callTool !== "function" || document.hidden ||
+        (refreshInFlight && Date.now() - refreshStartedAt < 15000)) return;
+    refreshInFlight = true;
+    refreshStartedAt = Date.now();
+    var sequence = ++refreshSequence;
+    // Prevent overlapping polls from applying older results after newer ones.
+    Promise.resolve().then(function () {
+      return bridge.callTool("browser_progress_read", planId ? { planId: planId } : {});
+    }).then(function (result) {
+      if (sequence !== refreshSequence) return;
       var value = result && (result.structuredContent || result);
       if (value && !result.isError && Array.isArray(value.steps)) { latest = value; render(); }
-    }).catch(function () {});
+    }).catch(function () {}).finally(function () {
+      if (sequence === refreshSequence) refreshInFlight = false;
+    });
   }
   function took(from, to) {
     var start = Date.parse(from);
@@ -142,17 +152,24 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     activity.hidden = folded || !pending;
     if (!activity.hidden) activity.textContent = activityText(value);
     var list = document.getElementById("steps");
-    list.textContent = "";
     if (folded) return;
-    steps.forEach(function (step) {
-      if (!step || typeof step.text !== "string") return;
+    var visible = steps.filter(function (step) { return step && typeof step.text === "string"; });
+    visible.forEach(function (step, index) {
       var state = ICONS[step.state] ? step.state : "todo";
-      var li = document.createElement("li");
-      li.className = state;
       var live = state === "doing" && value.activity && value.activity.status === "running" && recentActivity(value);
+      var signature = JSON.stringify([step.text, state, step.link, step.detail, step.startedAt, step.endedAt, !!live]);
+      var observedAt = value.activity && value.activity.observedAt || value.updatedAt;
+      var time = step.startedAt && (state === "doing" || step.endedAt)
+        ? took(step.startedAt, state === "doing" ? (live ? null : observedAt) : step.endedAt) : "";
+      var li = list.children[index];
+      if (li && renderedRows[index] === signature) {
+        var oldTime = li.querySelector(".when");
+        if (oldTime && oldTime.textContent !== time) oldTime.textContent = time;
+        return;
+      }
+      li = document.createElement("li");
+      li.className = state;
       li.innerHTML = state === "doing" && !live ? ICONS.waiting : ICONS[state];
-      // The list is drawn again every few seconds: start the spinner where the
-      // last one was, so it keeps turning instead of jumping back.
       var spin = li.querySelector(".spin");
       if (spin) spin.style.animationDelay = -(Date.now() % 1600) + "ms";
       var span = document.createElement("span");
@@ -168,17 +185,18 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
         span.appendChild(detail);
       }
       li.appendChild(span);
-      var observedAt = value.activity && value.activity.observedAt || value.updatedAt;
-      var time = step.startedAt && (state === "doing" || step.endedAt)
-        ? took(step.startedAt, state === "doing" ? (live ? null : observedAt) : step.endedAt) : "";
       if (time) {
         var when = document.createElement("span");
         when.className = "when";
         when.textContent = time;
         li.appendChild(when);
       }
-      list.appendChild(li);
+      if (list.children[index]) list.replaceChild(li, list.children[index]);
+      else list.appendChild(li);
+      renderedRows[index] = signature;
     });
+    while (list.children.length > visible.length) list.removeChild(list.lastChild);
+    renderedRows.length = visible.length;
   }
   window.addEventListener("openai:set_globals", render);
   document.addEventListener("visibilitychange", refresh);

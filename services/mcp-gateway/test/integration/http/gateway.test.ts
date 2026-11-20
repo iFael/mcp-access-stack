@@ -90,12 +90,8 @@ describe("embedded gateway HTTP surface", () => {
           // Internal progress mutations do not create their own visible cards.
           expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
         } else {
-          expect(tool._meta).toEqual({
-            securitySchemes: [{ type: "noauth" }],
-            ui: { resourceUri: "ui://mcp-v3/progress-v12.html" },
-            "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
-            "openai/widgetAccessible": true,
-          });
+          // One card belongs to the explicit progress tool, not every MCP call.
+          expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
         }
       }
 

@@ -8,7 +8,6 @@ import {
   MCP_TOOL_CATALOG_META_KEY,
   MCP_TOOL_NEXT_STEP_META_KEY,
   MCP_TOOL_NEXT_STEPS,
-  PROGRESS_CARD_URI,
   withMcpToolNextStep,
   createMcpToolCatalogMetadata,
   type McpToolCatalogMetadata,
@@ -61,7 +60,7 @@ export function buildPublishedTools(
         annotations: tool.annotations,
         execution: tool.execution,
         securitySchemes,
-        _meta: universalProgressMetadata(name, tool._meta, next),
+        _meta: publishedToolMetadata(tool._meta, next),
       };
       if (tool.outputSchema) {
         definition.outputSchema = toOutputJsonSchema(tool.outputSchema);
@@ -70,27 +69,16 @@ export function buildPublishedTools(
     });
 }
 
-/** The existing progress app is the default view for MCP tools without a dedicated app. */
-function universalProgressMetadata(
-  name: string,
+/** A tool opens a card only when it explicitly declares its own UI.
+ * Attaching the progress output template to every tool mounts another card
+ * on each ordinary browser/Git invocation and makes the chat jump.
+ */
+function publishedToolMetadata(
   original: Record<string, unknown> | undefined,
   next: string | undefined,
 ): Record<string, unknown> | undefined {
-  const meta: Record<string, unknown> = { ...original, ...(next ? { [MCP_TOOL_NEXT_STEP_META_KEY]: next } : {}) };
-  const ui = meta.ui && typeof meta.ui === "object" && !Array.isArray(meta.ui)
-    ? meta.ui as Record<string, unknown> : {};
-  if (name === "browser_progress_update" || name === "browser_progress_read" ||
-      name === "browser_user_card" || name === "browser_user_reply" ||
-      ui.visibility !== undefined || meta["openai/visibility"] === "private" ||
-      typeof ui.resourceUri === "string" || typeof meta["openai/outputTemplate"] === "string") {
-    return Object.keys(meta).length ? meta : undefined;
-  }
-  return {
-    ...meta,
-    ui: { ...ui, resourceUri: PROGRESS_CARD_URI },
-    "openai/outputTemplate": PROGRESS_CARD_URI,
-    "openai/widgetAccessible": true,
-  };
+  const meta = { ...original, ...(next ? { [MCP_TOOL_NEXT_STEP_META_KEY]: next } : {}) };
+  return Object.keys(meta).length ? meta : undefined;
 }
 
 export function createRegisteredMcpCatalogMetadata(

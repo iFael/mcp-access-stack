@@ -322,6 +322,7 @@ const PREVIOUS_URIS: Readonly<Record<string, string>> = {
   "ui://mcp-v3/progress-v9.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/progress-v10.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/progress-v11.html": PROGRESS_CARD_URI,
+  "ui://mcp-v3/progress-v12.html": PROGRESS_CARD_URI,
   "ui://mcp-v3/pull-request-v5.html": PULL_REQUEST_CARD_URI,
   "ui://mcp-v3/user-messages-v10.html": USER_MESSAGES_CARD_URI,
 };

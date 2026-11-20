@@ -334,7 +334,16 @@ describe("the chat cards the Edge serves", () => {
     expect(resources[0]!.text).toContain("Sem atualização recente");
     expect(resources[0]!.text).toContain("recentActivity(value)");
     expect(resources[0]!.text).toContain("ICONS.waiting");
-    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v12.html");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v13.html");
+    // Polling must preserve existing rows instead of deleting/recreating the list.
+    expect(resources[0]!.text).not.toContain('list.textContent = "";');
+    expect(resources[0]!.text).toContain("list.replaceChild");
+    expect(resources[0]!.text).toContain("refreshInFlight");
+    expect(resources[0]!.text).toContain("refreshSequence");
+    expect(resources[0]!.text).toContain("renderedRows[index] === signature");
+    const scripts = [...resources[0]!.text.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/gu)];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const match of scripts) expect(() => new Script(match[1]!)).not.toThrow();
     expect(resources[0]!.text).not.toContain('id="talk"');
     expect(resources[0]!.text).not.toContain('<textarea');
     expect(resources[0]!.text).not.toContain('id="send"');

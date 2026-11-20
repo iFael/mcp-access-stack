@@ -49,13 +49,15 @@ describe("advanced browser tools list", () => {
         });
         // Its next step aside, which ends its description too.
         const { "io.github.ifael/next-step": _next, ...meta } = (tool._meta ?? {}) as Record<string, unknown>;
-        expect(meta).toEqual({
-          securitySchemes: [{ type: "noauth" }],
-          ui: { resourceUri: "ui://mcp-v3/progress-v12.html" },
-          "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
-          "openai/widgetAccessible": true,
-        });
+        // Ordinary tools must not instantiate another progress app per call.
+        expect(meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
       }
+
+      const progress = listed.tools.find((tool) => tool.name === "browser_progress");
+      expect(progress?._meta?.["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v13.html");
+      expect(progress?.description).not.toContain("end every answer of the job with browser_progress");
+      const snapshot = listed.tools.find((tool) => tool.name === "browser_snapshot");
+      expect(snapshot?._meta).not.toHaveProperty("openai/outputTemplate");
 
       const network = advanced.find((tool) => tool.name === "browser_network");
       expect(network?.inputSchema).toMatchObject({
