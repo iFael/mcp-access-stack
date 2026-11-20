@@ -248,9 +248,9 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
   },
   browser: {
     title: "Browser work",
-    summary: "browser_open starts browser work and connects on its own; the user's personal Chrome needs a plan first.",
+    summary: "browser_open connects on its own; browser_plan approval is required only when the user enables it or a task needs a scoped grant.",
     steps: [
-      "Personal Chrome: browser_plan with the summary, steps, sites and actions; continue with the same taskId once the user approves.",
+      "Personal Chrome: use browser_plan when the user enabled mandatory approval or you need to request a scoped grant; otherwise browser_open can begin directly. browser_progress is the separate, always-visible task card.",
       "Open: browser_open (browser_open_authorized_site for private sites), then browser_snapshot or browser_find for refs. Every tab belongs to a task: without a taskId, browser_open starts a new one and returns it as tab.taskId; pass that taskId on the task's later calls.",
       "Act with browser_click, browser_fill or browser_sequence; read-only work uses browser_extract directly.",
       "Login, CAPTCHA or a step only the user should do: browser_wait with forUser and a short reason.",

@@ -257,6 +257,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const result = await this.call("snapshot", {
       tabId: input.tabId,
       ...(filtered || input.forceFull ? { forceFull: true } : {}),
+      ...(input.filter === "interactive" ? { compact: true } : {}),
       ...(input.includeAccessibility ? { includeAccessibility: true } : {}),
       ...(input.point ? { point: input.point } : {}),
     }, context);
@@ -298,7 +299,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       let point = this.coordinateClicks.get(input.tabId);
       if (!point || point.x !== input.x || point.y !== input.y) {
         const snapshot = await this.snapshot({
-          tabId: input.tabId, point: { x: input.x, y: input.y }, forceFull: true,
+          tabId: input.tabId, point: { x: input.x, y: input.y },
+          filter: "interactive", maxChars: 3500, forceFull: true,
         }, context);
         if (snapshot.pointTarget) {
           point = { x: input.x, y: input.y, ref: snapshot.pointTarget.ref, url: snapshot.url };
@@ -339,6 +341,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       return result;
     } catch (error) {
       this.coordinateClicks.delete(input.tabId);
+      if (input.ref && error instanceof AppError &&
+          error.code === "BROWSER_CONFIRMATION_INVALID" &&
+          error.message === "Target preflight: target_changed. No click was dispatched.") {
+        // The extension explicitly confirms that no pointer event was sent.
+        // Reuse only the same live DOM ref; a new name must undergo the full
+        // dangerous-action classification and single-use confirmation again.
+        const fresh = await this.snapshot({ tabId: input.tabId, forceFull: true }, context);
+        if (!fresh.refs.some((reference) => reference.ref === ref)) throw error;
+        const rebound = this.actions.guardClick(guardedInput);
+        return this.call("click", { ...guardedInput, guard: rebound }, context);
+      }
       throw error;
     }
   }

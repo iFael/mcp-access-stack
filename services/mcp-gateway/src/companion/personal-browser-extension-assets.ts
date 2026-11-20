@@ -1,5 +1,6 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
 import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
+import { PERSONAL_DOM_SETTLE_SOURCE } from "./personal-browser-dom-settle-assets.js";
 import { PLAN_REVIEW_HTML, PLAN_REVIEW_SCRIPT } from "./personal-browser-plan-review-assets.js";
 import { TASK_HOME_HTML, TASK_HOME_SCRIPT } from "./personal-browser-task-home-assets.js";
 import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
@@ -1924,6 +1925,7 @@ async function navigate(input, signal) {
     if (signal?.aborted) throw error;
   }
   metadata.lastUsedAt = new Date().toISOString();
+  await settlePersonalDom(input.tabId, signal);
   metadata.requestedUrl = targetUrl;
   await updateMetadata(chromeTabId, metadata);
   const tab = await chrome.tabs.get(chromeTabId);
@@ -1938,7 +1940,7 @@ async function snapshot(input, signal) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
     func: snapshotPage,
-    args: [generation],
+    args: [generation, input.compact === true],
   });
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
   let pointTarget;
@@ -1948,7 +1950,6 @@ async function snapshot(input, signal) {
       args: [input.point.x, input.point.y],
     });
     pointTarget = target?.result;
-    if (!pointTarget) throw coded("LOCATOR_NOT_FOUND", "No observed interactive control at those viewport coordinates.");
   }
   axTargetsByTab.delete(chromeTabId);
   const native = input.includeAccessibility
@@ -2114,8 +2115,13 @@ function probePersonalPixelTarget(x, y, expectedUrl) {
   if (location.href !== expectedUrl) return { stale: true };
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 ||
       x >= innerWidth || y >= innerHeight) return { outside: true };
-  if (!document.elementFromPoint(x, y)) return { empty: true };
-  return { x, y };
+  const hit = document.elementFromPoint(x, y);
+  if (!hit) return { empty: true };
+  globalThis.__mcpV3PixelHitRefs ??= new WeakMap();
+  const hitId = globalThis.__mcpV3PixelHitRefs.get(hit) ??
+    (globalThis.__mcpV3NextPixelHitId = (globalThis.__mcpV3NextPixelHitId || 0) + 1);
+  globalThis.__mcpV3PixelHitRefs.set(hit, hitId);
+  return { x, y, width: innerWidth, height: innerHeight, hitId };
 }
 
 async function click(input, signal) {
@@ -2149,7 +2155,7 @@ async function click(input, signal) {
       args: [input.ref, input.guard, false, input.x ?? null, input.y ?? null],
     });
     point = injection?.result;
-    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "The element changed since the personal browser snapshot.");
+    if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Target preflight: " + (["stale_page", "stale_ref", "target_changed", "not_editable", "not_visible", "point_outside_target", "obscured"].includes(point?.error) ? point.error : "unavailable") + ". No click was dispatched.");
   }
   const target = { tabId: chromeTabId };
   let attached = false;
@@ -2157,6 +2163,7 @@ async function click(input, signal) {
     attached = await attachGuardedDebugger(target);
     throwIfAborted(signal, "click", false);
     if (!pixel && input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    else point = await revalidatePersonalClickAfterAttach(chromeTabId, target, input, point, pixel, attached, signal);
     const button = input.button ?? "left";
     const clickCount = input.clickCount ?? 1;
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
@@ -2423,7 +2430,7 @@ async function fill(input, signal) {
       args: [input.ref, input.guard, true],
     });
     if (!injection?.result || injection.result.error) {
-      throw coded("BROWSER_CONFIRMATION_INVALID", "The field changed since the personal browser snapshot.");
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Field preflight: " + (["stale_page", "stale_ref", "target_changed", "not_editable", "not_visible", "point_outside_target", "obscured"].includes(injection?.result?.error) ? injection.result.error : "unavailable") + ". No input was dispatched.");
     }
   }
   throwIfAborted(signal, "fill", false);
@@ -2792,7 +2799,7 @@ async function wait(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 30000;
-  if (!input.text && !input.ref) {
+  if (!input.text && !input.ref && !input.absentText && !input.url) {
     await delay(timeoutMs, signal);
     return { tabId: input.tabId, completed: true };
   }
@@ -2802,7 +2809,7 @@ async function wait(input, signal) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: waitProbe,
-      args: [input.text ?? null, input.ref ?? null],
+      args: [input.text ?? null, input.ref ?? null, input.url ?? null, input.absentText ?? null],
     }).catch(() => []);
     if (result?.result) return { tabId: input.tabId, completed: true };
     await delay(200, signal);
@@ -4479,6 +4486,7 @@ async function sequence(input, signal, timing) {
   };
   if (input.finalSnapshot) {
     const started = performance.now();
+    await settlePersonalDom(input.tabId, signal);
     try { response.snapshot = await snapshot({ tabId: input.tabId }, signal); }
     finally { if (timing) timing.snapshotMs += performance.now() - started; }
   }
@@ -6304,7 +6312,8 @@ async function waitForTabComplete(tabId, timeoutMs, signal) {
   });
 }
 
-function snapshotPage(generation) {
+${PERSONAL_DOM_SETTLE_SOURCE}
+function snapshotPage(generation, compact = false) {
   // Private isolated-world data: never mark, rewrite or clean the page's DOM.
   globalThis.__mcpV3PageInstanceId ??= generation;
   globalThis.__mcpV3StableElementRefs ??= new WeakMap();
@@ -6379,13 +6388,13 @@ function snapshotPage(generation) {
     );
     if (refs.length >= 2000) break;
   }
-  const pageText = (document.body?.innerText || "").slice(0, 180000);
+  const pageText = (compact ? "" : document.body?.innerText || "").slice(0, 180000);
   const refText = refLines.join("\\n");
   return {
     url: location.href,
     title: document.title || "",
     pageInstanceId: globalThis.__mcpV3PageInstanceId,
-    content: pageText + (refText ? "\\n\\nInteractive elements:\\n" + refText : ""),
+    content: compact ? refText : pageText + (refText ? "\\n\\nInteractive elements:\\n" + refText : ""),
     refs,
   };
 
@@ -6497,7 +6506,7 @@ function inspectPointInDocument(x, y) {
 }
 
 function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
-  if (!guard || guard.url !== location.href || guard.ref !== ref) return { error: "stale_page" };
+  if (!guard || typeof guard.url !== "string" || guard.ref !== ref || guard.url.split("#", 1)[0] !== location.href.split("#", 1)[0]) return { error: "stale_page" };
   const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
   if (!element || !element.isConnected) return { error: "stale_ref" };
   const tag = element.tagName.toLowerCase();
@@ -6590,9 +6599,11 @@ function parseChromeKey(input) {
   };
 }
 
-function waitProbe(text, ref) {
+function waitProbe(text, ref, url, absentText) {
   if (typeof ref === "string" && !globalThis.__mcpV3OwnedRefElements?.get(ref)?.isConnected) return false;
   if (typeof text === "string" && !(document.body?.innerText || "").includes(text)) return false;
+  if (typeof url === "string" && location.href !== url) return false;
+  if (typeof absentText === "string" && (document.body?.innerText || "").includes(absentText)) return false;
   return true;
 }
 
