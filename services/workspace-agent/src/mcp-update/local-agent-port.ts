@@ -28,6 +28,20 @@ export function createLocalAgentMcpUpdatePort(agent: () => LocalAgent, callbacks
   };
   return {
     mainHead: () => agent().releaseReadGitHubMainHead({ workspaceId, ...REPOSITORY }),
+    tagCommit: async (tag) => {
+      const refs = await agent().githubRead({ workspaceId, ...REPOSITORY, kind: "refs",
+        refType: "tags", prefix: tag, page: 1, perPage: 100 });
+      if (refs.nextPage !== undefined) {
+        throw new AppError("INTERNAL_ERROR", "GitHub tag inventory is incomplete.");
+      }
+      const exact = refs.items.filter((entry) => entry.ref === `refs/tags/${tag}`);
+      if (exact.length === 0) return null;
+      if (exact.length !== 1 || exact[0]?.type !== "commit" || typeof exact[0]?.sha !== "string" ||
+          !/^[a-f0-9]{40}$/u.test(exact[0].sha)) {
+        throw new AppError("INTERNAL_ERROR", "GitHub tag ref is not a verified commit.");
+      }
+      return exact[0].sha;
+    },
     checks: async (commitSha) => {
       const checks = await agent().githubGetCommitChecks({ workspaceId, ...REPOSITORY, commitSha });
       if (checks.failingCount > 0) return "failed";
