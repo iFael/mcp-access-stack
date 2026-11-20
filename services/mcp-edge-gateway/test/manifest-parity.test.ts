@@ -26,8 +26,8 @@ describe("Edge MCP generated manifest parity", () => {
     };
     for (const name of ["list_workspaces", "read_file", "browser_open", "github_get_commit_checks"]) {
       const meta = metaFor(name);
-      expect((meta.ui as Record<string, unknown>).resourceUri).toBe("ui://mcp-v3/progress-v11.html");
-      expect(meta["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v11.html");
+      expect((meta.ui as Record<string, unknown>).resourceUri).toBe("ui://mcp-v3/progress-v12.html");
+      expect(meta["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v12.html");
       expect(meta["openai/widgetAccessible"]).toBe(true);
     }
     expect((metaFor("github_get_pull_request").ui as Record<string, unknown>).resourceUri)
@@ -35,7 +35,7 @@ describe("Edge MCP generated manifest parity", () => {
     expect((metaFor("browser_user_messages").ui as Record<string, unknown>).resourceUri)
       .toBe("ui://mcp-v3/user-messages-v11.html");
     expect((metaFor("mcp_update").ui as Record<string, unknown>).resourceUri)
-      .toBe("ui://mcp-v3/progress-v11.html");
+      .toBe("ui://mcp-v3/progress-v12.html");
     for (const name of ["browser_progress_read", "browser_user_reply"]) {
       const meta = metaFor(name);
       expect((meta.ui as Record<string, unknown>).visibility).toEqual(["app"]);

@@ -13,7 +13,7 @@ import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v11.html";
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v12.html";
 export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
@@ -38,6 +38,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
 <style>${CARD_BASE_CSS}
   li { padding: 4px 0; }
   .when { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #activity { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
   .detail { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
   a { color: inherit; }
   .folded #steps { display: none; }
@@ -54,6 +55,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
 </head>
 <body>
 <div class="head"><h1 id="title">Etapas</h1><div class="chips"><span class="chip" id="count" hidden></span></div></div>
+<p id="activity" aria-live="polite" hidden></p>
 <ul id="steps"></ul>
 <script>${CARD_MCP_APPS_SCRIPT}</script>
 <script>
@@ -62,6 +64,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   var ICONS = {
     done: '<svg viewBox="0 0 20 20" aria-label="concluída"><circle cx="10" cy="10" r="9" fill="var(--fg)"/><path d="M6 10.4l2.6 2.6L14.2 7.4" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     doing: '<svg viewBox="0 0 20 20" aria-label="em andamento"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" stroke-width="2"/><path class="spin" d="M10 2a8 8 0 0 1 8 8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>',
+    waiting: '<svg viewBox="0 0 20 20" aria-label="estado não confirmado"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6"/><path d="M8 7v6m4-6v6" stroke="var(--muted)" stroke-width="1.6" stroke-linecap="round"/></svg>',
     todo: '<svg viewBox="0 0 20 20" aria-label="a fazer"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="2.6 2.6"/></svg>',
     failed: '<svg viewBox="0 0 20 20" aria-label="falhou"><circle cx="10" cy="10" r="9" fill="var(--bad)"/><path d="M7 7l6 6M13 7l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>',
     skipped: '<svg viewBox="0 0 20 20" aria-label="pulada"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="1.6"/><path d="M6 10h8" stroke="var(--muted)" stroke-width="1.6" stroke-linecap="round"/></svg>'
@@ -99,6 +102,19 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     if (minutes < 60) return minutes + " min";
     return Math.floor(minutes / 60) + " h " + (minutes % 60) + " min";
   }
+  // A plan is a status display, not a background execution engine. Only fresh
+  // observed MCP activity earns a spinner; silence never proves completion.
+  function recentActivity(value) {
+    var at = value && value.activity && Date.parse(value.activity.observedAt);
+    return isFinite(at) && Date.now() >= at && Date.now() - at < 90000;
+  }
+  function activityText(value) {
+    if (!value.activity) return "Estado da execução não confirmado até a próxima chamada MCP.";
+    if (!recentActivity(value)) return "Sem atualização recente. A execução pode continuar no servidor; reconcilie antes de repetir ações.";
+    if (value.activity.status === "running") return "Ferramenta MCP em execução, verificada recentemente.";
+    if (value.activity.status === "waiting") return "Operação pendente; aguardando resultado ou reconciliação.";
+    return "Nenhuma ferramenta MCP ativa neste momento.";
+  }
   function openLink(event) {
     var bridge = (window.mcpV3Card || window.openai);
     if (bridge && typeof bridge.openExternal === "function") {
@@ -121,6 +137,10 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     var count = document.getElementById("count");
     count.hidden = folded || steps.length === 0;
     count.textContent = done + "/" + steps.length;
+    var pending = steps.some(function (step) { return step && step.state === "doing"; });
+    var activity = document.getElementById("activity");
+    activity.hidden = folded || !pending;
+    if (!activity.hidden) activity.textContent = activityText(value);
     var list = document.getElementById("steps");
     list.textContent = "";
     if (folded) return;
@@ -129,7 +149,8 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
       var state = ICONS[step.state] ? step.state : "todo";
       var li = document.createElement("li");
       li.className = state;
-      li.innerHTML = ICONS[state];
+      var live = state === "doing" && value.activity && value.activity.status === "running" && recentActivity(value);
+      li.innerHTML = state === "doing" && !live ? ICONS.waiting : ICONS[state];
       // The list is drawn again every few seconds: start the spinner where the
       // last one was, so it keeps turning instead of jumping back.
       var spin = li.querySelector(".spin");
@@ -147,7 +168,9 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
         span.appendChild(detail);
       }
       li.appendChild(span);
-      var time = step.startedAt && (state === "doing" || step.endedAt) ? took(step.startedAt, state === "doing" ? null : step.endedAt) : "";
+      var observedAt = value.activity && value.activity.observedAt || value.updatedAt;
+      var time = step.startedAt && (state === "doing" || step.endedAt)
+        ? took(step.startedAt, state === "doing" ? (live ? null : observedAt) : step.endedAt) : "";
       if (time) {
         var when = document.createElement("span");
         when.className = "when";
@@ -185,6 +208,7 @@ export const PROGRESS_CARD_RESOURCE: EdgeUiResource = {
 };
 
 export type ProgressPlanStep = ProgressStep & { startedAt?: string; endedAt?: string };
+export interface ProgressActivity { status: "running" | "waiting" | "idle"; observedAt: string; }
 
 export interface ProgressPlan {
   planId: string;
@@ -192,6 +216,7 @@ export interface ProgressPlan {
   steps: ProgressPlanStep[];
   updatedAt: string;
   shownAt?: string;
+  activity?: ProgressActivity;
 }
 
 export interface ProgressStorage {
@@ -201,6 +226,19 @@ export interface ProgressStorage {
 }
 
 export class ProgressPlans {
+  private readonly inFlight = new Map<string, Map<object, number>>();
+  private readonly observedFailures = new Set<string>();
+
+  /** A lost transport must not keep an old tool looking active indefinitely. */
+  private pruneInFlight(nowMs: number): void {
+    for (const [phase, calls] of this.inFlight) {
+      for (const [body, startedAt] of calls) {
+        if (nowMs < startedAt || nowMs - startedAt >= 90_000) calls.delete(body);
+      }
+      if (calls.size === 0) this.inFlight.delete(phase);
+    }
+  }
+
   constructor(
     private readonly storage: ProgressStorage,
     private readonly now: () => Date = () => new Date(),
@@ -294,28 +332,43 @@ export class ProgressPlans {
     if (!name || !session || !userId) return;
     const phase = phaseForTool(name);
     if (!phase) return;
-    await this.serial(`${userId}:${session}`, async () => {
+    const sessionKey = `${userId}:${session}`;
+    const phaseKey = `${sessionKey}:${phase}`;
+    this.pruneInFlight(this.now().getTime());
+    const calls = this.inFlight.get(phaseKey) ?? new Map<object, number>();
+    if (calls.size === 0) this.observedFailures.delete(phaseKey);
+    calls.set(body as object, this.now().getTime());
+    this.inFlight.set(phaseKey, calls);
+    try {
+      await this.serial(sessionKey, async () => {
       const existingId = await this.planForSession(userId, session);
-      if (existingId && !await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existingId}`)) return;
       const key = `progress-plans:${userId}`;
       const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
       const existing = plans.find((entry) => entry.planId === existingId);
       const now = this.now().toISOString();
+      const activity: ProgressActivity = { status: "running", observedAt: now };
       if (!existing) {
         const plan = await this.open(userId, plans, `MCP V3 — ${phase}`,
-          [{ text: phase, state: "doing" }]);
+          [{ text: phase, state: "doing" }], activity);
         await this.storage.put(`${AUTO_PLAN_PREFIX}${plan.planId}`, true);
         await this.bindSession(userId, session, plan.planId);
         return;
       }
+      const automatic = await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existing.planId}`);
       const current = existing.steps.find((step) => step.text === phase);
-      if (current?.state === "doing" || (!current && existing.steps.length >= 20)) return;
-      const steps = current
-        ? existing.steps.map((step) => step.text === phase ? { text: phase, state: "doing" as const } : step)
-        : [...existing.steps, { text: phase, state: "doing" as const }];
-      await this.storage.put(key, plans.map((entry) => entry.planId === existingId
-        ? { ...entry, steps: timed(entry.steps, steps, now), updatedAt: now } : entry));
-    });
+      const steps = !automatic || current?.state === "doing" || (!current && existing.steps.length >= 20)
+        ? existing.steps
+        : current
+          ? existing.steps.map((step) => step.text === phase ? { text: phase, state: "doing" as const } : step)
+          : [...existing.steps, { text: phase, state: "doing" as const }];
+      await this.storage.put(key, plans.map((entry) => entry.planId === existing.planId
+        ? { ...entry, steps: timed(entry.steps, steps, now), activity, updatedAt: now } : entry));
+      });
+    } catch (error) {
+      calls.delete(body as object);
+      if (calls.size === 0) this.inFlight.delete(phaseKey);
+      throw error;
+    }
   }
 
   /** Only observed tool outcomes change a phase; the tool response is never rewritten. */
@@ -325,10 +378,12 @@ export class ProgressPlans {
     if (!name || !session || !userId) return;
     const phase = phaseForTool(name);
     if (!phase) return;
+    const sessionKey = `${userId}:${session}`;
+    const phaseKey = `${sessionKey}:${phase}`;
     let parsed: unknown;
-    try { parsed = await response.clone().json(); } catch { return; }
-    if (!isRecord(parsed)) return;
-    const result = isRecord(parsed.result) ? parsed.result : {};
+    try { parsed = await response.clone().json(); } catch { /* An unparseable outcome is not success. */ }
+    const envelope = isRecord(parsed) ? parsed : {};
+    const result = isRecord(envelope.result) ? envelope.result : {};
     const content = isRecord(result.structuredContent) ? result.structuredContent : {};
     const status = typeof content.status === "string" ? content.status
       : isRecord(content.update) && typeof content.update.status === "string"
@@ -336,11 +391,12 @@ export class ProgressPlans {
     const nestedState = typeof content.state === "string" ? content.state
       : isRecord(content.task) && typeof content.task.state === "string"
         ? content.task.state : undefined;
-    const failed = !response.ok || parsed.error !== undefined || result.isError === true ||
+    const failed = !response.ok || envelope.error !== undefined || result.isError === true ||
       [status, nestedState].some((value) => ["failed", "failure", "error"].includes(value ?? "")) ||
       content.passed === false || (typeof content.failingCount === "number" && content.failingCount > 0) ||
       (typeof content.exitCode === "number" && content.exitCode !== 0);
     const pending = !failed && (
+      !isRecord(parsed) ||
       [status, nestedState].some((value) => [
         "running", "pending", "queued", "in_progress", "started",
         "background_task_started", "handover_started", "confirmation_required",
@@ -349,24 +405,37 @@ export class ProgressPlans {
       content.allCompleted === false ||
       (typeof content.pendingCount === "number" && content.pendingCount > 0)
     );
-    const state: ProgressStep["state"] = failed ? "failed" : pending ? "doing" : "done";
-    await this.serial(`${userId}:${session}`, async () => {
+    this.pruneInFlight(this.now().getTime());
+    const calls = this.inFlight.get(phaseKey);
+    calls?.delete(body as object);
+    const remaining = calls?.size ?? 0;
+    if (remaining === 0) this.inFlight.delete(phaseKey);
+    if (failed) this.observedFailures.add(phaseKey);
+    const anyFailure = this.observedFailures.has(phaseKey);
+    if (remaining === 0) this.observedFailures.delete(phaseKey);
+    const state: ProgressStep["state"] = remaining > 0 ? "doing" : anyFailure ? "failed" : pending ? "doing" : "done";
+    await this.serial(sessionKey, async () => {
       const planId = await this.planForSession(userId, session);
-      if (!planId || !await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${planId}`)) return;
+      if (!planId) return;
       const key = `progress-plans:${userId}`;
       const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
       const current = plans.find((entry) => entry.planId === planId);
       if (!current) return;
       const now = this.now().toISOString();
+      const active = [...this.inFlight].some(([key, calls]) => key.startsWith(`${sessionKey}:`) && calls.size > 0);
+      const activity: ProgressActivity = { status: active ? "running" : pending ? "waiting" : "idle", observedAt: now };
+      const automatic = await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${planId}`);
       const detail = status === "confirmation_required" || status === "needs_confirmation"
         ? "Aguardando autorização" : status === "reconciliation_required" ||
-          status === "outcome_unknown" ? "Aguardando reconciliação" : undefined;
-      const steps = current.steps.map((step) => step.text === phase
+          status === "outcome_unknown" ? "Aguardando reconciliação" :
+          !isRecord(parsed) ? "Resultado não verificável" : undefined;
+      const steps = !automatic ? current.steps : current.steps.map((step) => step.text === phase
         ? { text: phase, state, ...(pending && detail ? { detail } : {}) }
         : step);
       // A newer card folds earlier copies of the same task.
       await this.storage.put(key, plans.map((entry) => entry.planId === planId
-        ? { ...entry, steps: timed(entry.steps, steps, now), updatedAt: now, shownAt: now } : entry));
+        ? { ...entry, steps: timed(entry.steps, steps, now), activity, updatedAt: now,
+          ...(automatic ? { shownAt: now } : {}) } : entry));
     });
   }
 
@@ -424,9 +493,10 @@ export class ProgressPlans {
     await this.storage.put(key, Object.fromEntries(Object.entries({ ...current, [session]: planId }).slice(-MAX_SESSION_PLANS)));
   }
 
-  private async open(userId: string, plans: ProgressPlan[], title: string, steps: ProgressStep[]): Promise<ProgressPlan> {
+  private async open(userId: string, plans: ProgressPlan[], title: string, steps: ProgressStep[], activity?: ProgressActivity): Promise<ProgressPlan> {
     const now = this.now().toISOString();
-    const plan: ProgressPlan = { planId: this.newId(), title, steps: timed([], steps, now), updatedAt: now, shownAt: now };
+    const plan: ProgressPlan = { planId: this.newId(), title, steps: timed([], steps, now), updatedAt: now, shownAt: now,
+      ...(activity ? { activity } : {}) };
     const kept = [...plans, plan].slice(-MAX_PLANS);
     await this.storage.put(`progress-plans:${userId}`, kept);
     for (const dropped of plans.filter((entry) => !kept.includes(entry))) {
@@ -456,6 +526,9 @@ export class ProgressPlans {
       ...(update.title === undefined ? {} : { title: update.title }),
       steps: timed(current.steps, update.steps, now),
       updatedAt: now,
+      ...(update.steps.some((step) => step.state === "doing") || current.activity
+        ? { activity: { status: update.steps.some((step) => step.state === "doing") ? "waiting" as const : "idle" as const, observedAt: now } }
+        : {}),
     };
     await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     return true;

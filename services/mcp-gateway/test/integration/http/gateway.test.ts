@@ -92,8 +92,8 @@ describe("embedded gateway HTTP surface", () => {
         } else {
           expect(tool._meta).toEqual({
             securitySchemes: [{ type: "noauth" }],
-            ui: { resourceUri: "ui://mcp-v3/progress-v11.html" },
-            "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+            ui: { resourceUri: "ui://mcp-v3/progress-v12.html" },
+            "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
             "openai/widgetAccessible": true,
           });
         }

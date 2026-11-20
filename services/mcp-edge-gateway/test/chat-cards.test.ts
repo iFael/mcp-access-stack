@@ -190,8 +190,12 @@ describe("automatic progress across MCP tools", () => {
     const before = await output.clone().text();
     await plans.finishTool(first, "user_1", output);
     expect(await output.text()).toBe(before);
-    await plans.startTool(sessionTool("github_get_commit_checks", "chat-a"), "user_1");
-    await plans.finishTool(sessionTool("github_get_commit_checks", "chat-a"), "user_1", response({ passed: true }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_1"))).structuredContent)
+      .toMatchObject({ activity: { status: "running" }, steps: [{ state: "doing" }] });
+    await plans.finishTool(second, "user_1", response({ pages: 3 }));
+    const github = sessionTool("github_get_commit_checks", "chat-a");
+    await plans.startTool(github, "user_1");
+    await plans.finishTool(github, "user_1", response({ passed: true }));
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_1"))).structuredContent)
       .toMatchObject({ planId: id, steps: [
         { text: "Pesquisa e navegação", state: "done" },
@@ -200,6 +204,66 @@ describe("automatic progress across MCP tools", () => {
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_2"))).isError).toBe(true);
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-b"), "user_1"))).isError).toBe(true);
     expect(storage.values.size).toBeGreaterThan(0);
+  });
+
+  it("reports live tool activity on an explicit card without rewriting its planned steps", async () => {
+    const storage = memory();
+    let now = "2026-11-19T14:00:00.000Z";
+    const plans = new ProgressPlans(storage, () => new Date(now));
+    const body = sessionTool("browser_progress", "chat-explicit");
+    body.params.arguments = { title: "MisterT", steps: [
+      { text: "Testar anexos", state: "doing" }, { text: "Validar", state: "todo" },
+    ] };
+    const opened = await result(await plans.handle(body, "owner"));
+    const planId = opened.structuredContent!.planId;
+    const snapshot = sessionTool("browser_snapshot", "chat-explicit");
+    now = "2026-11-19T14:01:00.000Z";
+    await plans.startTool(snapshot, "owner");
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-explicit"), "owner"))).structuredContent)
+      .toMatchObject({ planId, activity: { status: "running", observedAt: now },
+        steps: [{ text: "Testar anexos", state: "doing" }, { text: "Validar", state: "todo" }] });
+    now = "2026-11-19T14:02:00.000Z";
+    await plans.finishTool(snapshot, "owner", response({ items: 3 }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-explicit"), "owner"))).structuredContent)
+      .toMatchObject({ planId, activity: { status: "idle", observedAt: now },
+        steps: [{ text: "Testar anexos", state: "doing" }, { text: "Validar", state: "todo" }] });
+  });
+
+  it("does not mark an automatic phase done while another call is still running", async () => {
+    const plans = new ProgressPlans(memory());
+    const first = sessionTool("browser_snapshot", "chat-parallel");
+    const second = sessionTool("browser_screenshot", "chat-parallel");
+    await Promise.all([plans.startTool(first, "owner"), plans.startTool(second, "owner")]);
+    await plans.finishTool(first, "owner", response({ ok: true }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-parallel"), "owner"))).structuredContent)
+      .toMatchObject({ activity: { status: "running" }, steps: [{ state: "doing" }] });
+    await plans.finishTool(second, "owner", response({ ok: true }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-parallel"), "owner"))).structuredContent)
+      .toMatchObject({ activity: { status: "idle" }, steps: [{ state: "done" }] });
+  });
+
+  it("does not claim an orphaned old tool is still active after newer calls complete", async () => {
+    let now = "2026-11-19T14:00:00.000Z";
+    const plans = new ProgressPlans(memory(), () => new Date(now));
+    await plans.startTool(sessionTool("browser_snapshot", "chat-reconnect"), "owner");
+    now = "2026-11-19T14:03:00.000Z";
+    const check = sessionTool("github_get_commit_checks", "chat-reconnect");
+    await plans.startTool(check, "owner");
+    await plans.finishTool(check, "owner", response({ passed: true }));
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-reconnect"), "owner"))).structuredContent)
+      .toMatchObject({ activity: { status: "idle", observedAt: now },
+        steps: [{ text: "Pesquisa e navegação", state: "doing" }, { text: "GitHub e CI", state: "done" }] });
+  });
+
+  it("shows a persisted runtime update as waiting for further evidence", async () => {
+    const plans = new ProgressPlans(memory());
+    const body = sessionTool("browser_progress", "chat-background");
+    body.params.arguments = { title: "Publicar", steps: [{ text: "Release", state: "doing" }] };
+    const opened = await result(await plans.handle(body, "owner"));
+    const planId = opened.structuredContent!.planId as string;
+    expect(await plans.applyUpdate({ planId, steps: [{ text: "Release", state: "doing" }] }, "owner")).toBe(true);
+    expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-background"), "owner"))).structuredContent)
+      .toMatchObject({ planId, activity: { status: "waiting" } });
   });
 
   it("preserves failures, pending work and authorization without claiming successful completion", async () => {
@@ -267,7 +331,10 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
-    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v11.html");
+    expect(resources[0]!.text).toContain("Sem atualização recente");
+    expect(resources[0]!.text).toContain("recentActivity(value)");
+    expect(resources[0]!.text).toContain("ICONS.waiting");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v12.html");
     expect(resources[0]!.text).not.toContain('id="talk"');
     expect(resources[0]!.text).not.toContain('<textarea');
     expect(resources[0]!.text).not.toContain('id="send"');
