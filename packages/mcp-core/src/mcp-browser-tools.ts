@@ -329,7 +329,11 @@ export function registerBrowserTools(
             const tab = action.tab as { tabId?: unknown } | undefined;
             const tabId = withState && action.completed === true ? action.tabId
               : withTabState ? tab?.tabId : undefined;
-            if (typeof tabId !== "string" || action.state !== undefined) return performed;
+            // Managed tabs already use their own worker result contract. Only
+            // the personal Chrome bridge needs an extra observation here;
+            // probing a managed tab would create an unrequested second operation.
+            if (typeof tabId !== "string" || !tabId.startsWith("personal:") ||
+                action.state !== undefined) return performed;
             let state: c.BrowserStateUpdate;
             try {
               const existing = c.browserSnapshotResultSchema.safeParse(action.snapshot);

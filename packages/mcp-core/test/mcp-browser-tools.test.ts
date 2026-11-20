@@ -456,6 +456,29 @@ async function callTool(
 }
 
 describe("registerBrowserTools", () => {
+
+  it("does not probe managed-browser ownership sessions after open or wait", async () => {
+    const executor = mockExecutor();
+    executor.open = jest.fn(async () => ({ tab: {
+      tabId: "tab-1", taskId: "task-tab-1", lifecycle: "task-scoped" as const,
+      ownership: "mcp" as const, purpose: "session-continuity",
+      reusable: true, protected: false, sticky: false,
+      createdAt: collectedAt, lastUsedAt: collectedAt,
+      url: "https://example.test/report",
+    } })) as BrowserExecutor["open"];
+    executor.wait = jest.fn(async () => ({ tabId: "tab-1", completed: true as const })) as BrowserExecutor["wait"];
+    executor.snapshot = jest.fn(async () => { throw new Error("Managed worker must not receive an implicit snapshot"); }) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const opened = await callTool(server, "browser_open", { url: "https://example.test/report" });
+    const waited = await callTool(server, "browser_wait", { tabId: "tab-1", text: "Report ready" });
+    expect(opened.isError).not.toBe(true);
+    expect(waited.isError).not.toBe(true);
+    expect(opened.structuredContent).not.toHaveProperty("state");
+    expect(waited.structuredContent).not.toHaveProperty("state");
+    expect(executor.snapshot).not.toHaveBeenCalled();
+  });
+
   it("returns compact authenticated state after a native mutation without an extra model call", async () => {
     const executor = mockExecutor();
     executor.click = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["click"];
