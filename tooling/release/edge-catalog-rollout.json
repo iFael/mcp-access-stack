@@ -2,9 +2,9 @@
   "worker": "mcp-access-stack",
   "mode": "catalog",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "f73be3484a9e965f0817cd93e59fb248511e85ed00ccc13e931c18cfe1a49e11",
+  "previousRevision": "fa94ccc59ba6d9f35bac82d5d5d329a54e47e7c9c2b21c5d3f7383987732bfbb",
   "previousToolCount": 134,
-  "targetRevision": "fa94ccc59ba6d9f35bac82d5d5d329a54e47e7c9c2b21c5d3f7383987732bfbb",
+  "targetRevision": "6b77e733e3e3a340b3537d2e8696f194c46c142548204b46339ef0725af5a982",
   "targetToolCount": 134,
   "requiredTools": [
     "memory_context",

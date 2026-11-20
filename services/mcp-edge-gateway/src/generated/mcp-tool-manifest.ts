@@ -7,7 +7,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "follow the returned steps in order; each tool's result names the call after it.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -18,7 +18,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -134,7 +134,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_workspace_context for the workspace; list_workspace_roots first when it is an aggregate without a known root.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -145,7 +145,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -255,7 +255,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "pass one root to get_workspace_context, list_files, search_files or inspect_workspace_git.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -266,7 +266,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -319,7 +319,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_files for the files you need (up to 20 at once).",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -330,7 +330,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -391,7 +391,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "patch_file with its sha256 to change it; read_files for several files.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -402,7 +402,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -518,7 +518,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "patch_files with each sha256 to change them (up to 8 at once).",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -529,7 +529,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -815,7 +815,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "run_workspace_validations, then git_commit_paths when the change is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -826,7 +826,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -891,7 +891,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_file to check it, run_workspace_validations, then git_commit_paths when the change is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -902,7 +902,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -1043,7 +1043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_commit_paths when the change is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -1054,7 +1054,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -1128,7 +1128,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "run_workspace_validations, then git_commit_paths when the change is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -1139,7 +1139,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -1468,7 +1468,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on each item's result; read_files or patch_files for files it found.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -1479,7 +1479,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -1819,7 +1819,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "the tool its nextStep names; mcp_update does the whole update by itself.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -1830,7 +1830,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -2043,7 +2043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "reconcile an uncertain result with the same operationId, never dispatch again.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -2054,7 +2054,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -2404,7 +2404,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2416,7 +2416,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -2741,7 +2741,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -2752,7 +2752,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3124,7 +3124,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_release_state until the candidate is empty (the swap may restart the connection).",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3135,7 +3135,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3239,7 +3239,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "check the plan, then call it again with the plan to delete.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3250,7 +3250,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3407,7 +3407,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3418,7 +3418,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3584,7 +3584,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3595,7 +3595,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3814,7 +3814,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "If the root bootstrap is absent, it must be installed by an authorized host administrator; never use sudo via run_command. After provisioning, call oracle_disk_audit and reconcile its pages.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3825,7 +3825,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -3900,7 +3900,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "service_start only when it is inactive and should run.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -3911,7 +3911,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -4178,7 +4178,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "service_get_status to see it running.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -4189,7 +4189,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -4685,7 +4685,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "fix what it reports with patch_files, then git_commit_paths.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -4696,7 +4696,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -4938,7 +4938,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "fix what it reports with patch_files, then git_commit_paths.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -4949,7 +4949,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -5389,7 +5389,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "when it answers confirmation_required, show the reasons and call again with its confirmationId; when it became a background task, wait_background_task with its taskId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -5400,7 +5400,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -5893,7 +5893,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -5904,7 +5904,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -6317,7 +6317,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "while it runs, end your answer (you are woken when it ends) or wait_background_task; then read_background_task_output.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -6328,7 +6328,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -6673,7 +6673,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "wait_background_tasks for the ones still running; read_background_task_output for the ended ones.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -6684,7 +6684,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -7052,7 +7052,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "still running: end your answer (you are woken when it ends) or call it again; ended: read_background_task_output for its whole output.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -7063,7 +7063,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -7476,7 +7476,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "call it again for the ones still running; read_background_task_output for the ended ones.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -7487,7 +7487,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -8057,7 +8057,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_background_task or wait_background_task with a taskId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -8068,7 +8068,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -8413,7 +8413,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_background_task to see it ended.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -8424,7 +8424,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -8769,7 +8769,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_background_task_output with the returned offsets for more.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -8780,7 +8780,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -8880,7 +8880,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_background_task_output for its answer.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -8891,7 +8891,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -9254,7 +9254,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -9265,7 +9265,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -9365,7 +9365,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "call it again with the returned offsets while the task runs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -9376,7 +9376,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -9823,7 +9823,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_files on the paths found.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -9834,7 +9834,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -9935,7 +9935,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read_files on the paths found.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -9946,7 +9946,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10217,7 +10217,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_create_branch before changing files on main; git_commit_paths for the change.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10228,7 +10228,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10368,7 +10368,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read project instructions; resolve repositoryId via list_repositories and consult memory_context on the Oracle authority when available, then inspect files as needed.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10379,7 +10379,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10514,7 +10514,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10525,7 +10525,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10570,7 +10570,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "list_repositories or list_devices.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10581,7 +10581,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10711,7 +10711,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_repository for one; materialize_repository to work in it.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10722,7 +10722,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10809,7 +10809,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "materialize_repository or sync_repository to work in it.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10820,7 +10820,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -10971,7 +10971,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "materialize_repository.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -10982,7 +10982,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11134,7 +11134,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "after apply, get_repository and list_workspaces; update existing materialization display names separately if needed.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11145,7 +11145,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11250,7 +11250,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "import_repositories for the ones to register.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11261,7 +11261,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11362,7 +11362,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "list_workspaces to work in them.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11373,7 +11373,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11566,7 +11566,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "list_workspaces, then get_workspace_context.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11577,7 +11577,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11823,7 +11823,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "validate first; apply only after confirming the exact materialization and target folder, then get_repository and list_workspaces to verify both routes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11834,7 +11834,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -11971,7 +11971,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "get_workspace_context to work in it.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -11982,7 +11982,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12065,7 +12065,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "revoke_device only for a device the user names.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12076,7 +12076,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12163,7 +12163,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12174,7 +12174,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12271,7 +12271,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "patch_files for the change, then git_commit_paths.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12282,7 +12282,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12357,7 +12357,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "inspect_workspace_git with root set to the returned destination; the original checkout is not synchronized.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12368,7 +12368,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12461,7 +12461,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12472,7 +12472,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12563,7 +12563,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_commit.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12574,7 +12574,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12666,7 +12666,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_stage_paths for the paths to keep.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12677,7 +12677,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12772,7 +12772,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_push_branch.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12783,7 +12783,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -12863,7 +12863,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_push_branch; on reconciliation_required, inspect_workspace_git first.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -12874,7 +12874,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13018,7 +13018,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_push_branch.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13029,7 +13029,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13124,7 +13124,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "inspect_workspace_git to see the branch.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13135,7 +13135,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13255,7 +13255,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_create_pull_request for a new branch; github_start_commit_checks_watch for its CI.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13266,7 +13266,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13388,7 +13388,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_workflow_operation for the release workflow of the tag.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13399,7 +13399,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13520,7 +13520,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13531,7 +13531,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13628,7 +13628,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "pending: github_start_commit_checks_watch and end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13639,7 +13639,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -13858,7 +13858,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "reconcile with the same operationId until the run is observed and completed; never dispatch again.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -13869,7 +13869,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -14016,7 +14016,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -14027,7 +14027,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -14152,7 +14152,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -14163,7 +14163,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -14505,7 +14505,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_wait_commit_checks_watch with a watchId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -14516,7 +14516,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -14851,7 +14851,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "still running: end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -14862,7 +14862,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -15183,7 +15183,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -15194,7 +15194,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -15561,7 +15561,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_start_commit_checks_watch on its head and end your answer; you are woken when CI ends.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -15572,7 +15572,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -15719,7 +15719,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -15730,7 +15730,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -15862,7 +15862,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "github_start_commit_checks_watch on the same PR head after it becomes ready.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -15873,7 +15873,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -15988,7 +15988,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "git_sync_branch to bring main up to date.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -15999,7 +15999,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -16121,7 +16121,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "nextPage for more; job_logs with a jobId from run_jobs to see why a job failed.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -16132,7 +16132,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -16377,7 +16377,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -16388,7 +16388,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -16536,7 +16536,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_open to begin browser work.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -16547,7 +16547,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -16862,7 +16862,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_open.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -16873,7 +16873,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -17188,7 +17188,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_select_tab or browser_open with a tabId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -17199,7 +17199,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -17364,7 +17364,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -17375,7 +17375,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -17642,7 +17642,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "accept or dismiss it with the exact message.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -17653,7 +17653,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -17767,7 +17767,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_screenshot to see the page.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -17778,7 +17778,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -17942,7 +17942,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot for refs, or browser_extract to read the page.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -17953,7 +17953,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -18247,7 +18247,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "call it again with the returned confirmationId once the user approves, then browser_snapshot.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -18258,7 +18258,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -18562,7 +18562,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state; browser_snapshot when you need fresh refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -18573,7 +18573,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -18863,7 +18863,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_click, browser_fill or browser_sequence with its refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -18874,7 +18874,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -19237,7 +19237,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_click or browser_fill with the returned refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -19248,7 +19248,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -19361,7 +19361,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -19372,7 +19372,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -19447,7 +19447,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state; browser_sequence for several known steps.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -19458,7 +19458,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -19692,7 +19692,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -19703,7 +19703,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -19906,7 +19906,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot to check the result.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -19917,7 +19917,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -20193,7 +20193,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -20204,7 +20204,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -20423,7 +20423,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state; browser_sequence for several known steps.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -20434,7 +20434,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -20638,7 +20638,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot to check the result.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -20649,7 +20649,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -20872,7 +20872,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -20883,7 +20883,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -21087,7 +21087,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "act on the returned state.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -21098,7 +21098,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -21302,7 +21302,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "STATE_NOT_REACHED with forUser: call it again with forUser; reached: act on the returned state.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -21313,7 +21313,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -21521,7 +21521,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_finish_task when the browser work is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -21532,7 +21532,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -21691,7 +21691,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot before more steps after a navigation.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -21702,7 +21702,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -22812,7 +22812,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_finish_task when the browser work is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -22823,7 +22823,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -22988,7 +22988,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_frame_extract to check the result.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -22999,7 +22999,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -23220,7 +23220,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_frame_extract to check the result.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -23231,7 +23231,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -23441,7 +23441,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_dom_index for frame refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -23452,7 +23452,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -23717,7 +23717,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_frame_sequence with its lref_ refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -23728,7 +23728,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -24015,7 +24015,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "on confirmation_required, call it again with the confirmationId on the pending step.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -24026,7 +24026,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -24993,7 +24993,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_dom_index for refs.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -25004,7 +25004,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -25949,7 +25949,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -25960,7 +25960,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -26104,7 +26104,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -26115,7 +26115,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -26382,7 +26382,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -26393,7 +26393,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -26660,7 +26660,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_finish_task when the task is done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -26671,7 +26671,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -26858,7 +26858,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -26869,7 +26869,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -26980,7 +26980,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "status=pending: call it again with the planId alone; approved: browser_open with the task's taskId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -26991,7 +26991,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -27366,7 +27366,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "openai/widgetAccessible": true,
@@ -27379,7 +27379,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -27908,7 +27908,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -27919,7 +27919,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28006,7 +28006,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_snapshot to check the upload.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28017,7 +28017,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28140,7 +28140,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28151,7 +28151,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28247,7 +28247,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "action=inspect with an index for one request; capture=stop when done.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28258,7 +28258,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28376,7 +28376,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28387,7 +28387,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28516,7 +28516,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28527,7 +28527,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28638,7 +28638,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28649,7 +28649,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28733,7 +28733,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28744,7 +28744,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28882,7 +28882,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "inspect first, then grant once with the observed SHA-256 and operationId; inspect again to confirm effective policy before using github_mark_pull_request_ready.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28893,7 +28893,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -28957,7 +28957,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -28968,7 +28968,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -29032,7 +29032,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "read subsequent pages to collect the verified off-host archive; never confuse disaster recovery evidence with live Oracle memory.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -29043,7 +29043,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -29216,7 +29216,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "verify relevant claims against current Git, CI and runtime evidence; use memory_update with CAS after a user decision or meaningful checkpoint.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -29227,7 +29227,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -29594,7 +29594,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "memory_context to verify the updated revision before proceeding.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v11.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v12.html",
       "openai/widgetAccessible": true,
       "securitySchemes": [
         {
@@ -29605,7 +29605,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v11.html"
+        "resourceUri": "ui://mcp-v3/progress-v12.html"
       }
     },
     "annotations": {
@@ -29867,15 +29867,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "fa94ccc59ba6d9f35bac82d5d5d329a54e47e7c9c2b21c5d3f7383987732bfbb",
-  "serverVersion": "0.4.0-catalog.cfa94ccc59ba6.sa15e528da70d",
+  "contractRevision": "6b77e733e3e3a340b3537d2e8696f194c46c142548204b46339ef0725af5a982",
+  "serverVersion": "0.4.0-catalog.c6b77e733e3e3.sa15e528da70d",
   "toolCount": 134,
   "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cfa94ccc59ba6.sa15e528da70d"
+  "version": "0.4.0-catalog.c6b77e733e3e3.sa15e528da70d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";
