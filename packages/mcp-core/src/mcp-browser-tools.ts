@@ -264,6 +264,14 @@ const browserVideoToolResultSchema = z
     rejectDefinedFields(result, ["active"], context, "video stop");
   });
 
+// One bounded native observation after an action, without a second ChatGPT tool call.
+// Never auto-observe handback/wait-for-user or operations with incompatible result schemas.
+const ACTIONS_WITH_NATIVE_STATE = new Set<BrowserToolName>([
+  "browser_click", "browser_hover", "browser_drag", "browser_scroll",
+  "browser_fill", "browser_form_input", "browser_type", "browser_press", "browser_sequence",
+  "browser_wait",
+]);
+
 export function registerBrowserTools(
   server: McpServer,
   executor: BrowserExecutor,
@@ -307,14 +315,52 @@ export function registerBrowserTools(
             );
           }
           const parsedInput = parsedInputResult.data;
+          const perform = async (context?: OperationContext): Promise<unknown> => {
+            const performed = await definition.run(parsedInput, context);
+            const withState = ACTIONS_WITH_NATIVE_STATE.has(definition.name);
+            const withTabState = ["browser_navigate", "browser_go_back", "browser_go_forward",
+              "browser_open"].includes(definition.name);
+            if ((!withState && !withTabState) ||
+                // A user handback is a strict no-observation boundary.
+                (definition.name === "browser_wait" &&
+                  typeof (parsedInput as { forUser?: unknown })?.forUser === "string") ||
+                typeof performed !== "object" || performed === null) return performed;
+            const action = performed as Record<string, unknown>;
+            const tab = action.tab as { tabId?: unknown } | undefined;
+            const tabId = withState && action.completed === true ? action.tabId
+              : withTabState ? tab?.tabId : undefined;
+            if (typeof tabId !== "string" || action.state !== undefined) return performed;
+            let state: c.BrowserStateUpdate;
+            try {
+              const existing = c.browserSnapshotResultSchema.safeParse(action.snapshot);
+              const observed = existing.success && existing.data.state
+                ? existing.data
+                : await executor.snapshot({
+                  tabId, filter: "interactive", maxChars: 3500,
+                }, context);
+              // Never invent a page identity for a legacy snapshot: a same-URL
+              // reload could otherwise make stale element refs look fresh.
+              state = observed.state ?? (observed.pageInstanceId
+                ? { documentId: observed.pageInstanceId, revision: 0,
+                    kind: "full", snapshot: observed.content, refsValid: true }
+                : { documentId: "unavailable", revision: 0,
+                    kind: "unavailable", refsValid: false });
+            } catch {
+              // The mutation has already happened: report unobservable state,
+              // never turn it into a retryable mutation error or invent fresh refs.
+              state = { documentId: "unavailable", revision: 0,
+                kind: "unavailable", refsValid: false };
+            }
+            return { ...action, state };
+          };
           const executed = options.operationContextFactory
             ? await withToolOperationContext(
                 options.operationContextFactory,
                 extra,
                 QUICK_OPERATION_TIMEOUT_MS,
-                (context) => definition.run(parsedInput, context),
+                (context) => perform(context),
               )
-            : await definition.run(parsedInput);
+            : await perform();
           const structuredExecuted = browserStructuredOutput(
             definition.name,
             executed,
@@ -497,7 +543,7 @@ function definitions(
       () => e.press(assumeParsed(v)),
       (activeContext) => e.press(assumeParsed(v), activeContext),
     )),
-    d("browser_wait", "Waits for time, text, or an element ref and returns the resulting semantic state. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait. In personal Chrome, forUser hands the tab to the user for a login, CAPTCHA or a step only they should do: Chrome notifies them with that reason, MCP neither reads nor acts in the tab meanwhile, and the call completes when they click 'Pronto, pode continuar'. On STATE_NOT_REACHED they are still busy; call again with forUser to keep waiting, then take a fresh snapshot.", c.browserWaitInputSchema, c.browserActionResultSchema, true, (v, context) => callWithOptionalContext(
+    d("browser_wait", "Waits for time, text, URL, disappearance of text (absentText), or an element ref; ordinary waits return a compact semantic state in the same call. Use directly for wait-only work; browser_sequence is statically mutating even when every step is a wait. In personal Chrome, forUser hands the tab to the user for a login, CAPTCHA or a step only they should do: Chrome notifies them with that reason, MCP neither reads nor acts in the tab meanwhile, and the call completes when they click 'Pronto, pode continuar'. On STATE_NOT_REACHED they are still busy; call again with forUser to keep waiting, then take a fresh snapshot.", c.browserWaitInputSchema, c.browserActionResultSchema, true, (v, context) => callWithOptionalContext(
       context,
       () => e.wait(assumeParsed(v)),
       (activeContext) => e.wait(assumeParsed(v), activeContext),
@@ -572,7 +618,7 @@ function definitions(
       () => e.finishTask(assumeParsed(v)),
       (activeContext) => e.finishTask(assumeParsed(v), activeContext),
     ), true),
-    d("browser_plan", "Personal Chrome only. Before acting for a task, show the user its plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, tabs the user drags into the task's Chrome tab group, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first. Approval starts the task's tab group with a first tab that the task's first browser_open uses, and resumes a paused task.", c.browserPlanInputSchema, c.browserPlanResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_plan", "Personal Chrome only. If the user enabled mandatory plan approval or the task needs a scoped grant, show the plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, tabs the user drags into the task's Chrome tab group, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first. Approval starts the task's tab group with a first tab that the task's first browser_open uses, and resumes a paused task.", c.browserPlanInputSchema, c.browserPlanResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.plan(assumeParsed(v)),
       (activeContext) => e.plan(assumeParsed(v), activeContext),
@@ -919,7 +965,11 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
     return `tabId=${String(result.tabId)}${stateSummary}`;
   }
   if (typeof result.tab === "object" && result.tab) {
-    return `tabId=${String((result.tab as { tabId?: unknown }).tabId ?? "unknown")}`;
+    const state = asRecord(result.state);
+    const stateSummary = typeof state.revision === "number"
+      ? `; state=${String(state.kind)}; revision=${String(state.revision)}; refsValid=${String(state.refsValid)}`
+      : "";
+    return `tabId=${String((result.tab as { tabId?: unknown }).tabId ?? "unknown")}${stateSummary}`;
   }
   return `${name} completed.`;
 }

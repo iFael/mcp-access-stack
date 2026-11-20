@@ -263,6 +263,10 @@ describe("browser upload file contract", () => {
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login" }).success).toBe(true);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", timeoutMs: 50_000 }).success).toBe(true);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", text: "Bem-vindo" }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", url: "https://example.test/app" }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", absentText: "Loading" }).success).toBe(true);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", url: "not-a-url" }).success).toBe(false);
+    expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "Faça login", absentText: "Loading" }).success).toBe(false);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: " " }).success).toBe(false);
     expect(browserWaitInputSchema.safeParse({ tabId: "personal:1", forUser: "x".repeat(201) }).success).toBe(false);
   });
@@ -452,6 +456,105 @@ async function callTool(
 }
 
 describe("registerBrowserTools", () => {
+  it("returns compact authenticated state after a native mutation without an extra model call", async () => {
+    const executor = mockExecutor();
+    executor.click = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["click"];
+    executor.snapshot = jest.fn(async ({ tabId }) => ({
+      tabId, url: "https://example.test/", pageInstanceId: "doc1",
+      content: '- button "Continue" [ref=p-1]',
+      refs: [{ ref: "p-1", role: "button", name: "Continue" }],
+      state: { documentId: "doc1", revision: 4, kind: "full" as const,
+        snapshot: '- button "Continue" [ref=p-1]', refsValid: true },
+    })) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const result = await callTool(server, "browser_click", { tabId: "personal:7", ref: "p-1" });
+    expect(result.structuredContent).toMatchObject({
+      completed: true, state: { documentId: "doc1", revision: 4, kind: "full", refsValid: true },
+    });
+    expect(executor.snapshot).toHaveBeenCalledWith({
+      tabId: "personal:7", filter: "interactive", maxChars: 3500,
+    }, undefined);
+  });
+
+  it("observes navigation state in the same call without changing the browser tab contract", async () => {
+    const executor = mockExecutor();
+    executor.navigate = jest.fn(async ({ tabId }) => ({ tab: {
+      tabId, taskId: "task-7", lifecycle: "task-scoped" as const, ownership: "mcp" as const,
+      purpose: "test", reusable: true, protected: false, sticky: false,
+      createdAt: collectedAt, lastUsedAt: collectedAt,
+      url: "https://example.test/next",
+    } })) as BrowserExecutor["navigate"];
+    executor.snapshot = jest.fn(async ({ tabId }) => ({
+      tabId, url: "https://example.test/next", pageInstanceId: "doc-next",
+      content: '- link "Next" [ref=p-1]', refs: [{ ref: "p-1", role: "link", name: "Next" }],
+      state: { documentId: "doc-next", revision: 2, kind: "full" as const,
+        snapshot: '- link "Next" [ref=p-1]', refsValid: true },
+    })) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const result = await callTool(server, "browser_navigate", {
+      tabId: "personal:7", url: "https://example.test/next",
+    });
+    expect(result.structuredContent).toMatchObject({
+      tab: { tabId: "personal:7", url: "https://example.test/next" },
+      state: { documentId: "doc-next", revision: 2, refsValid: true },
+    });
+    expect(executor.snapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("observes ordinary waits but never reads a user-handback tab", async () => {
+    const executor = mockExecutor();
+    executor.wait = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["wait"];
+    executor.snapshot = jest.fn(async ({ tabId }) => ({
+      tabId, url: "https://example.test/", pageInstanceId: "ready",
+      content: '- button "Ready" [ref=p-1]',
+      refs: [{ ref: "p-1", role: "button", name: "Ready" }],
+      state: { documentId: "ready", revision: 5, kind: "full" as const,
+        snapshot: '- button "Ready" [ref=p-1]', refsValid: true },
+    })) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const ordinary = await callTool(server, "browser_wait", { tabId: "personal:7", text: "Ready" });
+    expect(ordinary.structuredContent).toMatchObject({
+      state: { revision: 5, kind: "full" },
+    });
+    expect(executor.snapshot).toHaveBeenCalledTimes(1);
+    const handback = await callTool(server, "browser_wait", {
+      tabId: "personal:7", forUser: "Faça login",
+    });
+    expect(handback.structuredContent).toEqual({ tabId: "personal:7", completed: true });
+    expect(executor.snapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not falsely certify refs from a legacy snapshot without page identity", async () => {
+    const executor = mockExecutor();
+    executor.click = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["click"];
+    executor.snapshot = jest.fn(async ({ tabId }) => ({
+      tabId, url: "https://example.test/", content: '- button "Next" [ref=legacy-1]',
+      refs: [{ ref: "legacy-1", role: "button", name: "Next" }],
+    })) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const result = await callTool(server, "browser_click", { tabId: "personal:7", ref: "legacy-1" });
+    expect(result.structuredContent).toMatchObject({
+      completed: true, state: { kind: "unavailable", refsValid: false },
+    });
+  });
+
+  it("reports unavailable observation rather than an ambiguous mutation failure", async () => {
+    const executor = mockExecutor();
+    executor.fill = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["fill"];
+    executor.snapshot = jest.fn(async () => { throw new Error("Page closed after input"); }) as BrowserExecutor["snapshot"];
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, executor);
+    const result = await callTool(server, "browser_fill", { tabId: "personal:7", ref: "p-2", value: "private" });
+    expect(result.structuredContent).toMatchObject({
+      completed: true, state: { kind: "unavailable", refsValid: false },
+    });
+    expect(JSON.stringify(result)).not.toContain("private");
+  });
+
   it("forwards the network start/read/stop and detail options through the public browser_network tool", async () => {
     const executor = mockExecutor();
     const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });

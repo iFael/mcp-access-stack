@@ -1,11 +1,29 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   clickAuthorizationAction,
+  BrowserInteractionContextService,
   containsBrowserEnterKey,
   validateBrowserKeySequence,
 } from "../src/browser-interaction.js";
 
 describe("browser action-key classification", () => {
+  it("does not ask to confirm ordinary navigation or dialog dismissal", () => {
+    const interactions = new BrowserInteractionContextService();
+    const context = { tabId: "personal:7", url: "https://trello.com/b/test", title: "Automation" };
+    for (const name of ["Mensagens", "Posts", "Cancelar", "Cancel"]) {
+      expect(interactions.prepareDangerousAction(context, { ref: "r1", role: "button", name }, "click")).toBeUndefined();
+    }
+    expect(interactions.prepareDangerousAction(
+      { ...context, url: "https://example.test/close-account", title: "Close account" },
+      { ref: "r1", role: "button", name: "Cancelar" }, "click",
+    )).toMatchObject({ category: "delete-or-cancel" });
+    expect(interactions.prepareDangerousAction(context,
+      { ref: "r2", role: "button", name: "Cancelar assinatura" }, "click",
+    )).toMatchObject({ category: "delete-or-cancel" });
+    expect(interactions.prepareDangerousAction(context,
+      { ref: "r3", role: "button", name: "Enviar mensagem" }, "click",
+    )).toMatchObject({ category: "send-message" });
+  });
   it("recognizes Enter in single keys, chords and sequences", () => {
     for (const key of ["Enter", "Return", "NumpadEnter", "Ctrl+Enter", "Control+Shift+Return", "Tab Ctrl+Enter", "Alt+A NumpadEnter"]) {
       expect(containsBrowserEnterKey(key)).toBe(true);

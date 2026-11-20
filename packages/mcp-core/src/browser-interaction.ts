@@ -292,6 +292,11 @@ function classifyDangerousAction(
   context?: Pick<BrowserTab, "url" | "title">,
 ): BrowserConfirmationCategory | undefined {
   const value = foldText(`${reference.role} ${reference.name}`);
+  const label = foldText(reference.name).trim();
+  // A standalone Cancel button normally dismisses a dialog. Never suppress
+  // a cancel/delete action in an account-cancellation context or with an object.
+  if ((label === "cancel" || label === "cancelar") &&
+      classifyPageContext(context) !== "delete-or-cancel") return undefined;
   const byLabel = classifyDangerousLabel(value);
   // A control that only saves or goes on is as risky as the page it is on:
   // "Confirmar" on a checkout is a payment, "Continue" on a close-account page

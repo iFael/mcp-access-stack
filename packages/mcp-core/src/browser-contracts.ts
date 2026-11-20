@@ -570,18 +570,22 @@ export const browserWaitInputSchema = z
     tabId: tabIdSchema,
     timeoutMs: z.number().int().positive().max(120_000).optional(),
     text: z.string().min(1).max(10_000).optional(),
+    absentText: z.string().min(1).max(10_000).optional(),
+    url: z.url().optional(),
     ref: z.string().min(1).max(128).optional(),
     // Hands the tab to the user with this reason until they hand it back.
     forUser: z.string().trim().min(1).max(200).optional(),
     knownRevision: knownRevisionSchema,
   })
   .strict()
-  .refine((input) => input.text !== undefined || input.ref !== undefined || input.timeoutMs !== undefined ||
+  .refine((input) => input.text !== undefined || input.absentText !== undefined ||
+    input.url !== undefined || input.ref !== undefined || input.timeoutMs !== undefined ||
     input.forUser !== undefined, {
-    message: "Provide timeoutMs, text, ref, or forUser.",
+    message: "Provide timeoutMs, text, absentText, url, ref, or forUser.",
   })
-  .refine((input) => input.forUser === undefined || (input.text === undefined && input.ref === undefined), {
-    message: "forUser waits for the user and cannot be combined with text or ref.",
+  .refine((input) => input.forUser === undefined || (input.text === undefined &&
+    input.absentText === undefined && input.url === undefined && input.ref === undefined), {
+    message: "forUser waits for the user and cannot be combined with page conditions.",
   });
 export type BrowserWaitInput = z.infer<typeof browserWaitInputSchema>;
 

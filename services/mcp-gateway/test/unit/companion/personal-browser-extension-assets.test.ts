@@ -689,6 +689,8 @@ describe("personal browser extension assets", () => {
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
     let pageUrl = "https://example.com/";
     const context = vm.createContext({
+      revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown, _input: unknown,
+        point: unknown) => point,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -738,7 +740,7 @@ describe("personal browser extension assets", () => {
     vm.runInContext(extractFunction(serviceWorker, "probePersonalPixelTarget"), context);
     const probe = vm.runInContext("probePersonalPixelTarget", context) as
       (...args: unknown[]) => Record<string, unknown>;
-    expect(probe(20, 30, location.href)).toEqual({ x: 20, y: 30 });
+    expect(probe(20, 30, location.href)).toMatchObject({ x: 20, y: 30, width: 800, height: 600 });
     expect(probe(1, 1, location.href)).toMatchObject({ empty: true });
     expect(probe(900, 30, location.href)).toMatchObject({ outside: true });
     expect(probe(20, 30, "https://older.example/")).toMatchObject({ stale: true });
@@ -1174,7 +1176,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     let clock = 0;
     const context = vm.createContext({ performance: { now: () => clock },
-      throwIfAborted() {}, fill: async () => { clock += 4; return { completed: true }; },
+      throwIfAborted() {}, settlePersonalDom: async () => true, fill: async () => { clock += 4; return { completed: true }; },
       snapshot: async () => { clock += 7; return { content: "secret-dom", refs: [] }; } });
     vm.runInContext(extractFunction(serviceWorker, "sequence"), context);
     const sequence = vm.runInContext("sequence", context) as (input: unknown, signal: unknown, timing: Record<string, number>) => Promise<unknown>;
@@ -1199,6 +1201,8 @@ describe("personal browser extension assets", () => {
       Number, String, RegExp, Object, Array,
       chromeTabIdFrom: () => 7,
       probeGuardedElement: () => ({ x: 30, y: 40 }),
+      revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown,
+        _input: unknown, point: unknown) => point,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -1326,6 +1330,56 @@ describe("personal browser extension assets", () => {
     expect(probe(ref.ref, guard, false)).toMatchObject({ error: "obscured" });
   });
 
+  it("returns a snapshot without a semantic point target for safe pixel confirmation", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      crypto: { randomUUID: () => "11111111-1111-4111-8111-111111111111" },
+      axTargetsByTab: new Map(),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { scripting: { executeScript: async ({ func }: { func: { name: string } }) =>
+        [{ result: func.name === "snapshotPage"
+          ? { url: "https://example.test/", pageInstanceId: "page1", content: "Canvas", refs: [] }
+          : null }] } },
+    });
+    vm.runInContext("function snapshotPage(){} function inspectPointInDocument(){}", context);
+    vm.runInContext(extractFunction(serviceWorker, "snapshot"), context);
+    const run = vm.runInContext("snapshot", context) as (input: unknown) => Promise<unknown>;
+    await expect(run({ tabId: "personal:7", point: { x: 10, y: 10 } }))
+      .resolves.toMatchObject({ tabId: "personal:7", refs: [] });
+  });
+
+  it("retains authoritative refs in compact snapshots without unrelated page text", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const dom = createDom([fakeElement({ tagName: "BUTTON", text: "Open" })]);
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as
+      (generation: string, compact?: boolean) => { content: string; refs: unknown[] };
+    expect(snapshot("full").content).toContain("Login page");
+    const concise = snapshot("compact", true);
+    expect(concise.content).not.toContain("Login page");
+    expect(concise.content).toContain("button");
+    expect(concise.refs).toHaveLength(1);
+  });
+
+  it("waits for DOM quiescence before a requested final sequence snapshot", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const order: string[] = [];
+    const context = vm.createContext({
+      performance: { now: () => 0 },
+      throwIfAborted: () => undefined,
+      click: async () => { order.push("click"); return { completed: true }; },
+      settlePersonalDom: async () => { order.push("settle"); },
+      snapshot: async () => { order.push("snapshot"); return { content: "", refs: [] }; },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "sequence"), context);
+    const sequence = vm.runInContext("sequence", context) as (input: unknown) => Promise<unknown>;
+    await sequence({ tabId: "personal:7", steps: [
+      { action: "click", ref: "p-7", guard: { ref: "p-7" } },
+    ], finalSnapshot: true });
+    expect(order).toEqual(["click", "settle", "snapshot"]);
+  });
+
   it("hit-tests viewport coordinates against authoritative isolated-world refs", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const button = {
@@ -1356,6 +1410,11 @@ describe("personal browser extension assets", () => {
     expect(probe("p-7", guard, false, 150, 40)).toMatchObject({ error: "point_outside_target" });
     expect(probe("p-7", { ...guard, name: "Wrong" }, false, 21, 40))
       .toMatchObject({ error: "target_changed" });
+    vm.runInContext('location.href = "https://example.test/#section"', context);
+    expect(probe("p-7", guard, false, 21, 40)).toMatchObject({ x: 21, y: 40 });
+    vm.runInContext('location.href = "https://example.test/other#section"', context);
+    expect(probe("p-7", guard, false, 21, 40)).toMatchObject({ error: "stale_page" });
+    vm.runInContext('location.href = "https://example.test/"', context);
     button.tagName = "CANVAS";
     vm.runInContext('globalThis.__mcpV3OwnedRefMetadata.set("p-7", {ref:"p-7",role:"canvas",name:"Help"})', context);
     expect(inspect(21, 40)).toEqual({ ref: "p-7", role: "canvas", name: "Help" });

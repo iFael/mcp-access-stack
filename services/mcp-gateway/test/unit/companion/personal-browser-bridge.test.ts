@@ -1085,6 +1085,76 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("reclassifies a changed button before retrying any click", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    let snapshots = 0;
+    let attempts = 0;
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      if (request.operation === "snapshot") {
+        const name = snapshots++ === 0 ? "Continue" : "Excluir pedido";
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId, url: "https://example.test/", pageInstanceId: "same-page",
+            content: '- button "' + name + '" [ref=p-7]',
+            refs: [{ ref: "p-7", role: "button", name }] } }));
+      } else if (request.operation === "click") {
+        attempts += 1;
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: false,
+          error: { code: "BROWSER_CONFIRMATION_INVALID",
+            message: "Target preflight: target_changed. No click was dispatched." } }));
+      }
+    };
+    extension.on("message", respond);
+    try {
+      await bridge.snapshot({ tabId });
+      await expect(bridge.click({ tabId, ref: "p-7" }))
+        .rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      expect(attempts).toBe(1);
+      expect(snapshots).toBe(2);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("retries a harmless renamed live ref exactly once with a fresh guard", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    let snapshots = 0;
+    const clicks: Array<Record<string, unknown>> = [];
+    const respond = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      if (request.operation === "snapshot") {
+        const name = snapshots++ === 0 ? "Next" : "Open";
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId, url: "https://example.test/", pageInstanceId: "same-page",
+            content: '- button "' + name + '" [ref=p-7]',
+            refs: [{ ref: "p-7", role: "button", name }] } }));
+      } else if (request.operation === "click") {
+        clicks.push(request.input as Record<string, unknown>);
+        const first = clicks.length === 1;
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: !first,
+          ...(first ? { error: { code: "BROWSER_CONFIRMATION_INVALID",
+            message: "Target preflight: target_changed. No click was dispatched." } }
+            : { result: { tabId, completed: true } }) }));
+      }
+    };
+    extension.on("message", respond);
+    try {
+      await bridge.snapshot({ tabId });
+      await expect(bridge.click({ tabId, ref: "p-7" })).resolves.toMatchObject({ completed: true });
+      expect(clicks).toHaveLength(2);
+      expect(clicks[0]).toMatchObject({ guard: { name: "Next" } });
+      expect(clicks[1]).toMatchObject({ guard: { name: "Open" } });
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
   it("logs a safe peer error code with a terminal but never its private message", async () => {
     const events: Record<string, unknown>[]=[];
     const { bridge,extension,close }=await startAuthenticatedBridge(e => events.push(e));
