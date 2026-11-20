@@ -502,7 +502,7 @@ describe("registerBrowserTools", () => {
 
   it("observes navigation state in the same call without changing the browser tab contract", async () => {
     const executor = mockExecutor();
-    executor.navigate = jest.fn(async ({ tabId }) => ({ tab: {
+    executor.navigate = jest.fn(async ({ tabId }: Parameters<BrowserExecutor["navigate"]>[0]) => ({ tab: {
       tabId, taskId: "task-7", lifecycle: "task-scoped" as const, ownership: "mcp" as const,
       purpose: "test", reusable: true, protected: false, sticky: false,
       createdAt: collectedAt, lastUsedAt: collectedAt,
@@ -567,7 +567,7 @@ describe("registerBrowserTools", () => {
 
   it("reports unavailable observation rather than an ambiguous mutation failure", async () => {
     const executor = mockExecutor();
-    executor.fill = jest.fn(async ({ tabId }) => ({ tabId, completed: true as const })) as BrowserExecutor["fill"];
+    executor.fill = jest.fn(async ({ tabId }: Parameters<BrowserExecutor["fill"]>[0]) => ({ tabId, completed: true as const })) as BrowserExecutor["fill"];
     executor.snapshot = jest.fn(async () => { throw new Error("Page closed after input"); }) as BrowserExecutor["snapshot"];
     const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
     registerBrowserTools(server, executor);
