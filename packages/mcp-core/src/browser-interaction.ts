@@ -302,7 +302,7 @@ function classifyDangerousAction(
   // destructive/payment/send links and consent controls still keep their guard.
   const role = reference.role.toLowerCase();
   const pageRisk = classifyPageContext(context);
-  if (role === "link" && pageRisk && PROCEED_LABEL.test(label)) return pageRisk;
+  if (role === "link" && pageRisk && PROCEED_LABEL.exec(label)?.[0] === label) return pageRisk;
   if (role === "link" && (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
   if (["checkbox", "switch"].includes(role) &&
       (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
