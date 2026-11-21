@@ -70,10 +70,7 @@ export class FileService {
   ): Promise<ReadFileResult> {
     const security = new PathSecurity(workspace);
     const authorized = await security.authorizeExistingFileRead(input.path, "read_file");
-    const contents = await readTextFile(
-      authorized.canonicalPath,
-      workspace.limits.maxFileBytes,
-    );
+    const contents = await readTextFile(authorized.canonicalPath);
     const lines = contents.text.split(/\r?\n/);
     const startLine = input.startLine ?? 1;
     const requestedEndLine = input.endLine ?? lines.length;
@@ -152,9 +149,6 @@ export class FileService {
     const security = new PathSecurity(workspace);
     const authorized = await security.authorizeWriteTarget(input.path);
     const contentBytes = Buffer.byteLength(input.content, "utf8");
-    if (contentBytes > workspace.limits.maxFileBytes) {
-      throw new AppError("FILE_TOO_LARGE", "File exceeds the configured size limit.");
-    }
 
     const parentDirectory = path.dirname(authorized.absolutePath);
     await mkdir(parentDirectory, { recursive: true });
@@ -329,7 +323,7 @@ export class FileService {
       throw new AppError("FILE_NOT_FOUND", "Patch target must already exist.");
     }
 
-    const contents = await readTextFile(authorized.absolutePath, workspace.limits.maxFileBytes);
+    const contents = await readTextFile(authorized.absolutePath);
     if (contents.sha256 !== input.expectedSha256.toLocaleLowerCase("en-US")) {
       throw new AppError(
         "INVALID_ARGUMENT",
@@ -355,9 +349,6 @@ export class FileService {
     }
 
     const output = encodeTextPreservingFormat(patched, contents.encoding, contents.bom);
-    if (output.byteLength > workspace.limits.maxFileBytes) {
-      throw new AppError("FILE_TOO_LARGE", "Patched file exceeds the configured size limit.");
-    }
     const sha256After = hashBuffer(output);
     const changed = sha256After !== contents.sha256;
 

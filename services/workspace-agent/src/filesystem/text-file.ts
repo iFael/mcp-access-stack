@@ -20,9 +20,8 @@ export interface TextFileContents {
 
 export async function readTextFile(
   absolutePath: string,
-  maxFileBytes: number,
 ): Promise<TextFileContents> {
-  const buffer = await readTextBuffer(absolutePath, maxFileBytes);
+  const buffer = await readTextBuffer(absolutePath);
   const decoded = decodeBufferToText(buffer);
   return {
     text: decoded.text,
@@ -122,14 +121,16 @@ export function encodeTextPreservingFormat(
 
 async function readTextBuffer(
   absolutePath: string,
-  maxFileBytes: number,
+  maxFileBytes?: number,
 ): Promise<Buffer> {
-  const fileStat = await stat(absolutePath);
-  if (fileStat.size > maxFileBytes) {
+  if (maxFileBytes !== undefined && (await stat(absolutePath)).size > maxFileBytes) {
     throw new AppError("FILE_TOO_LARGE", "File exceeds the configured size limit.");
   }
 
   const buffer = await readFile(absolutePath);
+  if (maxFileBytes !== undefined && buffer.byteLength > maxFileBytes) {
+    throw new AppError("FILE_TOO_LARGE", "File exceeds the configured size limit.");
+  }
   if (buffer.includes(0) && !hasUtf16Bom(buffer)) {
     throw new AppError("BINARY_FILE", "Binary files are not supported.");
   }
