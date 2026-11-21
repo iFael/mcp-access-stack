@@ -15,6 +15,8 @@ const FILES = [
   "node_modules/@vs-code-gpt/shared/dist/index.js",
   "node_modules/@vs-code-gpt/local-agent/package.json",
   "node_modules/@vs-code-gpt/local-agent/dist/campaign/campaign-service-cli.js",
+  "node_modules/@vs-code-gpt/local-agent/dist/campaign/campaign-g4-probe-cli.js",
+  "node_modules/@vs-code-gpt/local-agent/dist/campaign/campaign-g4-safety-probe.js",
   "node_modules/@vs-code-gpt/local-agent/dist/campaign/trusted-campaign-service-entrypoint.js",
 ];
 
