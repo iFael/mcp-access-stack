@@ -8,7 +8,7 @@ import YAML from "yaml";
 import {
   verifyLocalCandidate, requirePublisherPrerequisites, verifyNoTrafficChange, parseInput,
   writeStageSecretFile, verifyVersionSecretBinding,
-  resolvePins, classifyVersionLookupStatus,
+  resolvePins, classifyVersionLookupStatus, immutableVersion,
 } from "./stage-edge-cas-candidate.mjs";
 
 test("classifies Cloudflare immutable-version lookup failures without exposing response bodies", () => {
@@ -16,6 +16,7 @@ test("classifies Cloudflare immutable-version lookup failures without exposing r
   assert.equal(classifyVersionLookupStatus(401), "VERSION_LOOKUP_AUTH_REQUIRED");
   assert.equal(classifyVersionLookupStatus(403), "VERSION_LOOKUP_FORBIDDEN");
   assert.equal(classifyVersionLookupStatus(404), "VERSION_LOOKUP_NOT_FOUND");
+  assert.equal(classifyVersionLookupStatus(408), "VERSION_LOOKUP_TIMEOUT");
   assert.equal(classifyVersionLookupStatus(429), "VERSION_LOOKUP_RATE_LIMITED");
   assert.equal(classifyVersionLookupStatus(503), "VERSION_LOOKUP_UNAVAILABLE");
 });
@@ -28,6 +29,82 @@ const previousRevision = CATALOG.previousRevision;
 const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const config = JSON.parse(await readFile(path.join(base, "services/mcp-edge-gateway/wrangler.jsonc"), "utf8"));
 const manifest = await readFile(path.join(base, "services/mcp-edge-gateway/src/generated/mcp-tool-manifest.ts"), "utf8");
+
+
+test("post-upload GET retries only bounded transient responses, with no second upload", async () => {
+  const id="9a4d7ba4-7cdf-42b8-aab6-ab700ea855f8";
+  const input={accountId:"c".repeat(32),token:"synthetic-token-only"};
+  const statuses=[404,429,503,200], delays=[], requests=[];
+  const payload={success:true,result:{id,resources:{
+    script:{etag:"a".repeat(32)},
+    bindings:{MCP_CONTRACT_PREPARE_TOKEN:{type:"secret_text"}}
+  }}};
+  const verified=await immutableVersion(input,id,{
+    fetchImpl:async(url,opts)=>{
+      requests.push({url,method:opts.method});
+      return {status:statuses.shift(),text:async()=>JSON.stringify(payload)};
+    },
+    sleep:async(ms)=>{delays.push(ms);}
+  });
+  assert.equal(verified,id);
+  assert.deepEqual(delays,[1000,2000,4000]);
+  assert.equal(requests.length,4);
+  assert.ok(requests.every(x=>x.method==="GET"&&x.url.endsWith("/versions/"+id)));
+});
+
+test("post-upload GET tolerates bounded transport failures without changing the target", async () => {
+  const id = "9a4d7ba4-7cdf-42b8-aab6-ab700ea855f8";
+  const input = { accountId: "c".repeat(32), token: "synthetic-token-only" };
+  const statuses = [null, 408, 200];
+  const delays = [];
+  const payload = { success: true, result: {
+    id, resources: { script: { etag: "a".repeat(32) },
+      bindings: { MCP_CONTRACT_PREPARE_TOKEN: { type: "secret_text" } } },
+  } };
+  let requests = 0;
+  const verified = await immutableVersion(input, id, {
+    fetchImpl: async (url, opts) => {
+      requests++;
+      assert.equal(opts.method, "GET");
+      assert.ok(url.endsWith("/versions/" + id));
+      const status = statuses.shift();
+      if (status === null) throw new Error("transient network error");
+      return { status, text: async () => JSON.stringify(payload) };
+    },
+    sleep: async ms => { delays.push(ms); },
+  });
+  assert.equal(verified, id);
+  assert.equal(requests, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+});
+
+test("post-upload GET fails closed on auth, malformed metadata and persistent absence",async()=>{
+  const id="9a4d7ba4-7cdf-42b8-aab6-ab700ea855f8";
+  const input={accountId:"c".repeat(32),token:"synthetic-token-only"};
+  for(const [status,code] of [[401,"AUTH_REQUIRED"],[403,"FORBIDDEN"],[400,"FAILED"]]){
+    let calls=0;
+    await assert.rejects(immutableVersion(input,id,{
+      fetchImpl:async()=>{calls++;return {status};},
+      sleep:async()=>{throw Error("no retry on permanent errors");},
+    }),new RegExp("EDGE_CAS_STAGE_VERSION_LOOKUP_"+code));
+    assert.equal(calls,1);
+  }
+  let calls=0;const delays=[];
+  await assert.rejects(immutableVersion(input,id,{
+    fetchImpl:async()=>{calls++;return {status:404};},
+    sleep:async ms=>{delays.push(ms);},
+  }),/EDGE_CAS_STAGE_VERSION_LOOKUP_NOT_FOUND/);
+  assert.equal(calls,6);
+  assert.deepEqual(delays,[1000,2000,4000,8000,16000]);
+  calls=0;
+  await assert.rejects(immutableVersion(input,id,{
+    fetchImpl:async()=>{calls++;return {status:200,text:async()=>JSON.stringify({
+      success:true,result:{id,resources:{script:{etag:"a".repeat(32)},bindings:{}}}
+    })};},
+    sleep:async()=>{throw Error("no metadata retry");},
+  }),/EDGE_CAS_STAGE_VERSION_SECRET_UNVERIFIED/);
+  assert.equal(calls,1);
+});
 
 test("Edge staging accepts only the rollout's target catalog and rejects the active one", () => {
   const pinned = `{\n  "contractRevision": "${revision}",\n  "toolCount": ${CATALOG.targetToolCount}\n}`;
