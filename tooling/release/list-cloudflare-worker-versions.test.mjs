@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { inventoryWorkerVersions, InventoryError } from "./list-cloudflare-worker-versions.mjs";
+import { inventoryWorkerVersions, InventoryError, formatInventoryError } from "./list-cloudflare-worker-versions.mjs";
 
 const ACCOUNT = "a".repeat(32);
 const TOKEN = "synthetic-read-token";
@@ -158,6 +158,29 @@ test("negative API responses, shape errors, and network errors are sanitized", a
   await fails(mockPages([], { badPayload: { success: true, result: { items: "unsafe" } } }).fetchImpl, "RESPONSE_SHAPE_INVALID");
   await fails(mockPages([], { badPayload: { success: true, result: { items: [{ id: "bad" }] } } }).fetchImpl, "VERSION_ID_INVALID");
 });
+test("HTTP failures expose only the numeric status, never credentials or response data", async () => {
+  for (const status of [401, 403, 404, 429, 503]) {
+    const mock = mockPages([], { httpStatus: status });
+    let diagnostic;
+    try {
+      await inventoryWorkerVersions({ accountId: ACCOUNT, token: TOKEN }, mock.fetchImpl);
+    } catch (error) {
+      assert.ok(error instanceof InventoryError);
+      assert.equal(error.code, "CLOUDFLARE_READ_FAILED");
+      assert.equal(error.httpStatus, status);
+      diagnostic = formatInventoryError(error);
+    }
+    assert.equal(diagnostic, "cloudflare_inventory: CLOUDFLARE_READ_FAILED http_status=" + status);
+    assert.ok(!diagnostic.includes(TOKEN));
+    assert.ok(!diagnostic.includes(ACCOUNT));
+    assert.equal(mock.calls.length, 1);
+  }
+  assert.equal(formatInventoryError(new Error("private-token-value")),
+    "cloudflare_inventory: UNEXPECTED_ERROR");
+  assert.equal(formatInventoryError(new InventoryError("CLOUDFLARE_READ_FAILED", "secret")),
+    "cloudflare_inventory: CLOUDFLARE_READ_FAILED");
+});
+
 test("invalid input fails before contacting Cloudflare", async () => {
   const m = mockPages([]);
   await fails(m.fetchImpl, "ACCOUNT_ID_INVALID", { accountId: "bad" });
