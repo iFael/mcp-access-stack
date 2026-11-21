@@ -321,7 +321,7 @@ describe("file access", () => {
     ]);
   });
 
-  test("rejects oversized and binary files", async () => {
+  test("reads text above the search limit but still rejects binary content", async () => {
     fixture = await createFixture({ limits: { maxFileBytes: 4 } });
     await writeWorkspaceFile(fixture.workspacePath, "large.txt", "12345");
     await writeWorkspaceFile(fixture.workspacePath, "binary.bin", Buffer.from([65, 0, 66]));
@@ -330,7 +330,10 @@ describe("file access", () => {
 
     await expect(
       agent.readFile({ workspaceId: "test", path: "large.txt" }),
-    ).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
+    ).resolves.toMatchObject({ content: "12345", sizeBytes: 5 });
+    await expect(
+      agent.readBinaryFile({ workspaceId: "test", path: "large.txt" }),
+    ).rejects.toMatchObject({ code: "LIMIT_EXCEEDED" });
     await expect(
       agent.readFile({ workspaceId: "test", path: "binary.bin" }),
     ).rejects.toMatchObject({ code: "BINARY_FILE" });

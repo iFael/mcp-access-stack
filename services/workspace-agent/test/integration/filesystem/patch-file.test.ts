@@ -94,6 +94,36 @@ describe("patch file", () => {
     });
   }, 30_000);
 
+  test("reads, writes and patches text larger than the configured file limit", async () => {
+    const original = "const marker = before;\n" + "x".repeat(325_000) + "\n";
+    const { agent, absolutePath } = await createPatchFixture(original, "utf-8");
+    const before = await agent.readFile({
+      workspaceId: "test", path: "legacy.js", startLine: 1, endLine: 1,
+    });
+    expect(before.content).toBe("const marker = before;");
+    expect(before.sizeBytes).toBeGreaterThan(300_000);
+
+    const patched = await agent.patchFile({
+      workspaceId: "test", path: "legacy.js", expectedSha256: before.sha256,
+      replacements: [{ oldText: "marker = before", newText: "marker = after" }],
+    });
+    expect(patched).toMatchObject({
+      changed: true, replacementsApplied: 1, sha256Before: before.sha256,
+    });
+    expect((await readFile(absolutePath)).toString("utf8").startsWith("const marker = after;")).toBe(true);
+    await expect(agent.patchFile({
+      workspaceId: "test", path: "legacy.js", expectedSha256: before.sha256,
+      replacements: [{ oldText: "marker = after", newText: "marker = again" }],
+    })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+
+    const created = await agent.writeFile({
+      workspaceId: "test", path: "large-new.txt", content: "z".repeat(325_000),
+    });
+    expect(created).toMatchObject({ created: true, sizeBytes: 325_000 });
+    expect((await agent.readFile({ workspaceId: "test", path: "large-new.txt" })).content)
+      .toHaveLength(325_000);
+  });
+
   test("rejects stale hashes and replacement count mismatches", async () => {
     const { agent } = await createPatchFixture("alpha\nalpha\n", "utf-8");
     const current = await agent.readFile({ workspaceId: "test", path: "legacy.js" });
