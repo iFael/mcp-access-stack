@@ -671,7 +671,14 @@ describe("CompanionConnector end-to-end", () => {
       socket.send(JSON.stringify({ type: "companion-hello", protocolVersion: COMPANION_PROTOCOL_VERSION }));
       socket.on("message", (data) => {
         const message = JSON.parse(data.toString("utf8")) as Record<string, unknown>;
-        if (message.type === "companion-user-messages") announced.push(message.pending as number);
+        if (message.type === "companion-user-messages") {
+          announced.push(message.pending as number);
+          // Registration persists the device asynchronously. Only announce the
+          // next count after the Edge receives the initial registered count.
+          if (expected.length === 2 && announced.length === 1 && message.pending === 2) {
+            connector.announceUserMessages(0);
+          }
+        }
         if (message.type !== "companion-ready") return;
         socket.send(JSON.stringify({
           type: "companion-registered",
@@ -680,7 +687,6 @@ describe("CompanionConnector end-to-end", () => {
           ...(features === undefined ? {} : { features }),
         }));
         setTimeout(() => {
-          connector.announceUserMessages(0);
           // Close once what is expected has arrived, or soon after when nothing is expected.
           const closeAt = Date.now() + 500;
           const closeWhenDone = () => {
