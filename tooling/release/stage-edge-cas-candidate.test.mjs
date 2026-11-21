@@ -8,8 +8,17 @@ import YAML from "yaml";
 import {
   verifyLocalCandidate, requirePublisherPrerequisites, verifyNoTrafficChange, parseInput,
   writeStageSecretFile, verifyVersionSecretBinding,
-  resolvePins,
+  resolvePins, classifyVersionLookupStatus,
 } from "./stage-edge-cas-candidate.mjs";
+
+test("classifies Cloudflare immutable-version lookup failures without exposing response bodies", () => {
+  assert.equal(classifyVersionLookupStatus(200), null);
+  assert.equal(classifyVersionLookupStatus(401), "VERSION_LOOKUP_AUTH_REQUIRED");
+  assert.equal(classifyVersionLookupStatus(403), "VERSION_LOOKUP_FORBIDDEN");
+  assert.equal(classifyVersionLookupStatus(404), "VERSION_LOOKUP_NOT_FOUND");
+  assert.equal(classifyVersionLookupStatus(429), "VERSION_LOOKUP_RATE_LIMITED");
+  assert.equal(classifyVersionLookupStatus(503), "VERSION_LOOKUP_UNAVAILABLE");
+});
 import { CATALOG } from "./activate-edge-catalog.mjs";
 
 const deployment = "10535ed8-c51b-418e-a387-3cf9ba8fde82";

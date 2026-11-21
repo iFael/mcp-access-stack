@@ -158,6 +158,16 @@ async function activeSnapshot(input) {
   });
   return validateActiveProvenance(comparison, input.expectedDeployment, input.expectedVersion);
 }
+// Stable, response-body-free diagnoses for a read-only Cloudflare lookup.
+export function classifyVersionLookupStatus(status) {
+  if (status === 200) return null;
+  if (status === 401) return "VERSION_LOOKUP_AUTH_REQUIRED";
+  if (status === 403) return "VERSION_LOOKUP_FORBIDDEN";
+  if (status === 404) return "VERSION_LOOKUP_NOT_FOUND";
+  if (status === 429) return "VERSION_LOOKUP_RATE_LIMITED";
+  if (status >= 500 && status <= 599) return "VERSION_LOOKUP_UNAVAILABLE";
+  return "VERSION_LOOKUP_FAILED";
+}
 async function immutableVersion(input, id) {
   const response = await fetch(
     "https://api.cloudflare.com/client/v4/accounts/" + input.accountId +
@@ -167,7 +177,8 @@ async function immutableVersion(input, id) {
       }, redirect: "error", signal: AbortSignal.timeout(10000),
     },
   );
-  if (response.status !== 200) deny("VERSION_LOOKUP_FAILED");
+  const reason = classifyVersionLookupStatus(response.status);
+  if (reason !== null) deny(reason);
   const raw = await response.text();
   if (raw.length > 262144) deny("VERSION_RESPONSE_TOO_LARGE");
   const payload = JSON.parse(raw);
@@ -225,6 +236,9 @@ async function main() {
       baseline.activeVersionId !== input.expectedVersion) deny("BASELINE_MISMATCH");
   const uploadLog = await readFile(path.join(input.temp, LOG), "utf8");
   const uploaded = readUploadedVersionId(uploadLog, input.expectedVersion);
+  // An immutable version ID is not a secret; keep it in sanitized CI output so
+  // a failed read-only verification can be reconciled without another upload.
+  console.log("EDGE_CAS_STAGE_RECONCILE_VERSION_ID " + uploaded);
   await immutableVersion(input, uploaded);
   verifyNoTrafficChange(baseline, await activeSnapshot(input));
   if (!process.env.GITHUB_OUTPUT) deny("OUTPUT_UNAVAILABLE");

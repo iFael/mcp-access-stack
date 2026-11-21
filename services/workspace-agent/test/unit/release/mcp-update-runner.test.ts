@@ -56,6 +56,7 @@ function world(overrides: Partial<McpUpdatePort> = {}) {
   const runs = new Map<string, number>();
   const port: McpUpdatePort = {
     mainHead: async () => MAIN,
+    tagCommit: async () => null,
     checks: async () => "passed",
     rolloutTarget: async () => ({ origin: "https://edge.example", previousRevision: OLD, targetRevision: NEW, targetToolCount: 120 }),
     health: async () => ({ activeContractRevision: edge.active, candidateContractRevision: edge.candidate,
@@ -190,6 +191,47 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(done.status).toBe("succeeded");
     expect(env.calls[0]).toBe("dispatch release-tag-bootstrap.yml");
     expect(env.progress.at(-1)!.steps.slice(1, 3).map((step) => step.state)).toEqual(["skipped", "skipped"]);
+  });
+
+  it("skips an occupied connector tag without rewriting the existing GitHub ref", async () => {
+    const seen: string[] = [];
+    const env = world({ tagCommit: async (tag) => {
+      seen.push(tag);
+      return tag === "v1.1.0-beta.103-connector.1" ? "b".repeat(40) : null;
+    } });
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(done).toMatchObject({ status: "succeeded", data: { tag: "v1.1.0-beta.104-connector.1" } });
+    expect(seen).toEqual(["v1.1.0-beta.103-connector.1", "v1.1.0-beta.104-connector.1"]);
+    expect(env.dispatched.find((call) => call.workflow === "release-tag-bootstrap.yml"))
+      .toMatchObject({ tag: "v1.1.0-beta.104-connector.1" });
+  });
+
+  it("refuses a tag already published for the same main and fails closed on unknown lookup", async () => {
+    for (const tagCommit of [async () => MAIN, async () => { throw new Error("github-read-unavailable"); }]) {
+      const env = world({ tagCommit });
+      const updates = runner(env.port);
+      const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+      expect(done.status).toBe("failed");
+      expect(done.step).toBe("precheck");
+      expect(env.dispatched).toHaveLength(0);
+    }
+  });
+
+  it("does not redispatch a failed Edge stage without reconciling the uploaded version", async () => {
+    const env = world();
+    const previous = env.port.reconcile;
+    env.port.reconcile = async (call) => call.workflow === "edge-cas-candidate-stage.yml"
+      ? { status: "observed", runId: 55, state: "completed", conclusion: "failure" }
+      : previous(call);
+    const updates = runner(env.port);
+    const failed = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(failed).toMatchObject({ status: "failed", step: "edge_stage", error: { code: "WORKFLOW_FAILED" } });
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({
+      code: "EDGE_STAGE_RECONCILIATION_REQUIRED",
+    });
+    expect(env.dispatched.filter((call) => call.workflow === "edge-cas-candidate-stage.yml")).toHaveLength(1);
+    expect(await updates.read(failed.updateId)).toMatchObject({ status: "failed", step: "edge_stage" });
   });
 
   it("stops before any effect when the state is not the expected one", async () => {

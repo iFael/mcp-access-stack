@@ -136,6 +136,8 @@ export type McpUpdateConfirmation = ReleaseConfirmation;
 export interface McpUpdatePort extends ReleaseInstallPort {
   mainHead(): Promise<string>;
   checks(sha: string): Promise<"passed" | "pending" | "failed">;
+  /** Exact immutable GitHub tag ref, or null when absent. Read failures must reject. */
+  tagCommit(tag: string): Promise<string | null>;
   /** tooling/release/edge-catalog-rollout.json at that commit. */
   rolloutTarget(sha: string): Promise<{ origin: string; previousRevision: string; targetRevision: string; targetToolCount: number }>;
   health(origin: string): Promise<{
@@ -266,6 +268,13 @@ export class McpUpdateRunner {
     if (record.status !== "failed") throw new StopUpdate("UPDATE_NOT_FAILED", `Update ${updateId} is ${record.status}; only a failed update resumes.`);
     const open = (await this.list()).find((other) => other.status === "running" || other.status === "needs_confirmation");
     if (open) throw new StopUpdate("UPDATE_IN_PROGRESS", `Update ${open.updateId} is ${open.status}.`);
+    // Edge stage may have uploaded an immutable Worker version before its
+    // verification failed. The terminal workflow status cannot prove no upload.
+    // A second stage is prohibited until inventory reconciliation exists.
+    if (record.step === "edge_stage" && record.error?.code === "WORKFLOW_FAILED") {
+      throw new StopUpdate("EDGE_STAGE_RECONCILIATION_REQUIRED",
+        "The failed Edge stage may have uploaded a version. Reconcile Cloudflare inventory; do not dispatch again.");
+    }
     const { error, ...rest } = record;
     const run = STEP_RUN[record.step];
     const data = { ...rest.data };
@@ -393,6 +402,9 @@ export class McpUpdateRunner {
           throw new StopUpdate("EDGE_CONTRACT_MISMATCH",
             `The Edge runs ${health.activeContractRevision}; MAIN's rollout expects ${catalog.previousRevision} before ${catalog.targetRevision}.`);
         }
+        // Do not derive a release tag exclusively from the active installation:
+        // an unsuccessful previous update may already own that immutable tag.
+        const tag = await nextFreeConnectorTag(release.active, record.mainSha, port.tagCommit);
         return {
           ...record,
           skipped: unchanged ? ["edge_stage", "edge_activate"] : [],
@@ -401,7 +413,7 @@ export class McpUpdateRunner {
             activeBefore: release.active,
             ...(health.connectorInstanceId === null ? {} : { connectorInstanceBefore: health.connectorInstanceId }),
             catalog,
-            tag: `v${nextConnectorRelease(release.active)}`,
+            tag,
           },
         };
       }
@@ -665,6 +677,28 @@ export function nextConnectorRelease(active: string): string {
   const match = CONNECTOR_RELEASE.exec(active);
   if (!match) throw new StopUpdate("UNEXPECTED_ACTIVE_RELEASE", `Cannot derive the next tag from ${active}.`);
   return `${match[1]}.${match[2]}.${match[3]}-beta.${Number(match[4]) + 1}-connector.1`;
+}
+
+/** Bounded, exact GitHub ref inspection before any release side effect. */
+export async function nextFreeConnectorTag(
+  active: string, mainSha: string, tagCommit: (tag: string) => Promise<string | null>,
+): Promise<string> {
+  const initial = nextConnectorRelease(active);
+  const match = CONNECTOR_RELEASE.exec(initial);
+  if (!match || !SHA.test(mainSha)) throw new StopUpdate("TAG_INPUT_INVALID", "Invalid release identity.");
+  const baseNumber = Number(match[4]);
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const number = baseNumber + attempt;
+    if (!Number.isSafeInteger(number)) break;
+    const tag = `v${match[1]}.${match[2]}.${match[3]}-beta.${number}-connector.${match[5]}`;
+    const commit = await tagCommit(tag);
+    if (commit === null) return tag;
+    if (!SHA.test(commit)) throw new StopUpdate("TAG_REF_INVALID", "GitHub returned an unverified tag ref.");
+    if (commit === mainSha) {
+      throw new StopUpdate("MAIN_ALREADY_TAGGED", "This MAIN already owns a connector release tag.");
+    }
+  }
+  throw new StopUpdate("RELEASE_TAG_EXHAUSTED", "No free release tag in the bounded version range.");
 }
 
 export { StopUpdate as McpUpdateError };
