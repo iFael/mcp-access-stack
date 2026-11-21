@@ -257,6 +257,30 @@ describe("Edge catalog workflows",()=>{
   }
   const edge={workspaceId:"mcp-access-stack",owner:"iFael",repository:"mcp-access-stack",expectedMainSha:sha,operationId};
 
+  it("runs GET-only Cloudflare inventory at most once and reconciles by pinned operation ID",async()=>{
+    const f=edgeSetup();
+    const inventory:GitHubReleaseWorkflowInput={...edge,workflow:"cloudflare-version-inventory.yml"};
+    expect(await f.coordinator.dispatch(inventory,context)).toEqual({status:"submitted",operationId});
+    expect(await f.coordinator.dispatch(inventory,context)).toEqual({status:"submitted",operationId});
+    expect(f.calls).toEqual([{workflow:"cloudflare-version-inventory.yml",details:{operation_id:operationId}}]);
+    // A different workflow's run or an ordinary manual run is not the receipt's run.
+    f.addRun("cloudflare-version-inventory.yml","Cloudflare Worker versions inventory (GET only)");
+    expect(await f.coordinator.reconcile(inventory,context)).toEqual({status:"outcome_unknown",operationId});
+    const fresh=edgeSetup();
+    fresh.addRun("cloudflare-version-inventory.yml","mcp-cloudflare-inventory-"+operationId);
+    expect(await fresh.coordinator.reconcile(inventory,context)).toEqual({
+      status:"observed",operationId,runId:4242001,state:"completed",conclusion:"success",
+    });
+  });
+
+  it("fails closed for Cloudflare inventory when the pinned main changes",async()=>{
+    const f=edgeSetup();
+    const inventory:GitHubReleaseWorkflowInput={...edge,workflow:"cloudflare-version-inventory.yml"};
+    await expect(f.coordinator.dispatch({...inventory,tag:"v1.0.0"},context))
+      .rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    expect(f.calls).toHaveLength(0);
+  });
+
   it("forwards the stage run id to the activation and finds each run by its own title",async()=>{
     const f=edgeSetup();
     const activation:GitHubReleaseWorkflowInput={...edge,workflow:"edge-catalog-activate.yml",stageRunId:40033066092};

@@ -104,6 +104,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "the Linux execution-node workspace; each pins the current Cloudflare deployment itself.",
     steps: [
       "Check: github_get_commit_checks on the exact main SHA must be green.",
+      "Inventory (GET only): when a previous Edge stage has an uncertain upload, run github_workflow_operation workflow=cloudflare-version-inventory.yml mode=dispatch with expectedMainSha and a new operationId, then reconcile the SAME operationId; inspect the resulting run logs with github_read. This never uploads or deploys a Worker.",
       "Stage: github_workflow_operation workflow=edge-cas-candidate-stage.yml mode=dispatch with expectedMainSha and a new operationId; reconcile until completed and success. The run uploads a Worker version with no traffic; note its runId.",
       "Activate: github_workflow_operation workflow=edge-catalog-activate.yml mode=dispatch with the same expectedMainSha, stageRunId = the stage runId and a new operationId; reconcile until completed. It deploys the staged version and prepares the new contract as candidate.",
       "Recover only if the activation failed at its candidate preparation: github_workflow_operation workflow=edge-catalog-recover-prepare.yml mode=dispatch with expectedMainSha and operationId = the activation operationId; reconcile until completed.",
@@ -111,6 +112,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
     ],
     rules: [
       "Each workflow runs once per operationId; on outcome_unknown only reconcile with the same identifiers.",
+      "Never repeat a failed Edge stage when an upload may have occurred; reconcile the existing upload with the GET-only Cloudflare inventory first.",
       "Never recover a failed deployment step: the recovery workflow refuses it, report it to the user instead.",
       "Each step is a separate authorization unless the user approved the whole rollout.",
     ],

@@ -837,6 +837,7 @@ export const GITHUB_OPERATION_WORKFLOWS = [
   "edge-catalog-activate.yml",
   "edge-catalog-recover-prepare.yml",
   "companion-only-distribution.yml",
+  "cloudflare-version-inventory.yml",
 ] as const;
 export type GitHubOperationWorkflow = (typeof GITHUB_OPERATION_WORKFLOWS)[number];
 

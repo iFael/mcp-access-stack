@@ -1,8 +1,13 @@
 name: Cloudflare Worker versions inventory (GET only)
+run-name: ${{ format('mcp-cloudflare-inventory-{0}', inputs.operation_id) }}
 
 on:
   workflow_dispatch:
     inputs:
+      operation_id:
+        description: Stable UUID of the one-shot GET-only inventory operation
+        required: true
+        type: string
       expected_main_sha:
         description: Exact approved main SHA for a read-only inventory
         required: true
@@ -28,10 +33,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          OPERATION_ID: ${{ inputs.operation_id }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REPOSITORY" == "iFael/mcp-access-stack" ]]
           [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$OPERATION_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
           [[ "$EXPECTED_MAIN_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$GITHUB_SHA" == "$EXPECTED_MAIN_SHA" ]]
           [[ "$(gh api repos/iFael/mcp-access-stack/git/ref/heads/main --jq '.object.sha')" == "$EXPECTED_MAIN_SHA" ]]

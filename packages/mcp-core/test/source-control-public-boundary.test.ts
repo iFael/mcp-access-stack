@@ -125,6 +125,18 @@ describe("unified workflow bootstrap provenance",()=>{
     expect(githubWorkflowOperationInputSchema.safeParse({...activation,stageRunId:0}).success).toBe(false);
     expect(githubWorkflowOperationInputSchema.safeParse({...activation,workflow:"deploy.yml",stageRunId:1}).success).toBe(false);
   });
+  it("allows only the pinned read-only Cloudflare inventory workflow with a one-use operation ID",()=>{
+    const inventory={workspaceId:"repo",owner:"octo",repository:"app",
+      workflow:"cloudflare-version-inventory.yml" as const,mode:"dispatch" as const,
+      expectedMainSha:shaA,operationId:"11111111-2222-4333-8444-555555555558"};
+    expect(githubWorkflowOperationInputSchema.safeParse(inventory).success).toBe(true);
+    expect(githubWorkflowOperationInputSchema.safeParse({...inventory,mode:"reconcile"}).success).toBe(true);
+    for (const disallowed of [
+      {tag:"v1.1.0-beta.150"}, {ciRunId:123}, {stageRunId:123},
+      {bootstrapOperationId:"11111111-2222-4333-8444-555555555559"},
+      {workflow:"arbitrary.yml"}, {expectedMainSha:"not-a-sha"},
+    ]) expect(githubWorkflowOperationInputSchema.safeParse({...inventory,...disallowed}).success).toBe(false);
+  });
   it("accepts the companion publication with ciRunId only, and ciRunId nowhere else",()=>{
     const companion={workspaceId:"repo",owner:"octo",repository:"app",mode:"dispatch" as const,
       workflow:"companion-only-distribution.yml" as const,

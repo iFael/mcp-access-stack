@@ -13,7 +13,8 @@ const EDGE_STAGE = "edge-cas-candidate-stage.yml" as const;
 const EDGE_ACTIVATE = "edge-catalog-activate.yml" as const;
 const EDGE_RECOVER = "edge-catalog-recover-prepare.yml" as const;
 const COMPANION = "companion-only-distribution.yml" as const;
-const WORKFLOWS = [F09_WORKFLOW, TAG_BOOTSTRAP, PUBLIC_RELEASE, EDGE_STAGE, EDGE_ACTIVATE, EDGE_RECOVER, COMPANION] as const;
+const CLOUDFLARE_INVENTORY = "cloudflare-version-inventory.yml" as const;
+const WORKFLOWS = [F09_WORKFLOW, TAG_BOOTSTRAP, PUBLIC_RELEASE, EDGE_STAGE, EDGE_ACTIVATE, EDGE_RECOVER, COMPANION, CLOUDFLARE_INVENTORY] as const;
 // Each workflow's run-name; the operation finds its own run only by this title.
 const RUN_TITLE_PREFIX: Record<(typeof WORKFLOWS)[number], string> = {
   [F09_WORKFLOW]: "mcp-release-",
@@ -23,6 +24,7 @@ const RUN_TITLE_PREFIX: Record<(typeof WORKFLOWS)[number], string> = {
   [EDGE_ACTIVATE]: "mcp-edge-catalog-",
   [EDGE_RECOVER]: "mcp-edge-catalog-recovery-",
   [COMPANION]: "mcp-companion-publish-",
+  [CLOUDFLARE_INVENTORY]: "mcp-cloudflare-inventory-",
 };
 const PUBLIC_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/u;
 
@@ -253,7 +255,7 @@ export class GitHubReleaseWorkflowOperation {
       idempotencyKey: input.workflow === F09_WORKFLOW
         ? `release-workflow:${input.workspaceId}:${input.operationId}`
         : input.workflow === EDGE_STAGE || input.workflow === EDGE_ACTIVATE || input.workflow === EDGE_RECOVER ||
-            input.workflow === COMPANION
+            input.workflow === COMPANION || input.workflow === CLOUDFLARE_INVENTORY
           ? `release-workflow:${input.workspaceId}:${input.workflow}:${input.operationId}`
         : input.workflow === TAG_BOOTSTRAP
           ? `release-workflow:${input.workspaceId}:tag-bootstrap:${input.operationId}`
