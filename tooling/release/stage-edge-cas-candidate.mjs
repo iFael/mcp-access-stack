@@ -164,27 +164,53 @@ export function classifyVersionLookupStatus(status) {
   if (status === 401) return "VERSION_LOOKUP_AUTH_REQUIRED";
   if (status === 403) return "VERSION_LOOKUP_FORBIDDEN";
   if (status === 404) return "VERSION_LOOKUP_NOT_FOUND";
+  if (status === 408) return "VERSION_LOOKUP_TIMEOUT";
   if (status === 429) return "VERSION_LOOKUP_RATE_LIMITED";
   if (status >= 500 && status <= 599) return "VERSION_LOOKUP_UNAVAILABLE";
   return "VERSION_LOOKUP_FAILED";
 }
-async function immutableVersion(input, id) {
-  const response = await fetch(
-    "https://api.cloudflare.com/client/v4/accounts/" + input.accountId +
-    "/workers/scripts/" + WORKER + "/versions/" + id, {
-      method: "GET", headers: {
-        authorization: "Bearer " + input.token, accept: "application/json",
-      }, redirect: "error", signal: AbortSignal.timeout(10000),
-    },
-  );
-  const reason = classifyVersionLookupStatus(response.status);
-  if (reason !== null) deny(reason);
-  const raw = await response.text();
-  if (raw.length > 262144) deny("VERSION_RESPONSE_TOO_LARGE");
-  const payload = JSON.parse(raw);
-  verifyUploadedVersion(payload, id);
-  verifyVersionSecretBinding(payload);
-  return id;
+// Cloudflare may expose an uploaded immutable version after the Wrangler command
+// succeeds. Retry only GETs: never rerun the upload or relax provenance checks.
+const VERSION_READ_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+export async function immutableVersion(input, id, {
+  fetchImpl = fetch,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+} = {}) {
+  const url = "https://api.cloudflare.com/client/v4/accounts/" + input.accountId +
+    "/workers/scripts/" + WORKER + "/versions/" + id;
+  for (let attempt = 0; attempt <= VERSION_READ_DELAYS_MS.length; attempt++) {
+    let response;
+    let networkError = false;
+    try {
+      response = await fetchImpl(url, {
+        method: "GET", headers: {
+          authorization: "Bearer " + input.token, accept: "application/json",
+        }, redirect: "error", signal: AbortSignal.timeout(10000),
+      });
+    } catch {
+      networkError = true;
+    }
+    const status = networkError ? "network" : response.status;
+    const reason = networkError
+      ? "VERSION_LOOKUP_NETWORK_UNAVAILABLE"
+      : classifyVersionLookupStatus(status);
+    if (reason === null) {
+      const raw = await response.text();
+      if (raw.length > 262144) deny("VERSION_RESPONSE_TOO_LARGE");
+      let payload;
+      try { payload = JSON.parse(raw); } catch { deny("VERSION_RESPONSE_INVALID"); }
+      verifyUploadedVersion(payload, id);
+      verifyVersionSecretBinding(payload);
+      return id;
+    }
+    const transient = networkError || status === 404 || status === 408 || status === 429 ||
+      (status >= 500 && status <= 599);
+    if (!transient || attempt === VERSION_READ_DELAYS_MS.length) deny(reason);
+    // Print only an allowlisted status/attempt. Never print tokens or response bodies.
+    console.log("EDGE_CAS_STAGE_VERSION_LOOKUP_RETRY status=" + status +
+      " attempt=" + (attempt + 1) + "/" + VERSION_READ_DELAYS_MS.length);
+    await sleep(VERSION_READ_DELAYS_MS[attempt]);
+  }
 }
 async function main() {
   const mode = process.argv[2];
