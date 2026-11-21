@@ -14,20 +14,28 @@ const SOURCES = new Set(["unknown", "api", "wrangler", "terraform", "dash",
   "cf_cli", "dash_template", "integration", "quick_editor", "playground", "workersci"]);
 
 export class InventoryError extends Error {
-  constructor(code) {
+  constructor(code, status = null) {
     super(code);
     this.name = "InventoryError";
     this.code = code;
+    this.httpStatus = Number.isInteger(status) && status >= 100 && status <= 599
+      ? status : null;
   }
 }
-function fail(code) { throw new InventoryError(code); }
+function fail(code, status = null) { throw new InventoryError(code, status); }
+export function formatInventoryError(error) {
+  const code = error instanceof InventoryError ? error.code : "UNEXPECTED_ERROR";
+  return "cloudflare_inventory: " + code +
+    (error instanceof InventoryError && error.httpStatus !== null
+      ? " http_status=" + error.httpStatus : "");
+}
 function record(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function time(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value))
     ? new Date(value).toISOString() : null;
 }
 async function boundedJson(response) {
-  if (response.status !== 200) fail("CLOUDFLARE_READ_FAILED");
+  if (response.status !== 200) fail("CLOUDFLARE_READ_FAILED", response.status);
   const reader = response.body?.getReader();
   if (!reader) fail("RESPONSE_STREAM_INVALID");
   const chunks = [];
@@ -138,8 +146,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     });
     console.log(JSON.stringify(result));
   } catch (error) {
-    console.error("cloudflare_inventory: " + (error instanceof InventoryError
-      ? error.code : "UNEXPECTED_ERROR"));
+    console.error(formatInventoryError(error));
     process.exitCode = 1;
   }
 }
