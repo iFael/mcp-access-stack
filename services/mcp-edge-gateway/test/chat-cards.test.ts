@@ -331,7 +331,10 @@ describe("the chat cards the Edge serves", () => {
     ]);
     expect(resources.map((resource) => resource.uri)).toEqual([PROGRESS_CARD_URI, PULL_REQUEST_CARD_URI]);
     expect(resources[0]!.text).toContain("browser_progress_read");
-    expect(resources[0]!.text).toContain("Sem atualização recente");
+    for (const status of ["Executando —", "Aguardando —", "Sem atividade recente —", "Falhou —"]) {
+      expect(resources[0]!.text).toContain(status);
+    }
+    expect(resources[0]!.text).toContain("activityText(value, failed)");
     expect(resources[0]!.text).toContain("recentActivity(value)");
     expect(resources[0]!.text).toContain("ICONS.waiting");
     expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v13.html");

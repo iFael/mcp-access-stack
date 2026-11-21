@@ -118,12 +118,13 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     var at = value && value.activity && Date.parse(value.activity.observedAt);
     return isFinite(at) && Date.now() >= at && Date.now() - at < 90000;
   }
-  function activityText(value) {
-    if (!value.activity) return "Estado da execução não confirmado até a próxima chamada MCP.";
-    if (!recentActivity(value)) return "Sem atualização recente. A execução pode continuar no servidor; reconcilie antes de repetir ações.";
-    if (value.activity.status === "running") return "Ferramenta MCP em execução, verificada recentemente.";
-    if (value.activity.status === "waiting") return "Operação pendente; aguardando resultado ou reconciliação.";
-    return "Nenhuma ferramenta MCP ativa neste momento.";
+  function activityText(value, failed) {
+    if (failed) return "Falhou — consulte a etapa indicada antes de retomar.";
+    if (!value.activity) return "Aguardando — estado não confirmado até a próxima observação MCP.";
+    if (!recentActivity(value)) return "Sem atividade recente — a execução pode continuar no servidor; reconcilie antes de repetir ações.";
+    if (value.activity.status === "running") return "Executando — atividade MCP confirmada recentemente.";
+    if (value.activity.status === "waiting") return "Aguardando — resultado ou reconciliação pendente.";
+    return "Aguardando — nenhuma ferramenta MCP ativa neste momento.";
   }
   function openLink(event) {
     var bridge = (window.mcpV3Card || window.openai);
@@ -148,9 +149,10 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
     count.hidden = folded || steps.length === 0;
     count.textContent = done + "/" + steps.length;
     var pending = steps.some(function (step) { return step && step.state === "doing"; });
+    var failed = steps.some(function (step) { return step && step.state === "failed"; });
     var activity = document.getElementById("activity");
-    activity.hidden = folded || !pending;
-    if (!activity.hidden) activity.textContent = activityText(value);
+    activity.hidden = folded || (!pending && !failed);
+    if (!activity.hidden) activity.textContent = activityText(value, failed);
     var list = document.getElementById("steps");
     if (folded) return;
     var visible = steps.filter(function (step) { return step && typeof step.text === "string"; });

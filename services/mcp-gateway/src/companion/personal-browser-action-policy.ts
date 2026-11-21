@@ -199,13 +199,13 @@ export class PersonalBrowserActionPolicy {
       page.url, input.x, input.y, input.button ?? "left",
       input.clickCount ?? 1, [...(input.modifiers ?? [])].sort(),
     ])).digest("hex");
-    // Every pixel-only click may hit controls that AX cannot classify, including
-    // transactions and destructive controls. Require an exact, one-use human grant.
+    // Without a semantic ref, the click could hit a sensitive control even on
+    // an otherwise ordinary page: a screenshot cannot authorize it by itself.
     this.authorize(
       input.confirmationId,
       this.interactions.prepareConfirmation(
         { tabId: input.tabId, url: page.url },
-        "submit-form", "pixel-click", "sha256:" + target,
+        this.interactions.pageRiskCategory(page) ?? "submit-form", "pixel-click", "sha256:" + target,
       ),
     );
     return { url: page.url, pixel: true, x: input.x, y: input.y };
@@ -253,7 +253,7 @@ export class PersonalBrowserActionPolicy {
     ])).digest("hex");
     this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
       { tabId: input.tabId, url: page.url },
-      "submit-form", "pixel-drag", "sha256:" + target,
+      this.interactions.pageRiskCategory(page) ?? "submit-form", "pixel-drag", "sha256:" + target,
     ));
     return { fromGuard, toGuard };
   }
@@ -294,12 +294,13 @@ export class PersonalBrowserActionPolicy {
 
   guardType(input: BrowserTypeInput): PersonalActionGuard {
     const page = this.requirePage(input.tabId);
-    if (input.submit) {
+    const pageRisk = input.submit ? this.interactions.pageRiskCategory(page) ?? "submit-form" : undefined;
+    if (pageRisk) {
       this.authorize(
         input.confirmationId,
         this.interactions.prepareConfirmation(
           { tabId: input.tabId, url: page.url },
-          this.interactions.pageRiskCategory(page) ?? "submit-form", "type",
+          pageRisk, "type",
           "keyboard:Enter:sha256:" + createHash("sha256").update(input.text).digest("hex"),
         ),
       );
@@ -310,14 +311,13 @@ export class PersonalBrowserActionPolicy {
   guardPress(input: BrowserPressInput): PersonalActionGuard {
     validateBrowserKeySequence(input.key, input.repeat);
     const page = this.requirePage(input.tabId);
-    if (containsBrowserEnterKey(input.key)) {
-      this.authorize(
-        input.confirmationId,
-        this.interactions.prepareConfirmation(
-          { tabId: input.tabId, url: page.url },
-          this.interactions.pageRiskCategory(page) ?? "submit-form", "press", "keyboard:Enter",
-        ),
-      );
+    const enter = containsBrowserEnterKey(input.key);
+    const category = enter ? this.interactions.pageRiskCategory(page) ??
+      (/(?:ctrl|control|meta|command)\+enter/iu.test(input.key) ? "send-message" : "submit-form") : undefined;
+    if (category) {
+      this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url }, category, "press", "keyboard:Enter",
+      ));
     }
     return { url: page.url };
   }

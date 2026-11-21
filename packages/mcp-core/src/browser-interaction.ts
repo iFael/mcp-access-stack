@@ -298,6 +298,14 @@ function classifyDangerousAction(
   if ((label === "cancel" || label === "cancelar") &&
       classifyPageContext(context) !== "delete-or-cancel") return undefined;
   const byLabel = classifyDangerousLabel(value);
+  // Navigation links and ordinary toggles are not submissions. Explicitly
+  // destructive/payment/send links and consent controls still keep their guard.
+  const role = reference.role.toLowerCase();
+  const pageRisk = classifyPageContext(context);
+  if (role === "link" && pageRisk && PROCEED_LABEL.exec(label)?.[0] === label) return pageRisk;
+  if (role === "link" && (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
+  if (["checkbox", "switch"].includes(role) &&
+      (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
   // A control that only saves or goes on is as risky as the page it is on:
   // "Confirmar" on a checkout is a payment, "Continue" on a close-account page
   // deletes it. Such pages are never approved per site.
@@ -314,7 +322,7 @@ function classifyDangerousLabel(value: string): BrowserConfirmationCategory | un
   if (/\b(buy|purchase|pay|checkout|order|subscribe|donate|comprar|pagar|pagamento|finalizar compra|assinar|contratar|doar)\b/.test(value) ||
       /\btransfer/.test(value) ||
       /\b(fazer|finalizar|confirmar|concluir|efetuar|enviar) pedido\b/.test(value)) return "purchase-or-payment";
-  if (/\b(send|message|email|enviar|mensagem)\b/.test(value)) return "send-message";
+  if (/\b(send|enviar|send message|send email|enviar mensagem|enviar email)\b/.test(value)) return "send-message";
   if (/\b(publish|post|publicar|postar)\b/.test(value)) return "publish-content";
   if (/\b(password|credential|security|senha|credencial)\b/.test(value)) return "change-credentials";
   if (/\b(accept|agree|terms|contract|aceitar|concordo|termos|contrato)\b/.test(value)) return "accept-terms-or-contract";

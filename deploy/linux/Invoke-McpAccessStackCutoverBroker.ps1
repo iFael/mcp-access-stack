@@ -25,8 +25,15 @@ function Write-TextAtomic([string]$Path,[string]$Value) {
   [IO.File]::WriteAllText($tmp,$Value,[Text.UTF8Encoding]::new($false))
   [IO.File]::Move($tmp,$Path,$true)
 }
-function Health([string]$Base) {
-  Invoke-RestMethod -Uri ($Base.TrimEnd('/')+'/health') -Method Get -TimeoutSec 3 -ErrorAction Stop
+function Health([string]$Base,[int]$Attempts=1) {
+  for ($attempt=1; $attempt -le $Attempts; $attempt++) {
+    try {
+      return (Invoke-RestMethod -Uri ($Base.TrimEnd('/')+'/health') -Method Get -TimeoutSec 5 -ErrorAction Stop)
+    } catch {
+      if ($attempt -eq $Attempts) { throw }
+      Start-Sleep -Milliseconds (500*$attempt)
+    }
+  }
 }
 function Wait-Selected([string]$Base,[string]$Revision,[string[]]$Excluded=@(),[int]$Timeout=30) {
   $deadline=[DateTimeOffset]::UtcNow.AddSeconds($Timeout)
@@ -219,7 +226,8 @@ $failureCode=$null
 
 try {
   Start-Sleep -Seconds $handoverDelaySeconds
-  $before=Health $edgeBaseUrl
+  $failureStage='preflight-health';$failureCode='EDGE_HEALTH_FAILED'
+  $before=Health $edgeBaseUrl 3
   $previousId=[string](Optional (Optional $before 'runtime') 'connectorInstanceId')
   $activeRevision=[string](Optional $before 'activeContractRevision')
   $candidateRevision=[string](Optional $before 'candidateContractRevision')

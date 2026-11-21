@@ -1208,7 +1208,9 @@ describe("personal browser extension assets", () => {
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
-        scripting: { executeScript: async () => [{ result: { x: 30, y: 40 } }] },
+        scripting: { executeScript: async (input: { func: { name: string } }) => [{ result:
+          input.func.name === "observePersonalEditableMutation"
+            ? { ready: true, changed: true } : { x: 30, y: 40 } }] },
         debugger: {
           attach: async () => { attachCount += 1; },
           detach: async () => { detachCount += 1; },
@@ -1218,7 +1220,7 @@ describe("personal browser extension assets", () => {
         },
       },
     });
-    for (const fn of ["parseChromeKey", "click", "fill", "press"]) {
+    for (const fn of ["parseChromeKey", "observePersonalEditableMutation", "click", "fill", "press"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
     }
     const guardedClick = vm.runInContext("click", context) as (arg: unknown) => Promise<unknown>;
@@ -1691,6 +1693,66 @@ describe("personal browser extension assets", () => {
     expect(events[8]?.params).toEqual({ text: "\t" });
   });
 
+  it("verifies editable input changes without exposing the editor text", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const editor = {
+      tagName: "DIV", textContent: "original secret", isConnected: true,
+      isContentEditable: true, disabled: false, readOnly: false,
+      getAttribute: () => null,
+    };
+    const context = vm.createContext({
+      document: { activeElement: editor },
+      __mcpV3OwnedRefElements: new Map([["editor", editor]]),
+    });
+    vm.runInContext(extractFunction(serviceWorker, "observePersonalEditableMutation"), context);
+    const check = vm.runInContext("observePersonalEditableMutation", context) as
+      (stage: string, ref: string | null, expected: string | null) => Record<string, unknown>;
+    expect(check("before", "editor", "new secret")).toEqual({ ready: true, alreadyEqual: false });
+    expect(check("after", "editor", "new secret")).toEqual({ ready: true, changed: false, matches: false, plain: false });
+    editor.textContent = "new secret";
+    expect(check("after", "editor", "new secret")).toEqual({ ready: true, changed: true, matches: true, plain: false });
+    const hidden = { ...editor, tagName: "INPUT", isContentEditable: false, getAttribute: () => "hidden" };
+    (context as unknown as { document: { activeElement: unknown } }).document.activeElement = hidden;
+    expect(check("before", null, "private")).toEqual({ ready: false });
+  });
+
+  it("refuses to report success when typing has no focused editor or visible text change", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const sent: string[] = [];
+    let focused = false;
+    let changed = false;
+    const context = vm.createContext({
+      setTimeout: (callback: () => void) => { callback(); return 0; },
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      delay: async () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async (input: { args: unknown[] }) => [{
+          result: input.args[0] === "before" ? { ready: focused } : { ready: true, changed },
+        }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string) => { sent.push(method); },
+        },
+      },
+    });
+    for (const name of ["observePersonalEditableMutation", "typeText"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", text: "X", guard: { url: "https://example.com/" } };
+    await expect(typeText(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(sent).toHaveLength(0);
+    focused = true;
+    await expect(typeText(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(sent).toEqual(["Input.insertText"]);
+    changed = true;
+    await expect(typeText(input)).resolves.toMatchObject({ completed: true });
+  });
+
   it("types international text as native keystrokes and composes CJK runs through an IME", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -1706,6 +1768,7 @@ describe("personal browser extension assets", () => {
       },
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: { ready: true, changed: true } }] },
         debugger: {
           attach: async () => undefined, detach: async () => undefined,
           sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
@@ -1715,7 +1778,7 @@ describe("personal browser extension assets", () => {
       },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
     });
-    for (const name of ["physicalTypingKey", "imeComposedCharacter", "typeText"]) {
+    for (const name of ["physicalTypingKey", "imeComposedCharacter", "observePersonalEditableMutation", "typeText"]) {
       vm.runInContext(extractFunction(serviceWorker, name), context);
     }
     const typeText = vm.runInContext("typeText", context) as (input: unknown) => Promise<unknown>;
@@ -3280,8 +3343,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     vm.runInContext('const BLOCKED_PRIVATE_ORIGINS = new Set(); const PERSONAL_PREFIX = "personal:"; ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
-      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; ' +
-      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' +
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
+      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
       "personalTabContextEnabled", "personalPlanRequired", "listPersonalOpenTabs", "personalTabSharingDispatch",
@@ -3395,9 +3458,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       },
     });
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; const PERSONAL_PREFIX = "personal:"; ' +
-      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,AA=="; ' +
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_NOTIFICATION_ICON = "data:image/png;base64,AA=="; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const BLOCKED_PRIVATE_ORIGINS = new Set(); ' +
-      'const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; ' +
+      'const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["readPersonalHandoff", "refuseDuringPersonalHandoff", "waitForUser", "resumePersonalHandoff",
       "clearPersonalHandoff", "settlePersonalHandoffSignals", "setPersonalSharedBadge", "notifyPersonalTaskFinished",
@@ -3792,7 +3855,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     vm.runInContext(serviceWorker.slice(start, end), context);
     vm.runInContext('const PERSONAL_PREFIX = "personal:"; const BLOCKED_PRIVATE_ORIGINS = new Set(); ' +
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
-      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context);
+      'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context); // gitleaks:allow -- fixed browser storage slot names, not credentials
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "readPersonalHandoff",
       "personalTabContextEnabled", "personalPlanRequired", "personalApprovalStatus", "personalTabSharingDispatch"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
@@ -4788,7 +4851,7 @@ function groupHarness(serviceWorker: string) {
     readPersonalPlans: async () => ({}),
     finishTask: async (input: Record<string, unknown>) => { finished.push(input); },
   });
-  vm.runInContext(`const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_PREFIX = "personal:";
+  vm.runInContext(`const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_PREFIX = "personal:"; // gitleaks:allow -- fixed browser ownership storage name, not a credential
 const PERSONAL_NOTIFICATION_ICON = "data:,"; const BLOCKED_PRIVATE_ORIGINS = new Set();
 const axTargetsByTab = new Map(); const personalNetworkEntries = new Map(); const mutationQueues = new Map();
 let ownershipTail = Promise.resolve();`, context);
@@ -4849,7 +4912,7 @@ describe("popup messages to a running task", () => {
       },
       send: (value: Record<string, unknown>) => { sent.push(structuredClone(value)); },
     });
-    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,";', context);
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_NOTIFICATION_ICON = "data:,";', context); // gitleaks:allow -- fixed browser ownership storage name, not a credential
     vm.runInContext(extractFunction(serviceWorker, "readOwnedTabs"), context);
     for (const name of TASK_MESSAGE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
     for (const name of TASK_MESSAGE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);
@@ -4970,7 +5033,7 @@ describe("writing the wake notice in a ChatGPT tab", () => {
         },
       },
     });
-    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs";', context);
+    vm.runInContext('const OWNED_TABS_KEY = "mcpV3OwnedTabs";', context); // gitleaks:allow -- fixed browser ownership storage name, not a credential
     vm.runInContext(extractFunction(serviceWorker, "readOwnedTabs"), context);
     for (const name of WAKE_CONSTANTS) vm.runInContext(extractConst(serviceWorker, name), context);
     for (const name of WAKE_FUNCTIONS) vm.runInContext(extractFunction(serviceWorker, name), context);

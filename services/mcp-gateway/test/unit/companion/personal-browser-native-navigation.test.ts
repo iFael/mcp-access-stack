@@ -51,6 +51,37 @@ describe("personal Chrome SPA navigation", () => {
     expect(probe(null, null, "https://example.test/app", "Loading")).toBe(true);
     expect(probe(null, null, "https://example.test/other", "Loading")).toBe(false);
   });
+  it("does not claim navigation readiness when Chrome never confirms the document load", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const start = serviceWorker.indexOf("async function navigate(input, signal) {");
+    const end = serviceWorker.indexOf("\n}\n", start);
+    let updates = 0;
+    let metadataSaved = false;
+    const context = vm.createContext({
+      axTargetsByTab: new Map(),
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({ sticky: false }),
+      assertPersonalNavigationTarget: (url: string) => url,
+      throwIfAborted: () => undefined,
+      preservePersonalConsole: async () => undefined,
+      waitForTabComplete: async () => { throw new Error("Tab load timeout"); },
+      settlePersonalDom: async () => true,
+      updateMetadata: async () => { metadataSaved = true; },
+      toBrowserTab: (_metadata: unknown, tab: unknown) => tab,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: { tabs: {
+        update: async () => { updates += 1; },
+        get: async () => ({ url: "https://example.test/app", status: "loading" }),
+      } },
+    });
+    const navigate = vm.runInContext("(" + serviceWorker.slice(start, end + 2) + ")", context) as
+      (input: unknown) => Promise<unknown>;
+    await expect(navigate({ tabId: "personal:7", url: "https://example.test/app" }))
+      .rejects.toMatchObject({ code: "NAVIGATION_TIMEOUT" });
+    expect(updates).toBe(1);
+    expect(metadataSaved).toBe(true);
+  });
+
   it("observes DOM stabilization after tab load before reporting navigation ready", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const source = serviceWorker.indexOf("async function navigate(input, signal) {");
