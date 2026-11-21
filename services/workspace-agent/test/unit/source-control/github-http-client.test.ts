@@ -115,6 +115,19 @@ describe("GitHubHttpClient fixed transport", () => {
       operation_id:op,expected_main_sha:"a".repeat(40)});
   });
 
+  it("dispatches Cloudflare inventory with only pinned main SHA and operation ID",async()=>{
+    const fetchImpl=jest.fn(async()=>new Response(null,{status:204}));
+    const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});
+    const op="11111111-2222-4333-8444-555555555555";
+    await client.dispatchWorkflow("octo","app","cloudflare-version-inventory.yml","a".repeat(40),
+      {operation_id:op,tag:"forbidden",stage_run_id:"7",ci_run_id:"9"});
+    expect(requestOf(fetchImpl).url).toBe(
+      "https://api.github.com/repos/octo/app/actions/workflows/cloudflare-version-inventory.yml/dispatches");
+    expect(JSON.parse(String(requestOf(fetchImpl).init.body))).toEqual({
+      ref:"main",inputs:{operation_id:op,expected_main_sha:"a".repeat(40)},
+    });
+  });
+
   it("dispatches the companion publication with only the operation, main SHA and CI run inputs", async () => {
     const fetchImpl=jest.fn(async()=>new Response(null,{status:204}));
     const client=new GitHubHttpClient({credentialProvider,fetchImpl:fetchImpl as typeof fetch});

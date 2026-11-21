@@ -389,7 +389,7 @@ export class GitHubHttpClient implements GitHubApiClient {
     expectedSha: string, inputs: Record<string, string>, context?: OperationContext): Promise<void> {
     if (!["edge-f09-guarded-rollout.yml","release-tag-bootstrap.yml","release.yml",
       "edge-cas-candidate-stage.yml","edge-catalog-activate.yml","edge-catalog-recover-prepare.yml",
-      "companion-only-distribution.yml"].includes(workflow)) {
+      "companion-only-distribution.yml","cloudflare-version-inventory.yml"].includes(workflow)) {
       throw new AppError("INVALID_ARGUMENT", "Workflow dispatch is not allowlisted.");
     }
     const requestInputs = workflow === "release-tag-bootstrap.yml"

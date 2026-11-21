@@ -175,6 +175,10 @@ test("inventory workflow is isolated, main-pinned, read-only, and has no release
   assert.equal(doc.errors.length, 0);
   const flow = doc.toJS();
   assert.ok(flow.on.workflow_dispatch.inputs.expected_main_sha.required);
+  assert.ok(flow.on.workflow_dispatch.inputs.operation_id.required);
+  assert.equal(flow["run-name"], "${{ format('mcp-cloudflare-inventory-{0}', inputs.operation_id) }}");
+  assert.ok(JSON.stringify(flow.jobs.preflight).includes("OPERATION_ID"));
+  assert.ok(JSON.stringify(flow.jobs.preflight).includes("GITHUB_RUN_ATTEMPT"));
   assert.deepEqual(flow.permissions, { contents: "read" });
   assert.equal(flow.jobs.inventory.environment, "cloudflare-observability");
   assert.equal(flow.jobs.inventory.permissions.contents, "read");
