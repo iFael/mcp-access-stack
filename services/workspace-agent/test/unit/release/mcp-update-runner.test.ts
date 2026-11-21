@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
@@ -476,6 +476,93 @@ describe("the autonomous MCP update on the execution node", () => {
     const updates = runner(env.port);
     const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
     expect(done).toMatchObject({ status: "failed", step: "oracle_promote", error: { code: "ROLLED_BACK" } });
+  });
+
+  it("keeps the Oracle preflight health timeout and retry budget bounded", async () => {
+    const source = await readFile(path.join(process.cwd(), "deploy/linux/Invoke-McpAccessStackCutoverBroker.ps1"), "utf8");
+    const begin = source.indexOf("function Health(");
+    const end = source.indexOf("\nfunction Wait-Selected(", begin);
+    expect(begin).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(begin);
+    const health = source.slice(begin, end);
+    expect(health).toContain("for ($attempt=1; $attempt -le $Attempts; $attempt++)");
+    expect(health).toContain("-TimeoutSec 5");
+    expect(health).toContain("if ($attempt -eq $Attempts) { throw }");
+    expect(health).toContain("Start-Sleep -Milliseconds (500*$attempt)");
+    expect(source).toContain("$failureStage='preflight-health';$failureCode='EDGE_HEALTH_FAILED'");
+    expect(source).toContain("$before=Health $edgeBaseUrl 3");
+  });
+
+  it("stops at the broker's terminal failure without reissuing promotion", async () => {
+    const env = world();
+    const receipt = {
+      requestId: "00000000-0000-4000-8000-000000000123",
+      releaseId: "1.1.0-beta.103-connector.1",
+      installationRoot: "/runtime",
+      resultPath: "/runtime/state/linux-cutover-runs/00000000-0000-4000-8000-000000000123/result.json",
+    };
+    let promotes = 0;
+    env.port.promote = async () => {
+      promotes += 1;
+      return { status: "handover_started", cutoverReceipt: receipt };
+    };
+    env.port.cutoverStatus = async (value) => {
+      expect(value).toEqual(receipt);
+      return "failed";
+    };
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(done).toMatchObject({
+      status: "failed", step: "oracle_promote", error: { code: "CUTOVER_FAILED" },
+      data: { cutoverReceipt: receipt },
+    });
+    expect(promotes).toBe(1);
+    expect(env.state).toEqual({
+      active: "1.1.0-beta.102-connector.1", candidate: "1.1.0-beta.103-connector.1",
+    });
+  });
+
+  it("accepts a successful broker receipt only when the release is active", async () => {
+    const env = world();
+    const receipt = {
+      requestId: "00000000-0000-4000-8000-000000000124",
+      releaseId: "1.1.0-beta.103-connector.1",
+      installationRoot: "/runtime",
+      resultPath: "/runtime/state/linux-cutover-runs/00000000-0000-4000-8000-000000000124/result.json",
+    };
+    const promote = env.port.promote;
+    env.port.promote = async (releaseId) => ({
+      ...(await promote(releaseId)), cutoverReceipt: receipt,
+    });
+    env.port.cutoverStatus = async () => "passed";
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(done).toMatchObject({ status: "succeeded", data: { cutoverReceipt: receipt } });
+    expect(env.calls.filter((call) => call.startsWith("promote "))).toHaveLength(1);
+  });
+
+  it("does not invent failure or retry when the broker result is still unknown", async () => {
+    const env = world();
+    const receipt = {
+      requestId: "00000000-0000-4000-8000-000000000125",
+      releaseId: "1.1.0-beta.103-connector.1",
+      installationRoot: "/runtime",
+      resultPath: "/runtime/state/linux-cutover-runs/00000000-0000-4000-8000-000000000125/result.json",
+    };
+    const promote = env.port.promote;
+    env.port.promote = async (releaseId) => ({
+      ...(await promote(releaseId)), cutoverReceipt: receipt,
+    });
+    let observations = 0;
+    env.port.cutoverStatus = async () => {
+      observations += 1;
+      return null;
+    };
+    const updates = runner(env.port);
+    const done = await updates.settled((await updates.start({ mainSha: MAIN })).updateId);
+    expect(done.status).toBe("succeeded"); // The active release is independent positive evidence.
+    expect(observations).toBeGreaterThan(0);
+    expect(env.calls.filter((call) => call.startsWith("promote "))).toHaveLength(1);
   });
 
   it("checks /health after the promote", async () => {

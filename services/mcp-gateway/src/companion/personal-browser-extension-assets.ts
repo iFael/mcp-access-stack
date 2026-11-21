@@ -1919,8 +1919,10 @@ async function navigate(input, signal) {
   throwIfAborted(signal, "navigate", false);
   await preservePersonalConsole(chromeTabId, signal);
   await chrome.tabs.update(chromeTabId, { url: targetUrl, active: true });
+  let loadConfirmed = false;
   try {
     await waitForTabComplete(chromeTabId, 30000, signal);
+    loadConfirmed = true;
   } catch (error) {
     if (signal?.aborted) throw error;
   }
@@ -1929,6 +1931,9 @@ async function navigate(input, signal) {
   metadata.requestedUrl = targetUrl;
   await updateMetadata(chromeTabId, metadata);
   const tab = await chrome.tabs.get(chromeTabId);
+  if (!loadConfirmed && tab.status !== "complete") {
+    throw coded("NAVIGATION_TIMEOUT", "Chrome has not confirmed page load. Inspect the owned tab before navigating again.");
+  }
   return { tab: toBrowserTab(metadata, tab) };
 }
 
@@ -2417,6 +2422,35 @@ async function scroll(input, signal) {
   }
 }
 
+// Observe editable content in the isolated world without returning its text.
+// A completed CDP dispatch is not proof that a rich editor changed.
+function observePersonalEditableMutation(stage, ref, expectedText) {
+  let element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : document.activeElement;
+  if (!ref) {
+    for (let depth = 0; depth < 4 && element?.shadowRoot?.activeElement; depth += 1) {
+      element = element.shadowRoot.activeElement;
+    }
+  }
+  const tag = String(element?.tagName || "").toLowerCase();
+  const type = String(element?.getAttribute?.("type") || "text").toLowerCase();
+  const editable = element?.isConnected &&
+    !element.disabled && !element.readOnly && element.getAttribute?.("aria-readonly") !== "true" &&
+    (element.isContentEditable || tag === "textarea" ||
+     tag === "input" && !["hidden", "file", "button", "submit", "reset", "image", "radio", "checkbox", "range"].includes(type));
+  if (!editable) return { ready: false };
+  const value = typeof element.value === "string" ? element.value : String(element.textContent || "");
+  if (stage === "before") {
+    globalThis.__mcpV3EditorMutation = { element, value };
+    return { ready: true, alreadyEqual: value === expectedText };
+  }
+  const before = globalThis.__mcpV3EditorMutation;
+  if (!before || before.element !== element) return { ready: false };
+  const changed = value !== before.value;
+  const matches = value === expectedText;
+  if (changed || matches) delete globalThis.__mcpV3EditorMutation;
+  return { ready: true, changed, matches, plain: tag === "input" || tag === "textarea" };
+}
+
 async function fill(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -2438,6 +2472,22 @@ async function fill(input, signal) {
   let attached = false;
   try {
     attached = await attachGuardedDebugger(target);
+    if (!input.ref.startsWith("ax-")) {
+      // Revalidate and focus after attaching the debugger: its infobar can
+      // change the viewport or the currently focused editor.
+      const [revalidated] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: probeGuardedElement,
+        args: [input.ref, input.guard, true],
+      });
+      if (!revalidated?.result || revalidated.result.error) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Editable target changed after Chrome debugger attachment.");
+      }
+      const [before] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+        args: ["before", input.ref, input.value],
+      });
+      if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field is not editable.");
+    }
     if (input.ref.startsWith("ax-")) {
       const point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
       for (const [type, button] of [["mouseMoved", "none"], ["mousePressed", "left"], ["mouseReleased", "left"]]) {
@@ -2454,6 +2504,20 @@ async function fill(input, signal) {
       { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
     ]) await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", event);
     await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+    if (!input.ref.startsWith("ax-")) {
+      let verified = false;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const [after] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+          args: ["after", input.ref, input.value],
+        });
+        verified = after?.result?.ready === true &&
+          (after.result.matches === true || after.result.plain !== true && after.result.changed === true);
+        if (verified) break;
+        await delay(100, signal);
+      }
+      if (!verified) throw coded("STATE_NOT_REACHED", "Chrome sent input but the editor did not confirm a change. Inspect the field before retrying.");
+    }
     return { tabId: input.tabId, completed: true };
   } catch (error) {
     if (error?.code) throw error;
@@ -2687,6 +2751,16 @@ async function typeText(input, signal) {
   let composing;
   try {
     attached = await attachGuardedDebugger(target);
+    const verifyTypedChange = input.text.length > 0 && !input.submit && !/[\\r\\n\\t]/u.test(input.text);
+    if (verifyTypedChange) {
+      const [before] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+        args: ["before", null, null],
+      });
+      if (before?.result?.ready !== true) {
+        throw coded("STATE_NOT_REACHED", "No editable field is focused. Click the editor before typing.");
+      }
+    }
     if (input.slowly) {
       const processKey = { key: "Process", code: "", windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 };
       const chars = Array.from(input.text);
@@ -2730,6 +2804,19 @@ async function typeText(input, signal) {
       }
     } else {
       await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.text });
+    }
+    if (verifyTypedChange) {
+      let changed = false;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const [after] = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+          args: ["after", null, null],
+        });
+        changed = after?.result?.ready === true && after.result.changed === true;
+        if (changed) break;
+        await delay(100, signal);
+      }
+      if (!changed) throw coded("STATE_NOT_REACHED", "Chrome sent keystrokes but the editor did not confirm a change. Inspect focus before retrying.");
     }
     if (input.submit) {
       for (const kind of ["keyDown", "keyUp"]) {

@@ -24,6 +24,31 @@ describe("browser action-key classification", () => {
       { ref: "r3", role: "button", name: "Enviar mensagem" }, "click",
     )).toMatchObject({ category: "send-message" });
   });
+  it("permits ordinary links and toggles while guarding sensitive links and consent", () => {
+    const interactions = new BrowserInteractionContextService();
+    const context = { tabId: "personal:7", url: "https://example.test/dashboard", title: "Dashboard" };
+    for (const [role, name] of [
+      ["link", "Read messages"], ["link", "Help"], ["checkbox", "Show details"], ["switch", "Enable filters"],
+    ] as const) {
+      expect(interactions.prepareDangerousAction(context, { ref: "r", role, name }, "click")).toBeUndefined();
+    }
+    for (const [role, name, category] of [
+      ["link", "Place order", "purchase-or-payment"],
+      ["link", "Transfer funds", "purchase-or-payment"],
+      ["link", "Subscribe", "purchase-or-payment"],
+      ["link", "Delete account", "delete-or-cancel"],
+      ["checkbox", "Accept terms", "accept-terms-or-contract"],
+      ["switch", "Delete all records", "delete-or-cancel"],
+    ] as const) {
+      expect(interactions.prepareDangerousAction(context, { ref: "r", role, name }, "click"))
+        .toMatchObject({ category });
+    }
+    expect(interactions.prepareDangerousAction(
+      { ...context, url: "https://example.test/checkout", title: "Checkout" },
+      { ref: "r", role: "link", name: "Continue" }, "click",
+    )).toMatchObject({ category: "purchase-or-payment" });
+  });
+
   it("recognizes Enter in single keys, chords and sequences", () => {
     for (const key of ["Enter", "Return", "NumpadEnter", "Ctrl+Enter", "Control+Shift+Return", "Tab Ctrl+Enter", "Alt+A NumpadEnter"]) {
       expect(containsBrowserEnterKey(key)).toBe(true);

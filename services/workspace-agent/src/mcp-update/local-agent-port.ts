@@ -1,7 +1,9 @@
 import { AppError } from "@vs-code-gpt/shared";
+import { lstat, readFile } from "node:fs/promises";
+import path from "node:path";
 import type { LocalAgent } from "../local-agent.js";
 import type { McpUpdatePort, McpUpdateRecord, McpUpdateWorkflowCall } from "./mcp-update-runner.js";
-import type { ReleaseInstallPort } from "./release-install.js";
+import type { CutoverReceipt, ReleaseInstallPort } from "./release-install.js";
 
 const WORKSPACE_ID = "mcp-access-stack";
 const REPOSITORY = { owner: "iFael", repository: "mcp-access-stack" } as const;
@@ -114,7 +116,45 @@ export function createLocalAgentReleasePort(agent: () => LocalAgent, workspaceId
     },
     promote: async (releaseId, confirmationId) => {
       const result = await agent().promoteRelease({ workspaceId, releaseId, ...(confirmationId === undefined ? {} : { confirmationId }) });
-      return result.status === "confirmation_required" ? confirmation(result) : { status: "handover_started" };
+      if (result.status === "confirmation_required") return confirmation(result);
+      const cutoverReceipt: CutoverReceipt = {
+        releaseId: result.releaseId, requestId: result.requestId,
+        installationRoot: result.installationRoot, resultPath: result.resultPath,
+      };
+      return { status: "handover_started", ...(workspaceId === WORKSPACE_ID ? { cutoverReceipt } : {}) };
+    },
+    cutoverStatus: async (receipt) => {
+      if (workspaceId !== WORKSPACE_ID ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(receipt.requestId)) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Invalid Oracle cutover receipt identity.");
+      }
+      const installed = await agent().getReleaseState({ workspaceId });
+      if (path.resolve(installed.installationRoot) !== path.resolve(receipt.installationRoot)) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Oracle cutover installation root changed since handoff.");
+      }
+      const expectedPath = path.resolve(receipt.installationRoot, "state", "linux-cutover-runs", receipt.requestId, "result.json");
+      if (path.resolve(receipt.resultPath) !== expectedPath) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Oracle cutover result path does not match its handoff.");
+      }
+      let info;
+      try { info = await lstat(expectedPath); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+      if (!info.isFile() || info.size > 65_536) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Oracle cutover result is not a bounded regular file.");
+      }
+      let result: unknown;
+      try { result = JSON.parse(await readFile(expectedPath, "utf8")); }
+      catch { throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Oracle cutover result is not readable JSON."); }
+      if (!result || typeof result !== "object" || !("schemaVersion" in result) || result.schemaVersion !== 1 ||
+          !("requestId" in result) ||
+          result.requestId !== receipt.requestId || !("releaseId" in result) || result.releaseId !== receipt.releaseId ||
+          !("status" in result) || (result.status !== "passed" && result.status !== "failed")) {
+        throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Oracle cutover terminal receipt is invalid.");
+      }
+      return result.status;
     },
   };
 }

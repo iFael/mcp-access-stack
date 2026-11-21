@@ -50,12 +50,21 @@ export type ReleaseConfirmation = {
   expiresAt: string;
 };
 
+export interface CutoverReceipt {
+  requestId: string;
+  releaseId: string;
+  installationRoot: string;
+  resultPath: string;
+}
+
 export interface ReleaseInstallPort {
   releaseState(): Promise<{ active: string | null; candidate: string | null }>;
   /** ownerScope: the user who asked for the update, so the task is theirs to read like one they started. */
   prepare(tag: string, confirmationId?: string, ownerScope?: string): Promise<ReleaseConfirmation | { status: "started"; taskId: string }>;
   task(taskId: string, ownerScope?: string): Promise<"running" | "succeeded" | "failed">;
-  promote(releaseId: string, confirmationId?: string): Promise<ReleaseConfirmation | { status: "handover_started" }>;
+  promote(releaseId: string, confirmationId?: string): Promise<ReleaseConfirmation | { status: "handover_started"; cutoverReceipt?: CutoverReceipt }>;
+  /** Read-only terminal result for the same cutover, when its receipt is known. */
+  cutoverStatus?(receipt: CutoverReceipt): Promise<"passed" | "failed" | null>;
 }
 
 export interface ReleaseInstallData {
@@ -67,6 +76,7 @@ export interface ReleaseInstallData {
   failedPrepareTaskIds?: string[];
   promoteRequested?: boolean;
   promoteStartedAt?: string;
+  cutoverReceipt?: CutoverReceipt;
 }
 
 export interface ReleaseInstallContext {
@@ -126,9 +136,20 @@ export async function promoteOnce(context: ReleaseInstallContext, releaseId: str
         confirmationId: result.confirmationId, reasons: result.reasons, expiresAt: result.expiresAt,
       });
     }
+    if (result.cutoverReceipt) {
+      if (result.cutoverReceipt.releaseId !== releaseId) {
+        throw new StopUpdate("CUTOVER_IDENTITY_MISMATCH", "The cutover handoff returned a different release.");
+      }
+      promoted = { ...promoted, cutoverReceipt: result.cutoverReceipt };
+      await context.save(promoted);
+    }
   }
   await context.until("PROMOTE_TIMEOUT", "the promote", async () => {
     const state = await port.releaseState();
+    if (promoted.cutoverReceipt && port.cutoverStatus &&
+        await port.cutoverStatus(promoted.cutoverReceipt) === "failed") {
+      throw new StopUpdate("CUTOVER_FAILED", `Cutover broker ${promoted.cutoverReceipt.requestId} reported failed.`);
+    }
     if (state.active === releaseId) return true;
     if (state.active === data.activeBefore && state.candidate === null) {
       throw new StopUpdate("ROLLED_BACK", `The runtime went back to ${state.active}.`);
