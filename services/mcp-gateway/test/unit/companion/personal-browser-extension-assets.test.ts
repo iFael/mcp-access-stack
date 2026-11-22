@@ -12,7 +12,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.4");
+    expect(manifest.version).toBe("1.17.5");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("Parar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -3529,7 +3529,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.4");
+    expect(parsedManifest.version).toBe("1.17.5");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3976,6 +3976,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     };
     const windows: Array<Record<string, unknown>> = [];
     const removedWindows: number[] = [];
+    const taskScopeReports: Array<Record<string, unknown>> = [];
     const notifications: Array<[string, string, Record<string, unknown>?]> = [];
     let onTick: (() => Promise<void>) | undefined;
     let onSiteRequest: ((id: string) => Promise<void>) | undefined;
@@ -3986,6 +3987,10 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const context = vm.createContext({
       URL, Date, Number, String, Math, Promise, Array, Object, Set, coded,
       PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
+      send: (message: Record<string, unknown>) => { taskScopeReports.push(message); },
+      readPersonalSiteGrants: async () => [],
+      readPersonalAutoSites: async () => [],
+      readPersonalPermanentScriptOrigins: async () => [],
       crypto: { randomUUID: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd` },
       chromeTabIdFrom: (id: string) => {
         const match = /^personal:(\d+)$/u.exec(String(id));
@@ -4030,6 +4035,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       if (id.startsWith("mcp-plan-site:")) queueMicrotask(() => void onSiteRequest?.(id));
     };
     vm.runInContext(serviceWorker.slice(start, end), context);
+    vm.runInContext(extractFunction(serviceWorker, "pushPersonalSiteApprovals"), context);
     loadGroupSupport(context, serviceWorker);
     vm.runInContext("const withOwnershipLock = (work) => work();", context);
     const syncRules = vm.runInContext("syncPersonalPlanNavigationRules", context) as () => Promise<void>;
@@ -4089,6 +4095,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       domains: ["shop.example"], actions: ["navigate", "interact", "fill"], tabIds: ["personal:8"],
       feedback: "Sem JavaScript, por favor" });
     expect(notifications.at(-1)).toEqual(["clear", "mcp-plan:" + planId]);
+    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [
+      { taskId: "t1", domains: ["shop.example"], actions: ["navigate", "interact", "fill"] },
+    ] });
     expect(removedWindows).toEqual([]);
     await expect(review({ type: "mcp-plan-decide", planId, approve: false })).rejects.toThrow("not-pending");
 
@@ -4167,6 +4176,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     // Only owned or shared tabs can be listed, and finishing the task ends its plans.
     await expect(plan({ ...proposal, tabIds: ["personal:12"] })).rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
     await clear("t1");
+    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [] });
     await expect(planRules()).resolves.toEqual([]);
     expect(sessionRules).toEqual([expect.objectContaining({ id: 1 })]);
     await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
@@ -4195,6 +4205,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       URL, Date, Number, String, Math, Promise, Array, Object, Set,
       PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
       send: (message: Record<string, unknown>) => { sent.push(message); },
+      readPersonalPlans: async () => ({}),
       chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
       readOwnedTabs: async () => owned,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -4251,7 +4262,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await ask("personal:7", "https://shop.example");
     await expect(grant(7)).resolves.toBe(true);
     const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown>>; autoSites: string[] };
-    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [],
+    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [], taskScopes: [],
       grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1" }] });
     // No time limit: the grant is held until its task ends.
     expect(session.get("mcpV3SiteGrants")).toEqual([{ origin: "https://shop.example", category: "upload-file",

@@ -749,6 +749,10 @@ async function pushPersonalSiteApprovals() {
       ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : { tabId: grant.tabId }) })),
     autoSites: await readPersonalAutoSites(),
     permanentScriptOrigins: await readPersonalPermanentScriptOrigins(),
+    taskScopes: Object.values(await readPersonalPlans())
+      .filter((plan) => plan?.status === "approved")
+      .map((plan) => ({ taskId: plan.taskId, domains: plan.approvedDomains,
+        actions: plan.approvedActions })),
   });
 }
 
@@ -1258,6 +1262,8 @@ async function readPersonalPlans() {
 
 async function writePersonalPlans(plans) {
   await chrome.storage.session.set({ [PERSONAL_PLANS_KEY]: plans });
+  // Revoke or replace task-scoped permissions whenever approved plans change.
+  await pushPersonalSiteApprovals();
 }
 
 async function personalPlanRequired() {
@@ -1599,7 +1605,8 @@ async function decidePersonalPlanSiteExtension(id, accepted) {
 }
 
 // An approved plan bounds what MCP does for its task: only its sites, only its
-// actions. With "Pedir um plano" on in the popup, nothing runs without one.
+// actions. Without a plan, basic navigation remains autonomous, but sensitive
+// operations continue to use their existing confirmation policy.
 async function enforcePersonalPlan(operation, input, signal) {
   const needs = personalPlanNeeds(operation, input);
   if (needs.length === 0) return;

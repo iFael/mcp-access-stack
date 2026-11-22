@@ -611,6 +611,55 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("accepts task-approved script scope from the authenticated extension and fails closed on revocation", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const handler = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      const result = request.operation === "selectTab" ? { tab: {
+        tabId, url: "https://example.com/account",
+        ownership: "mcp", lifecycle: "task-scoped", taskId: "task-1",
+        purpose: "test", reusable: false, protected: false, sticky: false,
+        createdAt: "2026-11-22T10:00:00.000Z", lastUsedAt: "2026-11-22T10:00:00.000Z",
+      } } : request.operation === "snapshot" ? {
+        tabId, url: "https://example.com/account", content: "Account", refs: [],
+      } : { tabId, value: "Account" };
+      extension.send(JSON.stringify({ type: "response", id: request.id, ok: true, result }));
+    };
+    extension.on("message", handler);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+    const script = { tabId, function: "() => document.title" };
+    try {
+      await bridge.selectTab({ tabId });
+      await bridge.snapshot({ tabId });
+      const sendScope = (scope: Record<string, unknown>[]) =>
+        extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: [],
+          taskScopes: scope }));
+      for (const malformed of [
+        { taskId: "task-1", domains: ["example.com/path"], actions: ["evaluate"] },
+        { taskId: "task-1", domains: ["example.com"], actions: ["delete-or-cancel"] },
+        { taskId: "task-1", domains: ["com"], actions: ["evaluate"] },
+      ]) {
+        sendScope([malformed]);
+        await settle();
+        await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      }
+      sendScope([{ taskId: "task-1", domains: ["example.com"], actions: ["evaluate"] }]);
+      await settle();
+      await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Account" });
+      sendScope([{ taskId: "other-task", domains: ["example.com"], actions: ["evaluate"] }]);
+      await settle();
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      sendScope([]);
+      await settle();
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+    } finally {
+      extension.off("message", handler);
+      await close();
+    }
+  });
+
   it("asks Chrome for a site approval and honors only approvals the extension reports", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";

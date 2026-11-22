@@ -1866,9 +1866,10 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
 }
 
 function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
-  const { grants, autoSites, permanentScriptOrigins = [] } = message;
+  const { grants, autoSites, permanentScriptOrigins = [], taskScopes = [] } = message;
   if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200 ||
-      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100) return undefined;
+      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100 ||
+      !Array.isArray(taskScopes) || taskScopes.length > 100) return undefined;
   const parsedGrants: PersonalSiteGrant[] = [];
   for (const grant of grants) {
     if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
@@ -1890,8 +1891,19 @@ function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalS
   if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
   if (permanentScriptOrigins.some((origin) => typeof origin !== "string" ||
       !/^https:\/\/[^/\s]{1,260}$/u.test(origin) || new URL(origin).origin !== origin)) return undefined;
+  const planActions = new Set(["navigate", "interact", "fill", "upload", "download", "evaluate"]);
+  const approvedScopes: NonNullable<PersonalSiteApprovals["taskScopes"]>[number][] = [];
+  for (const scope of taskScopes) {
+    if (!isRecord(scope) || typeof scope.taskId !== "string" || scope.taskId.length < 1 ||
+        scope.taskId.length > 128 || !Array.isArray(scope.domains) || scope.domains.length > 100 ||
+        !Array.isArray(scope.actions) || scope.actions.length > 6 ||
+        scope.domains.some((domain) => typeof domain !== "string" ||
+          !/^(?=.{4,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/u.test(domain)) ||
+        scope.actions.some((action) => typeof action !== "string" || !planActions.has(action))) return undefined;
+    approvedScopes.push({ taskId: scope.taskId, domains: [...scope.domains], actions: [...scope.actions] });
+  }
   return { grants: parsedGrants, autoSites: [...autoSites] as string[],
-    permanentScriptOrigins: [...permanentScriptOrigins] as string[] };
+    permanentScriptOrigins: [...permanentScriptOrigins] as string[], taskScopes: approvedScopes };
 }
 
 function sendCancel(socket: WebSocket, id: string): void {
