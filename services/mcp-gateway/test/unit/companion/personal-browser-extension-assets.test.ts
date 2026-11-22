@@ -11,7 +11,7 @@ describe("personal browser extension assets", () => {
     const manifest = JSON.parse(assets.manifest) as {
       action: { default_popup: string }; options_page: string; version: string;
     };
-    expect(manifest.version).toBe("1.17.0");
+    expect(manifest.version).toBe("1.17.1");
     expect(manifest.action.default_popup).toBe("browser-status.html");
     expect(manifest.options_page).toBe("secret-provision.html");
     expect(assets.popupHtml).toContain("Parar o MCP");
@@ -3395,7 +3395,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.0");
+    expect(parsedManifest.version).toBe("1.17.1");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
