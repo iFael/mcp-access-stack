@@ -6805,9 +6805,13 @@ function inspectPointInDocument(x, y) {
   const live = globalThis.__mcpV3OwnedRefElements;
   const metadata = globalThis.__mcpV3OwnedRefMetadata;
   if (!live || !metadata) return null;
+  const nestedAction = top?.closest?.('a[href],button,[role="button"],[role="link"],[role="menuitem"],input[type="submit"],input[type="button"]');
   for (let current = top; current; current = current.parentElement || current.getRootNode?.()?.host) {
     for (const [ref, element] of live) {
-      if (element === current && element.isConnected) return metadata.get(ref) || null;
+      if (element === current && element.isConnected) {
+        if (nestedAction && globalThis.__mcpV3PixelEditorRefs?.has(ref)) return null;
+        return metadata.get(ref) || null;
+      }
     }
   }
   // Monaco's visual text can be outside its zero-width EditContext element.
@@ -6815,9 +6819,13 @@ function inspectPointInDocument(x, y) {
   // never for an arbitrary pixel or a label that could submit a form.
   const editor = top?.closest?.('[role="textbox"],[role="code"],code,[contenteditable="true"],.monaco-editor,.cm-editor');
   const active = document.activeElement;
-  if (editor?.isConnected && !editor.closest?.('a[href],button,[role="button"]') &&
+  // A real Monaco/CodeMirror host can receive a click before its hidden input
+  // receives focus. Require its own connected editing input, not just a CSS class.
+  const editorInput = editor?.matches?.(".monaco-editor,.cm-editor") &&
+    editor.querySelector?.('textarea.inputarea,[role="textbox"],[contenteditable="true"],.cm-content');
+  if (editor?.isConnected && !nestedAction && !editor.closest?.('a[href],button,[role="button"]') &&
       (editor.matches?.('[role="textbox"],[role="code"],code,[contenteditable="true"]') ||
-       active && editor.contains?.(active))) {
+       editorInput?.isConnected || (active && editor.contains?.(active)))) {
     const ref = "p-editor-" + (globalThis.__mcpV3PageInstanceId || "") + "-" +
       ((globalThis.__mcpV3PixelEditorCounter = (globalThis.__mcpV3PixelEditorCounter || 0) + 1));
     const target = { ref, role: "textbox", name: "" };
@@ -6861,9 +6869,15 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
       !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement && element.isContentEditable)) {
     return { error: "not_editable" };
   }
-  element.scrollIntoView({ block: "center", inline: "center" });
+  // Monaco's input can be tiny or covered by its own rendered text.
+  // Click its verified editor surface while still binding to the input ref.
+  const editorHost = role === "textbox" && !editorPointRef &&
+    (tag === "textarea" || element.isContentEditable || element.getAttribute("role") === "textbox")
+    ? element.closest?.(".monaco-editor,.cm-editor") : null;
+  const clickSurface = editorHost?.isConnected && editorHost.contains?.(element) ? editorHost : element;
+  clickSurface.scrollIntoView({ block: "center", inline: "center" });
   if (focus) element.focus?.();
-  const rect = element.getBoundingClientRect();
+  const rect = clickSurface.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
   const x = coordinateX == null ? rect.left + rect.width / 2 : coordinateX;
   const y = coordinateY == null ? rect.top + rect.height / 2 : coordinateY;
@@ -6883,7 +6897,13 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
     Array.from(element.labels || []).some((label) =>
       (top === label || label.contains(top)) &&
       !top?.closest?.("a,button,input,select,textarea,[role=button],[role=link]"));
-  if (!top || (top !== element && !element.contains(top) && !associatedLabel)) {
+  // Only a visual layer inside the same editor may cover an editing input.
+  // Buttons, links, nested actions and unrelated overlays remain blocked.
+  const editorHit = (editorPointRef || clickSurface !== element) &&
+    clickSurface.contains?.(top) &&
+    !top?.closest?.('a[href],button,[role="button"],[role="link"],[role="menuitem"],input[type="submit"],input[type="button"]');
+  if (!top || (editorPointRef && !editorHit) ||
+      (top !== element && !element.contains(top) && !associatedLabel && !editorHit)) {
     return { error: "obscured" };
   }
   return { x, y };

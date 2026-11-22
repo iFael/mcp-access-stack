@@ -974,6 +974,7 @@ describe("PersonalBrowserBridge", () => {
   it("resolves viewport coordinates to authenticated structured refs before clicking or hovering", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const requests: Array<{ operation?: string; input: Record<string, unknown> }> = [];
+    let target = { ref: "p-7", role: "link", name: "Help" };
     const respond = (data: WebSocket.RawData) => {
       const message = JSON.parse(data.toString()) as WireMessage;
       if (message.type !== "request") return;
@@ -981,9 +982,9 @@ describe("PersonalBrowserBridge", () => {
       const result = message.operation === "snapshot"
         ? {
           tabId: "personal:7", url: "https://example.com/",
-          content: '- link "Help" [ref=p-7]',
-          refs: [{ ref: "p-7", role: "link", name: "Help" }],
-          pointTarget: { ref: "p-7", role: "link", name: "Help" },
+          content: "- " + target.role + " " + JSON.stringify(target.name) + " [ref=" + target.ref + "]",
+          refs: [target],
+          pointTarget: target,
         }
         : { tabId: "personal:7", completed: true };
       extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, result }));
@@ -1003,6 +1004,18 @@ describe("PersonalBrowserBridge", () => {
         .resolves.toMatchObject({ completed: true });
       expect(requests.map((request) => request.operation)).toEqual(["snapshot", "hover"]);
       expect(requests[1]?.input).toMatchObject({ ref: "p-7", x: 31, y: 44 });
+
+      // A pixel over a verified editor is resolved to a safe semantic ref:
+      // it must not fall back to pixel-click's one-use confirmation.
+      target = { ref: "p-editor-page-1", role: "textbox", name: "" };
+      requests.length = 0;
+      await expect(bridge.click({ tabId: "personal:7", x: 60, y: 40 }))
+        .resolves.toMatchObject({ tabId: "personal:7", completed: true });
+      expect(requests.map((request) => request.operation)).toEqual(["snapshot", "click"]);
+      expect(requests[1]?.input).toMatchObject({
+        tabId: "personal:7", ref: "p-editor-page-1", x: 60, y: 40,
+        guard: { ref: "p-editor-page-1", role: "textbox", name: "" },
+      });
     } finally {
       extension.off("message", respond);
       await close();
