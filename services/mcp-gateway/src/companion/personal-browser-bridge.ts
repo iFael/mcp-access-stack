@@ -54,6 +54,8 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const STAGED_UPLOAD_RETENTION_MS = 30 * 60 * 1_000;
 const MAX_UPLOADABLE_SCREENSHOTS = 200;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
+const EXTENSION_RELOAD_COOLDOWN_MS = 60_000;
+const EXTENSION_RELOAD_MAX_ATTEMPTS = 3;
 // A 12 MiB PDF needs up to 16 MiB of base64 transport. Other results retain their schemas.
 const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
@@ -112,6 +114,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   private readonly stagedUploads = new Map<string, { tabId: string; timer: NodeJS.Timeout }>();
   // Only screenshots this bridge captured may be uploaded by path.
   private readonly uploadableScreenshots = new Set<string>();
+  private expectedExtensionVersion = "";
+  private observedExtensionVersion: string | undefined;
+  private updatedExtensionNeedsSnapshot = false;
+  private reloadPending = false;
+  private reloadReason: string | undefined;
+  private reloadAttempts = 0;
+  private lastReloadAt = 0;
+  private reloadTimer: ReturnType<typeof setTimeout> | undefined;
   private socket: WebSocket | undefined;
   private socketGeneration = 0;
   private nextConnectionGeneration = 0;
@@ -151,12 +161,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   connectionInfo(): PersonalBrowserConnectionInfo {
+    const reloadInfo = {
+      expectedExtensionVersion: this.expectedExtensionVersion,
+      reloadPending: this.reloadPending,
+      ...(this.reloadReason ? { reloadReason: this.reloadReason } : {}),
+    };
     if (this.isConnected() && this.peerInfo) {
-      return {
-        ...this.peerInfo,
-        capabilities: [...this.peerInfo.capabilities],
-        expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
-      };
+      return { ...this.peerInfo, capabilities: [...this.peerInfo.capabilities], ...reloadInfo };
     }
     return {
       connected: false,
@@ -164,12 +175,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       profile: "personal",
       protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
       capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
-      expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+      ...(this.observedExtensionVersion ? { extensionVersion: this.observedExtensionVersion } : {}),
+      ...reloadInfo,
     };
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    clearTimeout(this.reloadTimer);
     const socket = this.socket;
     this.socket = undefined;
     this.socketGeneration = 0;
@@ -267,6 +280,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }, context);
     // The original authenticated refs, not the projected text, own the guards.
     this.actions.observeSnapshot(result);
+    this.updatedExtensionNeedsSnapshot = false;
     const tracked = this.snapshots.observe(result, {
       ...input,
       ...(filtered ? { forceFull: true } : {}),
@@ -1159,50 +1173,32 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       this.port,
       blockedPrivateOrigins,
     );
+    // Each file is fully written before its same-directory atomic rename.
+    // Publish the manifest last: the bridge never requests reload mid-write.
+    for (const [name, content] of [
+      ["service-worker.js", assets.serviceWorker],
+      ["secret-provision.html", assets.secureChannelHtml],
+      ["secret-provision.js", assets.secureChannelScript],
+      ["plan-review.html", assets.planReviewHtml],
+      ["plan-review.js", assets.planReviewScript],
+      ["task-home.html", assets.taskHomeHtml],
+      ["task-home.js", assets.taskHomeScript],
+      ["manifest.json", assets.manifest],
+    ] as const) {
+      const target = path.join(this.extensionDirectory, name);
+      const temporary = path.join(this.extensionDirectory, "." + name + "." + randomUUID() + ".tmp");
+      try {
+        await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+        await rename(temporary, target);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
     await Promise.all([
-      writeFile(
-        path.join(this.extensionDirectory, "manifest.json"),
-        assets.manifest,
-        { encoding: "utf8", mode: 0o600 },
-      ),
-      writeFile(
-        path.join(this.extensionDirectory, "service-worker.js"),
-        assets.serviceWorker,
-        { encoding: "utf8", mode: 0o600 },
-      ),
       rm(path.join(this.extensionDirectory, "browser-status.html"), { force: true }),
-      writeFile(
-        path.join(this.extensionDirectory, "secret-provision.html"),
-        assets.secureChannelHtml,
-        { encoding: "utf8", mode: 0o600 },
-      ),
-      writeFile(
-        path.join(this.extensionDirectory, "secret-provision.js"),
-        assets.secureChannelScript,
-        { encoding: "utf8", mode: 0o600 },
-      ),
       rm(path.join(this.extensionDirectory, "tab-sharing.js"), { force: true }),
-      writeFile(
-        path.join(this.extensionDirectory, "plan-review.html"),
-        assets.planReviewHtml,
-        { encoding: "utf8", mode: 0o600 },
-      ),
-      writeFile(
-        path.join(this.extensionDirectory, "plan-review.js"),
-        assets.planReviewScript,
-        { encoding: "utf8", mode: 0o600 },
-      ),
-      writeFile(
-        path.join(this.extensionDirectory, "task-home.html"),
-        assets.taskHomeHtml,
-        { encoding: "utf8", mode: 0o600 },
-      ),
-      writeFile(
-        path.join(this.extensionDirectory, "task-home.js"),
-        assets.taskHomeScript,
-        { encoding: "utf8", mode: 0o600 },
-      ),
     ]);
+    this.expectedExtensionVersion = PERSONAL_BROWSER_EXTENSION_VERSION;
 
     const server = new WebSocketServer({
       host: "127.0.0.1",
@@ -1233,16 +1229,45 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           const peerInfo = parsePersonalBrowserHello(raw);
           if (!peerInfo) {
             clearTimeout(handshakeTimeout);
+            // Authenticated extensions with an older protocol or missing capability
+            // can still receive the upgrade hint before their 1008 close.
+            let offeredVersion: string | undefined;
+            try {
+              const candidate: unknown = JSON.parse(raw);
+              if (isRecord(candidate) && candidate.type === "hello" &&
+                  typeof candidate.extensionVersion === "string" &&
+                  candidate.extensionVersion.length > 0 && candidate.extensionVersion.length <= 100) {
+                offeredVersion = candidate.extensionVersion;
+              }
+            } catch { /* Invalid handshakes receive only the ordinary 1008. */ }
+            if (offeredVersion) this.observedExtensionVersion = offeredVersion;
+            if (offeredVersion && offeredVersion !== this.expectedExtensionVersion &&
+                this.requestExtensionReload(socket, true)) return;
             socket.close(1008, "incompatible personal browser extension");
             return;
           }
           activated = true;
           clearTimeout(handshakeTimeout);
           const previous = this.socket;
+          const previousVersion = this.peerInfo?.extensionVersion;
+          const previousObservedVersion = this.observedExtensionVersion;
           const previousGeneration = this.socketGeneration;
           this.socket = socket;
           this.socketGeneration = generation;
           this.peerInfo = peerInfo;
+          this.observedExtensionVersion = peerInfo.extensionVersion;
+          const updated = peerInfo.extensionVersion === this.expectedExtensionVersion;
+          if (updated && previousObservedVersion && previousObservedVersion !== peerInfo.extensionVersion) {
+            this.updatedExtensionNeedsSnapshot = true;
+          }
+          if (updated) {
+            clearTimeout(this.reloadTimer);
+            this.reloadTimer = undefined;
+            this.reloadPending = false;
+            this.reloadReason = undefined;
+            this.reloadAttempts = 0;
+            this.lastReloadAt = 0;
+          }
           this.actions.clear();
           this.snapshots.clear();
           this.coordinateClicks.clear();
@@ -1253,7 +1278,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
               previousGeneration,
               new AppError(
                 "BROWSER_DISCONNECTED",
-                "The MCP V3 personal Chrome extension connection was replaced.",
+                updated && previousVersion !== peerInfo.extensionVersion
+                  ? "The Chrome extension was updated. Take a fresh browser_snapshot before continuing."
+                  : "The MCP V3 personal Chrome extension connection was replaced.",
               ),
             );
             if (previous.readyState < WebSocket.CLOSING) {
@@ -1265,6 +1292,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
               type: "hello-ack",
               protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
             }));
+            if (!updated) this.requestExtensionReload(socket);
           }
           this.options.log?.({
             event: "mcp_v3_personal_browser_connected",
@@ -1295,7 +1323,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
             generation,
             new AppError(
               "BROWSER_DISCONNECTED",
-              "The MCP V3 personal Chrome extension disconnected.",
+              this.reloadPending
+                ? "The Chrome extension is updating. Reconnect and take a fresh browser_snapshot before continuing."
+                : "The MCP V3 personal Chrome extension disconnected.",
             ),
           );
         }
@@ -1409,6 +1439,67 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
   }
 
+  // Only an authenticated loopback peer receives reload instructions.
+  // Back off per installed release; a bad unpacked update must never loop forever.
+  private requestExtensionReload(socket: WebSocket, incompatible = false): boolean {
+    if (this.closed || socket.readyState !== WebSocket.OPEN ||
+        !this.observedExtensionVersion ||
+        this.observedExtensionVersion === this.expectedExtensionVersion) return false;
+
+    if (this.reloadAttempts >= EXTENSION_RELOAD_MAX_ATTEMPTS) {
+      this.reloadPending = false;
+      this.reloadReason = "Automatic reload failed after three attempts; check Chrome extension permissions and reload manually.";
+      this.options.log?.({ event: "mcp_v3_chrome_autoreload_exhausted",
+        expectedExtensionVersion: this.expectedExtensionVersion, attempts: this.reloadAttempts });
+      return false;
+    }
+    if (this.pending.size > 0 || this.pendingChromeConfirmations.size > 0) {
+      this.reloadPending = true;
+      this.reloadReason = "Waiting for browser operations to finish before reloading.";
+      if (!incompatible) this.scheduleExtensionReloadCheck(socket, 1_000);
+      return false;
+    }
+    const remaining = EXTENSION_RELOAD_COOLDOWN_MS - (Date.now() - this.lastReloadAt);
+    if (this.reloadAttempts > 0 && remaining > 0) {
+      if (!incompatible) this.scheduleExtensionReloadCheck(socket, remaining);
+      return false;
+    }
+    this.reloadAttempts += 1;
+    this.lastReloadAt = Date.now();
+    this.reloadPending = true;
+    this.reloadReason = undefined;
+    try {
+      socket.send(JSON.stringify({
+        type: "reload-extension", expectedVersion: this.expectedExtensionVersion,
+      }), (error) => {
+        if (error) this.reloadReason = "Chrome extension reload request could not be delivered.";
+        if (incompatible && socket.readyState < WebSocket.CLOSING) {
+          socket.close(1008, "incompatible personal browser extension");
+        }
+      });
+      this.options.log?.({ event: "mcp_v3_chrome_autoreload_requested",
+        expectedExtensionVersion: this.expectedExtensionVersion,
+        observedExtensionVersion: this.observedExtensionVersion,
+        attempt: this.reloadAttempts, incompatible });
+      if (!incompatible) this.scheduleExtensionReloadCheck(socket, EXTENSION_RELOAD_COOLDOWN_MS);
+      return true;
+    } catch {
+      this.reloadReason = "Chrome extension reload request failed.";
+      return false;
+    }
+  }
+
+  private scheduleExtensionReloadCheck(socket: WebSocket, delayMs: number): void {
+    clearTimeout(this.reloadTimer);
+    this.reloadTimer = setTimeout(() => {
+      this.reloadTimer = undefined;
+      if (this.socket === socket && socket.readyState === WebSocket.OPEN) {
+        this.requestExtensionReload(socket);
+      }
+    }, Math.max(1, delayMs));
+    this.reloadTimer.unref();
+  }
+
   private authorize(requestUrl: string | undefined): boolean {
     if (!requestUrl) return false;
     try {
@@ -1436,6 +1527,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "heartbeat-ack" }));
       }
+      return;
+    }
+    if (message.type === "reload-extension-status" &&
+        (message.state === "deferred" || message.state === "reloading")) {
+      this.reloadPending = true;
+      this.reloadReason = message.state === "deferred" && typeof message.reason === "string"
+        ? message.reason.slice(0, 300)
+        : "Chrome extension is updating; take a fresh snapshot after reconnection.";
       return;
     }
     if (message.type === "one-use-confirmation-result" && typeof message.id === "string") {
@@ -1554,6 +1653,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           "Personal browser mode requires the MCP V3 Chrome extension to be loaded and connected.",
         )),
       );
+    }
+    if (this.updatedExtensionNeedsSnapshot && isRecord(input) && typeof input.tabId === "string" &&
+        !["snapshot", "tabs", "closeTab", "finishTask", "videoStop"].includes(operation)) {
+      return Promise.reject(fail(new AppError(
+        "BROWSER_CONFIRMATION_INVALID",
+        "The Chrome extension was updated; take a fresh browser_snapshot before continuing.",
+      )));
     }
     if (!peerInfo.capabilities.includes(operation)) {
       return Promise.reject(fail(new AppError(

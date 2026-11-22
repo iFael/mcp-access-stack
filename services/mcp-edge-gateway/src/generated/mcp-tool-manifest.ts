@@ -16334,6 +16334,14 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991,
               "type": "integer"
+            },
+            "reloadPending": {
+              "type": "boolean"
+            },
+            "reloadReason": {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
@@ -16655,6 +16663,14 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991,
               "type": "integer"
+            },
+            "reloadPending": {
+              "type": "boolean"
+            },
+            "reloadReason": {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
@@ -29283,15 +29299,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "189d0d1f0f04bd2fb3614e024b26410939e132c2215950b085b47046856008a7",
-  "serverVersion": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d",
+  "contractRevision": "10c816433f61e4d37022c28babe78ee57fd4cacdaa2da849eba4795490a3753c",
+  "serverVersion": "0.4.0-catalog.c10c816433f61.sa15e528da70d",
   "toolCount": 134,
   "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d"
+  "version": "0.4.0-catalog.c10c816433f61.sa15e528da70d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

@@ -7,6 +7,8 @@ export interface PersonalBrowserConnectionInfo {
   protocolVersion: number;
   extensionVersion?: string;
   expectedExtensionVersion?: string;
+  reloadPending?: boolean;
+  reloadReason?: string;
   capabilities: string[];
 }
 
