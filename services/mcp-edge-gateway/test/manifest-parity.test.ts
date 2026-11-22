@@ -32,8 +32,8 @@ describe("Edge MCP generated manifest parity", () => {
     expect((metaFor("browser_progress").ui as Record<string, unknown>).resourceUri)
       .toBe("ui://mcp-v3/progress-v13.html");
     expect(metaFor("browser_progress_update")).not.toHaveProperty("openai/outputTemplate");
-    expect((metaFor("github_get_pull_request").ui as Record<string, unknown>).resourceUri)
-      .toBe("ui://mcp-v3/pull-request-v6.html");
+    expect(metaFor("github_get_pull_request")).not.toHaveProperty("ui");
+    expect(metaFor("github_get_pull_request")).not.toHaveProperty("openai/outputTemplate");
     expect((metaFor("browser_user_messages").ui as Record<string, unknown>).resourceUri)
       .toBe("ui://mcp-v3/user-messages-v11.html");
     expect((metaFor("mcp_update").ui as Record<string, unknown>).resourceUri)

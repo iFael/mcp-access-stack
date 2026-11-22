@@ -3278,15 +3278,6 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_issue_write: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
 };
 
-// The pull request card the chat shows with github_get_pull_request. The Edge serves it.
-export const PULL_REQUEST_CARD_URI = "ui://mcp-v3/pull-request-v6.html";
-const PULL_REQUEST_CARD_META = {
-  ui: { resourceUri: PULL_REQUEST_CARD_URI },
-  "openai/outputTemplate": PULL_REQUEST_CARD_URI,
-  "openai/toolInvocation/invoking": "Lendo a PR",
-  "openai/toolInvocation/invoked": "PR",
-} as const;
-
 export function registerSourceControlTools(
   server: McpServer,
   executor: SourceControlExecutor,
@@ -3910,7 +3901,7 @@ export function registerSourceControlTools(
         inputSchema: sourceControlMcpSchemas.github_get_pull_request.input,
         outputSchema: sourceControlMcpSchemas.github_get_pull_request.output,
         annotations: sourceControlAnnotations.github_get_pull_request,
-        _meta: { ...meta, ...PULL_REQUEST_CARD_META },
+        _meta: meta,
       },
       async (input, extra) => {
         const authError = validateAuthentication(options, extra.authInfo);

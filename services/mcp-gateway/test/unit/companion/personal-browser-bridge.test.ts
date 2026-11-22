@@ -1,5 +1,5 @@
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Script } from "node:vm";
@@ -1469,6 +1469,8 @@ describe("PersonalBrowserBridge", () => {
     await mkdir(extensionDir, { recursive: true });
     await writeFile(path.join(extensionDir, "browser-status.html"), "old popup");
     await writeFile(path.join(extensionDir, "tab-sharing.js"), "old popup script");
+    await writeFile(path.join(extensionDir, "manifest.json"), JSON.stringify({ version: "0.1.0" }));
+    await writeFile(path.join(extensionDir, "service-worker.js"), 'const EXTENSION_VERSION = "0.1.0";');
     const port = await reservePort();
     const bridge = await PersonalBrowserBridge.start({
       stateRoot: root,
@@ -1489,12 +1491,17 @@ describe("PersonalBrowserBridge", () => {
     );
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
       manifest_version: number;
+      version: string;
       permissions: string[];
     };
     const workerSource = await readFile(workerPath, "utf8");
     const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
 
     expect(manifest.manifest_version).toBe(3);
+    expect(manifest.version).toBe(PERSONAL_BROWSER_EXTENSION_VERSION);
+    expect(workerSource).toContain('const EXTENSION_VERSION = "' + manifest.version + '";');
+    expect((await readdir(extensionDir)).filter(name => name.endsWith(".tmp"))).toEqual([]);
+    expect((await stat(workerPath)).mtimeMs).toBeLessThanOrEqual((await stat(manifestPath)).mtimeMs);
     await expect(readFile(path.join(extensionDir, "browser-status.html"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(path.join(extensionDir, "tab-sharing.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(manifest.permissions).toEqual(expect.arrayContaining([
@@ -1503,6 +1510,7 @@ describe("PersonalBrowserBridge", () => {
       "storage",
       "debugger",
     ]));
+    expect(manifest.permissions).not.toContain("management");
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(() => new Script(workerSource)).not.toThrow();
     const popupHtml = await readFile(path.join(root, "browser", "personal-extension", "secret-provision.html"), "utf8");
@@ -1666,6 +1674,150 @@ describe("PersonalBrowserBridge", () => {
       expect(bridge.isConnected()).toBe(true);
     } finally {
       socket.close();
+      await close();
+    }
+  });
+
+  it("keeps the installed extension connected without requesting a redundant reload", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    try {
+      const messages: string[] = [];
+      extension.on("message", (data) => {
+        messages.push((JSON.parse(data.toString()) as { type: string }).type);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(messages).not.toContain("reload-extension");
+      expect(bridge.connectionInfo()).toMatchObject({
+        extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+        expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+        reloadPending: false,
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  it("requests a newer installed version on a compatible older hello", async () => {
+    const { bridge, token, port, close } = await startAuthenticatedBridge();
+    const old = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        old.once("open", resolve);
+        old.once("error", reject);
+      });
+      const reload = nextWireMessage(old, (message) => message.type === "reload-extension");
+      old.send(JSON.stringify({
+        type: "hello", protocolVersion: PERSONAL_BROWSER_PROTOCOL_VERSION,
+        extensionVersion: "1.17.4", browser: "chrome", profile: "personal",
+        capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+      }));
+      await expect(reload).resolves.toMatchObject({
+        type: "reload-extension", expectedVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+      });
+      expect(bridge.connectionInfo()).toMatchObject({
+        connected: true, extensionVersion: "1.17.4",
+        expectedExtensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+        reloadPending: true,
+      });
+    } finally {
+      old.close();
+      await close();
+    }
+  });
+
+  it("recovers after version N+1 reconnects and requires new snapshot references", async () => {
+    const { bridge, token, port, close } = await startAuthenticatedBridge();
+    let old: WebSocket | undefined;
+    let updated: WebSocket | undefined;
+    try {
+      old = await connectExtension(port, token, PERSONAL_BROWSER_CAPABILITIES, "1.17.4");
+      old.close();
+      updated = await connectExtension(port, token, PERSONAL_BROWSER_CAPABILITIES,
+        PERSONAL_BROWSER_EXTENSION_VERSION);
+      expect(bridge.connectionInfo()).toMatchObject({
+        extensionVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+        reloadPending: false,
+      });
+      await expect(bridge.wait({ tabId: "personal:7", timeoutMs: 100 })).rejects.toMatchObject({
+        code: "BROWSER_CONFIRMATION_INVALID",
+        message: expect.stringContaining("fresh browser_snapshot"),
+      });
+      updated.on("message", (data) => {
+        const request = JSON.parse(data.toString()) as WireMessage;
+        if (request.type !== "request" || request.operation !== "snapshot") return;
+        updated?.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId: "personal:7", url: "https://example.com/",
+            title: "Example", content: "safe", refs: [] } }));
+      });
+      await expect(bridge.snapshot({ tabId: "personal:7" })).resolves.toMatchObject({
+        url: "https://example.com/",
+      });
+    } finally {
+      old?.close();
+      updated?.close();
+      await close();
+    }
+  });
+
+  it("sends the reload request before a 1008 close on an obsolete protocol", async () => {
+    const { bridge, token, port, close } = await startAuthenticatedBridge();
+    const old = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        old.once("open", resolve);
+        old.once("error", reject);
+      });
+      const reload = nextWireMessage(old, (message) => message.type === "reload-extension");
+      const closed = new Promise<number>((resolve) => old.once("close", resolve));
+      old.send(JSON.stringify({
+        type: "hello", protocolVersion: 999,
+        extensionVersion: "1.17.4", browser: "chrome", profile: "personal",
+        capabilities: [...PERSONAL_BROWSER_CAPABILITIES],
+      }));
+      await expect(reload).resolves.toMatchObject({
+        type: "reload-extension", expectedVersion: PERSONAL_BROWSER_EXTENSION_VERSION,
+      });
+      await expect(closed).resolves.toBe(1008);
+      expect(bridge.connectionInfo().reloadPending).toBe(true);
+    } finally {
+      old.close();
+      await close();
+    }
+  });
+
+  it("never sends a reload while a call is pending and limits retries to three with a 60-second cooldown", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    type ReloadBridge = {
+      socket: WebSocket;
+      observedExtensionVersion: string;
+      pending: Map<string, unknown>;
+      reloadAttempts: number;
+      lastReloadAt: number;
+      requestExtensionReload(socket: WebSocket): boolean;
+    };
+    const state = bridge as unknown as ReloadBridge;
+    try {
+      state.observedExtensionVersion = "1.17.4";
+      state.pending.set("in-flight", {});
+      expect(state.requestExtensionReload(state.socket)).toBe(false);
+      expect(state.reloadAttempts).toBe(0);
+      state.pending.delete("in-flight");
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (attempt > 1) state.lastReloadAt -= 60_001;
+        const received = nextWireMessage(extension, (message) => message.type === "reload-extension");
+        expect(state.requestExtensionReload(state.socket)).toBe(true);
+        await received;
+        expect(state.reloadAttempts).toBe(attempt);
+        expect(state.requestExtensionReload(state.socket)).toBe(false);
+        expect(state.reloadAttempts).toBe(attempt);
+      }
+      state.lastReloadAt -= 60_001;
+      expect(state.requestExtensionReload(state.socket)).toBe(false);
+      expect(bridge.connectionInfo()).toMatchObject({
+        reloadPending: false,
+        reloadReason: expect.stringContaining("three attempts"),
+      });
+    } finally {
       await close();
     }
   });

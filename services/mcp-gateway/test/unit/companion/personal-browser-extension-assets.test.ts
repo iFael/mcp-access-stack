@@ -6,6 +6,73 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("reloads a newer unpacked extension only after active calls settle, preserving user tabs", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    const pending = new Map<string, unknown>([["active", true]]);
+    const held = new Map<string, unknown>([["7", true]]);
+    const context = vm.createContext({
+      EXTENSION_VERSION: "1.17.6", PERSONAL_HANDOFF_PREFIX: "mcpV3PersonalHandoff:",
+      inFlightRequests: pending, mutationQueues: new Map(),
+      personalRecordings: new Map(), personalNetworkCaptures: new Map(),
+      personalDialogArms: new Map(), personalViewportSessions: new Map(),
+      personalDebuggerTransitions: new Map(), personalTaskDebuggers: held,
+      pendingPersonalOneUseConfirmations: new Map(),
+      releasePersonalTaskDebugger: async (id: number) => { calls.push("detach:" + id); held.delete(String(id)); },
+      endAllPersonalRecordings: () => { calls.push("stop-recordings"); },
+      send: (message: { state?: string }) => { calls.push("status:" + message.state); },
+      chrome: {
+        storage: { session: { get: async () => ({}) } },
+        runtime: { reload: () => { calls.push("reload"); } },
+      },
+      Date, Object, Promise,
+      setTimeout: (callback: () => void) => { pending.clear(); callback(); },
+    });
+    vm.runInContext("let personalExtensionReloadPending = false;", context);
+    const reload = vm.runInContext(
+      `(${extractFunction(serviceWorker, "reloadPersonalExtensionWhenIdle")})`, context) as
+      (version: string) => Promise<void>;
+    await reload("1.17.7");
+    expect(calls).toEqual(["detach:7", "stop-recordings", "status:reloading", "reload"]);
+    await reload("1.17.6");
+    expect(calls).toHaveLength(4);
+    expect(serviceWorker).toContain("chrome.runtime.reload()");
+  });
+
+  it("defers automatic reload for a live user handoff or capture instead of interrupting it", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let time = 0;
+    const events: string[] = [];
+    const context = vm.createContext({
+      EXTENSION_VERSION: "1.17.6", PERSONAL_HANDOFF_PREFIX: "mcpV3PersonalHandoff:",
+      inFlightRequests: new Map(), mutationQueues: new Map(),
+      personalRecordings: new Map(), personalNetworkCaptures: new Map([["7", true]]),
+      personalDialogArms: new Map(), personalViewportSessions: new Map(),
+      personalDebuggerTransitions: new Map(), personalTaskDebuggers: new Map(),
+      pendingPersonalOneUseConfirmations: new Map(),
+      releasePersonalTaskDebugger: async () => { events.push("detached"); },
+      endAllPersonalRecordings: () => { events.push("recordings-ended"); },
+      send: (message: { state?: string }) => { events.push(message.state ?? "unknown"); },
+      chrome: {
+        storage: { session: { get: async () => ({
+          "mcpV3PersonalHandoff:7": { reason: "login", done: false },
+        }) } },
+        runtime: { reload: () => { events.push("reload"); } },
+      },
+      Date: { now: () => { time += 10_000; return time; } },
+      Object, Promise,
+      setTimeout: (callback: () => void) => { callback(); },
+    });
+    vm.runInContext("let personalExtensionReloadPending = false;", context);
+    const reload = vm.runInContext(
+      `(${extractFunction(serviceWorker, "reloadPersonalExtensionWhenIdle")})`, context) as
+      (version: string) => Promise<void>;
+    await reload("1.17.7");
+    expect(events).toEqual(["deferred"]);
+    expect(events).not.toContain("reload");
+    expect(events).not.toContain("detached");
+  });
+
   it("has no toolbar popup and preserves the secure options page and native controls", () => {
     const assets = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const manifest = JSON.parse(assets.manifest) as {

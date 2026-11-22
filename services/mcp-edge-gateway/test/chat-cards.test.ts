@@ -129,7 +129,7 @@ describe("the plan card", () => {
     const plans = new ProgressPlans(memory(), () => new Date("2026-10-30T20:00:00.000Z"),
       () => "plan_00000000-0000-4000-8000-000000000007");
     const body = call("mcp_update", { action: "start", workspaceId: "mcp-access-stack", expectedMainSha: "a".repeat(40) });
-    await plans.openForUpdate(body, "user_1");
+    await plans.startTool(body, "user_1");
     expect(body.params.arguments).toMatchObject({ planId: "plan_00000000-0000-4000-8000-000000000007" });
     expect(await plans.applyUpdate({ planId: "plan_00000000-0000-4000-8000-000000000007",
       steps: [{ text: "Pré-checagem", state: "done" }] }, "user_1")).toBe(true);
@@ -143,11 +143,11 @@ describe("the plan card", () => {
       call("browser_open", { url: "https://example.com" }),
     ]) {
       const before = JSON.stringify(other);
-      await plans.openForUpdate(other, "user_1");
+      await plans.startTool(other, "user_1");
       expect(JSON.stringify(other)).toBe(before);
     }
     const anonymous = call("mcp_update", { action: "start" });
-    await plans.openForUpdate(anonymous, undefined);
+    await plans.startTool(anonymous, undefined);
     expect(anonymous.params.arguments).not.toHaveProperty("planId");
   });
 
@@ -313,7 +313,7 @@ describe("automatic progress across MCP tools", () => {
     const original = await result(await plans.handle(sessionTool("browser_progress_read", "chat-release"), "owner"));
     const update = sessionTool("mcp_update", "chat-release");
     update.params.arguments = { action: "start", expectedMainSha: "a".repeat(40), workspaceId: "mcp-access-stack" };
-    await plans.openForUpdate(update, "owner");
+    await plans.startTool(update, "owner");
     expect(update.params.arguments).toMatchObject({ planId: original.structuredContent?.planId });
     expect((storage.values.get("progress-plans:owner") as unknown[]).length).toBe(1);
     expect(await plans.applyUpdate({ planId: original.structuredContent!.planId as string,

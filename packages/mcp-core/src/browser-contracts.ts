@@ -181,6 +181,8 @@ export const browserStatusResultSchema = z
         protocolVersion: z.number().int().positive(),
         extensionVersion: z.string().min(1).max(100).optional(),
         expectedExtensionVersion: z.string().min(1).max(100).optional(),
+        reloadPending: z.boolean().optional(),
+        reloadReason: z.string().min(1).max(300).optional(),
         capabilities: z.array(z.string().min(1).max(64)).max(64),
       })
       .strict()

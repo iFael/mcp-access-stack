@@ -284,6 +284,48 @@ async function releasePersonalTaskDebugger(chromeTabId) {
   }
 }
 
+// Reload only after the current work has safely quiesced. Chrome keeps the
+// user's tabs, group membership and storage when an unpacked extension reloads.
+let personalExtensionReloadPending = false;
+async function reloadPersonalExtensionWhenIdle(expectedVersion) {
+  if (personalExtensionReloadPending || typeof expectedVersion !== "string" ||
+      !/^\\d+\\.\\d+\\.\\d+$/u.test(expectedVersion) ||
+      expectedVersion === EXTENSION_VERSION) return;
+  personalExtensionReloadPending = true;
+  try {
+    const deadline = Date.now() + 30000;
+    const busy = async () => {
+      const values = await chrome.storage.session.get(null);
+      const userTurn = Object.entries(values).some(([key, value]) =>
+        key.startsWith(PERSONAL_HANDOFF_PREFIX) && value &&
+        typeof value.reason === "string" && value.done !== true);
+      return inFlightRequests.size > 0 || mutationQueues.size > 0 ||
+        personalRecordings.size > 0 || personalNetworkCaptures.size > 0 ||
+        personalDialogArms.size > 0 || personalViewportSessions.size > 0 ||
+        personalDebuggerTransitions.size > 0 ||
+        pendingPersonalOneUseConfirmations.size > 0 || userTurn;
+    };
+    while (await busy()) {
+      if (Date.now() >= deadline) {
+        send({ type: "reload-extension-status", state: "deferred",
+          reason: "A browser operation, recording or user handoff is still active." });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    await Promise.all([...personalTaskDebuggers.keys()]
+      .map((key) => releasePersonalTaskDebugger(Number(key))));
+    endAllPersonalRecordings();
+    send({ type: "reload-extension-status", state: "reloading" });
+    chrome.runtime.reload();
+  } catch {
+    send({ type: "reload-extension-status", state: "deferred",
+      reason: "Chrome refused to reload the extension automatically." });
+  } finally {
+    personalExtensionReloadPending = false;
+  }
+}
+
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   socket = new WebSocket(BRIDGE_URL);
@@ -334,6 +376,10 @@ async function handleMessage(raw) {
   try {
     message = JSON.parse(String(raw));
   } catch {
+    return;
+  }
+  if (message?.type === "reload-extension") {
+    void reloadPersonalExtensionWhenIdle(message.expectedVersion);
     return;
   }
   if (message?.type === "cancel" && typeof message.id === "string") {
