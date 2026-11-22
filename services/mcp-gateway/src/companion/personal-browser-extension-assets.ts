@@ -6662,11 +6662,16 @@ function snapshotPage(generation, compact = false) {
       globalThis.__mcpV3StableElementRefs.set(element, ref);
     }
     liveRefs.set(ref, element);
-    const role = element.getAttribute("role") ||
+    // A native link, checkbox or field keeps its semantic role even when it
+    // uses cursor:pointer or tabindex. The guarded click probe must see the
+    // same role; only an otherwise generic element becomes a button.
+    const declaredRole = element.getAttribute("role");
+    const nativeRole = declaredRole || defaultRole(element);
+    const role = !declaredRole && nativeRole === "generic" &&
       ((element.getAttribute("tabindex") !== null && element.getAttribute("tabindex") !== "-1") ||
        element.getAttribute("aria-haspopup") !== null ||
-       (element.childElementCount === 0 && style.cursor === "pointer")
-        ? "button" : defaultRole(element));
+       (element.childElementCount === 0 && style.cursor === "pointer"))
+      ? "button" : nativeRole;
     const name = normalizeText(accessibleName(element, role)).slice(0, 500);
     const states = semanticStates(element, role);
     refs.push({ ref, role, name });

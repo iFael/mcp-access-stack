@@ -1321,6 +1321,44 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ error: "target_changed" });
   });
 
+  it("preserves link and checkbox roles when pointer styles also mark generic leaves", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const link = fakeElement({ tagName: "A", text: "Sair do plano", attributes: { href: "/next" } });
+    const checkbox = fakeElement({ tagName: "INPUT", attributes: {
+      type: "checkbox", "aria-label": "Ativar Butler",
+    } });
+    const pointer = fakeElement({ tagName: "SPAN", text: "json(token)" });
+    const elements = [link, checkbox, pointer];
+    for (const element of elements) Object.assign(element, {
+      isConnected: true, childElementCount: 0, parentElement: null,
+      getRootNode: () => ({}), contains: () => false,
+      getBoundingClientRect: () => ({
+        left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100,
+      }),
+    });
+    const dom = createDom(elements);
+    Object.assign(dom.context, {
+      innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", cursor: "pointer" }),
+    });
+    const document = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as
+      (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    const probe = vm.runInContext(`(${extractFunction(serviceWorker, "probeGuardedElement")})`, dom.context) as
+      (ref: string, guard: unknown, focus: boolean) => { x?: number; y?: number; error?: string };
+    const refs = snapshot("native-role-regression").refs;
+    expect(refs.map(({ role, name }) => ({ role, name }))).toEqual([
+      { role: "link", name: "Sair do plano" },
+      { role: "checkbox", name: "Ativar Butler" },
+      { role: "button", name: "json(token)" },
+    ]);
+    for (const [index, element] of elements.entries()) {
+      document.elementFromPoint = () => element;
+      expect(probe(refs[index]!.ref, { ...refs[index], url: "https://example.test/" }, false))
+        .toMatchObject({ x: 50, y: 50 });
+    }
+  });
+
   it("allows a checkbox's exact associated label but rejects unrelated overlays", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const checkbox = fakeElement({
