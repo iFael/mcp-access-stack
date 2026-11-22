@@ -620,8 +620,14 @@ async function main(): Promise<void> {
     // A link out of the approved sites never loads in the plan's tab: Chrome blocks the request
     // itself, and only an MCP tab outside any plan reaches the other site.
     const clickLeave = async (tabId: string) => {
-      const leaveRef = (await bridge.snapshot({ tabId })).refs.find((item) => item.name === "Sair do plano")?.ref;
-      return bridge.click({ tabId, ref: leaveRef! }).then(() => "clicked", errorCode);
+      const observed = await bridge.snapshot({ tabId });
+      const leaveRef = observed.refs.find((item) => item.name === "Sair do plano")?.ref;
+      return bridge.click({ tabId, ref: leaveRef! }).then(() => "clicked", (error: Error & { code?: string }) => {
+        // Local fixture values only; capture the precise guarded failure
+        // instead of replacing a regression with an expected error.
+        report("plan link preflight", { url: observed.url, ref: leaveRef, code: error.code, reason: error.message });
+        return error.code;
+      });
     };
     const leftWithPlan = await clickLeave(planTab);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
