@@ -1,7 +1,7 @@
 // The card ChatGPT shows with the result of browser_user_messages: the agent's
 // question, if any, its options as buttons, and a field where the user writes to the task without
 // interrupting it. What they send goes through browser_user_reply to the same
-// inbox as the extension popup, and reaches the agent with its next call.
+// inbox as the ChatGPT reply card, and reaches the agent with its next call.
 // Only tools whose _meta.ui.resourceUri names this card make the Edge serve it.
 
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
@@ -238,7 +238,7 @@ ${CARD_BASE_CSS}
     setStatus("Enviando…", false);
     // ChatGPT may take long to answer the card, or never answer it, even when the message arrived.
     var slow = setTimeout(function () {
-      if (busy) setStatus("O ChatGPT ainda não confirmou o envio. Se não aparecer na conversa em 1 minuto, escreva no popup da extensão.", false);
+      if (busy) setStatus("O ChatGPT ainda não confirmou o envio. Se não aparecer na conversa, envie a mensagem diretamente no chat.", false);
     }, 20000);
     render();
     // One id per message: sending it again after ChatGPT lost the answer never delivers it twice.
@@ -268,7 +268,7 @@ ${CARD_BASE_CSS}
       save();
       watch(item);
     }).catch(function (error) {
-      setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente de novo ou use o popup da extensão.", true);
+      setStatus("Não foi enviado: " + (error && error.message ? error.message : String(error)) + ". Tente novamente ou envie sua mensagem diretamente no chat.", true);
     }).then(function () {
       clearTimeout(slow);
       busy = false;

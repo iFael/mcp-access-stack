@@ -1,6 +1,6 @@
 import { browserUserMessageSchema, type BrowserUserMessage } from "@vs-code-gpt/shared";
 
-// Messages the user writes in the extension popup wait here until the agent's
+// Messages the user sends via the ChatGPT reply card wait here until the agent's
 // next call on their task takes them. The extension keeps its own copy until
 // it hears they were delivered, and sends the undelivered ones again after a
 // reconnect, so this inbox only needs to hold what is in flight.

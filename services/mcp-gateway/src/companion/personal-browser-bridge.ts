@@ -1170,11 +1170,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         assets.serviceWorker,
         { encoding: "utf8", mode: 0o600 },
       ),
-      writeFile(
-        path.join(this.extensionDirectory, "browser-status.html"),
-        assets.popupHtml,
-        { encoding: "utf8", mode: 0o600 },
-      ),
+      rm(path.join(this.extensionDirectory, "browser-status.html"), { force: true }),
       writeFile(
         path.join(this.extensionDirectory, "secret-provision.html"),
         assets.secureChannelHtml,
@@ -1182,14 +1178,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       ),
       writeFile(
         path.join(this.extensionDirectory, "secret-provision.js"),
-        assets.popupScript,
+        assets.secureChannelScript,
         { encoding: "utf8", mode: 0o600 },
       ),
-      writeFile(
-        path.join(this.extensionDirectory, "tab-sharing.js"),
-        assets.tabSharingScript,
-        { encoding: "utf8", mode: 0o600 },
-      ),
+      rm(path.join(this.extensionDirectory, "tab-sharing.js"), { force: true }),
       writeFile(
         path.join(this.extensionDirectory, "plan-review.html"),
         assets.planReviewHtml,

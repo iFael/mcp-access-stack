@@ -1086,7 +1086,7 @@ export const browserPlanResultSchema = z
   .strict();
 export type BrowserPlanResult = z.infer<typeof browserPlanResultSchema>;
 
-// Notes the user writes in the personal Chrome extension popup for a running
+// Notes the user writes in the ChatGPT task reply card for a running
 // task: answers, test confirmations, errors they saw. Each one is delivered once.
 export const browserUserMessageSchema = z
   .object({

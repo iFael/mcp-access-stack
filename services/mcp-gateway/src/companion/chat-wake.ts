@@ -8,7 +8,7 @@
 // note. While the agent is answering, or the
 // user is typing, nothing is written and it waits. Only the user's own words,
 // the companion's notes and the agent's own ids go in, nothing from a page.
-// The user can turn it off in the extension popup.
+// The user can disable wake via the existing extension-local setting.
 //
 // Each notice goes to the conversation it belongs to (see
 // conversation-book.ts), never to whichever one is open: it is written in the
@@ -156,7 +156,7 @@ export class ChatWake {
     if (this.pending.length !== before) this.publish();
   }
 
-  // The extension sends its switch on every connect, so this also refreshes the popup.
+  // The extension sends its wake setting on every connect.
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) {
@@ -340,7 +340,7 @@ export class ChatWake {
         body: `${chatWakeText(fresh).replaceAll("[MCP V3] ", "")}\n\nAbra no app do ChatGPT a conversa dessa tarefa: eu escrevo lá.`,
       });
     } catch {
-      // The popup still shows what waits.
+      // ChatGPT retains the pending reply-card message.
     }
   }
 
@@ -348,7 +348,7 @@ export class ChatWake {
     try {
       this.options.onStatus?.(this.status());
     } catch {
-      // The popup only misses a refresh.
+      // The reply-card state is reconciled on the next request.
     }
   }
 

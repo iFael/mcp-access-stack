@@ -1451,6 +1451,10 @@ describe("PersonalBrowserBridge", () => {
   it("materializes the extension, rejects an invalid token and accepts authenticated RPC", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
+    const extensionDir = path.join(root, "browser", "personal-extension");
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(path.join(extensionDir, "browser-status.html"), "old popup");
+    await writeFile(path.join(extensionDir, "tab-sharing.js"), "old popup script");
     const port = await reservePort();
     const bridge = await PersonalBrowserBridge.start({
       stateRoot: root,
@@ -1477,6 +1481,8 @@ describe("PersonalBrowserBridge", () => {
     const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
 
     expect(manifest.manifest_version).toBe(3);
+    await expect(readFile(path.join(extensionDir, "browser-status.html"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(path.join(extensionDir, "tab-sharing.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(manifest.permissions).toEqual(expect.arrayContaining([
       "tabs",
       "scripting",
