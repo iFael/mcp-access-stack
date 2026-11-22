@@ -11,7 +11,7 @@ describe("personal browser extension assets", () => {
     const manifest = JSON.parse(assets.manifest) as {
       action: { default_popup: string }; options_page: string; version: string;
     };
-    expect(manifest.version).toBe("1.17.1");
+    expect(manifest.version).toBe("1.17.2");
     expect(manifest.action.default_popup).toBe("browser-status.html");
     expect(manifest.options_page).toBe("secret-provision.html");
     expect(assets.popupHtml).toContain("Parar o MCP");
@@ -1494,7 +1494,7 @@ describe("personal browser extension assets", () => {
     const editor = fakeElement({ tagName: "DIV", text: "expression", attributes: { role: "textbox" } });
     Object.assign(editor, { isConnected: true, matches: () => true, closest: () => null });
     const token = fakeElement({ tagName: "SPAN", text: "json(...)" });
-    Object.assign(token, { closest: () => editor, parentElement: null });
+    Object.assign(token, { closest: (selector: string) => selector.includes('[role="textbox"]') ? editor : null, parentElement: null });
     const document = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
     document.elementFromPoint = () => token;
     Object.assign(dom.context, { innerWidth: 800, innerHeight: 600,
@@ -1504,6 +1504,66 @@ describe("personal browser extension assets", () => {
     const point = vm.runInContext(`(${extractFunction(serviceWorker, "inspectPointInDocument")})`, dom.context) as
       (x: number, y: number) => { ref: string; role: string; name: string } | null;
     expect(point(25, 25)).toMatchObject({ ref: expect.stringMatching(/^p-editor-/u), role: "textbox", name: "" });
+  });
+
+  it("resolves Monaco visual layers to a guarded editor without accepting buttons or overlays", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const textarea = fakeElement({ tagName: "TEXTAREA",
+      attributes: { "aria-label": "Editor content;Press Alt+F1 for Accessibility Options." } });
+    const editor = fakeElement({ tagName: "DIV" });
+    const visual = fakeElement({ tagName: "SPAN", text: "json(...)" });
+    const rect = { left: 0, top: 0, right: 100, bottom: 30, width: 100, height: 30 };
+    Object.assign(editor, {
+      isConnected: true, matches: (selector: string) => selector.includes(".monaco-editor"),
+      querySelector: () => textarea,
+      contains: (element: unknown) => element === visual || element === textarea || element === button,
+      getBoundingClientRect: () => rect,
+    });
+    Object.assign(textarea, {
+      isConnected: true, parentElement: editor, getRootNode: () => ({}),
+      closest: (selector: string) => selector.includes(".monaco-editor") ? editor : null,
+      contains: () => false,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1 }),
+    });
+    Object.assign(visual, {
+      isConnected: true, parentElement: editor,
+      closest: (selector: string) => selector.includes(".monaco-editor") ? editor : null,
+    });
+    const button = fakeElement({ tagName: "BUTTON", text: "Submit" });
+    Object.assign(button, {
+      parentElement: editor,
+      closest: (selector: string) => selector.includes("button") ? button :
+        selector.includes(".monaco-editor") ? editor : null,
+    });
+    const dom = createDom([textarea]);
+    Object.assign(dom.context, { innerWidth: 800, innerHeight: 600,
+      __mcpV3OwnedRefElements: new Map(), __mcpV3OwnedRefMetadata: new Map(),
+      __mcpV3PageInstanceId: "monaco",
+    });
+    const document = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    document.elementFromPoint = () => visual;
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as
+      (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    const probe = vm.runInContext(`(${extractFunction(serviceWorker, "probeGuardedElement")})`, dom.context) as
+      (ref: string, guard: unknown, focus: boolean, x?: number, y?: number) => { x?: number; y?: number; error?: string };
+    const inspect = vm.runInContext(`(${extractFunction(serviceWorker, "inspectPointInDocument")})`, dom.context) as
+      (x: number, y: number) => { ref: string; role: string; name: string } | null;
+    const ref = snapshot("monaco-visual-layer").refs.find((item) => item.name.startsWith("Editor content"))!;
+    expect(ref.role).toBe("textbox");
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ x: 50, y: 15 });
+    const point = inspect(50, 15);
+    expect(point).toMatchObject({ ref: expect.stringMatching(/^p-editor-/u), role: "textbox", name: "" });
+    expect(probe(point!.ref, { ...point, url: "https://example.test/" }, false, 50, 15))
+      .toMatchObject({ x: 50, y: 15 });
+    document.elementFromPoint = () => button;
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ error: "obscured" });
+    expect(inspect(50, 15)).toBeNull();
+    document.elementFromPoint = () => ({ tagName: "DIV", parentElement: null, closest: () => null });
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ error: "obscured" });
+    expect(inspect(50, 15)).toBeNull();
   });
 
   it("waits for DOM quiescence before a requested final sequence snapshot", async () => {
@@ -3395,7 +3455,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.1");
+    expect(parsedManifest.version).toBe("1.17.2");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
