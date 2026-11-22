@@ -26364,7 +26364,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user, and pause=true keeps them open in the task's collapsed tab group to come back to: nothing acts there until a new plan for the task is approved (or, when no plan is required, browser_open with its taskId), and a pause left for 24 hours ends like a finished task. Managed mode rejects keepOpen and pause. protected/sticky affect browser_close_tab, not default task finalization.",
+    "description": "Call when browser work is complete. By default it closes every MCP tab for the task. For an explicit personal-browser task only, keepOpen=true releases its tabs from MCP ownership and leaves them open for the user, and pause=true keeps them open in the task's collapsed tab group to come back to: nothing acts there until browser_open resumes the task with its taskId, and a pause left for 24 hours ends like a finished task. Managed mode rejects keepOpen and pause. protected/sticky affect browser_close_tab, not default task finalization.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -26462,179 +26462,6 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "browser_finish_task"
-  },
-  {
-    "_meta": {
-      "io.github.ifael/next-step": "status=pending: call it again with the planId alone; approved: browser_open with the task's taskId.",
-      "securitySchemes": [
-        {
-          "scopes": [
-            "workspaces:read"
-          ],
-          "type": "oauth2"
-        }
-      ]
-    },
-    "annotations": {
-      "destructiveHint": false,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
-    "description": "Personal Chrome only. If the user enabled mandatory plan approval or the task needs a scoped grant, show the plan in a Chrome window: summary, steps, sites (bare hostnames, each covering its subdomains) and actions (navigate, interact, fill, upload, download, evaluate; reading pages on the approved sites is always included, so pass actions=[] for a read-only task). Waits up to timeoutMs (default 50000) for the user; status=pending means call again with planId alone to keep waiting. The user may approve only some sites and actions: the result lists what was approved, and feedback carries their note. Once approved, MCP acts for that task (tabs opened with its taskId, tabs the user drags into the task's Chrome tab group, plus the shared tabIds listed in the plan) only on those sites and with those actions; anything else is refused until a new plan for the task is approved, which replaces it. Approval never replaces confirmations of sensitive actions. The user can require an approved plan before MCP acts at all; actions are then refused with a hint to call browser_plan first. Approval starts the task's tab group with a first tab that the task's first browser_open uses, and resumes a paused task. Next: status=pending: call it again with the planId alone; approved: browser_open with the task's taskId.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
-    "inputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "actions": {
-          "items": {
-            "enum": [
-              "navigate",
-              "interact",
-              "fill",
-              "upload",
-              "download",
-              "evaluate"
-            ],
-            "type": "string"
-          },
-          "maxItems": 6,
-          "type": "array"
-        },
-        "deviceId": {
-          "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-          "type": "string"
-        },
-        "domains": {
-          "items": {
-            "maxLength": 253,
-            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$",
-            "type": "string"
-          },
-          "maxItems": 20,
-          "minItems": 1,
-          "type": "array"
-        },
-        "planId": {
-          "pattern": "^plan_[a-z0-9-]{8,64}$",
-          "type": "string"
-        },
-        "runtimeId": {
-          "pattern": "^rt_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-          "type": "string"
-        },
-        "steps": {
-          "items": {
-            "maxLength": 200,
-            "minLength": 1,
-            "type": "string"
-          },
-          "maxItems": 20,
-          "minItems": 1,
-          "type": "array"
-        },
-        "summary": {
-          "maxLength": 500,
-          "minLength": 1,
-          "type": "string"
-        },
-        "tabIds": {
-          "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-          },
-          "maxItems": 10,
-          "minItems": 1,
-          "type": "array"
-        },
-        "taskId": {
-          "maxLength": 128,
-          "minLength": 1,
-          "type": "string"
-        },
-        "timeoutMs": {
-          "exclusiveMinimum": 0,
-          "maximum": 120000,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "name": "browser_plan",
-    "outputSchema": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "additionalProperties": false,
-      "properties": {
-        "actions": {
-          "items": {
-            "enum": [
-              "navigate",
-              "interact",
-              "fill",
-              "upload",
-              "download",
-              "evaluate"
-            ],
-            "type": "string"
-          },
-          "maxItems": 6,
-          "type": "array"
-        },
-        "domains": {
-          "items": {
-            "maxLength": 253,
-            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$",
-            "type": "string"
-          },
-          "maxItems": 20,
-          "type": "array"
-        },
-        "feedback": {
-          "maxLength": 500,
-          "type": "string"
-        },
-        "planId": {
-          "pattern": "^plan_[a-z0-9-]{8,64}$",
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "pending",
-            "approved",
-            "rejected",
-            "superseded"
-          ],
-          "type": "string"
-        },
-        "tabIds": {
-          "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-          },
-          "maxItems": 10,
-          "type": "array"
-        },
-        "taskId": {
-          "maxLength": 128,
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "planId",
-        "taskId",
-        "status",
-        "domains",
-        "actions"
-      ],
-      "type": "object"
-    },
-    "title": "browser_plan"
   },
   {
     "_meta": {
@@ -29283,15 +29110,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "189d0d1f0f04bd2fb3614e024b26410939e132c2215950b085b47046856008a7",
-  "serverVersion": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d",
-  "toolCount": 134,
-  "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
+  "contractRevision": "c8edfbdff5ba12b76e59e7704eb144436a20d5bc34f00e762fe88d4dc0d25fc6",
+  "serverVersion": "0.4.0-catalog.cc8edfbdff5ba.s65e543617746",
+  "toolCount": 133,
+  "toolSetRevision": "65e5436177469676568b42f9b6fcca7928eddabdf392f5bff782986f0aa0ab1c"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d"
+  "version": "0.4.0-catalog.cc8edfbdff5ba.s65e543617746"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

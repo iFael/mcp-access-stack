@@ -26,8 +26,6 @@ import type {
   BrowserEvaluateResult,
   BrowserFinishTaskInput,
   BrowserFinishTaskResult,
-  BrowserPlanInput,
-  BrowserPlanResult,
   BrowserUserMessage,
   BrowserUserMessagesInput,
   BrowserUserReplyInput,
@@ -124,7 +122,6 @@ export interface BrowserExecutor {
   goForward(input: BrowserTabActionInput, context?: OperationContext): Promise<BrowserTabResult>;
   closeTab(input: BrowserCloseTabInput, context?: OperationContext): Promise<BrowserActionResult>;
   finishTask(input: BrowserFinishTaskInput, context?: OperationContext): Promise<BrowserFinishTaskResult>;
-  plan(input: BrowserPlanInput, context?: OperationContext): Promise<BrowserPlanResult>;
   userMessages?(input: BrowserUserMessagesInput, context?: OperationContext): Promise<BrowserUserMessagesResult>;
   /** Queues what the user wrote in the chat card for the agent's next call on the task. */
   postUserMessage?(input: BrowserUserReplyInput, context?: OperationContext): Promise<BrowserUserReplyResult>;

@@ -40,8 +40,6 @@ import {
   type BrowserFindResult,
   type BrowserFinishTaskInput,
   type BrowserFinishTaskResult,
-  type BrowserPlanInput,
-  type BrowserPlanResult,
   type BrowserFrameClickInput,
   type BrowserFrameExtractInput,
   type BrowserFrameExtractResult,
@@ -1701,13 +1699,6 @@ export class BrowserRuntime implements BrowserExecutor {
     this.interactionContext.discardReferences(tab.tabId);
     await this.checkpoint();
     return { tabId: tab.tabId, completed: true };
-  }
-
-  async plan(_input: BrowserPlanInput): Promise<BrowserPlanResult> {
-    throw new AppError(
-      "BROWSER_OPERATION_MODE_UNSUPPORTED",
-      "browser_plan is approved by the user only in personal Chrome mode.",
-    );
   }
 
   async finishTask(
