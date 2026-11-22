@@ -402,7 +402,9 @@ async function main(): Promise<void> {
 
     // Zoom re-renders a clipped region at a higher resolution to read small text.
     const zoomed = await bridge.screenshot({ tabId: board.tab.tabId, region: { x: 0, y: 0, width: 100, height: 40 }, zoom: 4 });
-    const zoomedSize = jpegSize(await readFile(zoomed.path));
+    const screenshotBytes = (zoomed as typeof zoomed & { contentBase64?: string }).contentBase64;
+    if (!screenshotBytes) throw new Error("Screenshot returned no in-memory image.");
+    const zoomedSize = jpegSize(Buffer.from(screenshotBytes, "base64"));
     report("zoomed region", zoomedSize);
     if (zoomedSize.width !== 400 || zoomedSize.height !== 160) throw new Error("Zoomed region has the wrong resolution.");
 

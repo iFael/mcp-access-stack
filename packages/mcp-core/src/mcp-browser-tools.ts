@@ -597,7 +597,7 @@ function definitions(
       () => e.navigatePath!(assumeParsed(v)),
       (activeContext) => e.navigatePath!(assumeParsed(v), activeContext),
     )),
-    d("browser_screenshot", "Captures an MCP-owned tab, optionally cropping a CSS viewport region, magnifying it with zoom (1-8, personal Chrome) to read small text, and using device-pixel scaling, and stores it in private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_screenshot", "Captures an MCP-owned tab, optionally cropping a CSS viewport region, magnifying it with zoom (1-8, personal Chrome) to read small text, and using device-pixel scaling, and returns native image content. Personal Chrome captures are kept in bounded companion memory for up to 30 minutes, subject to a bounded memory budget instead of a fixed capture count, without permanent screenshot files; managed-browser captures use private runtime storage. When imageContent is present in the structured result, Code Mode callers should forward it directly with image(imageContent) instead of printing its base64; native MCP image content is also returned for compatible clients.", c.browserScreenshotInputSchema, c.browserScreenshotResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.screenshot(assumeParsed(v)),
       (activeContext) => e.screenshot(assumeParsed(v), activeContext),
@@ -653,7 +653,7 @@ function definitions(
       () => e.download(assumeParsed(v)),
       (activeContext) => e.download(assumeParsed(v), activeContext),
     )),
-    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode. In personal mode, screenshotPaths uploads earlier browser_screenshot results (their path) from this session without resending the image.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
+    d("browser_upload", "Uploads authorized workspace files into a file input in an MCP-owned tab, or drops them onto a drop zone ref (dropRef) with native Chrome drag events in personal mode. In personal mode, screenshotPaths accepts opaque in-memory handles returned by browser_screenshot in the same session (valid for up to 30 minutes), without resending the image.", browserUploadToolInputSchema, c.browserUploadResultSchema, false, (v, context) => runUploadTool(e, workspaceExecutor, assumeParsed(v), context)),
     d("browser_console", "Reads or clears sanitized console messages with regex pattern, errors-only, and result limit from an MCP-owned tab. Basic sanitized console reads are available in interactive mode; trace/video and detailed network inspection remain diagnostic-only.", c.browserConsoleInputSchema, c.browserConsoleResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.console(assumeParsed(v)),

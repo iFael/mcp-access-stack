@@ -1164,7 +1164,7 @@ export const browserUploadFileSchema = z
   .object({
     name: z.string().trim().min(1).max(255).regex(/^[^/\\\x00]+$/u),
     contentBase64: z.string().max(8 * 1024 * 1024).optional(),
-    // A browser_screenshot result path; only the session that captured it can read it.
+    // A browser_screenshot result: an in-memory handle for personal Chrome, or a path for managed mode.
     screenshotPath: z.string().min(1).max(4_096).optional(),
     mimeType: z.string().trim().min(1).max(255).optional(),
   })

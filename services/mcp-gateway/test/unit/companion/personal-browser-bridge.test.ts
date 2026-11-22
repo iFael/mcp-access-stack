@@ -775,8 +775,8 @@ describe("PersonalBrowserBridge", () => {
       expect(delivered).toEqual(["tela.jpg"]);
       await expect(upload([{ name: "tela.png", screenshotPath: shot.path }]))
         .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-      const outsider = path.join(path.dirname(shot.path), "planted.jpg");
-      await writeFile(outsider, "abc");
+      expect(shot.path).toMatch(/^personal:\/\/screenshot\/[0-9a-f-]{36}\.jpg$/u);
+      const outsider = shot.path.replace(/[^/]+$/u, "planted.jpg");
       await expect(upload([{ name: "planted.jpg", screenshotPath: outsider }]))
         .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
       await expect(upload([{ name: "hosts.jpg", screenshotPath: "/etc/hosts" }]))
@@ -830,7 +830,7 @@ describe("PersonalBrowserBridge", () => {
         steps: [{ action: "wait", timeoutMs: 5 }], finalScreenshot: true });
       expect(seen).toEqual(["sequence", "screenshot"]);
       expect(result).toMatchObject({ completed: true, screenshot: { sizeBytes: 5,
-        path: expect.stringContaining("personal-artifacts") } });
+        path: expect.stringMatching(/^personal:\/\/screenshot\/[0-9a-f-]{36}\.png$/u) } });
       expect(JSON.stringify(result)).not.toContain("aGVsbG8");
       expect(result.actionSummary).toHaveLength(1);
     } finally {
@@ -1594,7 +1594,7 @@ describe("PersonalBrowserBridge", () => {
     await bridge.close();
   });
 
-  it("persists personal screenshot bytes returned by the extension", async () => {
+  it("keeps personal screenshot bytes in memory without saving a file", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     try {
       extension.on("message", (data) => {
@@ -1615,13 +1615,20 @@ describe("PersonalBrowserBridge", () => {
       });
 
       const result = await bridge.screenshot({ tabId: "personal:7" });
-      expect(result.path).toMatch(/personal-artifacts[\\/]screenshots/u);
+      expect(result.path).toMatch(/^personal:\/\/screenshot\/[0-9a-f-]{36}\.jpg$/u);
       expect(result.sizeBytes).toBe(3);
-      await expect(readFile(result.path)).resolves.toEqual(Buffer.from("abc"));
+      expect(path.isAbsolute(result.path)).toBe(false);
+      await expect(readFile(result.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(result).toMatchObject({
         mimeType: "image/jpeg",
         contentBase64: "YWJj",
       });
+      // More than ten images may be reused; retention is limited by bytes,
+      // not by an arbitrary count of screenshots.
+      for (let i = 0; i < 11; i += 1) await bridge.screenshot({ tabId: "personal:7" });
+      const cache = (bridge as unknown as { uploadableScreenshots: Map<string, unknown> }).uploadableScreenshots;
+      expect(cache.size).toBe(12);
+      expect(cache.has(result.path)).toBe(true);
     } finally {
       await close();
     }

@@ -79,7 +79,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.7");
+    expect(manifest.version).toBe("1.17.8");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -3616,7 +3616,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.7");
+    expect(parsedManifest.version).toBe("1.17.8");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3706,6 +3706,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       [5, { id: 5, url: "https://mail.example/inbox?token=abc#msg", title: "Inbox (3)", active: true }],
       [6, { id: 6, url: "http://intranet.local/", title: "Intranet", active: false }],
       [8, { id: 8, url: "chrome://settings/", title: "Settings", active: false }],
+      [10, { id: 10, url: "chrome://newtab/", title: "Nova guia", active: false }],
     ]);
     const context = vm.createContext({
       URL, String, Number, Object, Array, Set, Date, Promise,
@@ -3780,6 +3781,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
     await expect(dispatch({ type: "mcp-tab-share", tabId: 6 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
+    await expect(dispatch({ type: "mcp-tab-share", tabId: 8 })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
     await expect(dispatch({ type: "mcp-tab-share", tabId: 3 })).rejects.toThrow("already-owned");
     await expect(dispatch({ type: "mcp-tab-status", tabId: 3 })).resolves.toMatchObject({ mcp: true, shareable: false });
     await expect(dispatch({ type: "mcp-tab-share", tabId: 5 })).resolves.toMatchObject({ shared: true, shareable: false });
@@ -3815,6 +3817,17 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await dispatch({ type: "mcp-tab-share", tabId: 5 });
     await expect(dispatch({ type: "mcp-tab-unshare", tabId: 9 })).rejects.toThrow("not-shared");
     await expect(dispatch({ type: "mcp-tab-unshare", tabId: 5 })).resolves.toMatchObject({ shared: false, shareable: true });
+    expect(owned).toEqual({});
+
+    // Chrome New Tab is shareable as a group only; no internal URL is exposed
+    // or stored as a navigation grant. Other chrome:// pages stay blocked.
+    await expect(dispatch({ type: "mcp-tab-share", tabId: 10 })).resolves.toMatchObject({ shared: true });
+    expect(sharedGroups).toContainEqual([10, "shared-uuid-1"]);
+    expect(owned["10"]).toMatchObject({ ownership: "user", mcpGroupId: 40 });
+    expect(owned["10"]).not.toHaveProperty("requestedUrl");
+    expect((await listTabs({})).tabs.find((tab) => tab.tabId === "personal:10")).not.toHaveProperty("url");
+    await expect(dispatch({ type: "mcp-tab-unshare", tabId: 10 })).resolves.toMatchObject({ shared: false });
+    expect(openTabs.has(10)).toBe(true);
     expect(owned).toEqual({});
   });
 
@@ -5005,7 +5018,7 @@ const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_PENDING_S
   "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
 const GROUP_SUPPORT_FUNCTIONS = ["readSessionMap", "changeSessionMap", "rememberMcpGroup", "mcpGroupTask",
   "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup", "isPopupShareGroup",
-  "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask",
+  "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask", "personalShareTarget",
   "readPendingPersonalShare", "answerPersonalShare", "refusePersonalGroupShare", "notifyPersonalShare", "personalDragShareNeedsConfirmation",
   "mcpGroupTitle",
   "pausePersonalTask", "resumePersonalTask", "stylePersonalTaskGroups",

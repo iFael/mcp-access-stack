@@ -52,7 +52,9 @@ import { PersonalBrowserTaskInbox } from "./personal-browser-task-inbox.js";
 const DEFAULT_PORT = 3361;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const STAGED_UPLOAD_RETENTION_MS = 30 * 60 * 1_000;
-const MAX_UPLOADABLE_SCREENSHOTS = 200;
+const SCREENSHOT_MEMORY_RETENTION_MS = 30 * 60 * 1_000;
+// Bound retained bytes rather than the number of captures.
+const MAX_SCREENSHOT_MEMORY_BYTES = 128 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const EXTENSION_RELOAD_COOLDOWN_MS = 60_000;
 const EXTENSION_RELOAD_MAX_ATTEMPTS = 3;
@@ -112,8 +114,12 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   // Chrome reads uploaded files lazily (drop handlers, later form submits), so
   // staged copies outlive the call until their tab closes or retention ends.
   private readonly stagedUploads = new Map<string, { tabId: string; timer: NodeJS.Timeout }>();
-  // Only screenshots this bridge captured may be uploaded by path.
-  private readonly uploadableScreenshots = new Set<string>();
+  // Captures remain only in this bridge process. The opaque handle is scoped
+  // to the current session and can be used for a subsequent authorized upload.
+  private readonly uploadableScreenshots = new Map<string, {
+    bytes: Buffer; timer: ReturnType<typeof setTimeout>;
+  }>();
+  private retainedScreenshotBytes = 0;
   private expectedExtensionVersion = "";
   private observedExtensionVersion: string | undefined;
   private updatedExtensionNeedsSnapshot = false;
@@ -193,6 +199,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.pixelEvidence.clear();
     this.coordinateDrags.clear();
     await this.releaseStagedUploads();
+    for (const shot of this.uploadableScreenshots.values()) clearTimeout(shot.timer);
+    this.uploadableScreenshots.clear();
+    this.retainedScreenshotBytes = 0;
     await this.recorder.close();
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close(1000, "MCP V3 companion shutdown");
@@ -702,19 +711,24 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       : transport.mimeType === "image/webp"
         ? "webp"
         : "jpg";
-    const directory = path.join(
-      path.resolve(this.options.stateRoot),
-      "browser",
-      "personal-artifacts",
-      "screenshots",
-    );
-    await mkdir(directory, { recursive: true });
-    const absolutePath = path.join(directory, `${randomUUID()}.${extension}`);
-    await writeFile(absolutePath, bytes, { mode: 0o600 });
-    this.uploadableScreenshots.add(absolutePath);
-    if (this.uploadableScreenshots.size > MAX_UPLOADABLE_SCREENSHOTS) {
-      this.uploadableScreenshots.delete(this.uploadableScreenshots.values().next().value!);
+    if (bytes.length > MAX_SCREENSHOT_MEMORY_BYTES) {
+      throw new AppError("LIMIT_EXCEEDED", "Screenshot exceeds the in-memory capture budget.");
     }
+    while (this.retainedScreenshotBytes + bytes.length > MAX_SCREENSHOT_MEMORY_BYTES) {
+      const oldest = this.uploadableScreenshots.keys().next().value;
+      if (!oldest) break;
+      const old = this.uploadableScreenshots.get(oldest)!;
+      clearTimeout(old.timer);
+      this.retainedScreenshotBytes -= old.bytes.length;
+      this.uploadableScreenshots.delete(oldest);
+    }
+    const handle = `personal://screenshot/${randomUUID()}.${extension}`;
+    const timer = setTimeout(() => {
+      if (this.uploadableScreenshots.delete(handle)) this.retainedScreenshotBytes -= bytes.length;
+    }, SCREENSHOT_MEMORY_RETENTION_MS);
+    timer.unref();
+    this.uploadableScreenshots.set(handle, { bytes, timer });
+    this.retainedScreenshotBytes += bytes.length;
     // A screenshot is a prerequisite for pixel-only actions, never a grant.
     // The separate one-use confirmation is still required for every click.
     try {
@@ -725,7 +739,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
     return {
       ...transport,
-      path: absolutePath,
+      path: handle,
       sizeBytes: bytes.length,
     };
   }
@@ -1013,22 +1027,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   private async readUploadableScreenshot(name: string, screenshotPath: string): Promise<Buffer> {
-    const source = path.resolve(screenshotPath);
-    if (!this.uploadableScreenshots.has(source)) {
+    const capture = this.uploadableScreenshots.get(screenshotPath);
+    if (!capture) {
       throw new AppError("INVALID_ARGUMENT",
         "screenshotPath must be a browser_screenshot path captured in this personal Chrome session.");
     }
-    const kind = path.extname(source).toLowerCase();
+    const kind = path.extname(screenshotPath).toLowerCase();
     const named = path.extname(name).toLowerCase();
     if (named !== kind && !(kind === ".jpg" && named === ".jpeg")) {
       throw new AppError("INVALID_ARGUMENT", `A screenshot upload name must keep its ${kind} extension.`);
     }
-    try {
-      return await readFile(source);
-    } catch {
-      this.uploadableScreenshots.delete(source);
-      throw new AppError("INVALID_ARGUMENT", "The screenshot file no longer exists; capture it again.");
-    }
+    return capture.bytes;
   }
 
   private uploadsRoot(): string {
