@@ -3030,7 +3030,7 @@ async function press(input, signal) {
   if (!input.guard || tab.url !== input.guard.url) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Chrome keyboard input requires the original page URL.");
   }
-  const keys = String(input.key).trim().split(/\s+/u).map(parseChromeKey);
+  const keys = String(input.key).trim().split(/\\s+/u).map(parseChromeKey);
   const repeat = input.repeat ?? 1;
   if (keys.length * repeat > 100) throw coded("LIMIT_EXCEEDED", "Chrome key sequence exceeds 100 inputs.");
   if (repeat > 1 && keys.some((key) => key.key === "Enter")) throw coded("ACTION_BLOCKED_BY_POLICY", "Repeating Enter can submit multiple forms.");

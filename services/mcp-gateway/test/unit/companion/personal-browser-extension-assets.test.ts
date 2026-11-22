@@ -11,7 +11,7 @@ describe("personal browser extension assets", () => {
     const manifest = JSON.parse(assets.manifest) as {
       action: { default_popup: string }; options_page: string; version: string;
     };
-    expect(manifest.version).toBe("1.17.0");
+    expect(manifest.version).toBe("1.17.1");
     expect(manifest.action.default_popup).toBe("browser-status.html");
     expect(manifest.options_page).toBe("secret-provision.html");
     expect(assets.popupHtml).toContain("Parar o MCP");
@@ -1264,6 +1264,25 @@ describe("personal browser extension assets", () => {
     const parseChromeKey = vm.runInContext("parseChromeKey", context) as (key: string) => unknown;
     expect(parseChromeKey("Shift+End")).toEqual({ key: "End", code: "End", keyCode: 35, modifiers: 8 });
     expect(parseChromeKey("pagedown")).toMatchObject({ key: "PageDown", keyCode: 34 });
+
+    // Exercise the generated worker, not only parseChromeKey: template literal
+    // escaping must preserve whitespace splitting for keys containing "s".
+    await guardedPress({ tabId: "personal:7", key: "Backspace Delete",
+      guard: { url: "https://example.com/" } });
+    expect(commands.slice(-4)).toEqual([
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46,
+      }) },
+    ]);
   });
 
   it("keeps the same guarded editor ref when only its editable content changes", () => {
@@ -3376,7 +3395,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.0");
+    expect(parsedManifest.version).toBe("1.17.1");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
