@@ -9,7 +9,7 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { chromium, type BrowserContext } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
@@ -170,6 +170,17 @@ async function main(): Promise<void> {
   const bridge = await PersonalBrowserBridge.start({
     stateRoot: root, port: 34_000 + Math.floor(Math.random() * 1_000),
   });
+  // Test-only instrumentation in a throwaway profile: expose the exact
+  // registered Chrome notification-click listener so headless CI can emulate
+  // the user's choice. Never inject this into the production extension.
+  const extensionScript = path.join(bridge.extensionDirectory, "service-worker.js");
+  const originalScript = await readFile(extensionScript, "utf8");
+  const listener = "chrome.notifications?.onButtonClicked?.addListener((id, buttonIndex) => {";
+  if (originalScript.split(listener).length !== 2) {
+    throw new Error("Chrome notification listener was not found exactly once in the smoke extension.");
+  }
+  await writeFile(extensionScript, originalScript.replace(listener,
+    "chrome.notifications?.onButtonClicked?.addListener(globalThis.__mcpSmokeNotificationClick = (id, buttonIndex) => {"));
   let context: BrowserContext | undefined;
   try {
     context = await chromium.launchPersistentContext(path.join(root, "profile"), {
@@ -202,6 +213,32 @@ async function main(): Promise<void> {
       (id) => resolve({ id, error: chrome.runtime.lastError?.message ?? null })))`) as { id?: string; error: string | null };
     report("notification", notification);
     if (notification.error || !notification.id) throw new Error("The extension could not show a notification.");
+
+    // Chrome's headless runner has no human to press notification buttons.
+    // Observe a real pending notification and invoke the same listener Chrome
+    // calls on a user click, from this isolated smoke profile only.
+    const decideChromeNotification = async (prefix: string, buttonIndex: 0 | 1): Promise<string> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const id = await extensionWorker.evaluate(`(async () => {
+          const notifications = await chrome.notifications.getAll();
+          return Object.keys(notifications).find((candidate) =>
+            candidate.startsWith(${JSON.stringify(prefix)}) &&
+            (!candidate.startsWith("mcp-action:") || pendingPersonalOneUseConfirmations.has(candidate)) &&
+            (!candidate.startsWith("mcp-plan-site:") || pendingPersonalPlanSiteExtensions.has(candidate)));
+        })()`) as string | undefined;
+        if (id) {
+          const dispatched = await extensionWorker.evaluate(`(() => {
+            if (typeof globalThis.__mcpSmokeNotificationClick !== "function") return false;
+            globalThis.__mcpSmokeNotificationClick(${JSON.stringify(id)}, ${buttonIndex});
+            return true;
+          })()`) as boolean;
+          if (!dispatched) throw new Error("The smoke listener did not receive the Chrome notification click.");
+          return id;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("The expected Chrome notification was not created: " + prefix);
+    };
 
     const opened = await bridge.open({ url: `http://parent-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
     const tabId = opened.tab.tabId;
@@ -262,15 +299,16 @@ async function main(): Promise<void> {
     if (again.resolved[0]?.strategy !== "already-expanded") throw new Error("An expanded menu level was clicked again.");
     const danger = { tabId: legacy.tab.tabId, path: ["Excluir registros"], sourceFramePath: ["menu"],
       checkpoint: { action: "extract" as const, framePath: ["menu"], locator: { id: "log" } } };
-    let pathConfirmation = "";
-    try {
-      await bridge.navigatePath!(danger);
-      throw new Error("A dangerous menu label ran without confirmation.");
-    } catch (error) {
-      pathConfirmation = confirmationIdOf(error);
+    const deniedPath = bridge.navigatePath!(danger).then(() => "allowed",
+      (error: { code?: string }) => error.code);
+    await decideChromeNotification("mcp-action:", 1);
+    if (await deniedPath !== "ACTION_BLOCKED_BY_POLICY") {
+      throw new Error("Chrome denial did not block the dangerous menu path.");
     }
-    const deleted = await bridge.navigatePath!({ ...danger, confirmationId: pathConfirmation });
-    report("confirmed dangerous menu path", deleted.checkpoint);
+    const approvedPath = bridge.navigatePath!(danger);
+    await decideChromeNotification("mcp-action:", 0);
+    const deleted = await approvedPath;
+    report("one-use Chrome-approved dangerous menu path", deleted.checkpoint);
     if (deleted.checkpoint?.step.value !== "apagado") throw new Error("Confirmed menu path did not run.");
 
     // Safe pagination follows only same-origin rel=next, never a bare "Próxima".
@@ -499,7 +537,7 @@ async function main(): Promise<void> {
     await otherTab.goto(`http://plain-site.test:${sitePort}/?segredo=1#x`);
     const worker = context.serviceWorkers().find((candidate) => candidate.url().startsWith("chrome-extension://"))!;
     const popup = await context.newPage();
-    await popup.goto(new URL("secret-provision.html", worker.url()).href);
+    await popup.goto(new URL("browser-status.html", worker.url()).href);
     const popupCall = (type: string, extra: Record<string, unknown> = {}) => popup.evaluate(`(async () => {
       const [tab] = await chrome.tabs.query({ url: "http://share-site.test/*" });
       return chrome.runtime.sendMessage({ type: ${JSON.stringify(type)}, tabId: tab.id, ...${JSON.stringify(extra)} });
@@ -550,9 +588,8 @@ async function main(): Promise<void> {
       throw new Error("The user handoff did not pause and resume MCP as expected.");
     }
 
-    // A plan opens in a Chrome window of its own; the user trims it there, MCP is
-    // then held to the approved sites and actions, and on opt-in tasks without
-    // an approved plan are refused.
+    // An approved plan bounds its task. Without a plan the browser remains
+    // autonomous; the removed mandatory-plan popup toggle is not enforced.
     const planTask = "personal-plan-smoke";
     const reviewOpened = context.waitForEvent("page", (page) => page.url().includes("plan-review.html"));
     const proposed = await bridge.plan({
@@ -573,24 +610,36 @@ async function main(): Promise<void> {
     await bridge.click({ tabId: planTab, ref: planRef! });
     const planMarked = await bridge.extract({ tabId: planTab, selector: "#estado" });
     const errorCode = (error: { code?: string }) => error.code;
-    const offSite = await bridge.navigate({ tabId: planTab, url: `http://plain-site.test:${sitePort}/` })
+    const offSiteAttempt = bridge.navigate({ tabId: planTab, url: `http://plain-site.test:${sitePort}/` })
       .then(() => "allowed", errorCode);
+    await decideChromeNotification("mcp-plan-site:", 1);
+    const offSite = await offSiteAttempt;
     const script = { tabId: planTab, function: "() => document.title" };
     const scriptConfirmation = await bridge.evaluate(script).then(() => "", confirmationIdOf);
     const noScript = await bridge.evaluate({ ...script, confirmationId: scriptConfirmation }).then(() => "allowed", errorCode);
     // A link out of the approved sites never loads in the plan's tab: Chrome blocks the request
     // itself, and only an MCP tab outside any plan reaches the other site.
     const clickLeave = async (tabId: string) => {
-      const leaveRef = (await bridge.snapshot({ tabId })).refs.find((item) => item.name === "Sair do plano")?.ref;
-      return bridge.click({ tabId, ref: leaveRef! }).then(() => "clicked", errorCode);
+      const observed = await bridge.snapshot({ tabId });
+      const leaveRef = observed.refs.find((item) => item.name === "Sair do plano")?.ref;
+      return bridge.click({ tabId, ref: leaveRef! }).then(() => "clicked", (error: Error & { code?: string }) => {
+        // Local fixture values only; capture the precise guarded failure
+        // instead of replacing a regression with an expected error.
+        report("plan link preflight", { url: observed.url, ref: leaveRef, code: error.code, reason: error.message });
+        return error.code;
+      });
     };
     const leftWithPlan = await clickLeave(planTab);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     const escapedWithPlan = planEscapes.length;
+    const addition = bridge.navigate({ tabId: planTab, url: `http://plain-site.test:${sitePort}/` });
+    await decideChromeNotification("mcp-plan-site:", 0);
+    const addedSite = (await addition).tab.url;
     await popupCall("mcp-tab-require-plan", { enabled: true });
     const unplanned = await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: "personal-unplanned" })
       .then(() => "allowed", errorCode);
     const requireState = await popupCall("mcp-tab-require-plan", { enabled: false });
+    await bridge.finishTask({ taskId: "personal-unplanned" });
     await bridge.finishTask({ taskId: planTask });
     const afterPlan = await bridge.plan({ planId: proposed.planId }).then(() => "kept", errorCode);
     const freeTask = "personal-plan-free";
@@ -601,21 +650,20 @@ async function main(): Promise<void> {
     }
     const escapedWithoutPlan = planEscapes.length - escapedWithPlan;
     await bridge.finishTask({ taskId: freeTask });
-    report("plan approval", { proposed, reviewSteps, approved, offSite, noScript, unplanned, afterPlan,
+    report("plan approval", { proposed, reviewSteps, approved, offSite, addedSite, noScript, unplanned, afterPlan,
       leftWithPlan, escapedWithPlan, leftWithoutPlan, escapedWithoutPlan });
     if (proposed.status !== "pending" || reviewSteps !== 2 || approved.status !== "approved" ||
         approved.domains.join() !== "share-site.test" || approved.actions.join() !== "navigate,interact" ||
         approved.feedback !== "Sem JavaScript" || planMarked.value !== "clicado pelo MCP" ||
         offSite !== "ACTION_BLOCKED_BY_POLICY" || noScript !== "ACTION_BLOCKED_BY_POLICY" ||
-        unplanned !== "ACTION_BLOCKED_BY_POLICY" || requireState.requirePlan !== false || afterPlan !== "EXECUTION_NOT_FOUND" ||
+        !addedSite?.includes("plain-site.test") ||
+        unplanned !== "allowed" || requireState.requirePlan !== false || afterPlan !== "EXECUTION_NOT_FOUND" ||
         escapedWithPlan !== 0 || escapedWithoutPlan !== 1) {
       throw new Error("The plan did not bound MCP to what the user approved.");
     }
 
-    // A refused script asks Chrome for a site approval; once the user allows it in
-    // the popup, scripts on that site run until the task ends (or, in a shared tab,
-    // while it stays shared) without a confirmation, and automatic approval covers a
-    // host the user listed. Both end as the user says.
+    // A refused script asks Chrome for site approval. Native notification
+    // buttons grant only scoped use; retired global auto-site grants stay off.
     const popupTab = (type: string, chromeTabId: number, extra: Record<string, unknown> = {}) => popup.evaluate(
       `chrome.runtime.sendMessage(${JSON.stringify({ type, tabId: chromeTabId, ...extra })})`) as Promise<Record<string, unknown>>;
     const until = async <T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
@@ -633,7 +681,8 @@ async function main(): Promise<void> {
     const firstScript = await bridge.evaluate(title).then(() => "allowed", (error: Error & { code?: string }) =>
       error.code + (error.message.includes("siteApproval") ? "+siteApproval" : ""));
     const asked = await until(() => popupTab("mcp-tab-status", siteChromeId), (state) => state.approval === "execute-script");
-    const approvedState = await popupTab("mcp-tab-approve", siteChromeId);
+    await decideChromeNotification("mcp-approval:" + siteChromeId, 0);
+    const approvedState = await popupTab("mcp-tab-status", siteChromeId);
     const granted = await until(() => bridge.evaluate(title).then((result) => result.value, errorCode),
       (value) => value === "Minha aba");
     const autoTab = (await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
@@ -642,9 +691,8 @@ async function main(): Promise<void> {
     const autoTitle = { tabId: autoTab, function: "() => document.title" };
     const beforeAuto = await bridge.evaluate(autoTitle).then(() => "allowed", errorCode);
     const autoState = await popupTab("mcp-tab-auto", autoChromeId, { enabled: true });
-    const automatic = await until(() => bridge.evaluate(autoTitle).then((result) => result.value, errorCode),
-      (value) => value === "Plain");
-    await popupTab("mcp-tab-auto", autoChromeId, { enabled: false });
+    const automatic = await bridge.evaluate(autoTitle).then((result) => result.value, errorCode);
+    const noAutoSites = (await popupTab("mcp-tab-status", autoChromeId)).autoSites;
     await bridge.finishTask({ taskId: approvalTask });
     const nextTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
     await bridge.snapshot({ tabId: nextTab });
@@ -656,7 +704,8 @@ async function main(): Promise<void> {
     const sharedTitle = { tabId: shared.tabId, function: "() => document.title" };
     const sharedFirst = await bridge.evaluate(sharedTitle).then(() => "allowed", errorCode);
     await until(() => popupTab("mcp-tab-status", userChromeId), (state) => state.approval === "execute-script");
-    const sharedApproved = await popupTab("mcp-tab-approve", userChromeId);
+    await decideChromeNotification("mcp-approval:" + userChromeId, 0);
+    const sharedApproved = await popupTab("mcp-tab-status", userChromeId);
     const sharedGranted = await until(() => bridge.evaluate(sharedTitle).then((result) => result.value, errorCode),
       (value) => value === "Minha aba");
     await popupTab("mcp-tab-unshare", userChromeId);
@@ -666,13 +715,14 @@ async function main(): Promise<void> {
       (value) => value === "ACTION_REQUIRES_CONFIRMATION");
     await popupTab("mcp-tab-unshare", userChromeId);
     report("site approvals", { firstScript, asked: asked.approval, approvedState: approvedState.grants, granted,
-      beforeAuto, autoSites: autoState.autoSites, automatic, afterTask,
+      beforeAuto, autoSites: noAutoSites, autoState, automatic, afterTask,
       sharedFirst, sharedApproved: sharedApproved.grants, sharedGranted, reshared });
     if (firstScript !== "ACTION_REQUIRES_CONFIRMATION+siteApproval" || asked.approval !== "execute-script" ||
         JSON.stringify(approvedState.grants) !== '[{"category":"execute-script","until":"task"}]' ||
         granted !== "Minha aba" ||
-        beforeAuto !== "ACTION_REQUIRES_CONFIRMATION" || JSON.stringify(autoState.autoSites) !== '["plain-site.test"]' ||
-        automatic !== "Plain" || afterTask !== "ACTION_REQUIRES_CONFIRMATION" ||
+        beforeAuto !== "ACTION_REQUIRES_CONFIRMATION" || autoState.ok !== false ||
+        JSON.stringify(noAutoSites) !== "[]" || automatic !== "ACTION_REQUIRES_CONFIRMATION" ||
+        afterTask !== "ACTION_REQUIRES_CONFIRMATION" ||
         sharedFirst !== "ACTION_REQUIRES_CONFIRMATION" ||
         JSON.stringify(sharedApproved.grants) !== '[{"category":"execute-script","until":"tab"}]' ||
         sharedGranted !== "Minha aba" || reshared !== "ACTION_REQUIRES_CONFIRMATION") {

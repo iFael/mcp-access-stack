@@ -4,6 +4,7 @@ import { describe, expect, it } from "@jest/globals";
 import {
   HANDOFF_EXTENSION_VERSION,
   HANDOFF_POPUP_HTML,
+  HANDOFF_SECURE_CHANNEL_HTML,
   HANDOFF_POPUP_SCRIPT,
   HANDOFF_WORKER_SOURCE,
 } from "../../../src/companion/personal-browser-secret-handoff-assets.js";
@@ -124,15 +125,17 @@ function harness() {
 }
 
 describe("native MCP V3 browser secret handoff", () => {
-  it("adds only browser-local popup, command and ephemeral session channel", () => {
+  it("separates the browser status popup from a private secure channel and ephemeral session secret", () => {
     const assets = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const manifest = JSON.parse(assets.manifest) as {
-      version: string; action: { default_popup: string }; commands: Record<string, unknown>;
+      version: string; action: { default_popup: string }; options_page: string; commands: Record<string, unknown>;
     };
     expect(manifest.version).toBe(HANDOFF_EXTENSION_VERSION);
-    expect(manifest.action.default_popup).toBe("secret-provision.html");
+    expect(manifest.action.default_popup).toBe("browser-status.html");
+    expect(manifest.options_page).toBe("secret-provision.html");
     expect(manifest.commands).toHaveProperty("fill-mcp-preparation-secret");
     expect(assets.popupHtml).toBe(HANDOFF_POPUP_HTML);
+    expect(assets.secureChannelHtml).toBe(HANDOFF_SECURE_CHANNEL_HTML);
     expect(assets.popupScript).toBe(HANDOFF_POPUP_SCRIPT);
     expect(assets.popupScript).not.toContain("BRIDGE_TOKEN");
     expect(assets.serviceWorker).toContain("chrome.storage.session");
@@ -141,7 +144,9 @@ describe("native MCP V3 browser secret handoff", () => {
     expect(assets.serviceWorker).toContain("chrome.storage.local.get(OWNED_TABS_KEY)");
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.local.set");
     expect(HANDOFF_WORKER_SOURCE).not.toContain("chrome.storage.sync.set");
-    expect(assets.popupHtml).toContain("Salvar no Cloudflare realiza um deploy");
+    expect(assets.popupHtml).toContain("Parar o MCP");
+    expect(assets.popupHtml).not.toContain("Gerar segredo temporário");
+    expect(assets.secureChannelHtml).toContain("Salvar o formulário ou realizar deploy exige autorização independente");
     expect(assets.popupHtml).toContain('<script src="tab-sharing.js"></script>');
     expect(assets.tabSharingScript).not.toContain("BRIDGE_TOKEN");
   });

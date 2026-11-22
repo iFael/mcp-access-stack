@@ -19230,6 +19230,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -19439,6 +19442,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -19721,6 +19727,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -19946,6 +19955,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -20156,6 +20168,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -20385,6 +20400,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -20595,6 +20613,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -20805,6 +20826,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -21028,6 +21052,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -22707,6 +22734,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -22923,6 +22953,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -26301,6 +26334,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -29247,15 +29283,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "9208fd3ac731435afcc4996fa2fc8c70c88f3697009caaccbb32dba617bc9b55",
-  "serverVersion": "0.4.0-catalog.c9208fd3ac731.sa15e528da70d",
+  "contractRevision": "1fda45be4af34195e7585ab3c2c7411a2cc90bbb728a1c2237cede43cf57e518",
+  "serverVersion": "0.4.0-catalog.c1fda45be4af3.sa15e528da70d",
   "toolCount": 134,
   "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c9208fd3ac731.sa15e528da70d"
+  "version": "0.4.0-catalog.c1fda45be4af3.sa15e528da70d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

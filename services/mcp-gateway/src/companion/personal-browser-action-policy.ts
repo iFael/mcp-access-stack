@@ -481,7 +481,8 @@ export class PersonalBrowserActionPolicy {
     throw new AppError(
       "ACTION_REQUIRES_CONFIRMATION",
       `Confirmation required: ${JSON.stringify({
-        ...confirmation, category: binding.category, action: binding.action, target: binding.target,
+        ...confirmation, tabId: binding.tabId,
+        category: binding.category, action: binding.action, target: binding.target,
         ...(siteApprovable ? {
           siteApproval: `Alternatively the user can allow ${binding.category} on ${binding.origin} until the task ` +
             "ends from the MCP V3 notification or popup in Chrome; then retry without confirmationId.",

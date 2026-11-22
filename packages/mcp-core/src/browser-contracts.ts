@@ -1290,6 +1290,9 @@ export const browserActionResultSchema = z
   .object({
     tabId: tabIdSchema,
     completed: z.literal(true),
+    // Input was dispatched, but the page could not prove whether it changed.
+    // Never invite an automatic retry of a potentially duplicated insertion.
+    unverified: z.boolean().optional(),
     state: browserStateUpdateSchema.optional(),
     timing: browserOperationTimingSchema.optional(),
   })

@@ -1155,6 +1155,156 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("waits for one Chrome approval in the same sensitive click and refuses without dispatch", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge(undefined, PERSONAL_BROWSER_CAPABILITIES);
+    const tabId = "personal:7";
+    const prompts: WireMessage[] = [];
+    const clicks: WireMessage[] = [];
+    let approve = true;
+    const respond = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type === "one-use-confirmation-request") {
+        prompts.push(message);
+        extension.send(JSON.stringify({
+          type: "one-use-confirmation-result", id: message.id, tabId, approved: approve,
+        }));
+      }
+      if (message.type !== "request") return;
+      if (message.operation === "snapshot") {
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+          result: { tabId, url: "https://shop.example/checkout", pageInstanceId: "checkout-1",
+            content: '- button "Pay now" [ref=p-pay]',
+            refs: [{ ref: "p-pay", role: "button", name: "Pay now" }] },
+        }));
+      }
+      if (message.operation === "click") {
+        clicks.push(message);
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+          result: { tabId, completed: true } }));
+      }
+    };
+    extension.on("message", respond);
+    try {
+      await bridge.snapshot({ tabId });
+      await expect(bridge.click({ tabId, ref: "p-pay" })).resolves.toMatchObject({ completed: true });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toMatchObject({ category: "purchase-or-payment", tabId });
+      expect(clicks).toHaveLength(1);
+      approve = false;
+      await expect(bridge.click({ tabId, ref: "p-pay" })).rejects.toMatchObject({
+        code: "ACTION_BLOCKED_BY_POLICY",
+      });
+      expect(prompts).toHaveLength(2);
+      expect(clicks).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("confirms two sensitive sequence controls before dispatching the batch once", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge(undefined, PERSONAL_BROWSER_CAPABILITIES);
+    const tabId = "personal:7";
+    const prompts: WireMessage[] = [];
+    const batches: WireMessage[] = [];
+    let allowBoth = true;
+    const respond = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type === "one-use-confirmation-request") {
+        prompts.push(message);
+        extension.send(JSON.stringify({ type: "one-use-confirmation-result",
+          id: message.id, tabId, approved: allowBoth || prompts.length % 2 === 1 }));
+        return;
+      }
+      if (message.type !== "request") return;
+      if (message.operation === "snapshot") {
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+          result: { tabId, url: "https://example.com/settings", pageInstanceId: "page1",
+            content: '- button "Pay now" [ref=p-pay]\n- button "Delete record" [ref=p-delete]',
+            refs: [{ ref: "p-pay", role: "button", name: "Pay now" },
+              { ref: "p-delete", role: "button", name: "Delete record" }] },
+        }));
+      }
+      if (message.operation === "sequence") {
+        batches.push(message);
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+          result: { tabId, completed: true,
+            steps: [{ index: 0, action: "click", completed: true },
+              { index: 1, action: "click", completed: true }] },
+        }));
+      }
+    };
+    extension.on("message", respond);
+    try {
+      await bridge.snapshot({ tabId });
+      const steps = [{ action: "click" as const, ref: "p-pay" },
+        { action: "click" as const, ref: "p-delete" }];
+      await expect(bridge.sequence({ tabId, steps })).resolves.toMatchObject({ completed: true });
+      expect(prompts.map((p) => p.category)).toEqual(["purchase-or-payment", "delete-or-cancel"]);
+      expect(batches).toHaveLength(1);
+      expect((batches[0]?.input as Record<string, unknown>).steps).toEqual([
+        expect.objectContaining({ action: "click", guard: expect.objectContaining({ ref: "p-pay" }) }),
+        expect.objectContaining({ action: "click", guard: expect.objectContaining({ ref: "p-delete" }) }),
+      ]);
+      allowBoth = false;
+      await expect(bridge.sequence({ tabId, steps })).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+      expect(batches).toHaveLength(1);
+    } finally {
+      extension.off("message", respond);
+      await close();
+    }
+  });
+
+  it("rebinds a safe SPA click after pushState only for the same document identity", async () => {
+    for (const stableDocument of [true, false]) {
+      const { bridge, extension, close } = await startAuthenticatedBridge();
+      const tabId = "personal:7";
+      const urls = ["https://app.example/settings", "https://app.example/settings/general"];
+      let snapshots = 0;
+      const clicks: Array<Record<string, unknown>> = [];
+      const respond = (data: WebSocket.RawData) => {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (message.type !== "request") return;
+        if (message.operation === "snapshot") {
+          const newer = snapshots++ > 0;
+          extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+            result: { tabId, url: urls[Number(newer)],
+              pageInstanceId: stableDocument || !newer ? "same-page" : "new-page",
+              content: '- link "Help" [ref=p-help]',
+              refs: [{ ref: "p-help", role: "link", name: "Help" }] },
+          }));
+        }
+        if (message.operation === "click") {
+          clicks.push(message.input as Record<string, unknown>);
+          const first = clicks.length === 1;
+          extension.send(JSON.stringify({ type: "response", id: message.id, ok: !first,
+            ...(first ? { error: { code: "BROWSER_CONFIRMATION_INVALID",
+              message: "Target preflight: stale_page. No click was dispatched." } }
+              : { result: { tabId, completed: true } }) }));
+        }
+      };
+      extension.on("message", respond);
+      try {
+        await bridge.snapshot({ tabId });
+        if (stableDocument) {
+          await expect(bridge.click({ tabId, ref: "p-help" })).resolves.toMatchObject({ completed: true });
+          expect(clicks).toHaveLength(2);
+          expect(clicks[0]).toMatchObject({ guard: { url: urls[0] } });
+          expect(clicks[1]).toMatchObject({ guard: { url: urls[1] } });
+        } else {
+          await expect(bridge.click({ tabId, ref: "p-help" })).rejects.toMatchObject({
+            code: "BROWSER_CONFIRMATION_INVALID",
+          });
+          expect(clicks).toHaveLength(1);
+        }
+        expect(snapshots).toBe(2);
+      } finally {
+        extension.off("message", respond);
+        await close();
+      }
+    }
+  });
+
   it("logs a safe peer error code with a terminal but never its private message", async () => {
     const events: Record<string, unknown>[]=[];
     const { bridge,extension,close }=await startAuthenticatedBridge(e => events.push(e));
@@ -1840,7 +1990,10 @@ interface WireMessage {
   [key: string]: unknown;
 }
 
-async function startAuthenticatedBridge(log?: (entry: Record<string, unknown>) => void): Promise<{
+async function startAuthenticatedBridge(
+  log?: (entry: Record<string, unknown>) => void,
+  capabilities: readonly string[] = PERSONAL_BROWSER_CAPABILITIES.filter((capability) => capability !== "chromeConfirmationV1"),
+): Promise<{
   bridge: PersonalBrowserBridge;
   extension: WebSocket;
   token: string;
@@ -1857,7 +2010,7 @@ async function startAuthenticatedBridge(log?: (entry: Record<string, unknown>) =
   );
   const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
   if (!token) throw new Error("Personal browser token was not materialized.");
-  const extension = await connectExtension(port, token);
+  const extension = await connectExtension(port, token, capabilities);
   return {
     bridge,
     extension,

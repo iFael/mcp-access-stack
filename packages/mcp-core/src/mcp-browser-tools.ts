@@ -966,7 +966,7 @@ function summarize(name: BrowserToolName, result: Record<string, unknown>): stri
     const stateSummary = typeof state.revision === "number"
       ? `; state=${String(state.kind)}; revision=${String(state.revision)}`
       : "";
-    return `tabId=${String(result.tabId)}${stateSummary}`;
+    return `tabId=${String(result.tabId)}${stateSummary}${result.unverified === true ? "; unverified=true (inspect before retry)" : ""}`;
   }
   if (typeof result.tab === "object" && result.tab) {
     const state = asRecord(result.state);

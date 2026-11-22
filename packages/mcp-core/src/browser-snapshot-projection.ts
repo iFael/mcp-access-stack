@@ -4,7 +4,7 @@ import type { BrowserSnapshotInput, BrowserSnapshotResult } from "./browser-cont
 const INTERACTIVE_ROLES = new Set([
   "button", "link", "textbox", "checkbox", "radio", "combobox", "listbox",
   "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "switch",
-  "slider", "spinbutton", "searchbox", "treeitem",
+  "slider", "spinbutton", "searchbox", "treeitem", "gridcell", "row",
 ]);
 
 /**

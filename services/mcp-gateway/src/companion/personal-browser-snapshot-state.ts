@@ -62,6 +62,10 @@ export class PersonalBrowserSnapshotState {
     return { ...snapshot, content: snapshotText, state };
   }
 
+  pageInstanceId(tabId: string): string | undefined {
+    return this.pages.get(tabId)?.pageInstanceId;
+  }
+
   discard(tabId: string): void {
     this.pages.delete(tabId);
   }
