@@ -6642,6 +6642,7 @@ function snapshotPage(generation, compact = false) {
     "[role='slider']",
     "[role='spinbutton']",
     "[contenteditable='true']",
+    "[draggable='true']",
     "[tabindex]:not([tabindex='-1'])",
     "[role='gridcell']",
     "[role='row']",

@@ -4341,6 +4341,17 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(JSON.stringify(result)).not.toContain("fictional-super-secret");
   });
 
+  it("exposes native HTML draggable elements as fresh refs without inventing a button role", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    expect(serviceWorker).toContain('"[draggable=\'true\']"');
+    const item = fakeElement({ tagName: "DIV", text: "A", attributes: { draggable: "true" } });
+    const dom = createDom([item]);
+    const snapshotPage = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context,
+    ) as (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    expect(snapshotPage("drag-a").refs[0]).toMatchObject({ role: "generic", name: "A" });
+  });
+
   it("emits richer safe DOM semantics without exposing input values", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const checkbox = fakeElement({
